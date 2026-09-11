@@ -7,7 +7,7 @@
 //! the axis-aligned rectangles that stand in for a shape the protocol has no
 //! way to describe. That translation lives here so there is one of it.
 
-use crate::renderer::{CornerRadii, EllipticalRadii};
+use crate::renderer::{CornerRadii, DrawCommand, EllipticalRadii, FlattenedCommand};
 use crate::widgets::Rect;
 
 /// An axis-aligned rectangle of a region, in logical surface pixels.
@@ -20,6 +20,13 @@ pub(crate) struct RegionRect {
 }
 
 impl RegionRect {
+    /// Whether this rectangle holds `(x, y)`, half-open on the far edges as
+    /// [`Rect::contains`] is: the pixel a rectangle ends at belongs to the next
+    /// one.
+    pub(crate) fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
+
     /// A whole-pixel rectangle covering all of `r`.
     ///
     /// Outward, because a region is a claim about where something is: a
@@ -172,14 +179,89 @@ fn to_region_rect(b: Rect) -> Option<RegionRect> {
     })
 }
 
+/// One declaration of where input reaches a surface, in the order it was
+/// painted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InputRegionOp {
+    /// Whether input reaches this rectangle. `false` cuts it out of whatever
+    /// came before.
+    pub takes: bool,
+    pub rect: RegionRect,
+}
+
+/// What a surface asks the compositor about where input reaches it: the area
+/// it takes before any container has spoken, and the declarations that came
+/// out of the frame.
+///
+/// Two fields rather than one resolved list, because a rounded hole cut out of
+/// a surface is not a union of rectangles anyone should have to compute:
+/// `wl_region` subtracts, and this is that program in the order it is applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct InputRegionRequest {
+    pub base: Vec<RegionRect>,
+    pub ops: Vec<InputRegionOp>,
+}
+
+/// The input declarations of the frame that was just drawn, in paint order.
+///
+/// Read off the flattened commands for the reason
+/// [`crate::blur::regions_from_commands`] gives at length: a container that did
+/// not paint has no command here, so a hidden, culled or replaced declaration
+/// takes itself back without anyone having to remember it.
+///
+/// Not sorted, unlike a blur region: these compose, and the order they compose
+/// in is the order they were painted in.
+pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<InputRegionOp> {
+    let mut out = Vec::new();
+    for cmd in commands {
+        let DrawCommand::InputRegion {
+            rect,
+            corner_radii,
+            takes,
+        } = &*cmd.command
+        else {
+            continue;
+        };
+        let Some((world, world_radii)) = cmd.clipped_world_rounded_rect(*rect, *corner_radii)
+        else {
+            continue;
+        };
+        out.extend(
+            rounded_rect_to_rects(world, world_radii)
+                .into_iter()
+                .map(|rect| InputRegionOp {
+                    takes: *takes,
+                    rect,
+                }),
+        );
+    }
+    out
+}
+
+/// The area a surface takes input in before any container has spoken: the
+/// whole of it, or whatever the surface itself declared, at creation or since.
+///
+/// A surface that says nothing takes input everywhere, which is what the
+/// protocol's null region means. `click_through` is the same declaration with
+/// nothing in it, and a declaration cuts the base down to the rectangles it
+/// names.
+pub(crate) fn base_rects(declared: Option<&[Rect]>, width: f32, height: f32) -> Vec<RegionRect> {
+    match declared {
+        None => Vec::from_iter(RegionRect::covering(Rect::new(0.0, 0.0, width, height))),
+        Some(rects) => rects
+            .iter()
+            .copied()
+            .filter_map(RegionRect::covering)
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn covers(rects: &[RegionRect], x: i32, y: i32) -> bool {
-        rects
-            .iter()
-            .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+        rects.iter().any(|r| r.contains(x, y))
     }
 
     fn round(radius: f32) -> EllipticalRadii {

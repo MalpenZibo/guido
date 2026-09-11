@@ -52,8 +52,13 @@ struct RecordedSurface {
     events: Vec<(Instant, Event)>,
     first_frame_presented: bool,
     exclusive_zones: Vec<i32>,
-    /// Every input region asked for, oldest first.
+    /// Every input region asked for, oldest first. Kept whole rather than
+    /// resolved, because "no region at all" and "a region holding nothing" are
+    /// opposite instructions that a list of rectangles cannot tell apart.
     input_regions: Vec<Option<Vec<Rect>>>,
+    /// Every derived region published, oldest first — the base a surface takes
+    /// input in, and what the frame declared about it.
+    input_requests: Vec<crate::region::InputRegionRequest>,
     sizes_asked: Vec<(u32, u32)>,
     frame_callbacks: u32,
 }
@@ -119,6 +124,10 @@ impl Surface for &mut RecordedSurface {
 
     fn set_input_region(&mut self, rects: Option<&[Rect]>) {
         self.input_regions.push(rects.map(<[Rect]>::to_vec));
+    }
+
+    fn sync_input_region(&mut self, request: &crate::region::InputRegionRequest, _commit: bool) {
+        self.input_requests.push(request.clone());
     }
 
     fn request_frame_callback(&mut self) {
@@ -384,6 +393,45 @@ impl Headless {
     /// all.
     pub fn input_regions_asked(&self, id: SurfaceId) -> &[Option<Vec<Rect>>] {
         &self.host.get(id).input_regions
+    }
+
+    /// Whether input reaches a point of a surface, by the reading the
+    /// compositor gives the last region it was handed: the area the surface
+    /// takes, then every declaration the frame made, in order.
+    ///
+    /// A surface whose tree has never declared anything takes input
+    /// everywhere, which is what it asked for by saying nothing.
+    pub fn input_reaches(&self, id: SurfaceId, x: f32, y: f32) -> bool {
+        let (x, y) = (x.floor() as i32, y.floor() as i32);
+        let surface = self.host.get(id);
+
+        // Before the tree has declared anything, the answer is whatever the
+        // surface itself asked for at birth or through a handle — which is
+        // "everywhere" only when it asked for nothing.
+        let Some(request) = surface.input_requests.last() else {
+            return match surface.input_regions.last() {
+                None | Some(None) => true,
+                Some(Some(rects)) => rects.iter().any(|r| r.contains(x as f32, y as f32)),
+            };
+        };
+
+        // The compositor's reading of the program it was handed: the
+        // area the surface takes, then every declaration in order.
+        // Here rather than beside the type, because nothing the library
+        // does asks this question — only a test does.
+        let mut takes = request.base.iter().any(|r| r.contains(x, y));
+        for op in &request.ops {
+            if op.rect.contains(x, y) {
+                takes = op.takes;
+            }
+        }
+        takes
+    }
+
+    /// How many times a surface has published a derived input region. A frame
+    /// that changes nothing must not add to this.
+    pub fn input_regions_published(&self, id: SurfaceId) -> usize {
+        self.host.get(id).input_requests.len()
     }
 
     /// The sizes a surface has asked for, oldest first.

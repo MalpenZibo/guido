@@ -444,6 +444,57 @@ impl WaylandState {
         }
     }
 
+    /// Publish where input reaches a surface: the area it takes, then the
+    /// declarations the frame made, in the order they were painted.
+    ///
+    /// `wl_region` is exactly this program — add and subtract — so a rounded
+    /// hole cut out of a bar needs no complement computed anywhere.
+    ///
+    /// Not committed here by default: the request rides the buffer commit
+    /// inside the upcoming present, so the region and the frame it was read
+    /// off change together. `commit: true` is for the paths that skip
+    /// presenting.
+    pub(crate) fn sync_input_region(
+        &mut self,
+        id: SurfaceId,
+        request: &crate::region::InputRegionRequest,
+        commit: bool,
+    ) {
+        let Some(surface_state) = self.surfaces.get(&id) else {
+            return;
+        };
+        let Ok(region) = Region::new(&self.compositor_state) else {
+            log::warn!("Failed to create wl_region for input");
+            return;
+        };
+
+        for r in &request.base {
+            region.add(r.x, r.y, r.width, r.height);
+        }
+        for op in &request.ops {
+            let r = op.rect;
+            if op.takes {
+                region.add(r.x, r.y, r.width, r.height);
+            } else {
+                region.subtract(r.x, r.y, r.width, r.height);
+            }
+        }
+        surface_state
+            .wl_surface
+            .set_input_region(Some(region.wl_region()));
+
+        log::debug!(
+            "Surface {:?} input region: {} base rect(s), {} declaration(s)",
+            id,
+            request.base.len(),
+            request.ops.len()
+        );
+
+        if commit {
+            surface_state.wl_surface.commit();
+        }
+    }
+
     /// Set the input region for a surface at runtime.
     pub fn set_surface_input_region(&mut self, id: SurfaceId, rects: Option<&[Rect]>) {
         if let Some(surface_state) = self.surfaces.get(&id) {

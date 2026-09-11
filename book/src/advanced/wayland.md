@@ -548,56 +548,87 @@ most recently.
 
 ## Input Regions
 
-By default the whole surface accepts pointer and touch input. An input
-region limits input to a set of rectangles (logical surface
-coordinates) — everything outside them lets clicks pass through to the
-windows below. This is how transparent overlays avoid stealing clicks:
+By default the whole surface accepts pointer and touch input. A container can
+say otherwise, and what it says goes to the compositor: everything outside the
+region lets clicks reach the windows below.
+
+The surface declares the baseline and a container declares the exception. An
+overlay that lets everything past, with one pill that does not:
 
 ```rust,ignore
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-// Only the given rectangle is clickable:
 SurfaceConfig::new()
-    .background_color(Color::TRANSPARENT);
-    .input_region([Rect::new(16.0, 20.0, 200.0, 40.0)])
+    .background_color(Color::TRANSPARENT)
+    .click_through();
 
-// Fully click-through (e.g. a HUD or wallpaper widget):
-SurfaceConfig::new().click_through()
+container()
+    .takes_input(true)
+    .corners(20.0)
+    .on_click(|| {})
 # ;
 # }
 ```
 
-At runtime, use the handle — `None` restores full-surface input, an
-empty list is fully click-through:
+And the other way round, a bar that takes input with a notch the desktop gets:
 
 ```rust,ignore
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+container().takes_input(false).width(200.0)
+# ;
+# }
+```
+
+The region is read off the frame that was drawn, so it follows the shape on
+screen: its corners, its transform, its clip. A container that stops painting —
+hidden, culled, scrolled out of view — takes its region with it, and a frame
+that changes nothing publishes nothing. `examples/input_region.rs` is the first
+of the two, in full.
+
+**What a container declares is its own shape.** Children are covered because
+they are drawn inside it, not because the declaration reaches them. A child
+drawn *outside* its parent — `overflow` is `Visible` by default, so a transform
+or a size larger than the parent does it — is outside the region as well, and on
+a click-through surface a handler on that child never runs:
+
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let do_thing = || {};
+container()
+    .takes_input(true)
+    .width(100.0)
+    .height(30.0)
+    // 40px below the parent, so outside the region: those clicks go to the
+    // desktop, not to this handler.
+    .child(container().translate((0.0, 40.0)).on_click(do_thing))
+# ;
+# }
+```
+
+Declare `takes_input` on the container whose shape you mean, and a nested
+declaration of the opposite kind is simply a smaller area declared later — an
+island inside a hole works with no rule of its own.
+
+`takes_input(false)` is not the same as
+[`enabled(false)`](../interactivity/disabled.md): a disabled container
+refuses input and still blocks what is behind the surface, which is what a
+disabled button should do.
+
+For a region that belongs to no widget, the surface still takes rectangles
+directly:
+
+```rust,ignore
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+SurfaceConfig::new().input_region([Rect::new(16.0, 20.0, 200.0, 40.0)]);
 surface_handle(id).set_input_region(Some(vec![rect]));
 surface_handle(id).set_input_region(None);
-# ;
-# }
-```
-
-The idiomatic pattern glues the region to a widget's bounds with a
-`WidgetRef`, so it follows layout changes automatically (full version
-in `examples/input_region.rs`):
-
-```rust,ignore
-# extern crate guido;
-# use guido::prelude::*;
-# fn main() {
-let pill_ref = create_widget_ref();
-// ...build the surface with .click_through() and .widget_ref(pill_ref)...
-
-create_effect(move || {
-    let rect = pill_ref.rect().get();
-    if rect.width > 0.0 {
-        surface_handle(id).set_input_region(Some(vec![rect]));
-    }
-});
 # ;
 # }
 ```

@@ -681,3 +681,32 @@ fn baseline_alignment_lines_text_up() {
 
     assert_snapshot("baseline_alignment", render(view, 400.0, 160.0));
 }
+
+/// Where a declaration about input sits in the frame, which is the part the
+/// region's composition depends on: before the container's own background, and
+/// before the children whose declarations refine it.
+#[test]
+fn an_input_declaration_is_carried_in_paint_order() {
+    let view = container()
+        .padding(8.0)
+        .layout(Flex::column().spacing(8.0))
+        .child(
+            container()
+                .width(120.0)
+                .height(40.0)
+                .corners(20.0)
+                .background(Color::rgb(0.2, 0.2, 0.3))
+                .takes_input(true)
+                .child(swatch(20.0, 20.0, Color::CYAN)),
+        )
+        .child(
+            container()
+                .width(120.0)
+                .height(40.0)
+                .background(Color::rgb(0.3, 0.2, 0.2))
+                .takes_input(false)
+                .child(swatch(20.0, 20.0, Color::MAGENTA).takes_input(true)),
+        );
+
+    assert_snapshot("input_regions", render(view, 200.0, 140.0));
+}

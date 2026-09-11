@@ -10,7 +10,7 @@ use crate::reactive::owner::{OwnerId, dispose_owner_now};
 use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, RenderTarget};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::Widget;
+use crate::widgets::{Rect, Widget};
 use crate::{Platform, Surface};
 
 /// A surface with unified GPU lifecycle management.
@@ -36,6 +36,19 @@ pub struct ManagedSurface {
     pub flattened_commands: Vec<FlattenedCommand>,
     /// Draw groups over `flattened_commands`, in draw order.
     pub command_layers: Vec<CommandLayer>,
+    /// Where input reaches this surface before any container has spoken:
+    /// what the config declared, and what a handle has said since.
+    ///
+    /// One home for it, so a runtime `set_input_region` and a declaration in
+    /// the tree compose instead of erasing each other.
+    pub input_base: Option<Vec<Rect>>,
+    /// The region this surface last asked the compositor for, or `None` while
+    /// no container has ever declared one.
+    ///
+    /// Kept here rather than in a platform so that both of them publish on the
+    /// same rule: once, when it changes, and never for a surface whose tree has
+    /// said nothing about input.
+    pub input_region: Option<crate::region::InputRegionRequest>,
 }
 
 impl ManagedSurface {
@@ -48,6 +61,8 @@ impl ManagedSurface {
         owner_id: OwnerId,
         tree: &mut Tree,
     ) -> Self {
+        let config_input_region = config.input_region.clone();
+
         // Register root widget - tree assigns the ID
         let widget_id = tree.register(widget);
 
@@ -66,6 +81,8 @@ impl ManagedSurface {
             root_node: RenderNode::new(widget_id.as_u64()),
             flattened_commands: Vec::new(),
             command_layers: Vec::new(),
+            input_base: config_input_region,
+            input_region: None,
         }
     }
 

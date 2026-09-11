@@ -12,7 +12,7 @@ declarations do not.**
 
 Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `border`, `translate`, `rotate`, `scale`, `pivot`, `width`, `height`,
-`padding`, `visible`, `enabled`, `shadow` — and beyond `Container`, `Text`'s `wrap`,
+`padding`, `visible`, `enabled`, `takes_input`, `shadow` — and beyond `Container`, `Text`'s `wrap`,
 `Image`'s `content_fit`, `TextInput`'s `password`, `mask_char`, `caret` and `readonly`,
 `RippleConfig`'s colour, and the direction a `Flex` is built with.
 

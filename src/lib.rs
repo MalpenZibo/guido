@@ -452,7 +452,26 @@ fn process_surface_commands<P: Platform>(
                 }
             }
             SurfaceCommand::SetInputRegion { id, rects } => {
-                with_surface(wayland_state, id, |s| s.set_input_region(rects.as_deref()));
+                // The base, not a separate opinion: a frame that publishes a
+                // declared region reads this, so what a handle says survives
+                // the next declaration instead of being overwritten by it.
+                let mut declaring = false;
+                if let Some(managed) = surface_manager.get_mut(id) {
+                    managed.input_base = rects.clone();
+                    declaring = managed.input_region.is_some();
+                }
+
+                if declaring {
+                    // The tree has already spoken, and the answer is composed
+                    // from both. Applying the base alone here would drop the
+                    // declarations for a frame, so the frame that composes them
+                    // is asked for instead.
+                    if let Some(managed) = surface_manager.get(id) {
+                        jobs::request_job(managed.widget_id, jobs::JobRequest::Paint);
+                    }
+                } else {
+                    with_surface(wayland_state, id, |s| s.set_input_region(rects.as_deref()));
+                }
             }
             SurfaceCommand::CreatePopup {
                 id,
@@ -842,6 +861,12 @@ pub(crate) trait Surface {
     /// Publish the region to blur behind this surface.
     fn sync_blur_region(&mut self, rects: Vec<region::RegionRect>, commit: bool) {
         let _ = (rects, commit);
+    }
+
+    /// Publish where input reaches this surface: the area it takes, and the
+    /// declarations the frame made about it.
+    fn sync_input_region(&mut self, request: &region::InputRegionRequest, commit: bool) {
+        let _ = (request, commit);
     }
 
     /// Ask to be told when this surface's last frame has been shown.
@@ -1316,6 +1341,10 @@ impl Surface for WaylandSurface<'_> {
 
     fn sync_blur_region(&mut self, rects: Vec<region::RegionRect>, commit: bool) {
         self.state.sync_blur_region(self.id, rects, commit)
+    }
+
+    fn sync_input_region(&mut self, request: &region::InputRegionRequest, commit: bool) {
+        self.state.sync_input_region(self.id, request, commit)
     }
 
     fn request_frame_callback(&mut self) {
@@ -1801,6 +1830,35 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     {
         let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
         handle.sync_blur_region(blur_rects, false);
+    }
+
+    // And the other region read off the same frame, on the same commit. The
+    // rule for whether to publish at all is here rather than in a platform:
+    // a surface whose tree has never declared anything about input is left
+    // alone, so what a config or a handle asked for stays; one that has
+    // declared publishes when the answer changes and not otherwise. The one
+    // frame that must be published while carrying nothing is the frame that
+    // stops declaring, which owes the compositor its base back.
+    if carried.input_region || surface.input_region.is_some() {
+        let request = region::InputRegionRequest {
+            base: region::base_rects(
+                surface.input_base.as_deref(),
+                frame.width as f32,
+                frame.height as f32,
+            ),
+            ops: region::input_ops_from_commands(&surface.flattened_commands),
+        };
+        if surface.input_region.as_ref() != Some(&request)
+            && let Some(mut handle) = wayland_state.surface(id)
+        {
+            handle.sync_input_region(&request, false);
+            // Remembered while the tree is still declaring. The frame that
+            // stops declaring publishes the base once and then forgets, so a
+            // surface whose declaration resolves to nothing this frame — fully
+            // clipped, scrolled away — does not re-send the same region on
+            // every frame after it.
+            surface.input_region = carried.input_region.then_some(request);
+        }
     }
 
     // Here, above `present`, because both of these have to ride its commit —

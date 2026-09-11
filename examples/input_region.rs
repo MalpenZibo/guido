@@ -1,8 +1,9 @@
 //! Click-through overlay: only the centered pill accepts input.
 //!
-//! The surface spans the whole top edge without reserving space, but its
-//! input region is glued to the pill's bounds via a `WidgetRef` — clicks
-//! anywhere else pass through to the windows below.
+//! The surface spans the whole top edge without reserving space and lets
+//! everything through; the pill declares that input reaches it. The region the
+//! compositor is given is read off the frame, so it is the pill's rounded
+//! shape, wherever the layout put it, and it is gone the moment the pill is.
 
 use guido::prelude::*;
 
@@ -10,18 +11,16 @@ fn main() {
     env_logger::init();
 
     App::new().run(|app| {
-        let pill_ref = create_widget_ref();
         let count = create_signal(0);
 
-        let id = app.add_surface(
+        app.add_surface(
             SurfaceConfig::new()
                 .height(80)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
                 .layer(Layer::Overlay)
                 .exclusive_zone(ExclusiveZone::None)
                 .background_color(Color::TRANSPARENT)
-                // Start fully click-through; the effect below narrows the
-                // region to the pill once it has been laid out.
+                // Everything passes through, except what says otherwise.
                 .click_through(),
             move || {
                 container()
@@ -34,7 +33,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .widget_ref(pill_ref)
+                            .takes_input(true)
                             .padding([10.0, 24.0])
                             .background(Color::rgba(0.15, 0.15, 0.25, 0.95))
                             .corners(20.0)
@@ -50,14 +49,5 @@ fn main() {
                     )
             },
         );
-
-        // Keep the input region glued to the pill's bounds (re-runs whenever
-        // layout moves or resizes it).
-        create_effect(move || {
-            let rect = pill_ref.rect().get();
-            if rect.width > 0.0 {
-                surface_handle(id).set_input_region(Some(vec![rect]));
-            }
-        });
     });
 }

@@ -472,6 +472,10 @@ pub struct Container {
 
     // Backdrop blur: this surface's own content, the compositor's, or both.
     pub(super) backdrop_blur: Option<Signal<BackdropBlur>>,
+    /// Whether pointer and touch input reaches this container's area, said to
+    /// the compositor rather than to the hit test — see
+    /// [`takes_input`](Container::takes_input).
+    pub(super) takes_input: Option<Signal<bool>>,
 
     /// Declared with `control()`. A container is an interaction unit for other
     /// reasons too — see `is_control` — so this is only the explicit half.
@@ -523,6 +527,7 @@ impl Container {
             interaction: None,
             widget_ref: None,
             backdrop_blur: None,
+            takes_input: None,
             declared_control: false,
             anims: None,
             scroll_axis: ScrollAxis::None,
@@ -740,6 +745,62 @@ impl Container {
     /// one off with [`BackdropSources::empty`](crate::backdrop::BackdropSources::empty).
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
         self.backdrop_blur = Some(blur.into_signal());
+        self
+    }
+
+    /// Whether pointer and touch input reaches this container's area at all.
+    ///
+    /// This is not the hit test. It is what the *compositor* is told, so
+    /// `takes_input(false)` does not merely stop this container answering: the
+    /// click goes to whatever is behind the surface, a terminal or the desktop.
+    /// A container that should refuse input without giving it away is
+    /// [`enabled(false)`](Self::enabled), which is a state and keeps blocking
+    /// what is underneath.
+    ///
+    /// The surface says the baseline and a container says the exception. A
+    /// surface takes input everywhere unless it declares
+    /// [`click_through`](crate::surface::SurfaceConfig::click_through), so:
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// // an island in a surface that lets everything else past
+    /// container().takes_input(true).corners(20.0);
+    ///
+    /// // a hole in a bar, where the desktop gets the click
+    /// container().takes_input(false).width(200.0);
+    /// ```
+    ///
+    /// **What is declared is this container's own shape, and nothing else.**
+    /// Children are covered because they are drawn inside it, not because the
+    /// declaration reaches them — so a child that draws *outside* it, which
+    /// `overflow(Visible)` allows, is outside the region too:
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # let do_thing = || {};
+    /// container()
+    ///     .takes_input(true)
+    ///     .width(100.0)
+    ///     .height(30.0)
+    ///     // Drawn 40px below the parent, so outside what it declared: on a
+    ///     // click-through surface this handler never runs, because the
+    ///     // compositor sends that click to whatever is behind.
+    ///     .child(container().translate((0.0, 40.0)).on_click(do_thing));
+    /// ```
+    ///
+    /// It is the container's shape rather than its subtree because a region is
+    /// sent to the compositor as rectangles: one declaration is one shape, and
+    /// a declaration every descendant inherited would be a shape per painting
+    /// widget, every frame the region moves.
+    ///
+    /// A descendant declaring the opposite is a smaller area declared later, so
+    /// an island inside a hole needs no rule of its own.
+    ///
+    /// The region follows the shape on screen — its corners, its transform, its
+    /// clip — because it is read off the frame that was drawn, and it is gone
+    /// the moment the container stops painting.
+    pub fn takes_input<M>(mut self, takes: impl IntoSignal<bool, M>) -> Self {
+        self.takes_input = Some(takes.into_signal());
         self
     }
 
@@ -1730,6 +1791,7 @@ impl Widget for Container {
             border_color,
             gradient,
             backdrop_blur,
+            takes_input,
             overflow,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
@@ -1742,6 +1804,7 @@ impl Widget for Container {
                 self.animated_border_color(id),
                 self.gradient.as_ref().and_then(|g| g.get()),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
+                self.takes_input.as_ref().map(|t| t.get()),
                 self.overflow.get_or(Overflow::Visible),
             )
         });
@@ -1781,6 +1844,13 @@ impl Widget for Container {
                 corner_radii,
                 corner_curvature,
             );
+        }
+
+        // Beside the blur command and for the same reason: a region the
+        // compositor is told about is read off the frame, so a container that
+        // stopped painting cannot leave one behind.
+        if let Some(takes) = takes_input {
+            ctx.declare_input_region(local_bounds, corner_radii, takes);
         }
 
         self.paint_decoration(
