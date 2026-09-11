@@ -941,6 +941,36 @@ mod tests {
         assert_eq!(groups, 2, "which is what the split is for");
     }
 
+    /// The other region a frame carries, and the same two questions: the
+    /// compositor has to be told it is there, and a command that draws nothing
+    /// must not cost a draw group. This one is stricter than the blur above —
+    /// it is declared *over* a background rather than under one, which is the
+    /// order `Container::paint` emits, and the order that would split a group
+    /// for a command with no pixels in it.
+    #[test]
+    fn an_input_declaration_is_carried_without_costing_a_group() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut node = RenderNode::new(1);
+        node.bounds = rect;
+        node.commands
+            .push(Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)));
+        node.commands.push(Rc::new(DrawCommand::InputRegion {
+            rect,
+            corner_radii: CornerRadii::from(0.0),
+            takes: true,
+        }));
+
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        let carried = flatten_root_into(&node, &mut commands, &mut layers);
+
+        assert!(
+            carried.input_region,
+            "the frame carries a declaration, and the loop is told so"
+        );
+        assert_eq!(layers.len(), 1, "and it splits nothing to say it");
+        assert_eq!(commands.len(), 2, "while still travelling with the frame");
+    }
+
     #[test]
     fn ascending_layers_stay_in_one_group() {
         // The common case: nothing is painted over a higher layer, so the
