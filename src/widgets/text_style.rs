@@ -45,8 +45,10 @@
 use smallvec::SmallVec;
 
 use crate::clock::FrameInstant;
+use crate::finite::FiniteOr;
 use crate::jobs::RequiredJob;
 use crate::reactive::{IntoSignal, Signal};
+use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
 use super::font::{FontFamily, FontWeight};
@@ -201,6 +203,12 @@ impl TextShadow {
     }
 }
 
+/// The size a text draws at when nothing declares one, in logical pixels.
+///
+/// Beside the resolver that hands it out, which is also what a declaration
+/// nobody can compute falls back to.
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
+
 /// The text style a container declares for its descendants.
 ///
 /// Every field is optional and resolved independently: a state override that
@@ -224,6 +232,24 @@ pub struct TextStyle {
 }
 
 impl TextStyle {
+    /// The colour to draw the glyphs in.
+    ///
+    /// This and the size below are resolved here, rather than at each widget's
+    /// `refresh`, so that both pass [`FiniteOr`] on their way to
+    /// [`TextAnims::retarget`]: a value nothing can compute becomes a segment's
+    /// start, and every segment after it begins from there. See
+    /// [`crate::finite`] for why the door belongs at the resolver.
+    pub(crate) fn resolved_color(&self, id: WidgetId) -> Color {
+        self.color.get_finite_or(Color::WHITE, id, "color")
+    }
+
+    /// The size to measure and draw the glyphs at, in logical pixels — see
+    /// [`resolved_color`](Self::resolved_color) for the door both pass.
+    pub(crate) fn resolved_font_size(&self, id: WidgetId) -> f32 {
+        self.font_size
+            .get_finite_or(DEFAULT_FONT_SIZE, id, "font_size")
+    }
+
     /// Take from `outer` every property this style does not already declare.
     ///
     /// Called as the fold moves outward from the most specific declaration —
