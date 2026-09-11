@@ -180,6 +180,8 @@ container()
 
 A layer that says nothing about a property is passed over rather than ending the search, so a pressed layer that only scales still lets the hover's background through.
 
+So is a layer whose value is not a number. A property computed from a division that met a zero for one frame is passed over exactly as a layer that says nothing about it is, and what it falls through to is the value underneath: the next layer that has one, or the base. The base is resolved the same way, so whatever comes out of the walk is a number whatever the application computed. The same holds for a text's overrides — `when_hovered(|s| s.font_size(..))` on a label falls through to the `font_size` the label declares, not to the default.
+
 Note that a layer *replaces* the base value rather than ranking against it. A property that already carries a meaning of its own belongs in a layer with a condition, not in the base.
 
 ## State Style Methods

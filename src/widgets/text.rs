@@ -10,7 +10,7 @@ use super::container::get_animated_value;
 use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::state_layer::{StateWhen, Stateful};
-use super::text_style::{TextAnims, TextShadow, TextStroke, TextStyle};
+use super::text_style::{DEFAULT_FONT_SIZE, TextAnims, TextShadow, TextStroke, TextStyle};
 use super::widget::{Color, Event, EventResponse, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
@@ -34,8 +34,12 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
 ///
 /// ```ignore
 /// text("Hello").font_size(21.0).color(theme.text)
-/// container().font_size(21.0).child(text("Hello"))   // same, for a group
 /// ```
+///
+/// There is no enclosing declaration to inherit from: a container draws a box
+/// and says nothing about what is written inside it. A style shared by several
+/// labels is a function that returns one — see
+/// [`text_style`](crate::widgets::text_style).
 pub struct Text {
     content: Signal<String>,
     /// What this text declares about itself. Boxed and absent by default: a
@@ -81,7 +85,7 @@ impl Text {
             backdrop_blur: None,
             anims: None,
             cached_text: String::new(), // Will be set during first layout
-            cached_font_size: 14.0,
+            cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
             cached_wrap: true,
@@ -145,30 +149,6 @@ impl Text {
         self
     }
 
-    /// This text's own declaration, with whatever an active state overrides
-    /// folded over it, nearest first.
-    ///
-    /// Called inside the caller's tracking scope, like the fold it wraps: the
-    /// signals come back unread, and reading them is what subscribes.
-    fn resolved_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = TextStyle::default();
-        // Active overrides first, last declared first, so they outrank the
-        // text's own declaration — and `inherit_from` takes only what is still
-        // missing, which is what makes the whole chain resolve per property.
-        if !self.states.is_empty() {
-            let control = tree.nearest_control(id);
-            for (when, override_) in self.states.iter().rev() {
-                if self.is_state_active(id, control.as_ref(), when) {
-                    style.inherit_from(override_);
-                }
-            }
-        }
-        if let Some(own) = self.style.as_deref() {
-            style.inherit_from(own);
-        }
-        style
-    }
-
     /// Whether an override applies. Reading the answer is what subscribes the
     /// text to the control, so it is asked only for a state it declares.
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
@@ -199,20 +179,18 @@ impl Text {
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> (f32, Option<Color>) {
         let mut declared_color = None;
         let overflow = with_signal_tracking(id, JobType::Layout, || {
-            let style = self.resolved_style(tree, id);
+            let style = self.resolved_text_style(tree, id);
             self.cached_text = self.content.get();
-            self.cached_font_size = style.font_size.get_or(14.0);
+            self.cached_font_size = style.font_size(id);
             // Only where a colour motion was declared. Reading it here
             // subscribes this text's *layout* to the colour, and a text that
             // merely paints one has no reason to re-measure when it changes —
             // paint reads it under its own scope, as it always did.
-            declared_color = self
-                .animates_text_color()
-                .then(|| style.color.get_or(Color::WHITE));
-            self.cached_font_family = style.font_family.get_or_else(default_font_family);
-            self.cached_font_weight = style.font_weight.get_or(FontWeight::NORMAL);
+            declared_color = self.animates_text_color().then(|| style.color(id));
+            self.cached_font_family = style.font_family();
+            self.cached_font_weight = style.font_weight();
             self.cached_wrap = self.wrap.get_or(true);
-            decoration_overflow(style.stroke.map(|s| s.get()), style.shadow.map(|s| s.get()))
+            decoration_overflow(style.stroke(), style.shadow())
         });
         (overflow, declared_color)
     }
@@ -359,13 +337,13 @@ impl Widget for Text {
         // Read the painted properties with tracking so a change on whichever
         // ancestor supplied them repaints this text and nothing else.
         let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
-            let style = self.resolved_style(tree, id);
+            let style = self.resolved_text_style(tree, id);
             (
                 get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
-                    style.color.get_or(Color::WHITE)
+                    style.color(id)
                 }),
-                style.stroke.map(|s| s.get()),
-                style.shadow.map(|s| s.get()),
+                style.stroke(),
+                style.shadow(),
                 self.backdrop_blur.map(|radius| radius.get()),
             )
         });
@@ -406,9 +384,9 @@ impl Widget for Text {
 /// text(my_signal)  // reactive signal
 /// ```
 ///
-/// Styling lives on an enclosing container:
+/// Styling is declared here, on the widget that draws the glyphs:
 /// ```ignore
-/// container().font_size(18.0).bold().child(text("Hello"))
+/// text("Hello").font_size(18.0).bold()
 /// ```
 pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
     Text::new(content)
@@ -417,7 +395,7 @@ pub fn text<M>(content: impl IntoSignal<String, M>) -> Text {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::Animate;
+    use crate::animation::{Animatable, Animate};
     use crate::jobs;
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
@@ -835,6 +813,119 @@ mod tests {
         );
     }
 
+    /// An override nobody can compute is passed over, and the declaration it
+    /// displaced is what the text uses.
+    ///
+    /// `Container` answers the same question this way, at `resolve_state_value`:
+    /// a layer whose value is not finite is passed over exactly as one that says
+    /// nothing about the property is. What makes it possible here is that the
+    /// walk keeps a chain — a fold that picked a winner and put the door on
+    /// whatever it picked would have dropped this text's own 32 before the bad
+    /// override was ever looked at, and landed on 14.
+    #[test]
+    fn an_override_that_is_not_a_number_falls_through_to_the_declaration() {
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size(32.0)
+                .color(Color::RED)
+                .state(hot, |s: TextStyle| {
+                    s.font_size(f32::NAN)
+                        .color(Color::rgba(f32::NAN, 0.0, 0.0, 1.0))
+                }),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        #[cfg(debug_assertions)]
+        let before = crate::reactive::diagnostics::report_count();
+        let (color, size) = frame(&mut tree, root);
+        assert!(
+            (size - 32.0).abs() < 0.01,
+            "a bad override falls through to the size the text declares, not to \
+             the default: got {size}"
+        );
+        assert_eq!(color, Color::RED, "and to the colour it declares");
+
+        // And says nothing about it, as a container passes a layer over in
+        // silence: what the text is left following is exactly what it declared,
+        // so there is nothing to tell anybody. The diagnostic belongs to a
+        // declaration that is itself wrong — see
+        // `a_bad_declaration_is_reported_even_under_a_good_override`.
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::reactive::diagnostics::report_count() - before,
+            0,
+            "a passed-over override must not be reported"
+        );
+    }
+
+    /// A declaration the application got wrong is reported even when an override
+    /// is covering it.
+    ///
+    /// This is why the base is resolved apart from the overrides rather than as
+    /// the last link of one chain. An override that is not a number is passed over
+    /// in silence, because the value the widget is left following is fine — but
+    /// when the *declaration* is the broken one, silence loses the only message
+    /// this has to give. A state active from the first frame would bury it for the
+    /// life of the process, since the report dedupes per widget and property.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_bad_declaration_is_reported_even_under_a_good_override() {
+        use crate::reactive::diagnostics::report_count;
+
+        let hot = create_signal(true);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .font_size(f32::NAN)
+                .state(hot, |s: TextStyle| s.font_size(20.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let before = report_count();
+        let (_, size) = frame(&mut tree, root);
+        assert!(
+            (size - 20.0).abs() < 0.01,
+            "the override is what the text draws with, got {size}"
+        );
+        assert_eq!(
+            report_count() - before,
+            1,
+            "and the declaration underneath it was still wrong"
+        );
+    }
+
+    /// An override's colour must not wake a layout, for the same reason a plain
+    /// one must not.
+    ///
+    /// This is the test that decides where a declaration is *read* — see
+    /// `ResolvedTextStyle`, which is where the reasoning lives. It fails against
+    /// the shorter fix, the one that tests each candidate as it walks.
+    #[test]
+    fn an_override_colour_wakes_no_layout_either() {
+        let hot = create_signal(true);
+        let hue = create_signal(Color::RED);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").state(hot, move |s: TextStyle| s.color(hue)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+        jobs::clear_pending_jobs();
+
+        hue.set(Color::BLUE);
+        let woken = jobs::queued_job_types(root);
+        assert!(
+            !woken.contains(&JobType::Layout),
+            "an override's colour must not re-measure the text: {woken:?}"
+        );
+        assert!(
+            woken.contains(&JobType::Paint),
+            "and it does have to repaint it: {woken:?}"
+        );
+    }
+
     /// Every override setter, not just the one an earlier test happened to
     /// reach.
     ///
@@ -1120,6 +1211,178 @@ mod tests {
         assert!(
             commands(text("hi").text_shadow(visible)).len() > 1,
             "and a shadow that can be seen still draws"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // A signal that stops being a number
+    // -----------------------------------------------------------------------
+
+    /// A text through the frames a recovery claim needs: a bad number, then a
+    /// finite one, then long enough for any transition to have arrived.
+    ///
+    /// The pair is handed back rather than asserted on, so each property reads
+    /// its own half, and it is an `Option` because a text measured at NaN has no
+    /// bounds to paint into — the glyphs do not merely come out the wrong size,
+    /// they are gone.
+    fn after_a_bad_number(
+        widget: impl Widget + 'static,
+        poison: impl FnOnce(),
+        recover: impl FnOnce(),
+    ) -> Option<(Color, f32)> {
+        let ms = std::time::Duration::from_millis;
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().child(widget)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        all_text(&mut tree, root, t0);
+
+        poison();
+        // Two frames, so a bad number is not merely the target but through
+        // `lerp` into the displayed value — which `begin_segment` then keeps as
+        // the start of every segment after it.
+        all_text(&mut tree, root, t0 + ms(1));
+        all_text(&mut tree, root, t0 + ms(50));
+
+        recover();
+        all_text(&mut tree, root, t0 + ms(100));
+        all_text(&mut tree, root, t0 + ms(1000)).first().copied()
+    }
+
+    /// The size a text draws with is the one its signal asks for, even after the
+    /// signal has spent a frame not being a number.
+    #[test]
+    fn a_font_size_follows_its_signal_again_once_the_signal_recovers() {
+        let size = create_signal(10.0f32);
+        let painted = after_a_bad_number(
+            Text::new("x").font_size((move || size.get()).transition(200.0)),
+            || size.set(f32::NAN),
+            || size.set(30.0),
+        )
+        .map(|(_, size)| size);
+
+        assert!(
+            painted.is_some_and(|size| (size - 30.0).abs() < 0.5),
+            "a size given one bad number never followed its signal again: the \
+             glyphs are drawn at {painted:?} rather than 30"
+        );
+    }
+
+    /// The size's neighbour, and the same defect in the same place.
+    ///
+    /// `TextAnims` holds exactly two motions, and both are pointed at a value
+    /// read out of the same resolved style — so a door on one of them is not the
+    /// rule the door exists to state.
+    #[test]
+    fn a_text_colour_follows_its_signal_again_once_the_signal_recovers() {
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let painted = after_a_bad_number(
+            Text::new("x").color((move || hue.get()).transition(200.0)),
+            || hue.set(Color::rgba(f32::NAN, 0.0, 0.0, 1.0)),
+            // Red, and not white: white is what the door hands out for a colour
+            // nobody declared, so recovering to it would pass whether the signal
+            // was followed or merely fallen back on.
+            || hue.set(Color::rgb(1.0, 0.0, 0.0)),
+        )
+        .map(|(color, _)| color);
+
+        assert!(
+            painted.is_some_and(|color| color.r > 0.99 && color.g < 0.01),
+            "a colour given one bad number never followed its signal again: \
+             got {painted:?}"
+        );
+    }
+
+    /// A colour with no motion is resolved at paint and nowhere else, so that
+    /// read is a second way past the door.
+    ///
+    /// Nothing downstream of it guards — the channels reach the shader as they
+    /// are — and the tests above cannot see it: each declares a transition, which
+    /// takes the animated branch of `get_animated_value` and leaves the closure
+    /// beside it unwatched.
+    #[test]
+    fn a_colour_with_no_motion_is_painted_through_the_door_too() {
+        let hue = create_signal(Color::rgba(f32::NAN, 0.0, 0.0, 1.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new("x").color(hue)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let (painted, _) = frame(&mut tree, root);
+        assert!(
+            painted.channels().iter().all(|c| c.is_finite()),
+            "a colour nobody can compute reached the shader: {painted:?}"
+        );
+    }
+
+    /// Both animated text properties go through the door, not the one somebody
+    /// remembered.
+    ///
+    /// Asked of the resolver rather than of a symptom further down, for the
+    /// reason the container's enumeration gives: a symptom test passes for the
+    /// wrong reason all the time — the measurer already refuses a size it
+    /// cannot shape — and what the door promises is about the value it hands
+    /// out.
+    ///
+    /// *Animated*, and not every declared one, is the whole of what is claimed:
+    /// `TextStyle`'s stroke and shadow are numbers too and are read raw. They
+    /// are the category this issue's scope note put gradients and ripple colour
+    /// in — no `AnimationState` stands behind either, so a bad number is gone
+    /// from them the frame the signal recovers, and nothing keeps it.
+    #[test]
+    fn every_animated_text_property_is_resolved_to_a_finite_value() {
+        let nan = f32::NAN;
+        let declared = TextStyle::default()
+            .font_size(nan)
+            .color(Color::rgba(nan, 0.0, 0.0, 1.0));
+        let mut style = crate::widgets::text_style::ResolvedTextStyle::default();
+        style.push_own(&declared);
+
+        // Any id: the resolvers do not consult the tree, and the diagnostic only
+        // prints the number.
+        let id = WidgetId::from_u64(1);
+
+        assert!(
+            style.font_size(id).is_finite(),
+            "font_size resolved to a value that is not finite"
+        );
+        assert!(
+            style.color(id).channels().iter().all(|c| c.is_finite()),
+            "color resolved to a value that is not finite"
+        );
+    }
+
+    /// And it says so, once.
+    ///
+    /// A property that quietly stops following its signal is the silence as much
+    /// as the value, so the diagnostic is the third thing the fix owes. Once per
+    /// property rather than once per frame, which is the dedupe in
+    /// `diagnostics::non_finite`.
+    ///
+    /// The signal is written every frame, and that is what makes this test about
+    /// the dedupe: `Text::layout` early-outs when nothing has dirtied it, so a
+    /// loop that only paints resolves the size once and would pass with the
+    /// dedupe deleted. NaN is equal to nothing including itself, so writing the
+    /// same bad number again is always a change.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_font_size_that_is_not_a_number_is_reported_once() {
+        use crate::reactive::diagnostics::report_count;
+
+        let size = create_signal(f32::NAN);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new("x").font_size(move || size.get())));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let before = report_count();
+        for _ in 0..5 {
+            size.set(f32::NAN);
+            frame(&mut tree, root);
+        }
+        assert_eq!(
+            report_count() - before,
+            1,
+            "five resolutions, and it should have said so once"
         );
     }
 }

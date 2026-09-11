@@ -28,7 +28,7 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 use super::control::Control;
 use super::font::{FontFamily, FontWeight};
 use super::state_layer::{StateWhen, Stateful};
-use super::text_style::TextStyle;
+use super::text_style::{DEFAULT_FONT_SIZE, TextStyle};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
 /// The caret, selection band and placeholder colours a field declares for
@@ -337,7 +337,7 @@ impl TextInput {
             cached_text_width: 0.0,
             cached_glyph_positions: Vec::new(),
             measurements_dirty: true,
-            cached_font_size: 14.0,
+            cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
             password: None,
@@ -365,27 +365,6 @@ impl TextInput {
             input_style: None,
             states: Vec::new(),
         }
-    }
-
-    /// This input's own declarations, completed by the ancestors' for whatever
-    /// they leave out. Each walk is skipped when nothing is left to find.
-    fn resolved_text_style(&self, tree: &Tree, id: WidgetId) -> TextStyle {
-        let mut style = TextStyle::default();
-        // Active overrides first and last declared first, so they outrank this
-        // field's own declaration; `inherit_from` takes only what is missing,
-        // which resolves the chain per property.
-        if !self.states.is_empty() {
-            let control = tree.nearest_control(id);
-            for (when, override_) in self.states.iter().rev() {
-                if self.is_state_active(id, control.as_ref(), when) {
-                    style.inherit_from(override_);
-                }
-            }
-        }
-        if let Some(own) = self.text_style.as_deref() {
-            style.inherit_from(own);
-        }
-        style
     }
 
     /// Give up the hover, and the cursor icon that goes with it.
@@ -683,15 +662,11 @@ impl TextInput {
 
                 (
                     self.value.get(),
-                    style.font_size.get_or(14.0),
-                    style.font_family.get_or_else(default_font_family),
-                    style.font_weight.get_or(FontWeight::NORMAL),
-                    crate::widgets::text::decoration_overflow(
-                        style.stroke.map(|s| s.get()),
-                        style.shadow.map(|s| s.get()),
-                    ),
-                    self.animates_text_color()
-                        .then(|| style.color.get_or(Color::WHITE)),
+                    style.font_size(id),
+                    style.font_family(),
+                    style.font_weight(),
+                    crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
+                    self.animates_text_color().then(|| style.color(id)),
                 )
             });
 
@@ -1391,7 +1366,7 @@ impl Widget for TextInput {
                 let input = self.resolved_input_style();
                 let text_color = crate::widgets::container::get_animated_value(
                     self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
-                    || style.color.get_or(Color::WHITE),
+                    || style.color(id),
                 );
                 // Only when there is nothing to show instead. Read inside the
                 // tracking scope like every other paint input, so a prompt that
@@ -1416,8 +1391,8 @@ impl Widget for TextInput {
                     // The caret defaults to the text colour: an input that
                     // only sets `text_color` should not sprout a blue cursor.
                     input.cursor_color.get_or(text_color),
-                    style.stroke.map(|s| s.get()),
-                    style.shadow.map(|s| s.get()),
+                    style.stroke(),
+                    style.shadow(),
                     placeholder,
                 )
             });
@@ -1778,6 +1753,31 @@ mod tests {
         });
     }
 
+    /// The colour and size the field drew its glyphs at, on a frame at a named
+    /// instant.
+    ///
+    /// Named because an eased value is a function of how long it has been
+    /// running, and a test that let the clock decide would assert on whatever
+    /// the machine managed between two calls.
+    fn drawn_text(tree: &mut Tree, id: WidgetId, at: std::time::Instant) -> Option<(Color, f32)> {
+        fn find(node: &crate::renderer::RenderNode) -> Option<(Color, f32)> {
+            for cmd in &node.commands {
+                if let crate::renderer::DrawCommand::Text {
+                    color, font_size, ..
+                } = &**cmd
+                {
+                    return Some((*color, *font_size));
+                }
+            }
+            node.children.iter().find_map(|child| find(child))
+        }
+        tree.set_frame_instant(Some(at));
+        relayout(tree, id);
+        let node = paint_once(tree, id);
+        tree.set_frame_instant(None);
+        find(&node)
+    }
+
     /// Every rectangle the field draws. Focused with no selection, the caret is
     /// the only one there can be, and its x is where the displayed text ends.
     fn drawn_rects(tree: &mut Tree, id: WidgetId) -> Vec<crate::widgets::Rect> {
@@ -1888,34 +1888,133 @@ mod tests {
                 .color((move || hue.get()).transition(400.0)),
         );
 
-        fn drawn(tree: &mut Tree, id: WidgetId, at: std::time::Instant) -> Option<Color> {
-            tree.set_frame_instant(Some(at));
-            relayout(tree, id);
-            let node = paint_once(tree, id);
-            tree.set_frame_instant(None);
-            fn walk(node: &crate::renderer::RenderNode) -> Option<Color> {
-                for cmd in &node.commands {
-                    if let crate::renderer::DrawCommand::Text { color, .. } = &**cmd {
-                        return Some(*color);
-                    }
-                }
-                node.children.iter().find_map(|c| walk(c))
-            }
-            walk(&node)
-        }
-
         let t0 = std::time::Instant::now();
-        drawn(&mut tree, root, t0);
+        drawn_text(&mut tree, root, t0);
 
         hue.set(Color::rgb(1.0, 1.0, 1.0));
-        drawn(&mut tree, root, t0 + std::time::Duration::from_millis(1));
-        let midway = drawn(&mut tree, root, t0 + std::time::Duration::from_millis(100))
+        drawn_text(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let (midway, _) = drawn_text(&mut tree, root, t0 + std::time::Duration::from_millis(100))
             .expect("the field draws its text");
 
         assert!(
             midway.r > 0.01 && midway.r < 0.99,
             "an input's declared colour has to ease like a text's, got {midway:?}"
         );
+    }
+
+    /// A field's own font size is resolved by its own `refresh`, so the door
+    /// `Text` passes through has to be on this path too.
+    ///
+    /// One more way to see the same poisoning: a bad size reaches the glyph
+    /// positions the caret is placed from as well as the measurement, so a field
+    /// that has seen one keeps the size it had and stops following its signal.
+    #[test]
+    fn a_fields_font_size_follows_its_signal_again_once_the_signal_recovers() {
+        use crate::animation::Animate;
+
+        let ms = std::time::Duration::from_millis;
+        let size = create_signal(10.0f32);
+        let (mut tree, root, _id) = field_in_container(
+            text_input(create_signal("abc".to_owned()))
+                .font_size((move || size.get()).transition(200.0)),
+        );
+
+        let t0 = std::time::Instant::now();
+        drawn_text(&mut tree, root, t0);
+
+        size.set(f32::NAN);
+        drawn_text(&mut tree, root, t0 + ms(1));
+        drawn_text(&mut tree, root, t0 + ms(50));
+
+        size.set(30.0);
+        drawn_text(&mut tree, root, t0 + ms(100));
+
+        let painted = drawn_text(&mut tree, root, t0 + ms(1000)).map(|(_, size)| size);
+        assert!(
+            painted.is_some_and(|size| (size - 30.0).abs() < 0.5),
+            "a field given one bad size never followed its signal again: the \
+             glyphs are drawn at {painted:?} rather than 30"
+        );
+    }
+
+    /// A field resolves its colour on two complementary paths, and both are the
+    /// door's.
+    ///
+    /// `refresh` reads it only where a motion was declared, and paint only where
+    /// one was not, so no single scenario reaches both — this is the second.
+    /// Nothing downstream guards: the channels go to the shader as they are.
+    #[test]
+    fn a_fields_colour_with_no_motion_is_painted_through_the_door() {
+        use crate::animation::Animatable;
+
+        let hue = create_signal(Color::rgba(f32::NAN, 0.0, 0.0, 1.0));
+        let (mut tree, root, _id) =
+            field_in_container(text_input(create_signal("abc".to_owned())).color(hue));
+
+        let (painted, _) = drawn_text(&mut tree, root, std::time::Instant::now())
+            .expect("the field draws its text");
+        assert!(
+            painted.channels().iter().all(|c| c.is_finite()),
+            "a colour nobody can compute reached the shader: {painted:?}"
+        );
+    }
+
+    /// And the path `refresh` owns: a colour with a motion, poisoned and then
+    /// finite again.
+    #[test]
+    fn a_fields_colour_follows_its_signal_again_once_the_signal_recovers() {
+        use crate::animation::Animate;
+
+        let ms = std::time::Duration::from_millis;
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let (mut tree, root, _id) = field_in_container(
+            text_input(create_signal("abc".to_owned()))
+                .color((move || hue.get()).transition(200.0)),
+        );
+
+        let t0 = std::time::Instant::now();
+        drawn_text(&mut tree, root, t0);
+
+        hue.set(Color::rgba(f32::NAN, 0.0, 0.0, 1.0));
+        drawn_text(&mut tree, root, t0 + ms(1));
+        drawn_text(&mut tree, root, t0 + ms(50));
+
+        // Red, not white: white is what a colour nobody declared falls back to.
+        hue.set(Color::rgb(1.0, 0.0, 0.0));
+        drawn_text(&mut tree, root, t0 + ms(100));
+
+        let painted = drawn_text(&mut tree, root, t0 + ms(1000)).map(|(color, _)| color);
+        assert!(
+            painted.is_some_and(|color| color.r > 0.99 && color.g < 0.01),
+            "a field given one bad colour never followed its signal again: \
+             got {painted:?}"
+        );
+    }
+
+    /// The field walks its own chain, so the fall-through is its own to get
+    /// right — see `an_override_that_is_not_a_number_falls_through_to_the_declaration`
+    /// for the rule and why a fold could not state it.
+    #[test]
+    fn an_override_that_is_not_a_number_falls_through_to_the_fields_declaration() {
+        let hot = create_signal(true);
+        let (mut tree, root, _id) = field_in_container(
+            text_input(create_signal("abc".to_owned()))
+                .font_size(32.0)
+                .color(Color::RED)
+                .state(hot, |s: TextStyle| {
+                    s.font_size(f32::NAN)
+                        .color(Color::rgba(f32::NAN, 0.0, 0.0, 1.0))
+                }),
+        );
+
+        let (color, size) = drawn_text(&mut tree, root, std::time::Instant::now())
+            .expect("the field draws its text");
+        assert!(
+            (size - 32.0).abs() < 0.01,
+            "a bad override falls through to the size the field declares, not to \
+             the default: got {size}"
+        );
+        assert_eq!(color, Color::RED, "and to the colour it declares");
     }
 
     /// A field switched to masked refuses the very next copy, not the one after.
