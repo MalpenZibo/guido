@@ -79,7 +79,8 @@ pub struct AnimationState<T: Animatable> {
     using_reverse: bool,
     /// Spring state (for spring timing functions)
     spring_state: Option<SpringState>,
-    /// Whether the animation has been initialized with its first real value
+    /// Whether a real layout has placed this. A measure pass writes the value
+    /// without setting it — see [`set_immediate`](Self::set_immediate).
     initialized: bool,
     /// Previous value for change detection
     prev_value: Option<T>,
@@ -547,13 +548,26 @@ impl<T: Animatable> AnimationState<T> {
         &self.target
     }
 
-    /// Set value immediately without animation (for initialization)
+    /// Set value immediately without animation, and mark it placed — unless this
+    /// is a measure pass.
+    ///
+    /// A measure pass places the value and does **not** mark it placed. It has
+    /// to place it: `measure_natural_size` sizes a popup before the surface
+    /// exists, and the number it reports is read off this animation — through
+    /// [`displayed`](Self::displayed), which answers with the target for exactly
+    /// that reason. What it must not do is spend the appearance.
+    /// `begin_enter` already declines there, saying in as many words that a
+    /// measure pass is not an appearance; marking the property placed would
+    /// contradict it one line later, because the layout that *is* the appearance
+    /// reads `is_initial()` to decide whether to look at the enter at all.
     pub fn set_immediate(&mut self, value: T) {
         self.current = value;
         self.target = value;
         self.start = value;
         self.progress = 1.0;
-        self.initialized = true;
+        if !measuring_final() {
+            self.initialized = true;
+        }
     }
 
     /// Check if animation has never been initialized (first layout)

@@ -2150,9 +2150,10 @@ mod tests {
     /// Regression test for the missed-write race that left popup menus
     /// permanently collapsed: the Animation subscription for an animated
     /// prop is only registered during paint, but the animation target is
-    /// initialized (set_immediate) during the first layout — possibly a
-    /// popup measure pass long before a heavy tree finishes its first
-    /// paint. A signal write landing in that window notified nobody and
+    /// placed (set_immediate) during the first layout, long before a heavy
+    /// tree finishes its first paint — and a popup is measured before that
+    /// again, which places the target without counting as the first layout.
+    /// A signal write landing in that window notified nobody and
     /// the animation sat on the stale target forever. The first paint must
     /// detect the drift and request an Animation job so
     /// advance_animations adopts the missed target.
