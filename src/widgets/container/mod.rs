@@ -1614,6 +1614,18 @@ impl Widget for Container {
         );
         tree.clear_needs_layout(id);
 
+        // Before the measurement, because the measurement consumes what this
+        // places: `read_box_lengths` reads the animated padding, and a value
+        // seeded after it is a value this layout never saw. Asking for another
+        // layout afterwards would not do — `measure_natural_size` runs a layout
+        // whose size is a *return value*, so on the popup path there is no later
+        // pass for a repair to land in.
+        //
+        // Above it rather than at the top of the function: a layout that skips
+        // must not seed, and the gate is what decides that. Below the gate the
+        // first layout never skips, because it has no cached constraints.
+        self.seed_animations(tree, id);
+
         let lengths = self.read_box_lengths(id, constraints);
         let child = self.child_layout(&lengths, constraints);
         let padding = lengths.padding;
@@ -1662,7 +1674,6 @@ impl Widget for Container {
         }
 
         self.update_size_targets(tree, id, &lengths, content_size);
-        self.seed_animations(tree, id);
 
         let size = self.resolve_size(&lengths, constraints, content_size);
 

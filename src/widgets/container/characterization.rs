@@ -2652,6 +2652,176 @@ fn a_translate_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
     );
 }
 
+/// A padding written between construction and the first layout arrives.
+///
+/// The push half, for padding. The builder seeds from `get_untracked()`, so a
+/// write in that window is one nothing has subscribed to yet; what closes it is
+/// `seed_animations` re-reading the target at the first layout and placing it
+/// before the measurement that consumes it. Seed after `read_box_lengths` and the
+/// container measures with whatever the builder happened to see, with no later
+/// pass obliged to fix it.
+#[test]
+fn a_padding_written_before_the_first_layout_arrives() {
+    let inset = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .padding(
+                (move || Padding::all(inset.get()))
+                    .transition(Transition::new(80.0, TimingFunction::Linear)),
+            )
+            .child(box_of(20.0, 20.0)),
+    );
+
+    // Between the builder and the first layout, as a popup's content is built
+    // one frame and laid out the next.
+    inset.set(24.0);
+
+    // One frame: the seed runs before the measurement, so the layout that places
+    // the value is the layout that uses it.
+    let x = h.frame(400.0, 400.0).node.children[0].local_transform.tx();
+    assert!(
+        (x - 24.0).abs() < 0.5,
+        "the write landed before anything was listening and has to be picked up \
+         at the seed, got {x}"
+    );
+}
+
+/// And the size that padding feeds settles on the padding that was measured.
+///
+/// The consequence with no second chance. `update_size_targets` runs after the
+/// seed and places the size target from `content + padding` — so with the seed
+/// last, it placed a size computed from the padding the builder captured, and a
+/// placement jumps: no animation is left running, and nothing asks again. The
+/// container keeps a width that is wrong for the rest of its life, not for a
+/// frame.
+///
+/// Content-driven on purpose — a width with a cap and no exact value — because a
+/// container told its width outright does not consult its padding for it.
+#[test]
+fn a_size_settles_on_the_padding_the_layout_measured() {
+    let inset = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .padding(
+                (move || Padding::all(inset.get()))
+                    .transition(Transition::new(80.0, TimingFunction::Linear)),
+            )
+            .width(at_most(200.0).transition(Transition::new(80.0, TimingFunction::Linear)))
+            .child(box_of(20.0, 20.0)),
+    );
+
+    inset.set(24.0);
+    settle(&mut h, 120);
+
+    let width = h.tree.cached_size(h.root).map(|s| s.width);
+    assert!(
+        width.is_some_and(|w| (w - 68.0).abs() < 0.5),
+        "the size follows the content plus the padding that was measured, \
+         20 + 24 + 24: got {width:?}"
+    );
+}
+
+/// The same for a border width, seeded from the same pass by the same call.
+#[test]
+fn a_border_width_written_before_the_first_layout_arrives() {
+    let thickness = create_signal(0.0f32);
+    let mut h = H::new(container().width(80.0).height(80.0).border(
+        (move || thickness.get()).transition(Transition::new(80.0, TimingFunction::Linear)),
+        Color::WHITE,
+    ));
+
+    thickness.set(5.0);
+    // One frame is enough: a border width is paint-only, so unlike a padding it
+    // arrived even when the seed ran last. What this kills is its own
+    // `seed_or_enter` line; the arm it has in the drift list is the other
+    // border-width test's, one screen down.
+    let frame = h.frame(200.0, 200.0);
+    let width = borders(&frame.node).first().map(|(width, _)| *width);
+    assert!(
+        width.is_some_and(|w| (w - 5.0).abs() < 0.5),
+        "the write landed before anything was listening and has to be picked up \
+         at the seed, got {width:?}"
+    );
+}
+
+/// The same for a padding, which the drift list names first.
+///
+/// Read off the child's position, because that is where a padding arrives: the
+/// container's own rect says nothing about its inside.
+#[test]
+fn a_padding_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
+    let armed = create_signal(false);
+    let inset = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .padding(
+                (move || {
+                    if armed.get() {
+                        Padding::all(inset.get())
+                    } else {
+                        Padding::all(0.0)
+                    }
+                })
+                .transition(Transition::new(80.0, TimingFunction::Linear)),
+            )
+            .child(box_of(20.0, 20.0)),
+    );
+    h.fit(400.0, 400.0);
+    h.paint();
+
+    // The branch flips, which the first subscription can see.
+    armed.set(true);
+    settle(&mut h, 120);
+
+    // And this is the write nothing else can see.
+    inset.set(30.0);
+    settle(&mut h, 120);
+
+    let x = h.paint().children[0].local_transform.tx();
+    assert!(
+        (x - 30.0).abs() < 0.5,
+        "a padding behind a branch nobody tracked still has to converge, got {x}"
+    );
+}
+
+/// The same for a border width, the slot beside padding's in the drift list.
+///
+/// These two are the last pair of arms in that list nothing watched: deleting
+/// either changed nothing any test could see.
+#[test]
+fn a_border_width_target_behind_an_untaken_branch_is_picked_up_by_the_resync() {
+    let armed = create_signal(false);
+    let thickness = create_signal(0.0f32);
+    let mut h = H::new(
+        container().width(80.0).height(80.0).border(
+            (move || {
+                if armed.get() { thickness.get() } else { 0.0 }
+            })
+            .transition(Transition::new(80.0, TimingFunction::Linear)),
+            Color::WHITE,
+        ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    armed.set(true);
+    settle(&mut h, 120);
+
+    thickness.set(6.0);
+    settle(&mut h, 120);
+
+    let width = borders(&h.paint()).first().map(|(width, _)| *width);
+    assert!(
+        width.is_some_and(|w| (w - 6.0).abs() < 0.5),
+        "a border width behind a branch nobody tracked still has to converge, \
+         got {width:?}"
+    );
+}
+
 /// The same for a shadow, which reaches paint by its own slot in both the seed
 /// and the drift list.
 ///
@@ -3397,7 +3567,7 @@ fn an_enter_is_consumed_by_the_first_layout_and_does_not_play_again() {
 
 /// The verb reaches the properties whose first value is placed somewhere other
 /// than the seed pass — a size, which `update_size_targets` initialises, and a
-/// padding, which keeps the seed it was built with and is never re-seeded.
+/// padding, which reaches `seed_or_enter` last of the nine.
 ///
 /// These are two of the four that accepted an enter and silently dropped it
 /// while the take lived in one initialiser instead of in `AnimationState`.

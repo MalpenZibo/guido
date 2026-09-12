@@ -21,7 +21,11 @@
 //! - [`seed_animations`] is (1): at the first layout, every animated property
 //!   is read under Animation tracking so its subscription starts *now*. Widget
 //!   creation and first layout run in one synchronous block — for popups, the
-//!   measure-before-spawn — so nothing can land in between.
+//!   measure-before-spawn — so nothing can land in between. It runs *before*
+//!   the measurement, not after: padding is a property a layout reads, and one
+//!   placed after `read_box_lengths` is a value that layout never saw. On the
+//!   popup path there is no later pass to repair that — the size is a return
+//!   value.
 //! - [`resync_animation_targets`] is (2): every paint re-reads the targets
 //!   under tracking and asks for an Animation job when one has drifted, so
 //!   `advance_animations` adopts whatever the subscription missed.
@@ -147,9 +151,10 @@ impl Container {
         // Targets are computed under `&self` first: the writes below need
         // `&mut self.anims`, and the effective_* readers need `&self`.
         let (pd_target, bw_target) = with_signal_tracking(id, JobType::Animation, || {
-            // Read for the subscription, and kept: these two keep the
-            // seed they were built with rather than being re-seeded here,
-            // but an enter declared on them still has to begin somewhere.
+            // Read under tracking for the subscription, and placed below like
+            // every other property — which they have been since #348 gave them
+            // a `seed_or_enter`, and which is why the drift check can speak for
+            // them at all: it is gated on their having been placed.
             (
                 pd_init.then(|| self.effective_padding_target(id)),
                 bw_init.then(|| self.effective_border_width_target(id)),
