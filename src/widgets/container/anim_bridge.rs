@@ -91,10 +91,12 @@ impl Container {
             });
 
             if anim.is_initial() {
-                // Mark initialized at the first layout whatever the value, so
-                // later changes animate instead of snapping — unless an enter
-                // was declared, in which case this is the appearance it was
-                // waiting for and the size animates from there.
+                // Mark initialized at the first *real* layout whatever the
+                // value, so later changes animate instead of snapping — unless
+                // an enter was declared, in which case this is the appearance it
+                // was waiting for and the size animates from there. A measure
+                // pass places without marking, so the appearance is still to
+                // come: see `set_immediate`.
                 if anim.begin_enter(target, || tree.frame_instant()) {
                     retargeted = true;
                 } else {

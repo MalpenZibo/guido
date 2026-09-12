@@ -3565,6 +3565,74 @@ fn an_enter_is_consumed_by_the_first_layout_and_does_not_play_again() {
     );
 }
 
+/// A container whose width and padding both declare where they start.
+///
+/// Shared by the pair below, which differ in one thing — whether a measure pass
+/// runs first — and must not drift apart in any other.
+fn a_size_and_a_padding_entering() -> Container {
+    container()
+        .height(60.0)
+        .width(
+            120.0f32
+                .transition(Transition::new(100.0, TimingFunction::Linear))
+                .entering_from(0.0),
+        )
+        .padding(
+            Padding::all(20.0)
+                .transition(Transition::new(100.0, TimingFunction::Linear))
+                .entering_from(Padding::all(0.0)),
+        )
+        .child(container().width(10.0).height(10.0))
+}
+
+/// A measure pass does not spend the appearance.
+///
+/// `measure_natural_size` lays a popup out once, before the surface exists, to
+/// tell the compositor how big to make it. `begin_enter` declines there and says
+/// why — nothing is mapped, and there is no frame instant to play against — but
+/// it declines by returning the same `false` that means "nothing was declared",
+/// so the seed places the value and marks it placed. The real first layout then
+/// finds `is_initial()` false, never computes the target, and the enter that was
+/// never taken is never played.
+///
+/// Which makes the popup the one surface where an enter silently does nothing,
+/// and `entering_from`'s own documentation opens with a menu that scales open.
+#[test]
+fn a_measure_pass_leaves_the_appearance_for_the_first_real_layout() {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(a_size_and_a_padding_entering());
+
+    // The measure that runs before anything is mapped, capped at the output
+    // rather than asking for the size the surface is about to be told. Loose on
+    // both axes here, which is the layer-surface shape; a popup's measure pins
+    // the width and leaves only the height loose, and the root's constraints
+    // differ from the real layout's either way.
+    with_measure_final(|| {
+        h.fit(800.0, 800.0);
+    });
+
+    frame_at(&mut h, t0, 400.0, 400.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        400.0,
+        400.0,
+    );
+
+    let midway = h.tree.cached_size(h.root).unwrap().width;
+    assert!(
+        midway > 0.0 && midway < 120.0,
+        "the width has to open from the value it enters from, as it does without \
+         the measure pass, got {midway}"
+    );
+    let child = h.tree.get_children(h.root)[0];
+    let inset = h.tree.get_origin(child).unwrap().0;
+    assert!(
+        inset > 0.0 && inset < 20.0,
+        "and so does the padding, got {inset}"
+    );
+}
+
 /// The verb reaches the properties whose first value is placed somewhere other
 /// than the seed pass — a size, which `update_size_targets` initialises, and a
 /// padding, which reaches `seed_or_enter` last of the nine.
@@ -3576,21 +3644,7 @@ fn an_enter_is_consumed_by_the_first_layout_and_does_not_play_again() {
 #[test]
 fn an_enter_reaches_a_size_and_a_padding_too() {
     let t0 = std::time::Instant::now();
-    let mut h = H::new(
-        container()
-            .height(60.0)
-            .width(
-                120.0f32
-                    .transition(Transition::new(100.0, TimingFunction::Linear))
-                    .entering_from(0.0),
-            )
-            .padding(
-                Padding::all(20.0)
-                    .transition(Transition::new(100.0, TimingFunction::Linear))
-                    .entering_from(Padding::all(0.0)),
-            )
-            .child(container().width(10.0).height(10.0)),
-    );
+    let mut h = H::new(a_size_and_a_padding_entering());
 
     frame_at(&mut h, t0, 400.0, 400.0);
     frame_at(

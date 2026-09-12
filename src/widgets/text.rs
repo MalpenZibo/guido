@@ -546,6 +546,20 @@ mod tests {
         );
     }
 
+    /// A text whose colour declares where it starts.
+    ///
+    /// Shared by the pair below, which differ in one thing — whether a measure
+    /// pass runs first — and must not drift apart in any other.
+    fn a_colour_entering(from: Color, to: Color) -> (Tree, WidgetId) {
+        let mut tree = Tree::new();
+        let root = tree
+            .register(Box::new(container().child(
+                Text::new("entering").color(to.transition(400.0).entering_from(from)),
+            )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        (tree, root)
+    }
+
     /// A text's colour appears from somewhere else too.
     ///
     /// `TextAnims::retarget` is one of the four initialisers that place a
@@ -558,12 +572,7 @@ mod tests {
         const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
         const TO: Color = Color::rgb(1.0, 1.0, 1.0);
 
-        let mut tree = Tree::new();
-        let root = tree
-            .register(Box::new(container().child(
-                Text::new("entering").color(TO.transition(400.0).entering_from(FROM)),
-            )));
-        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let (mut tree, root) = a_colour_entering(FROM, TO);
 
         let t0 = std::time::Instant::now();
         all_text(&mut tree, root, t0);
@@ -575,6 +584,39 @@ mod tests {
 
         let settled = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(600))[0].0;
         assert!(settled.r > 0.99, "and it gets there, got {settled:?}");
+    }
+
+    /// And a measure pass does not spend it.
+    ///
+    /// `TextAnims::retarget` places a colour with `set_immediate` when no enter
+    /// begins, which is the same shape the container's seed has — so a label in a
+    /// popup lost its enter the same way a padding did, for the same reason and
+    /// in a different file. The guard is on `set_immediate` rather than on either
+    /// caller, which is what makes this one true without a second edit.
+    #[test]
+    fn a_measure_pass_leaves_a_text_colour_its_appearance() {
+        const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(1.0, 1.0, 1.0);
+
+        let (mut tree, root) = a_colour_entering(FROM, TO);
+
+        // The popup path: a natural size before anything is mapped, and loose,
+        // where the layouts after it are tight.
+        let t0 = std::time::Instant::now();
+        tree.set_frame_instant(Some(t0));
+        crate::widgets::container::with_measure_final(|| {
+            let _ =
+                jobs::pump_and_layout(&mut tree, root, Constraints::new(0.0, 0.0, 800.0, 800.0));
+        });
+        tree.set_frame_instant(None);
+
+        all_text(&mut tree, root, t0);
+        let midway = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(100))[0].0;
+        assert!(
+            midway.r > 0.01 && midway.r < 0.99,
+            "the colour has to arrive rather than be arrived, as it does without \
+             the measure pass, got {midway:?}"
+        );
     }
 
     /// The same for a size, which moves layout rather than paint — so the claim
