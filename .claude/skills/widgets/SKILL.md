@@ -236,8 +236,8 @@ Three rules the shape depends on, in order of how easily they are broken:
   `height` declare a `Length` and move an `f32` — so `width(w.timeline(..))`
   does not compile rather than compiling and playing nothing.
 
-A new animatable property adds its name to four lists that nothing keeps in
+A new animatable property adds its name to five lists that nothing keeps in
 step: `ContainerAnims`'s fields, `start_timeline!` and the `advance_anim!`
-block in `advance_animations`, and the drift block in
-`resync_animation_targets`. Miss one and the property silently never plays or
-never wakes.
+block in `advance_animations`, the seed block in `seed_animations`, and the
+drift block in `resync_animation_targets`. Miss one and the property silently
+never plays, never wakes, or keeps whatever value the builder happened to see.
