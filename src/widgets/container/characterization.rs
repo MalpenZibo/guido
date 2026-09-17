@@ -62,6 +62,19 @@ impl H {
         self.layout(Constraints::new(0.0, 0.0, w, h))
     }
 
+    /// One animation pass at a named instant, and what it said about whether
+    /// anything is still moving.
+    fn advance_at(&mut self, now: std::time::Instant) -> bool {
+        self.tree.set_frame_instant(Some(now));
+        let root = self.root;
+        let moving = self
+            .tree
+            .with_widget_mut(root, |w, id, t| w.advance_animations(t, id))
+            .expect("root is registered");
+        self.tree.set_frame_instant(None);
+        moving
+    }
+
     fn paint(&mut self) -> RenderNode {
         let root = self.root;
         let mut node = RenderNode::new(root.as_u64());
@@ -479,6 +492,47 @@ fn fixed_size_makes_a_relayout_boundary() {
     let mut loose = H::new(container().child(box_of(40.0, 20.0)));
     loose.fit(500.0, 500.0);
     assert!(!loose.tree.is_relayout_boundary(loose.root));
+}
+
+/// A paint-only animation is not a reason to re-measure the parent.
+///
+/// What stops a fixed box being a boundary is an animation that *moves the
+/// box* — width, height, padding — because the parent has to reposition its
+/// siblings on every frame of one. A background easing changes nothing about
+/// where anything is, and a container whose colour is moving still answers for
+/// its own area.
+#[test]
+fn a_moving_colour_does_not_stop_a_fixed_box_being_a_boundary() {
+    let colour = create_signal(Color::RED);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(50.0)
+            .background(colour.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .child(box_of(40.0, 20.0)),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 500.0, 500.0);
+    colour.set(Color::BLUE);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(20),
+        500.0,
+        500.0,
+    );
+    h.paint();
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(40),
+        500.0,
+        500.0,
+    );
+
+    assert!(
+        h.tree.is_relayout_boundary(h.root),
+        "a background halfway through its transition moves nothing, so the \
+         parent has nothing to re-measure"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1300,6 +1354,15 @@ fn a_shadow_alone_is_an_animated_property_on_both_lists() {
             .follows_a_signal_anywhere(),
         "a shadow animation mirrors a signal, so it re-syncs at paint"
     );
+    assert!(
+        !container()
+            .padding(Padding::all(0.0).transition(t()))
+            .when_hovered(|s| s.lighter(0.1))
+            .has_animated_state_properties(),
+        "padding is the property that answers differently to the two halves of \
+         this question — it does follow a signal, and it does move the box — so \
+         it is the one that says hovering has nothing here to animate"
+    );
 }
 
 /// The alpha floor is a floor: a shadow exactly at it is still nothing.
@@ -2051,6 +2114,41 @@ impl Container {
             .as_deref()
             .is_some_and(|declared| declared.slots().any(AnimSlot::follows_a_signal))
     }
+}
+
+/// A container still moving says so, and one that has settled stops saying it.
+///
+/// `advance_animations` folds the declared animations together with the
+/// ripple, the kinetic scroll and the scrollbars, and its answer is what keeps
+/// the next frame coming. A fold that lost the declared half would leave a
+/// transition running with nothing asking for the frames to run it on —
+/// visible only as an animation that stops halfway when nothing else in the
+/// container happens to be moving.
+#[test]
+fn a_container_whose_declared_animation_is_running_asks_for_another_frame() {
+    let colour = create_signal(Color::RED);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(50.0)
+            .background(colour.transition(Transition::new(100.0, TimingFunction::Linear))),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 500.0, 500.0);
+    h.paint();
+    colour.set(Color::BLUE);
+
+    let moving = h.advance_at(t0 + std::time::Duration::from_millis(20));
+    assert!(
+        moving,
+        "a transition halfway through needs the frame after it"
+    );
+
+    // Two: the frame that arrives is itself a frame something was moving on,
+    // and it is the one after it that has nothing left to ask for.
+    h.advance_at(t0 + std::time::Duration::from_millis(200));
+    let settled = h.advance_at(t0 + std::time::Duration::from_millis(220));
+    assert!(!settled, "and one that has arrived asks for nothing");
 }
 
 /// A container that declares no motion carries no animation box.
