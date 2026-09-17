@@ -126,7 +126,7 @@ impl Selections {
 
     /// A new offer for `kind`, read by `start_reader`, which is handed the
     /// offer's generation to stamp its result with and answers whether the read
-    /// could start.
+    /// could start. One that could not is an offer with no content.
     pub(super) fn offer(
         &mut self,
         kind: SelectionKind,
@@ -135,6 +135,7 @@ impl Selections {
         let generation = self.next_generation(kind);
         if let Err(e) = start_reader(generation) {
             log::warn!("Selection prefetch skipped: {e}");
+            self.apply(kind, generation, None);
         }
     }
 
@@ -559,3 +560,86 @@ impl DataSourceHandler for WaylandState {
 
 delegate_data_device!(WaylandState);
 delegate_primary_selection!(WaylandState);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::{
+        clipboard_paste, primary_paste, set_system_clipboard, set_system_primary,
+    };
+
+    /// An offer whose read cannot start — no event loop to deliver to, no thread
+    /// to read on — has no content, as one with nothing readable does.
+    #[test]
+    fn an_offer_whose_read_cannot_start_leaves_nothing_to_paste() {
+        let mut selections = Selections::new(None, None);
+
+        set_system_clipboard("copied two selections ago".into());
+        selections.offer(SelectionKind::Clipboard, |_| {
+            Err("failed to spawn clipboard reader thread".into())
+        });
+        assert_eq!(clipboard_paste(), None);
+
+        set_system_primary(Some("selected two selections ago".into()));
+        selections.offer(SelectionKind::Primary, |_| {
+            Err("no event loop running".into())
+        });
+        assert_eq!(
+            primary_paste(),
+            None,
+            "and the middle click has the same hole"
+        );
+    }
+
+    /// A reader that did start is left to deliver: the text is replaced when its
+    /// result arrives, not before.
+    #[test]
+    fn an_offer_being_read_keeps_the_text_until_the_read_lands() {
+        let mut selections = Selections::new(None, None);
+        set_system_clipboard("the last owner's".into());
+
+        let mut started = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            started = Some(generation);
+            Ok(())
+        });
+        assert_eq!(clipboard_paste().as_deref(), Some("the last owner's"));
+
+        selections.apply(
+            SelectionKind::Clipboard,
+            started.unwrap(),
+            Some("this one's".into()),
+        );
+        assert_eq!(clipboard_paste().as_deref(), Some("this one's"));
+    }
+
+    /// A read that lands after a newer offer is dropped: the slow pipe of the
+    /// last owner does not get to overwrite the one that replaced it.
+    #[test]
+    fn a_read_overtaken_by_a_newer_offer_is_dropped() {
+        let mut selections = Selections::new(None, None);
+
+        let mut first = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            first = Some(generation);
+            Ok(())
+        });
+        let mut second = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            second = Some(generation);
+            Ok(())
+        });
+
+        selections.apply(
+            SelectionKind::Clipboard,
+            second.unwrap(),
+            Some("newer".into()),
+        );
+        selections.apply(
+            SelectionKind::Clipboard,
+            first.unwrap(),
+            Some("older".into()),
+        );
+        assert_eq!(clipboard_paste().as_deref(), Some("newer"));
+    }
+}
