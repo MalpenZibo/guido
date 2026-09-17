@@ -50,8 +50,8 @@ type LockWidgetFn = Box<dyn Fn(OutputInfo) -> Box<dyn Widget>>;
 
 #[derive(Default)]
 struct LockData {
-    /// Builds the lock screen widget for an output. Kept across lock
-    /// cycles so hotplugged outputs get surfaces while locked.
+    /// Builds the lock screen widget for an output. Kept for as long as the
+    /// session stays locked, so an output plugged in meanwhile gets a surface.
     factory: Option<LockWidgetFn>,
     /// Lock surface per output.
     surfaces: HashMap<OutputId, SurfaceId>,
