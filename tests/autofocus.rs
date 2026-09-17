@@ -28,9 +28,8 @@ impl Screen {
     }
 
     fn layout(&mut self, id: WidgetId) {
-        self.tree.with_widget_mut(id, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 40.0))
-        });
+        self.tree
+            .layout_widget(id, Constraints::new(0.0, 0.0, 400.0, 40.0));
     }
 }
 

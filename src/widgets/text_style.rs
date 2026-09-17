@@ -365,6 +365,7 @@ impl TextAnims {
     /// the first frame ease from a value that was already stale.
     pub(crate) fn retarget(
         &mut self,
+        ctx: &mut crate::tree::LayoutCtx,
         color: Color,
         size: f32,
         now: FrameInstant,
@@ -372,8 +373,8 @@ impl TextAnims {
         let mut wants = None;
         if let Some(a) = self.color.as_mut() {
             if a.is_initial() {
-                if !a.begin_enter(color, || now) {
-                    a.set_immediate(color);
+                if !a.begin_enter(ctx, color, || now) {
+                    a.set_immediate(ctx, color);
                 }
             } else {
                 a.animate_to(color, now);
@@ -385,13 +386,13 @@ impl TextAnims {
         let mut measured = size;
         if let Some(a) = self.font_size.as_mut() {
             if a.is_initial() {
-                if !a.begin_enter(size, || now) {
-                    a.set_immediate(size);
+                if !a.begin_enter(ctx, size, || now) {
+                    a.set_immediate(ctx, size);
                 }
             } else {
                 a.animate_to(size, now);
             }
-            measured = a.displayed();
+            measured = a.displayed_in(ctx);
             // A size still moving has to be measured again, not merely redrawn.
             if a.is_animating() {
                 wants = Some(RequiredJob::Layout);
@@ -510,7 +511,7 @@ macro_rules! declares_text_style {
             /// silently-dropped value the whole rule exists to prevent.
             fn retarget_text_anims(
                 &mut self,
-                tree: &$crate::tree::Tree,
+                ctx: &mut $crate::tree::LayoutCtx,
                 id: $crate::tree::WidgetId,
                 color: $crate::widgets::Color,
                 size: f32,
@@ -518,7 +519,8 @@ macro_rules! declares_text_style {
                 let Some(anims) = self.$anims.as_deref_mut() else {
                     return size;
                 };
-                let (wants, measured) = anims.retarget(color, size, tree.frame_instant());
+                let now = ctx.tree_ref().frame_instant();
+                let (wants, measured) = anims.retarget(ctx, color, size, now);
                 if let Some(required) = wants {
                     $crate::jobs::request_job(id, $crate::jobs::JobRequest::Animation(required));
                 }

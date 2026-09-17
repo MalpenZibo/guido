@@ -232,7 +232,7 @@ pub mod widget_prelude {
     /// `scale`; a widget written outside the crate positions what it paints,
     /// and for that it needs the thing those three compose into.
     pub use crate::transform::Transform;
-    pub use crate::tree::{Tree, WidgetId};
+    pub use crate::tree::{LayoutCtx, LayoutPass, Tree, WidgetId};
     pub use crate::widgets::{LayoutHints, Widget};
 }
 
@@ -514,7 +514,7 @@ fn measure_popup_height(tree: &mut Tree, root: WidgetId, width: u32, parent: Sur
 /// Measure a widget tree's natural size. `fixed_w`/`fixed_h` pin an axis;
 /// `None` measures it loose, capped at the surface's output size (minus a
 /// margin) so a runaway or `fill()` content can't request an absurd
-/// surface. Runs under the measure-final flag: animation TARGETS, not
+/// surface. Runs as a measure: animation TARGETS, not
 /// in-flight values, so the result is animation-invariant.
 fn measure_natural_size(
     tree: &mut Tree,
@@ -551,12 +551,9 @@ fn measure_natural_size(
     };
 
     let constraints = Constraints::new(min_w, min_h, max_w, max_h);
-    let measured = widgets::container::with_measure_final(|| {
-        tree.with_widget_mut(root, |widget, id, tree| {
-            widget.layout(tree, id, constraints)
-        })
-    })
-    .unwrap_or(layout::Size::new(100.0, 100.0));
+    let measured = tree
+        .measure_widget(root, constraints)
+        .unwrap_or(layout::Size::new(100.0, 100.0));
 
     let w = fixed_w.unwrap_or_else(|| (measured.width.ceil() as u32).max(1));
     let h = fixed_h.unwrap_or_else(|| (measured.height.ceil() as u32).max(1));
@@ -1559,11 +1556,10 @@ fn layout_pass<P: Platform>(
         std::mem::swap(&mut roots, layout_roots);
         for root_id in &roots {
             // Use cached constraints for boundaries, or fall back to parent constraints
-            let cached = tree.last_constraints(*root_id).unwrap_or(constraints);
-
-            tree.with_widget_mut(*root_id, |widget, id, tree| {
-                widget.layout(tree, id, cached);
-            });
+            let cached = tree
+                .last_layout_constraints(*root_id)
+                .unwrap_or(constraints);
+            tree.layout_widget(*root_id, cached);
         }
         // Paint invalidation is per widget, not per subtree: every widget
         // that actually ran its layout marked itself (and its ancestors)
@@ -1574,9 +1570,7 @@ fn layout_pass<P: Platform>(
         // paint and flatten caches the layout pass just earned.
     } else if geometry.needs_resize {
         // Full layout from root only when explicitly needed (first frame, resize, etc.)
-        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-            widget.layout(tree, id, constraints);
-        });
+        tree.layout_widget(surface.widget_id, constraints);
         tree.mark_subtree_needs_paint(surface.widget_id);
     }
     // If neither condition is true, skip layout entirely - nothing is dirty
@@ -1590,9 +1584,7 @@ fn layout_pass<P: Platform>(
         && let Some(popup_width) = wayland_state.surface(id).and_then(|s| s.popup_auto_width())
     {
         let natural = measure_popup_height(tree, surface.widget_id, popup_width, id);
-        tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
-            widget.layout(tree, wid, constraints);
-        });
+        tree.layout_widget(surface.widget_id, constraints);
         with_surface(wayland_state, id, |s| {
             s.reposition_popup_if_changed(natural)
         });
@@ -1614,9 +1606,7 @@ fn layout_pass<P: Platform>(
         let fixed_w = (!surface.config.width.is_content()).then_some(frame.width);
         let fixed_h = (!surface.config.height.is_content()).then_some(frame.height);
         let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
-        tree.with_widget_mut(surface.widget_id, |widget, wid, tree| {
-            widget.layout(tree, wid, constraints);
-        });
+        tree.layout_widget(surface.widget_id, constraints);
         // Compared as they will be *asked for*, not as they were measured. On an
         // axis the compositor owns both sides are zero, so a `content()` width
         // under `LEFT | RIGHT` cannot make this true for ever by measuring 300
@@ -2775,6 +2765,7 @@ mod font_registry_tests {
 mod dispatch_declares_the_moment {
     use super::*;
     use crate::layout::Size;
+    use crate::tree::LayoutCtx;
     use crate::widgets::widget::{Event, EventResponse};
 
     /// A widget that records what time the tree said it was when it was handed
@@ -2784,13 +2775,10 @@ mod dispatch_declares_the_moment {
     impl widgets::Widget for Spy {
         fn layout(
             &mut self,
-            tree: &mut Tree,
-            id: WidgetId,
+            _ctx: &mut LayoutCtx,
             constraints: crate::layout::Constraints,
         ) -> Size {
-            let size = Size::new(constraints.max_width, constraints.max_height);
-            tree.cache_layout(id, constraints, size);
-            size
+            Size::new(constraints.max_width, constraints.max_height)
         }
 
         fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
@@ -2888,9 +2876,7 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
             let root = tree.register(Box::new(widget));
             tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
             tree.set_origin(root, 0.0, 0.0);
-            tree.with_widget_mut(root, |w, id, t| {
-                w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 100.0))
-            });
+            tree.layout_widget(root, Constraints::new(0.0, 0.0, 200.0, 100.0));
             // The handles resolve once their widgets have been laid out, which
             // is the order the loop runs them in.
             update_widget_refs(tree);
@@ -3726,5 +3712,60 @@ mod a_frame_lands_where_the_surface_points {
 
         let again = resolve_geometry(&mut ctx, &frame);
         assert!(!again.needs_resize, "the target already fits");
+    }
+}
+
+/// Who a read belongs to, when the widget that made it opened no scope of its
+/// own.
+#[cfg(test)]
+mod a_layout_is_attributed_to_the_widget_that_ran_it {
+    use super::*;
+    use crate::layout::{Constraints, Size};
+    use crate::reactive::create_signal;
+    use crate::tree::LayoutCtx;
+
+    /// A leaf written the way a third-party one is easiest to write: it reads
+    /// a signal in `layout` and opens no tracking scope, because nothing made
+    /// it.
+    struct Plain(crate::reactive::Signal<f32>);
+
+    impl widgets::Widget for Plain {
+        fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+            let extent = self.0.get();
+            Size::new(extent, extent)
+        }
+
+        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
+    }
+
+    /// The read belongs to the leaf, so the write re-lays out the leaf. Without
+    /// a scope around the call it belongs to the nearest ancestor that opened
+    /// one — the container — which is laid out again with every child it has,
+    /// "reactive, but imprecise, and silently so".
+    #[test]
+    fn a_leaf_that_opens_no_scope_is_still_the_one_marked() {
+        let extent = create_signal(20.0f32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            widgets::container()
+                .width(200.0)
+                .child(Plain(extent.into())),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0));
+        let leaf = tree.get_children(root)[0];
+
+        extent.set(40.0);
+        let roots = [root].into_iter().collect();
+        jobs::distribute_jobs(&tree, &roots);
+        let drained = jobs::drain_surface_jobs(root);
+        let mut layout_roots = Vec::new();
+        jobs::process_jobs(&drained, &mut tree, &mut layout_roots);
+        jobs::recycle_job_buffer(drained);
+
+        assert!(
+            tree.needs_layout(leaf),
+            "the widget that read the signal is the one that has to run again"
+        );
     }
 }

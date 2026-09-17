@@ -704,10 +704,8 @@ fn a_declaration_inside_a_hole_is_an_island_in_it() {
 struct Stamps(Rc<RefCell<Vec<Instant>>>);
 
 impl Widget for Stamps {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        let size = Size::new(constraints.max_width, constraints.max_height);
-        tree.cache_layout(id, constraints, size);
-        size
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        Size::new(constraints.max_width, constraints.max_height)
     }
 
     fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut PaintContext) {}
@@ -886,5 +884,79 @@ fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
         app.blur_regions_asked(surface).len(),
         withdrawn,
         "a surface with nothing to blur and nothing published says nothing"
+    );
+}
+
+/// A content-sized surface follows its content when the content grows.
+///
+/// The measure that sizes such a surface is asked the same constraints every
+/// frame — they come from the output, not from the content — so a cache that
+/// answers it from an entry written before the content changed says the
+/// surface is the size it used to be, for ever. A toast that grows, an OSD
+/// that gains a line, a popup whose list fills: none of them would ever ask
+/// the compositor for the new height.
+#[test]
+fn a_content_sized_surface_follows_content_that_grows() {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(24.0f32);
+    let bar = app.surface(content_bar(), move || {
+        container().height(move || height.get())
+    });
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+
+    height.set(80.0);
+    app.step();
+    app.step();
+
+    assert!(
+        app.exclusive_zones_asked(bar).contains(&80),
+        "the content grew to 80 and the surface never asked for it: {:?}",
+        app.exclusive_zones_asked(bar)
+    );
+}
+
+/// A surface whose height follows an animating child asks for where the
+/// animation is *going*, never for a size it is passing through.
+///
+/// The measure that configures a content-sized surface reads targets for this
+/// reason: asking the compositor to resize on every frame of an animation is
+/// one round trip per frame, and the surface would follow the animation a
+/// frame behind all the way up. The trap is the cache: a subtree in flight is
+/// laid out and then, later in the same frame, answered from that layout —
+/// and if what it said about itself is dropped at that second asking, the
+/// measure reads the in-flight layout back and configures the surface to it.
+#[test]
+fn a_growing_child_configures_the_surface_once_to_where_it_is_going() {
+    let Some(mut app) = headless() else { return };
+    let tall = create_signal(false);
+    let bar = app.surface(content_bar(), move || {
+        container().child(
+            container().height(
+                (move || if tall.get() { 80.0 } else { 24.0 })
+                    .transition(Transition::new(100.0, TimingFunction::Linear)),
+            ),
+        )
+    });
+    app.configure(bar, 200, 24, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+
+    tall.set(true);
+    for ms in [0, 20, 40, 60, 80, 100, 120] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+
+    let asked = app.exclusive_zones_asked(bar);
+    assert!(
+        asked
+            .iter()
+            .all(|&zone| zone == 1 || zone == 24 || zone == 80),
+        "the surface was configured to a size the animation was passing \
+         through: {asked:?}"
+    );
+    assert!(
+        asked.contains(&80),
+        "and it has to arrive at the one the animation is going to: {asked:?}"
     );
 }

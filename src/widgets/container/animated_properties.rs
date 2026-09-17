@@ -34,7 +34,7 @@ use super::{Color, Padding, Scale, Shadow, Translate};
 use crate::clock::FrameInstant;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::reactive::with_signal_tracking;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, WidgetId};
 use crate::widgets::Corners;
 
 /// The table. Hands its rows to `$emit`, which decides what to build from
@@ -365,14 +365,17 @@ macro_rules! retarget {
     };
 }
 macro_rules! seed_from_target {
-    (none, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr) => {
+    (none, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr,
+        $ctx:expr) => {
         // A size is seeded by the layout that measured it — see
         // `update_size_targets`, which is where the formula for one lives.
         let _ = $anim;
     };
-    ($target:ident, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr) => {
+    ($target:ident, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr,
+        $ctx:expr) => {
         if $anim.is_initial() {
-            $entered |= super::anim_bridge::seed_or_enter($anim, $container.$target($id), $now);
+            $entered |=
+                super::anim_bridge::seed_or_enter($ctx, $anim, $container.$target($id), $now);
         }
     };
 }
@@ -407,7 +410,7 @@ macro_rules! emit_passes {
             ///
             /// See `anim_bridge`'s module docs for why this cannot wait for the
             /// first paint.
-            pub(super) fn seed_animations(&mut self, tree: &Tree, id: WidgetId) {
+            pub(super) fn seed_animations(&mut self, ctx: &mut LayoutCtx, id: WidgetId) {
                 // Before anything else, and before a tracking scope: a
                 // property is initial until the pass that places it has run,
                 // so once every declared animation has been placed there is
@@ -423,6 +426,7 @@ macro_rules! emit_passes {
 
                 // Moved out and put back, so the targets can be read from
                 // `&self` while the animations are held by `&mut`.
+                let now = ctx.tree_ref().frame_instant();
                 let mut anims = self.anims.take();
                 let mut entered = false;
                 if let Some(declared) = anims.as_deref_mut() {
@@ -432,7 +436,7 @@ macro_rules! emit_passes {
                                 $(AnimSlot::$name(anim) => {
                                     seed_from_target!(
                                         $target, anim, self, id,
-                                        || tree.frame_instant(), entered
+                                        || now, entered, ctx
                                     );
                                 })*
                             }

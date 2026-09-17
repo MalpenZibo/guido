@@ -14,7 +14,8 @@ mod common;
 
 use common::Harness;
 use guido::prelude::*;
-use guido::widget_prelude::{Constraints, Layout, Tree, WidgetId};
+use guido::tree::LayoutCtx;
+use guido::widget_prelude::{Constraints, Layout, WidgetId};
 
 const ROWS: usize = 200;
 const ROW_WIDTH: f32 = 120.0;
@@ -161,17 +162,15 @@ struct Scatter(Vec<(f32, f32)>);
 impl Layout for Scatter {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         let mut size = Size::zero();
         for (&child, &(x, y)) in children.iter().zip(&self.0) {
-            let child_size = tree
-                .with_widget_mut(child, |w, id, t| w.layout(t, id, constraints))
-                .unwrap_or_default();
-            tree.set_origin(child, origin.0 + x, origin.1 + y);
+            let child_size = ctx.layout_child(child, constraints).unwrap_or_default();
+            ctx.tree().set_origin(child, origin.0 + x, origin.1 + y);
             size.width = size.width.max(x + child_size.width);
             size.height = size.height.max(y + child_size.height);
         }

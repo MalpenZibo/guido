@@ -53,7 +53,15 @@ impl H {
     fn layout(&mut self, constraints: Constraints) -> Size {
         let root = self.root;
         self.tree
-            .with_widget_mut(root, |w, id, t| w.layout(t, id, constraints))
+            .layout_widget(root, constraints)
+            .expect("root is registered")
+    }
+
+    /// The measure pass: what a content-sized surface is configured from.
+    fn measure(&mut self, constraints: Constraints) -> Size {
+        let root = self.root;
+        self.tree
+            .measure_widget(root, constraints)
             .expect("root is registered")
     }
 
@@ -3823,9 +3831,7 @@ fn a_measure_pass_leaves_the_appearance_for_the_first_real_layout() {
     // both axes here, which is the layer-surface shape; a popup's measure pins
     // the width and leaves only the height loose, and the root's constraints
     // differ from the real layout's either way.
-    with_measure_final(|| {
-        h.fit(800.0, 800.0);
-    });
+    h.measure(Constraints::new(0.0, 0.0, 800.0, 800.0));
 
     frame_at(&mut h, t0, 400.0, 400.0);
     frame_at(
@@ -3864,9 +3870,7 @@ fn a_child_entering_at_50ms(measure_first: bool) -> f32 {
     );
     if measure_first {
         // The popup shape: the width pinned, the height loose.
-        with_measure_final(|| {
-            h.layout(Constraints::new(200.0, 0.0, 200.0, 300.0));
-        });
+        h.measure(Constraints::new(200.0, 0.0, 200.0, 300.0));
     }
     frame_at(&mut h, t0, 200.0, 100.0);
     frame_at(
@@ -3937,8 +3941,8 @@ fn a_measure_after_a_real_layout_reports_the_target_not_the_frame() {
         jobs::recycle_job_buffer(drained);
         let fallback = Constraints::new(400.0, 0.0, 400.0, 1000.0);
         for root in layout_roots {
-            let c = h.tree.last_constraints(root).unwrap_or(fallback);
-            h.tree.with_widget_mut(root, |w, id, t| w.layout(t, id, c));
+            let c = h.tree.last_layout_constraints(root).unwrap_or(fallback);
+            h.tree.layout_widget(root, c);
         }
         h.tree.set_frame_instant(None);
     };
@@ -3954,7 +3958,7 @@ fn a_measure_after_a_real_layout_reports_the_target_not_the_frame() {
         "the control: mid-animation, got {in_flight}"
     );
 
-    let measured = with_measure_final(|| h.layout(Constraints::new(400.0, 0.0, 400.0, 800.0)));
+    let measured = h.measure(Constraints::new(400.0, 0.0, 400.0, 800.0));
     assert_eq!(measured.height, 200.0);
 }
 
@@ -3980,9 +3984,7 @@ fn a_settled_subtree_is_reused_by_a_measure_and_by_the_layout_after_it() {
     let grandchild = h.tree.get_children(h.children()[0])[0];
     h.tree.set_origin(grandchild, 999.0, 999.0);
 
-    with_measure_final(|| {
-        h.layout(Constraints::new(200.0, 0.0, 200.0, 300.0));
-    });
+    h.measure(Constraints::new(200.0, 0.0, 200.0, 300.0));
     assert_eq!(
         h.tree.get_origin(grandchild).unwrap().0,
         999.0,
@@ -4591,7 +4593,7 @@ fn a_falling_shadow_animates_down_instead_of_snapping() {
 /// stops short of. Two separate things cover it here, and the point of this
 /// test is that it does not care which:
 ///
-/// - `Container::layout` calls `cache_layout` before `publish_paint_reach`, so
+/// - the layout entry point caches the size before it publishes the reach, so
 ///   the mark happens while the old reach is still standing.
 /// - `Tree::set_own_paint_reach` damages the ring itself when the reach shrinks.
 ///
@@ -5783,7 +5785,11 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         let pivot = c.resolved_pivot(id);
         let (px, py) = pivot.resolve(Rect::new(0.0, 0.0, 50.0, 50.0));
         finite("pivot", vec![px, py]);
-        let lengths = c.read_box_lengths(id, Constraints::new(0.0, 0.0, 200.0, 200.0));
+        let lengths = c.read_box_lengths(
+            &mut crate::tree::LayoutCtx::detached(&mut Tree::new()),
+            id,
+            Constraints::new(0.0, 0.0, 200.0, 200.0),
+        );
         finite("padding (laid out)", lengths.padding.channels().to_vec());
         let numbers = |l: crate::layout::Length| {
             [l.min, l.max, l.exact, l.fraction]

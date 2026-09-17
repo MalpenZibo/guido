@@ -64,13 +64,10 @@ fn glyph_pixels_of(
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(
-            t,
-            id,
-            Constraints::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
-        )
-    });
+    tree.layout_widget(
+        root,
+        Constraints::new(0.0, 0.0, WIDTH as f32, HEIGHT as f32),
+    );
 
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {

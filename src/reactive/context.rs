@@ -568,9 +568,7 @@ mod tests {
         let mut tree = Tree::new();
         let root = tree.register(Box::new(widget));
         tree.with_widget_mut(root, |w, id, tree| w.register_children(tree, id));
-        tree.with_widget_mut(root, |w, id, tree| {
-            w.layout(tree, id, Constraints::new(0.0, 0.0, 200.0, 100.0));
-        });
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 200.0, 100.0));
         for event in [
             Event::mouse_down(10.0, 10.0, MouseButton::Left),
             Event::mouse_up(10.0, 10.0, MouseButton::Left),

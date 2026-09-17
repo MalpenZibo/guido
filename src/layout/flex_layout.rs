@@ -33,7 +33,7 @@
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
     reactive::{IntoSignal, OptionSignalExt, Signal},
-    tree::{Tree, WidgetId},
+    tree::{LayoutCtx, Tree, WidgetId},
 };
 
 /// Children with main-axis size below this threshold are treated as invisible
@@ -129,7 +129,7 @@ impl Flex {
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -185,7 +185,8 @@ impl Flex {
         self.fill_indices.clear();
 
         for (i, &child_id) in children.iter().enumerate() {
-            let is_fill = tree
+            let is_fill = ctx
+                .tree_ref()
                 .with_widget(child_id, |w| match axis {
                     Axis::Horizontal => w.layout_hints().fill_width,
                     Axis::Vertical => w.layout_hints().fill_height,
@@ -194,9 +195,7 @@ impl Flex {
 
             if is_fill {
                 self.fill_indices.push(i);
-            } else if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                widget.layout(tree, id, child_constraints)
-            }) {
+            } else if let Some(size) = ctx.layout_child(child_id, child_constraints) {
                 non_fill_main += size.main_axis(axis);
                 max_cross = max_cross.max(size.cross_axis(axis));
                 self.child_sizes[i] = size;
@@ -233,9 +232,7 @@ impl Flex {
 
             for &i in &self.fill_indices {
                 let child_id = children[i];
-                if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                    widget.layout(tree, id, fill_constraints)
-                }) {
+                if let Some(size) = ctx.layout_child(child_id, fill_constraints) {
                     max_cross = max_cross.max(size.cross_axis(axis));
                     self.child_sizes[i] = size;
                 }
@@ -292,9 +289,7 @@ impl Flex {
                         max_height: main_constraint,
                     },
                 };
-                if let Some(size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                    widget.layout(tree, id, stretch_constraints)
-                }) {
+                if let Some(size) = ctx.layout_child(child_id, stretch_constraints) {
                     children_main += size.main_axis(axis);
                     self.child_sizes[i] = size;
                 }
@@ -347,7 +342,9 @@ impl Flex {
             children
                 .iter()
                 .enumerate()
-                .map(|(i, &id)| baseline_of(tree, id, self.child_sizes[i].cross_axis(axis)))
+                .map(|(i, &id)| {
+                    baseline_of(ctx.tree_ref(), id, self.child_sizes[i].cross_axis(axis))
+                })
                 .fold(0.0f32, f32::max)
         } else {
             0.0
@@ -383,7 +380,7 @@ impl Flex {
                 },
                 CrossAlignment::Baseline => match axis {
                     Axis::Horizontal => {
-                        origin.1 + max_baseline - baseline_of(tree, child_id, child_cross)
+                        origin.1 + max_baseline - baseline_of(ctx.tree_ref(), child_id, child_cross)
                     }
                     // A column has no shared line to sit on.
                     Axis::Vertical => origin.0,
@@ -395,7 +392,7 @@ impl Flex {
                 Axis::Vertical => (cross_pos, main_pos),
             };
 
-            tree.set_origin(child_id, x, y);
+            ctx.tree().set_origin(child_id, x, y);
             main_pos += child_main;
 
             if child_main > MIN_VISIBLE_SIZE {
@@ -410,13 +407,13 @@ impl Flex {
 impl Layout for Flex {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         let direction = self.direction.get();
-        self.layout_axis(tree, children, constraints, origin, direction)
+        self.layout_axis(ctx, children, constraints, origin, direction)
     }
 }
 

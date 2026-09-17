@@ -1,6 +1,6 @@
 use crate::layout::{Axis, Constraints, Size};
 use crate::renderer::PaintContext;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Color {
@@ -828,7 +828,14 @@ pub trait Widget {
         LayoutHints::default()
     }
 
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    /// Measure this widget, and place its children.
+    ///
+    /// Called by the framework through `Tree::layout_widget` or
+    /// `LayoutCtx::layout_child`, which is what decides *whether* it runs, what
+    /// its reads are attributed to, which pass it is in, and what becomes of
+    /// what it answers. A widget computes a size and places its children; it
+    /// does not open a tracking scope, write a skip check, or cache anything.
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         let _ = (tree, id, event);
@@ -912,8 +919,8 @@ impl Widget for Box<dyn Widget> {
     fn layout_hints(&self) -> LayoutHints {
         (**self).layout_hints()
     }
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        (**self).layout(tree, id, constraints)
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        (**self).layout(ctx, constraints)
     }
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
         (**self).paint(tree, id, ctx)

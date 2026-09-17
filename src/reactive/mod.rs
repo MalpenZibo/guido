@@ -225,9 +225,7 @@ mod bench {
             let started = Instant::now();
             for frame in 0..frames {
                 width.set(40.0 + (frame % 7) as f32);
-                tree.with_widget_mut(root, |w, id, t| {
-                    w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 4000.0));
-                });
+                tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 4000.0));
                 let mut node = RenderNode::new(root.as_u64());
                 tree.with_widget_mut(root, |w, id, t| {
                     let mut ctx = PaintContext::new(&mut node);

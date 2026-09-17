@@ -6,7 +6,7 @@ pub use flex::{Constraints, Size};
 pub use flex_layout::Flex;
 pub use zstack::ZStack;
 
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, WidgetId};
 
 /// Trait for types that can be converted to f32 for use in layout dimensions.
 ///
@@ -246,7 +246,7 @@ pub trait Layout {
     /// Children are identified by WidgetId and accessed via the passed Tree.
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),

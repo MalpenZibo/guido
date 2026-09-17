@@ -51,9 +51,7 @@ fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, width, height))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, width, height));
 
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {

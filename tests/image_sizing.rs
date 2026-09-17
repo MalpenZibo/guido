@@ -22,7 +22,7 @@ fn size_of(widget: impl Widget + 'static, constraints: Constraints) -> Size {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints))
+    tree.layout_widget(root, constraints)
         .expect("root is registered")
 }
 
@@ -36,9 +36,7 @@ fn in_box(fit: ContentFit, w: f32, h: f32) -> Size {
             .child(image(source()).content_fit(fit)),
     ));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 1000.0, 1000.0))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 1000.0, 1000.0));
     let child = tree.get_children(root)[0];
     tree.cached_size(child).expect("the image was laid out")
 }
@@ -212,9 +210,7 @@ fn a_filling_container_hands_the_image_the_whole_surface() {
             .child(image(source()).content_fit(ContentFit::Cover)),
     ));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 2560.0, 1440.0))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 2560.0, 1440.0));
 
     let child = tree.get_children(root)[0];
     assert_eq!(

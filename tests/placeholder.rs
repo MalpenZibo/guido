@@ -14,9 +14,7 @@ fn drawn(widget: impl Widget + 'static) -> Vec<(String, Color)> {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 40.0))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 40.0));
 
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {

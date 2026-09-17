@@ -125,7 +125,7 @@ All widgets implement:
 
 ```rust,ignore
 pub trait Widget {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
 }

@@ -1,5 +1,6 @@
 use crate::clock::FrameInstant;
 use crate::reactive::Signal;
+use crate::tree::LayoutCtx;
 
 use crate::animation::{
     Animatable, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
@@ -144,14 +145,19 @@ impl<T: Animatable> AnimationState<T> {
     /// The instant is a closure because the overwhelmingly common answer is
     /// "no enter was declared", and asking a `Tree` for the time outside a
     /// frame is a diagnostic rather than a free read.
-    pub(crate) fn begin_enter(&mut self, target: T, now: impl FnOnce() -> FrameInstant) -> bool {
+    pub(crate) fn begin_enter(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        target: T,
+        now: impl FnOnce() -> FrameInstant,
+    ) -> bool {
         // A measure pass is not an appearance. It runs before the surface
         // exists — `measure_natural_size` sizes a popup so the compositor can
         // be told how big to make it — and it reads targets rather than
         // in-flight values for exactly this reason. Consuming the enter there
         // would play it against a surface that is not yet mapped, and there is
         // no frame instant to play it against either.
-        if measuring_final() {
+        if ctx.measuring() {
             return false;
         }
         let Some(from) = self.enter_from.take() else {
@@ -161,11 +167,11 @@ impl<T: Animatable> AnimationState<T> {
         if from == target {
             // Declared, but nowhere to travel from. Placing it is what every
             // property without an enter does, and it costs no frame.
-            self.set_immediate(target);
+            self.set_immediate(ctx, target);
             return false;
         }
 
-        self.set_immediate(from);
+        self.set_immediate(ctx, from);
         // Forward, whichever way it travels. `animate_to` would read the
         // direction off `current`, which is now the enter value, so an enter
         // that shrinks — a card settling down from a larger scale — would run
@@ -560,13 +566,19 @@ impl<T: Animatable> AnimationState<T> {
     /// measure pass is not an appearance; marking the property placed would
     /// contradict it one line later, because the layout that *is* the appearance
     /// reads `is_initial()` to decide whether to look at the enter at all.
-    pub fn set_immediate(&mut self, value: T) {
+    pub fn set_immediate(&mut self, ctx: &mut LayoutCtx, value: T) {
         self.current = value;
         self.target = value;
         self.start = value;
         self.progress = 1.0;
-        if measuring_final() {
-            differs_between_passes();
+        // A measure is not an appearance: it runs before the surface exists,
+        // and marking the property placed there would spend the enter that the
+        // layout after it is supposed to play. So the measure leaves it
+        // unplaced, and says that this subtree's answer belongs to the pass
+        // that asked — otherwise the layout after it would skip on the
+        // measure's cache and never appear at all.
+        if ctx.measuring() {
+            ctx.answer_depends_on_the_pass();
         } else {
             self.initialized = true;
         }
@@ -576,44 +588,6 @@ impl<T: Animatable> AnimationState<T> {
     pub fn is_initial(&self) -> bool {
         !self.initialized
     }
-}
-
-thread_local! {
-    /// While set, layout reads animation TARGETS instead of current
-    /// values. Content-sized surfaces measure under this flag so their
-    /// natural size is animation-invariant: an animated growth resizes
-    /// the surface once, to the final size, and the animation plays
-    /// inside it — never one compositor configure per frame.
-    static MEASURE_FINAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Run `f` with layout reading animation targets instead of current values.
-pub(crate) fn with_measure_final<R>(f: impl FnOnce() -> R) -> R {
-    MEASURE_FINAL.with(|m| m.set(true));
-    let out = f();
-    MEASURE_FINAL.with(|m| m.set(false));
-    out
-}
-
-pub(crate) fn measuring_final() -> bool {
-    MEASURE_FINAL.with(|m| m.get())
-}
-
-thread_local! {
-    /// Raised by a read a measure and a layout would answer differently: a
-    /// value still moving, or one a measure placed without it appearing. Taken
-    /// by the next `Tree::cache_layout`, which is in the subtree of the widget
-    /// that read it as long as that widget reads before it caches its layout —
-    /// as every widget in the crate does.
-    static DIFFERS_BETWEEN_PASSES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn differs_between_passes() {
-    DIFFERS_BETWEEN_PASSES.with(|d| d.set(true));
-}
-
-pub(crate) fn take_differs_between_passes() -> bool {
-    DIFFERS_BETWEEN_PASSES.with(|d| d.replace(false))
 }
 
 impl<T: Animatable + Copy> AnimationState<T> {
@@ -629,10 +603,21 @@ impl<T: Animatable + Copy> AnimationState<T> {
     /// stated once.
     #[inline]
     pub fn displayed(&self) -> T {
+        *self.current()
+    }
+
+    /// The same, for the pass laying out: where the animation is going while a
+    /// natural size is being measured, and where it is otherwise.
+    ///
+    /// A value in flight is read differently by the two passes, so the subtree
+    /// around it answers only the one that asked — which is what the context is
+    /// told here, as it happens, by the read that decided it.
+    #[inline]
+    pub fn displayed_in(&self, ctx: &mut LayoutCtx) -> T {
         if self.is_animating() {
-            differs_between_passes();
+            ctx.answer_depends_on_the_pass();
         }
-        if measuring_final() {
+        if ctx.measuring() {
             *self.target()
         } else {
             *self.current()
@@ -657,6 +642,13 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::tree::Tree;
+
+    /// The layout these tests read their values through. They are about what a
+    /// value answers, not about a widget, so the tree under it is empty.
+    fn laying_out(tree: &mut Tree) -> LayoutCtx<'_> {
+        LayoutCtx::detached(tree)
+    }
 
     /// on_complete fires exactly once per completed run; a retarget that
     /// completes again fires again.
@@ -673,7 +665,7 @@ mod tests {
             crate::animation::Transition::new(1, TimingFunction::Linear)
                 .on_complete(move || counter.set(counter.get() + 1)),
         );
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
 
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -712,7 +704,7 @@ mod tests {
         use crate::animation::Keyframes;
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim = anim.with_timeline(
             Keyframes::new(60.0)
                 .at(0.0, 0.0)
@@ -746,7 +738,7 @@ mod tests {
         use crate::animation::Keyframes;
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim = anim.with_timeline(
             Keyframes::new(80.0)
                 .at(0.0, 0.0)
@@ -778,7 +770,7 @@ mod tests {
         use crate::animation::Keyframes;
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(200.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim = anim.with_timeline(
             Keyframes::new(60.0)
                 .at(0.0, 0.0)
@@ -820,7 +812,7 @@ mod tests {
             .on_complete(move || seen.set(seen.get() + 1));
 
         let mut anim = AnimationState::new(0.0_f32, transition);
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim = anim.with_timeline(
             Keyframes::new(60.0)
                 .at(0.0, 0.0)
@@ -844,7 +836,7 @@ mod tests {
     #[test]
     fn a_play_without_a_sequence_does_not_pin_the_frame_loop() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.play(FrameInstant::from(Instant::now()));
         anim.advance(FrameInstant::from(Instant::now()));
         assert!(!anim.is_animating(), "nothing to play, nothing to animate");
@@ -922,7 +914,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
         assert!(
@@ -946,7 +938,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
         anim.animate_to(0.0, FrameInstant::from(Instant::now()));
@@ -965,7 +957,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 40);
 
@@ -988,7 +980,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 1200);
         assert!(!anim.is_animating(), "it has to have settled first");
@@ -1013,7 +1005,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 184);
 
@@ -1049,7 +1041,7 @@ mod tests {
         use crate::transform::Translate;
 
         let mut anim = AnimationState::new(Translate::NONE, spring(SpringConfig::DEFAULT));
-        anim.set_immediate(Translate::NONE);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), Translate::NONE);
         anim.animate_to(
             Translate::new(200.0, 0.0),
             FrameInstant::from(Instant::now()),
@@ -1081,7 +1073,7 @@ mod tests {
         use crate::transform::{Scale, Transform, Translate};
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(180.0, FrameInstant::from(Instant::now()));
 
         let mut smallest = f32::INFINITY;
@@ -1103,7 +1095,7 @@ mod tests {
     #[test]
     fn a_full_turn_is_a_turn_and_not_a_no_op() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(360.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 50);
@@ -1127,7 +1119,7 @@ mod tests {
     #[test]
     fn an_angle_past_the_wrap_keeps_going_forward() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(350.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 350.0);
         anim.animate_to(370.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 50);
@@ -1144,7 +1136,7 @@ mod tests {
     #[test]
     fn the_angle_moves_at_the_rate_the_easing_asks_for() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(90.0, FrameInstant::from(Instant::now()));
 
         at(&mut anim, 25);
@@ -1162,7 +1154,7 @@ mod tests {
         use crate::animation::SpringConfig;
 
         let mut anim = AnimationState::new(0.0_f32, spring(SpringConfig::DEFAULT));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
 
         // 40 frames of the target creeping upward, then it stops.
         for frame in 1..=40u64 {
@@ -1186,7 +1178,7 @@ mod tests {
     #[test]
     fn a_property_with_no_timeline_cannot_be_played() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(10.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.play(FrameInstant::from(Instant::now()));
         assert!(!anim.is_animating(), "nothing to play");
     }
@@ -1200,7 +1192,7 @@ mod tests {
 
         let delayed = Transition::new(0.0, TimingFunction::Spring(SpringConfig::BOUNCY)).delay(200);
         let mut anim = AnimationState::new(0.0_f32, delayed);
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 400);
         assert!(*anim.current() > 0.0, "past the delay and moving");
@@ -1214,7 +1206,7 @@ mod tests {
     #[test]
     fn a_timed_transition_has_no_spring_to_carry() {
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
-        anim.set_immediate(0.0);
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(1.0, FrameInstant::from(Instant::now()));
         run(&mut anim, 24);
         anim.animate_to(0.0, FrameInstant::from(Instant::now()));
@@ -1261,7 +1253,7 @@ mod tests {
         let transition = Transition::new(300.0, TimingFunction::Linear);
         let mut state = AnimationState::new(0.0f32, transition);
 
-        state.set_immediate(50.0);
+        state.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
 
         assert_eq!(*state.current(), 50.0);
         assert_eq!(*state.target(), 50.0);
@@ -1276,7 +1268,7 @@ mod tests {
 
         assert!(state.is_initial());
 
-        state.set_immediate(10.0);
+        state.set_immediate(&mut laying_out(&mut Tree::new()), 10.0);
         assert!(!state.is_initial());
     }
 
@@ -1284,7 +1276,7 @@ mod tests {
     fn test_get_animated_value_with_some() {
         let transition = Transition::new(300.0, TimingFunction::Linear);
         let mut state = AnimationState::new(42.0f32, transition);
-        state.set_immediate(42.0);
+        state.set_immediate(&mut laying_out(&mut Tree::new()), 42.0);
 
         let value = get_animated_value(Some(&state), || 0.0);
         assert_eq!(value, 42.0);

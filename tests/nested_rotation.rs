@@ -36,9 +36,7 @@ fn angles_down_the_chain(gp: f32, p: f32, c: f32) -> Vec<f32> {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(three_level(gp, p, c)));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0));
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {
         let mut ctx = PaintContext::new(&mut node);

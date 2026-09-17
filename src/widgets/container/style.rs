@@ -20,6 +20,7 @@
 
 use super::*;
 use crate::finite::{AllFinite, FiniteOr};
+use crate::tree::LayoutCtx;
 use crate::widgets::BackgroundOverride;
 
 impl Container {
@@ -396,10 +397,11 @@ impl Container {
             .get_finite_or(Padding::default(), id, "padding")
     }
 
-    pub(super) fn animated_padding(&self, id: WidgetId) -> Padding {
-        get_animated_value(self.anims.as_ref().and_then(|a| a.padding()), || {
-            self.effective_padding_target(id)
-        })
+    pub(super) fn animated_padding(&self, ctx: &mut LayoutCtx, id: WidgetId) -> Padding {
+        match self.anims.as_ref().and_then(|a| a.padding()) {
+            Some(anim) => anim.displayed_in(ctx),
+            None => self.effective_padding_target(id),
+        }
     }
 
     pub(super) fn animated_background(&self, id: WidgetId) -> Color {

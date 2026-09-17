@@ -30,9 +30,8 @@ impl Screen {
     /// One frame: lay the widget out, then apply whatever focus was asked for —
     /// the order the loop uses, and the reason a handle attached this frame works.
     fn frame(&mut self, id: WidgetId) {
-        self.tree.with_widget_mut(id, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 40.0))
-        });
+        self.tree
+            .layout_widget(id, Constraints::new(0.0, 0.0, 400.0, 40.0));
         apply_pending_focus(&self.tree);
     }
 }

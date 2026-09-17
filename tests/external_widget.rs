@@ -23,24 +23,28 @@ use guido::prelude::*;
 use guido::widget_prelude::*;
 
 /// A box whose size follows a signal. Deliberately minimal: `layout` and
-/// `paint` are the only required methods, and the tracking scope is the only
-/// thing it needs from the reactive system.
+/// `paint` are the only required methods, and what a layout has to do is read
+/// a signal and answer with a size — the scope that attributes that read, the
+/// check that decides whether it runs at all, and the cache it answers into
+/// belong to the framework, around the call.
 struct Bar {
     extent: Signal<f32>,
     measured: f32,
+    /// How many times the framework has asked this widget to lay itself out.
+    /// A leaf that writes no skip check of its own still must not be asked
+    /// twice for an answer it has already given.
+    layouts: Rc<Cell<u32>>,
     /// Where the last pointer event said it was, if it said anywhere. Shared
     /// with the test, which has no other way to look inside a boxed widget.
     pointed_at: Rc<Cell<Option<Option<Point>>>>,
 }
 
 impl Widget for Bar {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        let extent = with_signal_tracking(id, JobType::Layout, || self.extent.get());
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        self.layouts.set(self.layouts.get() + 1);
+        let extent = self.extent.get();
         self.measured = extent;
-        let size = Size::new(extent, extent);
-        tree.cache_layout(id, constraints, size);
-        tree.clear_needs_layout(id);
-        size
+        Size::new(extent, extent)
     }
 
     fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
@@ -68,9 +72,7 @@ fn lay_out(widget: impl Widget + 'static) -> (Tree, WidgetId, Size) {
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
     let size = tree
-        .with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
-        })
+        .layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0))
         .expect("root is registered");
     (tree, root, size)
 }
@@ -81,6 +83,7 @@ fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     let (mut tree, root, size) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
+        layouts: Rc::new(Cell::new(0)),
         pointed_at: Rc::new(Cell::new(None)),
     });
 
@@ -94,25 +97,29 @@ fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     assert!(!node.commands.is_empty(), "the widget drew nothing");
 }
 
-/// The value follows the signal on a later layout, which is the half of
-/// reactivity this test can see from outside: driving the job queue that turns
-/// a write into `needs_layout` is crate-internal, so *which widget* gets
-/// marked is asserted where that is reachable —
-/// `reactive::invalidation::the_innermost_scope_owns_the_read`.
+/// The value follows the signal on the layout that runs after a write.
+///
+/// Marked by hand, because driving the job queue that turns a write into
+/// `needs_layout` is crate-internal — as is *which* widget it marks, which is
+/// asserted where that is reachable:
+/// `a_layout_is_attributed_to_the_widget_that_ran_it` in `src/lib.rs`, and
+/// `reactive::invalidation::the_innermost_scope_owns_the_read` beneath it. What
+/// this half says is that the widget re-reads: a leaf laid out again answers
+/// from the signal, not from what it measured last time.
 #[test]
 fn it_re_measures_from_the_signal_it_read() {
     let extent = create_signal(20.0f32);
     let (mut tree, root, _) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
+        layouts: Rc::new(Cell::new(0)),
         pointed_at: Rc::new(Cell::new(None)),
     });
 
     extent.set(40.0);
+    tree.mark_needs_layout(root);
     let size = tree
-        .with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
-        })
+        .layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0))
         .expect("root is registered");
 
     assert_eq!(size, Size::new(40.0, 40.0));
@@ -133,6 +140,7 @@ fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
     let (mut tree, root, _) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
+        layouts: Rc::new(Cell::new(0)),
         pointed_at: Rc::clone(&pointed_at),
     });
 
@@ -153,5 +161,32 @@ fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
         Some(None),
         "and one that lost its position arrives without it, rather than not \
          arriving or arriving at the origin"
+    );
+}
+
+/// A leaf that writes no skip check of its own is not asked twice for the same
+/// answer.
+///
+/// The check belongs to the framework, around the call, rather than to each
+/// widget inside it: `Container` and `Text` wrote one, `TextInput` and `Image`
+/// did not, and a widget written outside the crate had to know it should.
+#[test]
+fn a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer() {
+    let extent = create_signal(20.0f32);
+    let layouts = Rc::new(Cell::new(0));
+    let (mut tree, root, _) = lay_out(Bar {
+        extent: extent.into(),
+        measured: 0.0,
+        layouts: Rc::clone(&layouts),
+        pointed_at: Rc::new(Cell::new(None)),
+    });
+    assert_eq!(layouts.get(), 1, "the first layout runs");
+
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0));
+
+    assert_eq!(
+        layouts.get(),
+        1,
+        "the same constraints, and nothing dirty: there is nothing to ask"
     );
 }

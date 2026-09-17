@@ -499,12 +499,13 @@ mod tests {
     use super::*;
     use crate::layout::{Constraints, Size};
     use crate::reactive::{create_signal, on_cleanup};
+    use crate::tree::LayoutCtx;
     use crate::tree::{Tree, WidgetId};
     use crate::widgets::{Container, container};
 
     struct TestWidget;
     impl Widget for TestWidget {
-        fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+        fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
             Size::zero()
         }
         fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
@@ -632,7 +633,7 @@ mod tests {
     fn replaced_child_subtree_is_torn_down_synchronously() {
         struct ParentWidget;
         impl Widget for ParentWidget {
-            fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+            fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
                 Size::zero()
             }
             fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
