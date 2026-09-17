@@ -6,7 +6,7 @@ use crate::animation::{SpringConfig, Transition};
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::Constraints;
 use crate::renderer::PaintContext;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widgets::Scroll;
 use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
 use crate::widgets::widget::{Event, EventResponse, MouseButton, Point, Rect, ScrollSource};
@@ -100,7 +100,7 @@ impl Container {
     /// Layout and position scrollbar container widgets
     pub(super) fn layout_scrollbar_containers(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         id: WidgetId,
         size: crate::layout::Size,
     ) {
@@ -123,7 +123,7 @@ impl Container {
         // Layout vertical scrollbar
         if self.scroll_axis.allows_vertical() && needs_vertical {
             self.layout_scrollbar_axis(
-                tree,
+                ctx,
                 id,
                 ScrollbarAxis::Vertical,
                 scale_factor,
@@ -135,7 +135,7 @@ impl Container {
         // Layout horizontal scrollbar
         if self.scroll_axis.allows_horizontal() && needs_horizontal {
             self.layout_scrollbar_axis(
-                tree,
+                ctx,
                 id,
                 ScrollbarAxis::Horizontal,
                 scale_factor,
@@ -147,7 +147,7 @@ impl Container {
 
     fn layout_scrollbar_axis(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         id: WidgetId,
         axis: ScrollbarAxis,
         scale_factor: f32,
@@ -189,7 +189,7 @@ impl Container {
         };
 
         if let Some(anim) = scale_anim {
-            let now = tree.frame_instant();
+            let now = ctx.tree_ref().frame_instant();
             anim.animate_to(target_scale, now);
             if anim.is_animating() {
                 let _ = anim.advance(now); // Paint-only, ignore result
@@ -206,10 +206,8 @@ impl Container {
                 max_width: track_rect.width,
                 max_height: track_rect.height,
             };
-            tree.with_widget_mut(track_id, |widget, widget_id, tree| {
-                widget.layout(tree, widget_id, track_constraints);
-            });
-            tree.set_origin(track_id, track_rect.x, track_rect.y);
+            ctx.layout_child(track_id, track_constraints);
+            ctx.tree().set_origin(track_id, track_rect.x, track_rect.y);
         }
 
         // Layout and position handle container via Tree
@@ -220,10 +218,9 @@ impl Container {
                 max_width: handle_rect.width,
                 max_height: handle_rect.height,
             };
-            tree.with_widget_mut(handle_id, |widget, widget_id, tree| {
-                widget.layout(tree, widget_id, handle_constraints);
-            });
-            tree.set_origin(handle_id, handle_rect.x, handle_rect.y);
+            ctx.layout_child(handle_id, handle_constraints);
+            ctx.tree()
+                .set_origin(handle_id, handle_rect.x, handle_rect.y);
         }
     }
 

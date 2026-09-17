@@ -365,14 +365,17 @@ macro_rules! retarget {
     };
 }
 macro_rules! seed_from_target {
-    (none, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr) => {
+    (none, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr,
+        $pass:expr) => {
         // A size is seeded by the layout that measured it — see
         // `update_size_targets`, which is where the formula for one lives.
         let _ = $anim;
     };
-    ($target:ident, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr) => {
+    ($target:ident, $anim:expr, $container:expr, $id:expr, $now:expr, $entered:expr,
+        $pass:expr) => {
         if $anim.is_initial() {
-            $entered |= super::anim_bridge::seed_or_enter($anim, $container.$target($id), $now);
+            $entered |=
+                super::anim_bridge::seed_or_enter($pass, $anim, $container.$target($id), $now);
         }
     };
 }
@@ -423,6 +426,7 @@ macro_rules! emit_passes {
 
                 // Moved out and put back, so the targets can be read from
                 // `&self` while the animations are held by `&mut`.
+                let pass = &tree.value_pass();
                 let mut anims = self.anims.take();
                 let mut entered = false;
                 if let Some(declared) = anims.as_deref_mut() {
@@ -432,7 +436,7 @@ macro_rules! emit_passes {
                                 $(AnimSlot::$name(anim) => {
                                     seed_from_target!(
                                         $target, anim, self, id,
-                                        || tree.frame_instant(), entered
+                                        || tree.frame_instant(), entered, pass
                                     );
                                 })*
                             }

@@ -29,6 +29,7 @@
 use super::*;
 use crate::finite::FiniteOr;
 use crate::layout::Axis;
+use crate::tree::ValuePass;
 
 /// The container's own size declarations, resolved for one layout pass.
 pub(super) struct BoxLengths {
@@ -88,16 +89,18 @@ impl Container {
 
     /// Read the declared padding and lengths, tracked so a later write
     /// re-runs this layout, with fractions resolved against `constraints`.
-    pub(super) fn read_box_lengths(&self, id: WidgetId, constraints: Constraints) -> BoxLengths {
-        let (padding, mut width, mut height, overflow) =
-            with_signal_tracking(id, JobType::Layout, || {
-                (
-                    self.animated_padding(id),
-                    self.width.get_finite_or(Length::default(), id, "width"),
-                    self.height.get_finite_or(Length::default(), id, "height"),
-                    self.overflow.get_or(Overflow::Visible),
-                )
-            });
+    pub(super) fn read_box_lengths(
+        &self,
+        pass: &ValuePass,
+        id: WidgetId,
+        constraints: Constraints,
+    ) -> BoxLengths {
+        let (padding, mut width, mut height, overflow) = (
+            self.animated_padding(pass, id),
+            self.width.get_finite_or(Length::default(), id, "width"),
+            self.height.get_finite_or(Length::default(), id, "height"),
+            self.overflow.get_or(Overflow::Visible),
+        );
 
         if let Some(f) = width.fraction
             && constraints.max_width.is_finite()
@@ -135,6 +138,7 @@ impl Container {
     /// whether an animation happens to be attached.
     fn animated_extent(
         &self,
+        pass: &ValuePass,
         anim: Option<&AnimationState<f32>>,
         length: &Length,
         available: f32,
@@ -143,7 +147,7 @@ impl Container {
             && !anim.is_initial()
             && length.exact.is_some()
         {
-            return anim.displayed();
+            return anim.displayed(pass);
         }
         match length.exact {
             Some(exact) => exact,
@@ -158,16 +162,19 @@ impl Container {
     /// viewport they are seen through.
     pub(super) fn child_layout(
         &self,
+        pass: &ValuePass,
         lengths: &BoxLengths,
         constraints: Constraints,
     ) -> ChildLayout {
         let padding = lengths.padding;
         let layout_width = self.animated_extent(
+            pass,
             self.anims.as_ref().and_then(|a| a.width()),
             &lengths.width,
             constraints.max_width,
         );
         let layout_height = self.animated_extent(
+            pass,
             self.anims.as_ref().and_then(|a| a.height()),
             &lengths.height,
             constraints.max_height,
@@ -257,12 +264,14 @@ impl Container {
     /// The container's final size, given what its content measured.
     pub(super) fn resolve_size(
         &self,
+        pass: &ValuePass,
         lengths: &BoxLengths,
         constraints: Constraints,
         content: Size,
     ) -> Size {
         Size::new(
             self.resolve_axis(
+                pass,
                 Axis::Horizontal,
                 &lengths.width,
                 lengths.overflow,
@@ -271,6 +280,7 @@ impl Container {
                 constraints.max_width,
             ),
             self.resolve_axis(
+                pass,
                 Axis::Vertical,
                 &lengths.height,
                 lengths.overflow,
@@ -281,8 +291,10 @@ impl Container {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_axis(
         &self,
+        pass: &ValuePass,
         axis: Axis,
         length: &Length,
         overflow: Overflow,
@@ -308,7 +320,7 @@ impl Container {
             };
 
         let mut size = if let Some(anim) = anim {
-            let animated = anim.displayed();
+            let animated = anim.displayed(pass);
             if allow_shrink {
                 animated
             } else {

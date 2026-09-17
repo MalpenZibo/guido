@@ -44,6 +44,8 @@
 
 use super::box_model::BoxLengths;
 use super::*;
+use crate::tree::LayoutCtx;
+use crate::tree::ValuePass;
 
 impl Container {
     /// Point the size animations at the content just measured.
@@ -54,7 +56,7 @@ impl Container {
     /// width is moving makes its siblings move too.
     pub(super) fn update_size_targets(
         &mut self,
-        tree: &Tree,
+        ctx: &mut LayoutCtx,
         id: WidgetId,
         lengths: &BoxLengths,
         content: Size,
@@ -73,10 +75,13 @@ impl Container {
                 content.height + lengths.padding.vertical_total(),
             ),
         ];
+        let pass = &ctx.value_pass();
+        let parent = ctx.tree_ref().get_parent(id);
         let Some(ref mut anims) = self.anims else {
             return;
         };
         let mut retargeted = false;
+        let tree = ctx.tree_ref();
 
         // The two size slots, in the order the targets above are written, and
         // whichever of them was declared.
@@ -104,10 +109,10 @@ impl Container {
                 // was waiting for and the size animates from there. A measure
                 // pass places without marking, so the appearance is still to
                 // come: see `set_immediate`.
-                if anim.begin_enter(target, || tree.frame_instant()) {
+                if anim.begin_enter(pass, target, || tree.frame_instant()) {
                     retargeted = true;
                 } else {
-                    anim.set_immediate(target);
+                    anim.set_immediate(pass, target);
                 }
             } else if (target - *anim.target()).abs() > 0.001 {
                 anim.animate_to(target, tree.frame_instant());
@@ -118,7 +123,7 @@ impl Container {
         if retargeted {
             // A size animation moves layout, not just paint.
             request_job(id, JobRequest::Animation(RequiredJob::Layout));
-            if let Some(parent_id) = tree.get_parent(id) {
+            if let Some(parent_id) = parent {
                 request_job(parent_id, JobRequest::Layout);
             }
         }
@@ -132,13 +137,14 @@ impl Container {
 /// Called from the arm the table generates for each property, which is where
 /// the type it animates is known.
 pub(super) fn seed_or_enter<T: crate::animation::Animatable>(
+    pass: &ValuePass,
     anim: &mut AnimationState<T>,
     target: T,
     now: impl FnOnce() -> crate::clock::FrameInstant,
 ) -> bool {
-    let entered = anim.begin_enter(target, now);
+    let entered = anim.begin_enter(pass, target, now);
     if !entered {
-        anim.set_immediate(target);
+        anim.set_immediate(pass, target);
     }
     // A sequence with no trigger is owed a play, and only this pass can ask for
     // the frame that gives it one: a triggered sequence wakes its container

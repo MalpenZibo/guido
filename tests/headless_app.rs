@@ -704,10 +704,8 @@ fn a_declaration_inside_a_hole_is_an_island_in_it() {
 struct Stamps(Rc<RefCell<Vec<Instant>>>);
 
 impl Widget for Stamps {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        let size = Size::new(constraints.max_width, constraints.max_height);
-        tree.cache_layout(id, constraints, size);
-        size
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        Size::new(constraints.max_width, constraints.max_height)
     }
 
     fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut PaintContext) {}

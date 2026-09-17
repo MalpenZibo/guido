@@ -1,6 +1,8 @@
 //! ZStack layout that stacks children on top of each other.
 
-use crate::tree::{Tree, WidgetId};
+#[cfg(test)]
+use crate::tree::Tree;
+use crate::tree::{LayoutCtx, WidgetId};
 use crate::widgets::LayoutHints;
 
 use super::{Constraints, Layout, Size};
@@ -72,14 +74,15 @@ impl ZStack {
 impl Layout for ZStack {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         self.hints.clear();
         self.hints.extend(children.iter().map(|&child_id| {
-            tree.with_widget(child_id, |w| w.layout_hints())
+            ctx.tree_ref()
+                .with_widget(child_id, |w| w.layout_hints())
                 .unwrap_or_default()
         }));
 
@@ -94,9 +97,7 @@ impl Layout for ZStack {
             if hints.fill_width && hints.fill_height {
                 continue;
             }
-            let Some(child_size) = tree.with_widget_mut(child_id, |widget, id, tree| {
-                widget.layout(tree, id, constraints)
-            }) else {
+            let Some(child_size) = ctx.layout_child(child_id, constraints) else {
                 continue;
             };
             if !hints.fill_width {
@@ -150,13 +151,11 @@ impl Layout for ZStack {
                 max_width: size.width,
                 max_height: size.height,
             };
-            tree.with_widget_mut(child_id, |widget, id, tree| {
-                widget.layout(tree, id, child_constraints)
-            });
+            ctx.layout_child(child_id, child_constraints);
         }
 
         for &child_id in children.iter() {
-            tree.set_origin(child_id, origin.0, origin.1);
+            ctx.tree().set_origin(child_id, origin.0, origin.1);
         }
 
         size
@@ -176,10 +175,8 @@ mod tests {
     ) -> (Tree, WidgetId) {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));
-        tree.with_widget_mut(id, |w, id, tree| {
-            w.register_children(tree, id);
-            w.layout(tree, id, constraints);
-        });
+        tree.with_widget_mut(id, |w, id, tree| w.register_children(tree, id));
+        tree.layout_widget(id, constraints);
         (tree, id)
     }
 

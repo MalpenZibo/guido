@@ -56,14 +56,10 @@ struct Bar {
 }
 
 impl Widget for Bar {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        let extent = with_signal_tracking(id, JobType::Layout, || self.extent.get());
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        let extent = self.extent.get();
         self.measured = extent;
-
-        let size = Size::new(extent, extent);
-        tree.cache_layout(id, constraints, size);
-        tree.clear_needs_layout(id);
-        size
+        Size::new(extent, extent)
     }
 
     fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
@@ -83,16 +79,23 @@ Three things are worth spelling out.
 reports; the parent decides where the result goes. Paint therefore happens in
 local coordinates, with `(0, 0)` at the widget's own origin.
 
-**The layout protocol is `cache_layout` then `clear_needs_layout`.** Without
-them the widget re-lays-out every frame, because nothing recorded that it is
-clean.
+**A layout measures; it does not decide whether it runs.** The framework calls
+it through `LayoutCtx::layout_child`, and that call holds the check that skips a
+widget with the same constraints and nothing dirty, the scope that makes the
+widget's reads belong to *it*, the pass it is in, and the cache the size goes
+into. So there is nothing to remember: read the signals plainly and return a
+size.
 
-**`with_signal_tracking` is not optional.** It is the scope that makes a
-widget's signal reads belong to *it*. Without one, a read registers against the
-nearest ancestor that opened a scope — the parent container — so a change to
-this widget's own content re-lays-out every one of its siblings. Still reactive,
-but imprecise, and silently so. Pass `JobType::Layout` for reads that change
-the size and `JobType::Paint` for reads that only change the drawing.
+**Paint is still yours to scope.** `with_signal_tracking(id, JobType::Paint,
+..)` around whatever you draw from, because nothing wraps a paint yet. Without
+it a read registers against the nearest ancestor that opened a scope — the
+parent container — so a change to what this widget draws repaints every one of
+its siblings too.
+
+**Which pass is running is `ctx.measuring()`.** True while a natural size is
+being measured, before a surface exists, which is when an animated value reads
+as where it is going rather than where it is. A widget that animates nothing
+never has to ask.
 
 ## A layout
 

@@ -13,9 +13,9 @@ mod style;
 #[cfg(test)]
 mod characterization;
 
+use crate::tree::ValuePass;
 use animations::instant_transition;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
-pub(crate) use animations::{measuring_final, take_differs_between_passes, with_measure_final};
 use interaction::{HitContext, untransform_point};
 pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
@@ -35,7 +35,7 @@ use crate::reactive::{
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
@@ -537,19 +537,20 @@ impl Container {
 
     /// Resolve the declared scroll measurements for this pass.
     ///
-    /// Under layout tracking, and at the top of `layout`, because the gutter
-    /// these describe comes out of the content box before anything is measured
+    /// At the top of `layout`, inside the Layout scope the call opened, because
+    /// the gutter these describe comes out of the content box before anything is
+    /// measured
     /// — so a width written to a signal has to re-run this container's layout,
     /// not merely repaint it. The geometry below reads the resolved numbers:
     /// a track rect is arithmetic, and arithmetic should not be reading signals
     /// halfway through.
-    fn resolve_scroll(&mut self, id: WidgetId) {
+    fn resolve_scroll(&mut self) {
         let Some(data) = self.scroll_data.as_mut() else {
             return;
         };
         let scroll = &data.scroll;
         let defaults = ScrollbarMetrics::default();
-        let (metrics, visibility) = with_signal_tracking(id, JobType::Layout, || {
+        let (metrics, visibility) = {
             (
                 ScrollbarMetrics {
                     width: scroll.width.get_or(defaults.width),
@@ -560,7 +561,7 @@ impl Container {
                 },
                 scroll.visibility.get_or(ScrollbarVisibility::Always),
             )
-        });
+        };
         data.metrics = metrics;
         data.scrollbar_visibility = visibility;
     }
@@ -1426,40 +1427,23 @@ impl Widget for Container {
         }
     }
 
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        let is_visible = with_signal_tracking(id, JobType::Layout, || self.visible.get_or(true));
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let id = ctx.id();
+        let is_visible = self.visible.get_or(true);
         if !is_visible {
-            tree.set_relayout_boundary(id, true);
-            let size = Size::zero();
-            tree.cache_layout(id, constraints, size);
-            tree.clear_needs_layout(id);
-            return size;
+            ctx.tree().set_relayout_boundary(id, true);
+            return Size::zero();
         }
 
         // Before `ensure_scrollbar_containers`, which reads the resolved
         // visibility to decide whether to build the parts at all — and before
         // the gutter `child_layout` takes out of the content box, which is
         // measured from the resolved width and margin.
-        self.resolve_scroll(id);
+        self.resolve_scroll();
 
-        tree.set_relayout_boundary(id, self.is_relayout_boundary_for(constraints));
-        self.ensure_scrollbar_containers(tree, id);
-
-        // Nothing to redo when the constraints are the same and no tracked
-        // signal (or animation) marked us dirty.
-        let constraints_changed = tree.cached_constraints(id) != Some(constraints);
-        let reactive_changed = tree.needs_layout(id);
-        if !constraints_changed && !reactive_changed {
-            crate::render_stats::record_layout_skipped();
-            return tree.cached_size(id).unwrap_or_default();
-        }
-        crate::render_stats::record_layout_executed_with_reasons(
-            crate::render_stats::LayoutReasons {
-                constraints_changed,
-                reactive_changed,
-            },
-        );
-        tree.clear_needs_layout(id);
+        let boundary = self.is_relayout_boundary_for(constraints);
+        ctx.tree().set_relayout_boundary(id, boundary);
+        self.ensure_scrollbar_containers(ctx.tree(), id);
 
         // Before the measurement, because the measurement consumes what this
         // places: `read_box_lengths` reads the animated padding, and a value
@@ -1471,25 +1455,22 @@ impl Widget for Container {
         // Above it rather than at the top of the function: a layout that skips
         // must not seed, and the gate is what decides that. Below the gate the
         // first layout never skips, because it has no cached constraints.
-        self.seed_animations(tree, id);
+        self.seed_animations(ctx.tree_ref(), id);
 
-        let lengths = self.read_box_lengths(id, constraints);
-        let child = self.child_layout(&lengths, constraints);
+        let pass = &ctx.value_pass();
+        let lengths = self.read_box_lengths(pass, id, constraints);
+        let child = self.child_layout(pass, &lengths, constraints);
         let padding = lengths.padding;
 
-        let children = self.children_source.reconcile_and_get(tree);
+        let children = self.children_source.reconcile_and_get(ctx.tree());
 
-        // A layout reads its own reactive properties (Flex's spacing and
-        // alignment, whatever a user-written Layout declares) while running.
-        // Those reads belong to this container just like padding and width do
-        // — without the scope they register no subscriber, and the property
-        // silently stops being reactive. Nesting is safe: every container
-        // opens its own scope, so a child's reads attribute to the child.
-        let layout_impl = &mut self.layout;
+        // A layout reads its own reactive properties — Flex's spacing and
+        // alignment, whatever a user-written `Layout` declares — and those
+        // reads belong to this container, which is whose scope the call is
+        // already inside.
         let content_size = if !children.is_empty() {
-            with_signal_tracking(id, JobType::Layout, || {
-                layout_impl.layout(tree, children, child.constraints, child.origin)
-            })
+            self.layout
+                .layout(ctx, children, child.constraints, child.origin)
         } else {
             Size::zero()
         };
@@ -1503,13 +1484,13 @@ impl Widget for Container {
         // own offset is all that has to be added.
         if let Some((child_id, child_baseline)) = children
             .iter()
-            .find_map(|&cid| tree.baseline(cid).map(|b| (cid, b)))
-            && let Some((_, child_y)) = tree.get_origin(child_id)
+            .find_map(|&cid| ctx.tree_ref().baseline(cid).map(|b| (cid, b)))
+            && let Some((_, child_y)) = ctx.tree_ref().get_origin(child_id)
         {
-            tree.set_baseline(id, child_y + child_baseline);
+            ctx.tree().set_baseline(id, child_y + child_baseline);
         }
 
-        self.children_sorted_along = sorted_axis(tree, children);
+        self.children_sorted_along = sorted_axis(ctx.tree_ref(), children);
 
         if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_mut();
@@ -1520,16 +1501,11 @@ impl Widget for Container {
             sd.scroll_state.clamp_offsets();
         }
 
-        self.update_size_targets(tree, id, &lengths, content_size);
+        self.update_size_targets(ctx, id, &lengths, content_size);
 
-        let size = self.resolve_size(&lengths, constraints, content_size);
+        let size = self.resolve_size(pass, &lengths, constraints, content_size);
 
-        // Layout scrollbar containers after size is determined
-        // Note: cache_layout is called at the end which stores size in Tree
-        self.layout_scrollbar_containers(tree, id, size);
-
-        // Cache constraints and size for partial layout
-        tree.cache_layout(id, constraints, size);
+        self.layout_scrollbar_containers(ctx, id, size);
 
         // A shadow falls outside the box that casts it, so the damage this
         // container reports has to reach past its own bounds.
@@ -1544,7 +1520,7 @@ impl Widget for Container {
         // Kept as well as published, because paint clamps to it: the shadow that
         // is drawn and the rect that is repainted have to be one number, not two
         // computations of it made a frame apart.
-        let reach = with_signal_tracking(id, JobType::Layout, || self.max_shadow_extent(id));
+        let reach = self.max_shadow_extent(id);
         self.shadow_reach.set(reach);
         // The shadow's reach is layout's to publish — it follows the shadow,
         // which layout already tracks. What a transform adds is not: a
@@ -1565,13 +1541,9 @@ impl Widget for Container {
         // already resolved it under this layout's tracking, so the value is in
         // hand and the dependence is the one that makes a Hidden-to-Visible
         // toggle re-run this.
-        let clips = self.scroll_axis != ScrollAxis::None || lengths.overflow == Overflow::Hidden;
-        tree.set_clips_children(id, clips);
-        if !clips {
-            tree.remeasure_children(id);
-        }
-        self.publish_paint_reach(tree, id, Rect::from_size(size));
-
+        ctx.clips_children(
+            self.scroll_axis != ScrollAxis::None || lengths.overflow == Overflow::Hidden,
+        );
         // Register widget ref so update_widget_refs() can refresh bounds
         if let Some(ref wr) = self.widget_ref {
             register_widget_ref(id, *wr);
@@ -1596,8 +1568,8 @@ impl Widget for Container {
 
         let hit = HitContext {
             bounds: tree.get_bounds(id).unwrap_or_default(),
-            corners: self.animated_corners(id),
-            transform: self.animated_transform(id),
+            corners: self.animated_corners(&ValuePass::PAINTING, id),
+            transform: self.animated_transform(&ValuePass::PAINTING, id),
             pivot: self.resolved_pivot(id),
         };
 
@@ -1692,13 +1664,13 @@ impl Widget for Container {
             overflow,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
-                self.animated_background(id),
-                self.animated_corners(id),
-                self.animated_shadow(id),
-                self.animated_transform(id),
+                self.animated_background(&ValuePass::PAINTING, id),
+                self.animated_corners(&ValuePass::PAINTING, id),
+                self.animated_shadow(&ValuePass::PAINTING, id),
+                self.animated_transform(&ValuePass::PAINTING, id),
                 self.resolved_pivot(id),
-                self.animated_border_width(id),
-                self.animated_border_color(id),
+                self.animated_border_width(&ValuePass::PAINTING, id),
+                self.animated_border_color(&ValuePass::PAINTING, id),
                 self.effective_gradient(id),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
                 self.takes_input.as_ref().map(|t| t.get()),
@@ -2064,9 +2036,7 @@ mod tests {
 
         // First layout: initializes the animation to the collapsed state
         // via set_immediate. No Animation subscription exists yet.
-        tree.with_widget_mut(id, |w, id, tree| {
-            w.layout(tree, id, Constraints::new(0.0, 0.0, 100.0, 100.0));
-        });
+        tree.layout_widget(id, Constraints::new(0.0, 0.0, 100.0, 100.0));
 
         // The missed write: no subscriber is registered, so this notifies
         // nobody and pushes no job for the widget.
@@ -2098,11 +2068,11 @@ mod tests {
         );
     }
 
-    /// Content-sized surfaces measure under the measure-final flag: layout
-    /// must report animation TARGETS, not in-flight values, so a growth
+    /// A content-sized surface is configured from a measure, and a measure
+    /// reports animation TARGETS rather than in-flight values — so a growth
     /// animation resizes the surface once instead of once per frame.
     #[test]
-    fn measure_final_reads_animation_targets() {
+    fn a_measure_reads_animation_targets() {
         let height_sig = create_signal(100.0_f32);
         let widget = container().width(50.0).height(
             (move || height_sig.get()).transition(Transition::new(200, TimingFunction::EaseOut)),
@@ -2118,28 +2088,21 @@ mod tests {
         let measure = Constraints::new(0.0, 0.0, 500.0, 500.0);
 
         // First layout initializes the animation at 100
-        tree.with_widget_mut(id, |w, id, tree| {
-            w.layout(tree, id, render);
-        });
+        tree.layout_widget(id, render);
 
         // Retarget to 180: the animation starts from ~100
         height_sig.set(180.0);
-        let mid = tree
-            .with_widget_mut(id, |w, id, tree| w.layout(tree, id, render))
-            .unwrap();
+        let mid = tree.layout_widget(id, render).unwrap();
         assert!(
             mid.height < 180.0,
             "mid-animation layout should not have reached the target yet (got {})",
             mid.height
         );
 
-        let fin = super::animations::with_measure_final(|| {
-            tree.with_widget_mut(id, |w, id, tree| w.layout(tree, id, measure))
-        })
-        .unwrap();
+        let fin = tree.measure_widget(id, measure).unwrap();
         assert_eq!(
             fin.height, 180.0,
-            "measure-final must report the animation target"
+            "a measure has to report the animation target"
         );
     }
 
@@ -2158,9 +2121,7 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(widget));
 
-        tree.with_widget_mut(id, |w, id, tree| {
-            w.layout(tree, id, Constraints::new(0.0, 0.0, 100.0, 100.0));
-        });
+        tree.layout_widget(id, Constraints::new(0.0, 0.0, 100.0, 100.0));
 
         // Discard jobs produced so far; only the write below matters.
         let roots: rustc_hash::FxHashSet<WidgetId> = [id].into_iter().collect();
@@ -2199,9 +2160,7 @@ mod tests {
         let id = tree.register(Box::new(widget));
         tree.with_widget_mut(id, |w, id, tree| w.register_children(tree, id));
         let size = tree
-            .with_widget_mut(id, |w, id, tree| {
-                w.layout(tree, id, Constraints::new(0.0, 0.0, 500.0, 500.0))
-            })
+            .layout_widget(id, Constraints::new(0.0, 0.0, 500.0, 500.0))
             .unwrap();
         assert_eq!(size.width, 24.0, "10 + spacing 4 + 10");
 

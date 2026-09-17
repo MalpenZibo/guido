@@ -452,8 +452,6 @@ requests.
 | `FONTS_CONSUMED` | `src/lib.rs` | Whether a font system already took the list, so a late load can say it came too late |
 | `TEXT_MEASURER` | `src/renderer/text_measurer.rs` | One shaping cache for every `layout` that measures text, none of which is handed one |
 | `BATCHING` | `src/platform/wayland.rs` | Which surface a `batch_layer_requests` group is open on. Not a field of `WaylandState`: the closure holds `&mut WaylandState`, so a guard could not restore a field if it panics, and a scope left open would hold every later commit |
-| `MEASURE_FINAL` | `src/widgets/container/animations.rs` | Whether layout is a measure: `AnimationState::displayed` has no tree or pass to ask. #371 removes it |
-| `DIFFERS_BETWEEN_PASSES` | `src/widgets/container/animations.rs` | A read a measure would answer differently, handed to the next `Tree::cache_layout` for the same reason. #371 removes it |
 | `DEPTH` | `src/reactive/diagnostics.rs` | Debug builds: nesting of `snapshot_zone`, inside which a read with no reactive scope is not warned about |
 | `REPORTED` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about, so a hot path warns once |
 | `REPORTS` | `src/reactive/diagnostics.rs` | Debug builds: the number of warnings, for the diagnostic's own tests |
@@ -485,7 +483,7 @@ pub trait Widget {
     /// anything decides whether to paint it. Called from the Paint job.
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
 
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size;
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
 
@@ -524,22 +522,44 @@ keystrokes — something no test can ask about, only sleep towards.
 is asking about, and reading either clock outside the pass that sets it reports
 a diagnostic in a debug build rather than quietly handing back the wall clock.
 
+### One way in, for every child
+
+A child is laid out through `LayoutCtx::layout_child`, and a root through
+`Tree::layout_widget` (or `measure_widget`). Nothing calls a widget's `layout`
+directly. That call is what decides whether the widget runs at all — the same
+constraints and nothing dirty is nothing to redo — what its reads are
+attributed to, which pass it is in, and what becomes of the size it answers
+with.
+
+So a widget's `layout` measures and places; it opens no tracking scope, writes
+no skip check and caches nothing. `Container` and `Text` used to write their own
+check and `TextInput` and `Image` never had one, which is how they ran again
+every time their parent did.
+
+Which pass is running travels on the context: `ctx.measuring()` is true while a
+natural size is being measured — the popup path, and a content-sized surface —
+and it is what makes an animated value read as where it is going rather than
+where it is. A measure's answers are cached apart from a layout's, and either
+may reuse the other's only for a subtree that is settled: `ValuePass` is how a
+read says that its answer belonged to the pass that asked.
+
 ### Widgets written outside the crate
 
 The trait is implementable from anywhere, and a leaf needs only `layout` and
-`paint`. What it also needs is `with_signal_tracking(id, JobType::Layout, ..)`
-around whatever it measures from, and the same with `JobType::Paint` around
-whatever it draws from — both exported from the prelude for this reason.
+`paint`. Paint is still the widget's own to scope —
+`with_signal_tracking(id, JobType::Paint, ..)` around whatever it draws from —
+because nothing wraps a paint yet; layout is not.
 
-Scopes nest and the innermost wins, so a widget that opens its own claims its
-reads back from its parent. One that does not is not unreactive: its reads
-register against the nearest ancestor that opened a scope, usually the enclosing
-container, so a change to its own content marks *that* for layout and every
-sibling is re-laid-out with it. Reactive, but imprecise, and silently so.
+Scopes nest and the innermost wins, so a widget's reads belong to it and a
+change to its own content re-lays-out it rather than its parent and every
+sibling with it.
 
-`tests/external_widget.rs` is a leaf written against the public API only, and
-`the_innermost_scope_owns_the_read` in `reactive/invalidation.rs` pins the
-ownership rule.
+`tests/external_widget.rs` is a leaf written against the public API only;
+`a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer` is what
+says the framework's check covers it, and
+`a_layout_is_attributed_to_the_widget_that_ran_it` in `src/lib.rs` — with
+`the_innermost_scope_owns_the_read` in `reactive/invalidation.rs` beneath it —
+pins the ownership rule.
 
 ## Event Flow
 

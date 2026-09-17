@@ -50,6 +50,7 @@
 //!     .child(text("Label").color(weak).when_hovered(|s| s.color(strong)));
 //! ```
 
+use crate::tree::ValuePass;
 use smallvec::SmallVec;
 
 use crate::clock::FrameInstant;
@@ -365,6 +366,7 @@ impl TextAnims {
     /// the first frame ease from a value that was already stale.
     pub(crate) fn retarget(
         &mut self,
+        pass: &ValuePass,
         color: Color,
         size: f32,
         now: FrameInstant,
@@ -372,8 +374,8 @@ impl TextAnims {
         let mut wants = None;
         if let Some(a) = self.color.as_mut() {
             if a.is_initial() {
-                if !a.begin_enter(color, || now) {
-                    a.set_immediate(color);
+                if !a.begin_enter(pass, color, || now) {
+                    a.set_immediate(pass, color);
                 }
             } else {
                 a.animate_to(color, now);
@@ -385,13 +387,13 @@ impl TextAnims {
         let mut measured = size;
         if let Some(a) = self.font_size.as_mut() {
             if a.is_initial() {
-                if !a.begin_enter(size, || now) {
-                    a.set_immediate(size);
+                if !a.begin_enter(pass, size, || now) {
+                    a.set_immediate(pass, size);
                 }
             } else {
                 a.animate_to(size, now);
             }
-            measured = a.displayed();
+            measured = a.displayed(pass);
             // A size still moving has to be measured again, not merely redrawn.
             if a.is_animating() {
                 wants = Some(RequiredJob::Layout);
@@ -518,7 +520,8 @@ macro_rules! declares_text_style {
                 let Some(anims) = self.$anims.as_deref_mut() else {
                     return size;
                 };
-                let (wants, measured) = anims.retarget(color, size, tree.frame_instant());
+                let (wants, measured) =
+                    anims.retarget(&tree.value_pass(), color, size, tree.frame_instant());
                 if let Some(required) = wants {
                     $crate::jobs::request_job(id, $crate::jobs::JobRequest::Animation(required));
                 }

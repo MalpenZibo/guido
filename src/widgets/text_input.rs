@@ -8,6 +8,7 @@
 //!
 //! Styling (background, borders, etc.) should be handled by wrapping in a Container.
 
+use crate::tree::ValuePass;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -22,7 +23,7 @@ use crate::reactive::{
     with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::control::Control;
@@ -637,39 +638,39 @@ impl TextInput {
 
     /// Refresh cached values from the bound signal and this field's style.
     ///
-    /// The reads happen in this widget's tracking scope, so a change to a
-    /// declared metric re-lays-out this input and nothing else.
+    /// The reads belong to this input because the call its layout is made
+    /// inside does — see `LayoutCtx::layout_child` — so a change to a declared
+    /// metric re-lays-out this input and nothing else.
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
-        let (new_value, new_font_size, new_font_family, new_font_weight, overflow, new_color) =
-            with_signal_tracking(id, JobType::Layout, || {
-                let style = self.resolved_text_style(tree, id);
+        let (new_value, new_font_size, new_font_family, new_font_weight, overflow, new_color) = {
+            let style = self.resolved_text_style(tree, id);
 
-                // Assigned here rather than returned, as the font metrics are:
-                // the rule in this function is that a value comes back through
-                // the tuple only when it is compared against its cache below to
-                // raise a dirty flag. These three raise their own or none.
-                self.cached_caret = self.caret.get_or(true);
-                let password = self.password.get_or(false);
-                let mask_char = self.mask_char.get_or('•');
-                if password != self.cached_password || mask_char != self.cached_mask_char {
-                    // Both feed `display_text`, and the masked string is what
-                    // the measurements are taken from, so either changing
-                    // invalidates the same two caches a new value does.
-                    self.cached_password = password;
-                    self.cached_mask_char = mask_char;
-                    self.display_text_dirty = true;
-                    self.measurements_dirty = true;
-                }
+            // Assigned here rather than returned, as the font metrics are:
+            // the rule in this function is that a value comes back through
+            // the tuple only when it is compared against its cache below to
+            // raise a dirty flag. These three raise their own or none.
+            self.cached_caret = self.caret.get_or(true);
+            let password = self.password.get_or(false);
+            let mask_char = self.mask_char.get_or('•');
+            if password != self.cached_password || mask_char != self.cached_mask_char {
+                // Both feed `display_text`, and the masked string is what
+                // the measurements are taken from, so either changing
+                // invalidates the same two caches a new value does.
+                self.cached_password = password;
+                self.cached_mask_char = mask_char;
+                self.display_text_dirty = true;
+                self.measurements_dirty = true;
+            }
 
-                (
-                    self.value.get(),
-                    style.font_size(id),
-                    style.font_family(),
-                    style.font_weight(),
-                    crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
-                    self.animates_text_color().then(|| style.color(id)),
-                )
-            });
+            (
+                self.value.get(),
+                style.font_size(id),
+                style.font_family(),
+                style.font_weight(),
+                crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
+                self.animates_text_color().then(|| style.color(id)),
+            )
+        };
 
         // Check if value changed (need to update char count and selection)
         if new_value != self.cached_value {
@@ -1297,21 +1298,26 @@ impl Widget for TextInput {
         blinking || animating
     }
 
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let id = ctx.id();
         // Text inputs are never relayout boundaries
-        tree.set_relayout_boundary(id, false);
+        ctx.tree().set_relayout_boundary(id, false);
 
-        // Refresh cached values from reactive properties
-        // This reads signals and registers layout dependencies
-        let overflow = self.refresh(tree, id);
-        tree.set_own_paint_reach(id, overflow);
+        // Refresh cached values from reactive properties. The reads belong to
+        // this layout, which is the scope the call was made inside.
+        let overflow = self.refresh(ctx.tree(), id);
+        ctx.tree().set_own_paint_reach(id, overflow);
 
         // Update measurement cache (has internal dirty check)
         self.update_measurements();
 
         // Use cached text width for sizing (TextMeasurer caches the actual measurement)
         // Use previous height from tree to maintain stable sizing
-        let prev_height = tree.cached_size(id).map(|s| s.height).unwrap_or(0.0);
+        let prev_height = ctx
+            .tree_ref()
+            .cached_size(id)
+            .map(|s| s.height)
+            .unwrap_or(0.0);
         let height = (self.cached_font_size * 1.2).max(prev_height);
 
         // Text inputs should fill available width (like HTML input elements)
@@ -1329,12 +1335,6 @@ impl Widget for TextInput {
                 .min(constraints.max_height),
         );
 
-        // Cache constraints and size for partial layout
-        tree.cache_layout(id, constraints, size);
-
-        // Clear needs_layout flag since layout is complete
-        tree.clear_needs_layout(id);
-
         if let Some(widget_ref) = self.widget_ref {
             register_widget_ref(id, widget_ref);
         }
@@ -1345,7 +1345,7 @@ impl Widget for TextInput {
         if self.autofocus_pending {
             self.autofocus_pending = false;
             if focused_widget().is_none() {
-                request_focus(tree, id);
+                request_focus(ctx.tree(), id);
             }
         }
 
@@ -1366,6 +1366,7 @@ impl Widget for TextInput {
                 let style = self.resolved_text_style(tree, id);
                 let input = self.resolved_input_style();
                 let text_color = crate::widgets::container::get_animated_value(
+                    &ValuePass::PAINTING,
                     self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
                     || style.color(id),
                 );
@@ -2091,10 +2092,12 @@ mod tests {
             crate::jobs::process_jobs(&drained, tree, &mut layout_roots);
             crate::jobs::recycle_job_buffer(drained);
             for boundary in layout_roots {
-                let c = tree.last_constraints(boundary).unwrap_or(constraints);
-                tree.with_widget_mut(boundary, |w, id, t| w.layout(t, id, c));
+                let c = tree
+                    .last_layout_constraints(boundary)
+                    .unwrap_or(constraints);
+                tree.layout_widget(boundary, c);
             }
-            tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints));
+            tree.layout_widget(root, constraints);
             let node = paint_once(tree, field);
             tree.set_frame_instant(None);
             node.commands.iter().find_map(|cmd| match &**cmd {
@@ -2102,9 +2105,14 @@ mod tests {
                 _ => None,
             })
         };
-        crate::widgets::container::with_measure_final(|| {
-            frame(&mut tree, 0, Constraints::new(200.0, 0.0, 200.0, 300.0))
-        });
+        // The popup path first: a measure of the natural size, before the
+        // layouts that place it.
+        let measure = |tree: &mut Tree, ms: u64, constraints: Constraints| {
+            tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(ms)));
+            let _ = crate::jobs::pump_and_measure(tree, root, constraints);
+            tree.set_frame_instant(None);
+        };
+        measure(&mut tree, 0, Constraints::new(200.0, 0.0, 200.0, 300.0));
         let loose = Constraints::new(0.0, 0.0, 200.0, 100.0);
         frame(&mut tree, 0, loose);
         let midway = frame(&mut tree, 50, loose).expect("the field draws its text");
@@ -2123,9 +2131,7 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(input));
         tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(id, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
-        });
+        tree.layout_widget(id, Constraints::new(0.0, 0.0, 200.0, 40.0));
         if focused {
             request_focus(&tree, id);
         }

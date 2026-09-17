@@ -563,6 +563,25 @@ pub(crate) fn pump_and_layout(
     root: WidgetId,
     constraints: crate::layout::Constraints,
 ) -> Option<crate::layout::Size> {
+    pump(tree, root);
+    tree.layout_widget(root, constraints)
+}
+
+/// The same, as a measure — the pass a content-sized surface is configured
+/// from, before it exists.
+#[cfg(test)]
+pub(crate) fn pump_and_measure(
+    tree: &mut Tree,
+    root: WidgetId,
+    constraints: crate::layout::Constraints,
+) -> Option<crate::layout::Size> {
+    pump(tree, root);
+    tree.measure_widget(root, constraints)
+}
+
+/// The jobs a frame runs before it lays anything out.
+#[cfg(test)]
+fn pump(tree: &mut Tree, root: WidgetId) {
     let roots: rustc_hash::FxHashSet<WidgetId> = [root].into_iter().collect();
     distribute_jobs(tree, &roots);
     let drained = drain_surface_jobs(root);
@@ -570,8 +589,6 @@ pub(crate) fn pump_and_layout(
     process_jobs(&drained, tree, &mut layout_roots);
     recycle_job_buffer(drained);
     recycle_job_buffer(drain_orphan_jobs());
-
-    tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints))
 }
 
 /// Forget every scheduled job (for testing).
@@ -772,11 +789,12 @@ mod tests {
 
     use super::*;
     use crate::layout::{Constraints, Size};
+    use crate::tree::LayoutCtx;
     use crate::widgets::Widget;
 
     struct TestWidget;
     impl Widget for TestWidget {
-        fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+        fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
             Size::zero()
         }
         fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}

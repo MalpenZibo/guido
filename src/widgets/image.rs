@@ -6,11 +6,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
+use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
 use crate::renderer::PaintContext;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::widget::{Rect, Widget};
 
@@ -203,19 +202,17 @@ impl Image {
 }
 
 impl Widget for Image {
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let id = ctx.id();
         // Images are never relayout boundaries
-        tree.set_relayout_boundary(id, false);
+        ctx.tree().set_relayout_boundary(id, false);
 
-        // Read the source with signal tracking so a change triggers re-layout
-        // Both under the same tracking: the fit decides the measured size, so a
-        // write to it has to re-run layout exactly as a new source does.
-        let (current_source, fit) = with_signal_tracking(id, JobType::Layout, || {
-            (
-                self.source.get(),
-                self.content_fit.get_or(ContentFit::default()),
-            )
-        });
+        // Both reads belong to this layout: the fit decides the measured size,
+        // so a write to it re-runs the layout exactly as a new source does.
+        let (current_source, fit) = (
+            self.source.get(),
+            self.content_fit.get_or(ContentFit::default()),
+        );
         self.cached_content_fit = fit;
 
         // Load intrinsic size if not cached or source changed
@@ -232,15 +229,7 @@ impl Widget for Image {
         // Update cached source
         self.cached_source = Some(current_source);
 
-        let size = self.calculate_size(&constraints);
-
-        // Cache constraints and size for partial layout
-        tree.cache_layout(id, constraints, size);
-
-        // Clear needs_layout flag since layout is complete
-        tree.clear_needs_layout(id);
-
-        size
+        self.calculate_size(&constraints)
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {

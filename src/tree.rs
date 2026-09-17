@@ -111,12 +111,10 @@ struct Slot {
     needs_paint: bool,
     /// Whether this widget is a relayout boundary
     is_relayout_boundary: bool,
-    /// Cached constraints from last layout
-    cached_constraints: Option<Constraints>,
-    /// Whether that layout was a measure
-    cached_by_measure: bool,
-    /// Whether a measure and a layout of this subtree would come out differently
-    differs_between_passes: bool,
+    /// What each pass last asked for, and what it answered — one entry per
+    /// [`LayoutPass`], because a measure and a layout can want different
+    /// answers from the same widget and neither may be handed the other's.
+    cached: [Option<CachedLayout>; LayoutPass::COUNT],
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -175,6 +173,93 @@ struct Slot {
 /// The tree stores all widgets in a dense Vec for cache-friendly iteration,
 /// with a sparse map for O(1) lookup by WidgetId. Generational indices
 /// prevent use-after-free bugs.
+/// Which pass is laying a widget out.
+///
+/// A measure and a real layout ask the same widget different questions — a
+/// measure reads where an animation is going, and runs before the surface
+/// exists — so what a widget answers, and what may be reused from its cache,
+/// belong to the pass that asked.
+///
+/// It travels with the call rather than in a thread-local: `MEASURE_FINAL` was
+/// set and cleared around `measure_natural_size` with no drop guard, and
+/// `DIFFERS_BETWEEN_PASSES` existed only because one shared cache entry could
+/// not tell the two apart.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayoutPass {
+    /// The layout that places what is on screen.
+    Layout,
+    /// The measure that reports a natural size, reading where animations are
+    /// going rather than where they are — what a content-sized surface is
+    /// configured from.
+    Measure,
+}
+
+impl LayoutPass {
+    pub(crate) const COUNT: usize = 2;
+
+    /// Whether this pass reads where an animation is going rather than where
+    /// it is now.
+    pub fn is_measure(self) -> bool {
+        matches!(self, LayoutPass::Measure)
+    }
+}
+
+/// What one pass asked a widget for, and what it answered.
+#[derive(Clone, Copy)]
+struct CachedLayout {
+    constraints: Constraints,
+    size: Size,
+    /// Whether this answer belongs to the pass that asked — because something
+    /// below was in flight, or a measure placed a value without spending its
+    /// appearance. A settled subtree is neither, and either pass may read it.
+    pass_dependent: bool,
+}
+
+/// Which pass is reading an animated value, and somewhere to say that the
+/// answer depended on it.
+///
+/// A measure reads where an animation is going and a layout reads where it is,
+/// so a value in flight answers the two differently — and a subtree whose
+/// answer is the same either way can be skipped by one pass on what the other
+/// cached. Noticing that is the job of the reads themselves, which is where it
+/// was noticed before: what has changed is that the notice travels with the
+/// pass rather than in a thread-local anybody could have set.
+pub struct ValuePass {
+    measuring: bool,
+    /// Raised by a read whose answer the pass decided. `None` outside a
+    /// layout, where nothing is deciding anything.
+    noticed: Option<std::rc::Rc<std::cell::Cell<bool>>>,
+}
+
+impl ValuePass {
+    /// Paint, where there is only ever one answer: where the animation is now,
+    /// and nothing is deciding what may be reused.
+    pub const PAINTING: Self = Self {
+        measuring: false,
+        noticed: None,
+    };
+
+    pub(crate) fn laying_out(measuring: bool, noticed: std::rc::Rc<std::cell::Cell<bool>>) -> Self {
+        Self {
+            measuring,
+            noticed: Some(noticed),
+        }
+    }
+
+    /// Whether this pass reads where animations are going.
+    pub fn measuring(&self) -> bool {
+        self.measuring
+    }
+
+    /// Say that what was just read would have answered the other pass
+    /// differently.
+    pub(crate) fn depends_on_the_pass(&self) {
+        if let Some(ref noticed) = self.noticed {
+            noticed.set(true);
+        }
+    }
+}
+
 pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Slot>,
@@ -200,6 +285,16 @@ pub struct Tree {
     /// paint draws it. `None` between frames, where nobody should be reading
     /// it.
     frame_instant: Option<std::time::Instant>,
+    /// Which pass is laying out, for as long as one is. Written by the one
+    /// entry point every layout goes through and put back when it returns, so
+    /// a measure nested inside a layout — the popup path — restores the outer
+    /// pass on its way out.
+    pass: LayoutPass,
+    /// Raised while a widget lays out, by a read whose answer the pass
+    /// decided: a value in flight, or one a measure placed without letting it
+    /// appear. Taken by the cache write, which is what makes a settled subtree
+    /// reusable by the pass that did not lay it out.
+    pass_dependent: std::rc::Rc<std::cell::Cell<bool>>,
     /// When the event now being dispatched happened.
     ///
     /// Not the same question as `frame_instant`: a frame advances what is
@@ -244,6 +339,8 @@ impl Tree {
             free_indices: Vec::new(),
             damage: std::collections::HashMap::new(),
             frame_instant: None,
+            pass: LayoutPass::Layout,
+            pass_dependent: std::rc::Rc::new(std::cell::Cell::new(false)),
             event_instant: None,
             focus_claimed_the_press: false,
         }
@@ -382,9 +479,7 @@ impl Tree {
             needs_layout: false,
             needs_paint: true,
             is_relayout_boundary: false,
-            cached_constraints: None,
-            cached_by_measure: false,
-            differs_between_passes: false,
+            cached: [None; LayoutPass::COUNT],
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -465,6 +560,120 @@ impl Tree {
             .map(|idx| f(&*self.dense[idx].widget))
     }
 
+    /// Lay a widget out, as the pass that is already running.
+    ///
+    /// The root of the entry point every layout goes through — `LayoutCtx::
+    /// layout_child` is the same call, from a parent. What happens around a
+    /// widget's `layout` belongs here rather than inside each widget: the skip
+    /// when there is nothing to redo, the tracking scope that attributes what
+    /// the widget reads to the widget, and the cache write afterwards.
+    ///
+    /// Returns the size, or `None` for an id the tree cannot answer for.
+    pub fn layout_widget(&mut self, id: WidgetId, constraints: Constraints) -> Option<Size> {
+        let dirty = self.needs_layout(id);
+        let cached = self.cached_for_pass(id, constraints);
+
+        // Whether *this* subtree's answer belongs to the pass that asked is
+        // the question the reads below answer; whatever the subtree around it
+        // has already said is put back when this one is done.
+        let enclosing = self.pass_dependent.replace(false);
+
+        // Nothing to redo: this pass asked the same question last time and
+        // nothing has marked the widget since.
+        if let Some(entry) = cached
+            && !dirty
+        {
+            crate::render_stats::record_layout_skipped();
+            // A skipped subtree read nothing this pass, and still answers what
+            // it answered last time.
+            self.pass_dependent.set(enclosing || entry.pass_dependent);
+            return Some(entry.size);
+        }
+        crate::render_stats::record_layout_executed_with_reasons(
+            crate::render_stats::LayoutReasons {
+                constraints_changed: cached.is_none(),
+                reactive_changed: dirty,
+            },
+        );
+
+        let size = self.with_widget_mut(id, |widget, id, tree| {
+            let mut ctx = LayoutCtx {
+                tree,
+                id,
+                clips_children: false,
+            };
+            // The scope is the widget's own, so what it reads while laying out
+            // belongs to it — including a widget from outside the crate, which
+            // used to have to know to open one, and was attributed to its
+            // nearest ancestor when it did not.
+            let size =
+                crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Layout, || {
+                    widget.layout(&mut ctx, constraints)
+                });
+            let clips = ctx.clips_children;
+            tree.cache_layout(id, constraints, size);
+            tree.clear_needs_layout(id);
+            // What its children paint, and how far past its own box this one
+            // does — both measured against the size it has just answered with,
+            // which is why they are here rather than inside the widget: from in
+            // there the only size to measure against was the one it had last
+            // time.
+            tree.set_clips_children(id, clips, size);
+            if !clips {
+                tree.remeasure_children(id, size);
+            }
+            // What this widget paints outside its own box, published from the
+            // size it has just answered with — which is why it is here rather
+            // than inside the widget: the walk it starts reads that size, and
+            // a widget publishing from inside its own layout was publishing
+            // against the box it had last time.
+            //
+            // A measure only asks how big this would be; nothing is placed and
+            // nothing is drawn, so there is no reach to publish and no damage
+            // to expand for one.
+            if tree.pass == LayoutPass::Layout {
+                widget.refresh_paint_bounds(tree, id);
+            }
+            size
+        })?;
+
+        // Upward, to whatever is laying this one out.
+        let mine = self.pass_dependent.get();
+        self.pass_dependent.set(enclosing || mine);
+        Some(size)
+    }
+
+    /// The same, as a measure: animations read where they are going, and what
+    /// it caches is kept apart from what the layout caches.
+    pub fn measure_widget(&mut self, id: WidgetId, constraints: Constraints) -> Option<Size> {
+        self.with_pass(LayoutPass::Measure, |tree| {
+            tree.layout_widget(id, constraints)
+        })
+    }
+
+    /// Whether the running pass reads where animations are going rather than
+    /// where they are.
+    pub fn measuring(&self) -> bool {
+        self.pass.is_measure()
+    }
+
+    /// The pass, as a widget's value reads see it: which way to read an
+    /// animation, and somewhere to say that the answer depended on the pass.
+    pub fn value_pass(&self) -> ValuePass {
+        ValuePass::laying_out(
+            self.pass.is_measure(),
+            std::rc::Rc::clone(&self.pass_dependent),
+        )
+    }
+
+    /// Run `f` under `pass`, and put back whatever pass was running.
+    fn with_pass<R>(&mut self, pass: LayoutPass, f: impl FnOnce(&mut Tree) -> R) -> R {
+        let previous = std::mem::replace(&mut self.pass, pass);
+        let out = f(self);
+        self.pass = previous;
+        out
+    }
+
     /// Mutate a widget via a closure.
     ///
     /// The closure receives the widget ID, mutable access to the widget, and the tree,
@@ -482,7 +691,7 @@ impl Tree {
         // Placeholder widget for extraction
         struct PlaceholderWidget;
         impl Widget for PlaceholderWidget {
-            fn layout(&mut self, _: &mut Tree, _: WidgetId, _: Constraints) -> Size {
+            fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
                 Size::zero()
             }
             fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
@@ -661,7 +870,7 @@ impl Tree {
                 // wants to know how far its children reach, so that is carried;
                 // what this widget paints is its own box, so nothing above it
                 // learns anything and the walk is done.
-                let (_, widest) = self.measure_children(parent);
+                let (_, widest) = self.measure_children(parent, None);
                 self.dense[parent_idx].children_reach = widest;
                 self.dense[parent_idx].children_outset = 0.0;
                 return;
@@ -676,7 +885,7 @@ impl Tree {
                 // maximum can have moved, and nothing above can have either.
                 return;
             } else {
-                self.measure_children(parent)
+                self.measure_children(parent, None)
             };
 
             if (outset, widest) == (had_outset, had_reach) {
@@ -723,10 +932,15 @@ impl Tree {
     ///
     /// One walk and one lookup per child — the sparse-then-dense resolve is the
     /// expensive half, and every number below comes off the slot it lands on.
-    fn measure_children(&self, id: WidgetId) -> (f32, f32) {
-        let Some(parent_box) = self
-            .get_bounds(id)
-            .map(|b| crate::widgets::Rect::from_size(crate::layout::Size::new(b.width, b.height)))
+    fn measure_children(&self, id: WidgetId, own_size: Option<Size>) -> (f32, f32) {
+        // The size this pass just measured, where the caller has it: the cache
+        // is written when the widget's layout *returns*, so a container asking
+        // in the middle of its own would otherwise be measuring its children
+        // against the box it had last time — or, on a first layout, against
+        // none at all.
+        let Some(parent_box) = own_size
+            .or_else(|| self.get_bounds(id).map(|b| Size::new(b.width, b.height)))
+            .map(crate::widgets::Rect::from_size)
         else {
             return (0.0, 0.0);
         };
@@ -763,8 +977,8 @@ impl Tree {
     ///
     /// Gathers upward when the union it feeds actually moved — see the body
     /// for why bottom-up layout is not enough on its own.
-    pub(crate) fn remeasure_children(&mut self, id: WidgetId) {
-        let (outset, widest) = self.measure_children(id);
+    fn remeasure_children(&mut self, id: WidgetId, own_size: Size) {
+        let (outset, widest) = self.measure_children(id, Some(own_size));
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
@@ -787,14 +1001,14 @@ impl Tree {
     /// The widest *reach* is kept: the search that narrows the children still
     /// needs it, because a child inside the clip can still draw outside its own
     /// bounds and into view.
-    pub(crate) fn set_clips_children(&mut self, id: WidgetId, clips: bool) {
+    fn set_clips_children(&mut self, id: WidgetId, clips: bool, own_size: Size) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
         self.dense[idx].clips_children = clips;
         if clips {
             self.dense[idx].children_outset = 0.0;
-            let (_, widest) = self.measure_children(id);
+            let (_, widest) = self.measure_children(id, Some(own_size));
             self.dense[idx].children_reach = widest;
         }
     }
@@ -1129,48 +1343,74 @@ impl Tree {
             self.expand_damage_rect(root, vacated);
         }
         let idx = self.get_dense_index(id).expect("checked above");
-        self.dense[idx].cached_constraints = Some(constraints);
-        self.dense[idx].cached_by_measure = crate::widgets::container::measuring_final();
-        // A child skipped from its cache read nothing this pass, and still
-        // carries what it read last time.
-        self.dense[idx].differs_between_passes =
-            crate::widgets::container::take_differs_between_passes()
-                || self.dense[idx].children.iter().any(|&child| {
-                    self.get_dense_index(child)
-                        .is_some_and(|c| self.dense[c].differs_between_passes)
-                });
+        // A subtree answers the passes differently when something in it is in
+        // flight, or when a measure placed a value without letting it appear.
+        // The reads say so as they happen; a child that was skipped read
+        // nothing this pass and still carries what it said last time.
+        let pass_dependent = self.pass_dependent.replace(false)
+            || self.dense[idx].children.iter().any(|&child| {
+                self.get_dense_index(child).is_some_and(|c| {
+                    self.dense[c]
+                        .cached
+                        .iter()
+                        .flatten()
+                        .any(|e| e.pass_dependent)
+                })
+            });
+        let pass = self.pass;
+        self.dense[idx].cached[pass as usize] = Some(CachedLayout {
+            constraints,
+            size,
+            pass_dependent,
+        });
         self.dense[idx].cached_size = Some(size);
         // Damages the new rect and marks the ancestors, which have to redraw
         // to re-emit this widget at its new geometry.
         self.mark_needs_paint(id);
     }
 
-    /// Get cached constraints for a widget.
+    /// What this widget was last asked for *by the pass that is running*, and
+    /// what it answered.
     ///
-    /// Constraints cached by a measure answer a layout, and the other way
-    /// round, only where nothing below would come out differently: a skip
-    /// across the passes otherwise returns the other pass's size, or never
-    /// places what a measure declined to.
+    /// Per pass, because the two do not answer the same question: a measure
+    /// reads where an animation is going, a layout reads where it is now, and
+    /// a measure runs before a surface exists so an appearance must not be
+    /// spent in one. One shared entry meant a skip across the passes handed
+    /// back the other pass's size, or never placed what a measure declined to.
+    fn cached_for_pass(&self, id: WidgetId, constraints: Constraints) -> Option<CachedLayout> {
+        let cached = &self.dense[self.get_dense_index(id)?].cached;
+        // This pass's own answer, or the other pass's — which may be read only
+        // where nothing below would have answered differently. Without that, a
+        // measure re-lays out a settled tree it could have read off the layout
+        // before it; with it, a value in flight, or an enter a measure declined
+        // to spend, is never handed across.
+        cached[self.pass as usize]
+            .filter(|entry| entry.constraints == constraints)
+            .or_else(|| {
+                cached
+                    .iter()
+                    .flatten()
+                    .find(|entry| !entry.pass_dependent && entry.constraints == constraints)
+                    .copied()
+            })
+    }
+
+    /// The constraints the running pass last laid this widget out under.
     pub fn cached_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        let slot = &self.dense[self.get_dense_index(id)?];
-        if slot.differs_between_passes
-            && slot.cached_by_measure != crate::widgets::container::measuring_final()
-        {
-            return None;
-        }
-        slot.cached_constraints
+        self.dense[self.get_dense_index(id)?].cached[self.pass as usize].map(|e| e.constraints)
     }
 
-    /// The constraints this widget was last laid out with, by either pass.
+    /// The constraints a real layout last ran this widget under, whichever
+    /// pass is asking.
     ///
-    /// For re-laying out a relayout boundary from where it stands, which wants
-    /// the constraints its parent gave it whichever pass that was. Deciding
-    /// whether a layout can be skipped is [`cached_constraints`](Self::cached_constraints).
-    pub(crate) fn last_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.dense[self.get_dense_index(id)?].cached_constraints
+    /// For the loop, which restarts a layout at a boundary and needs the
+    /// constraints that boundary was placed under — a question about the tree
+    /// on screen rather than about the pass asking.
+    pub(crate) fn last_layout_constraints(&self, id: WidgetId) -> Option<Constraints> {
+        self.dense[self.get_dense_index(id)?].cached[LayoutPass::Layout as usize]
+            .map(|entry| entry.constraints)
     }
 
-    /// Get cached size for a widget.
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
         self.get_dense_index(id)
             .and_then(|idx| self.dense[idx].cached_size)
@@ -1275,7 +1515,7 @@ mod tests {
     }
 
     impl Widget for MockWidget {
-        fn layout(&mut self, _tree: &mut Tree, _id: WidgetId, constraints: Constraints) -> Size {
+        fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
@@ -1877,14 +2117,14 @@ mod tests {
         tree.cache_layout(outer, cons, Size::new(100.0, 100.0));
         tree.cache_layout(boundary, cons, Size::new(100.0, 100.0));
         tree.cache_layout(child, cons, Size::new(100.0, 100.0));
-        tree.remeasure_children(boundary);
-        tree.remeasure_children(outer);
+        tree.remeasure_children(boundary, tree.cached_size(boundary).unwrap_or_default());
+        tree.remeasure_children(outer, tree.cached_size(outer).unwrap_or_default());
         assert_eq!(tree.children_reach(outer), 0.0, "nothing hangs out yet");
 
         // The child outgrows the box it sits in. Its own reach is still zero,
         // so nothing publishes; only the re-measure knows.
         tree.cache_layout(child, cons, Size::new(100.0, 400.0));
-        tree.remeasure_children(boundary);
+        tree.remeasure_children(boundary, tree.cached_size(boundary).unwrap_or_default());
 
         assert_eq!(
             tree.children_reach(outer),
@@ -2229,5 +2469,70 @@ mod clock_diagnostics {
             "a clock read inside its own pass is the ordinary case and says \
              nothing"
         );
+    }
+}
+
+/// What a widget is handed while it lays itself out: the tree, its own id, and
+/// the way to lay out a child.
+///
+/// A parent used to call a child's `layout` itself, through
+/// `Tree::with_widget_mut`, so everything that should happen around every
+/// layout was left to each widget to remember — the skip check, the tracking
+/// scope, which pass is running, the cache write. [`layout_child`](Self::
+/// layout_child) is that call, once, for everybody.
+pub struct LayoutCtx<'a> {
+    tree: &'a mut Tree,
+    id: WidgetId,
+    /// Whether this widget bounds what its children paint. Recorded rather
+    /// than published, because what follows from it is measured against the
+    /// size the widget has not answered with yet.
+    clips_children: bool,
+}
+
+impl LayoutCtx<'_> {
+    /// The widget being laid out.
+    pub fn id(&self) -> WidgetId {
+        self.id
+    }
+
+    /// The tree, for the geometry a layout writes: origins, baselines, and
+    /// what a widget declares about its own paint.
+    pub fn tree(&mut self) -> &mut Tree {
+        self.tree
+    }
+
+    /// The tree, to read.
+    pub fn tree_ref(&self) -> &Tree {
+        self.tree
+    }
+
+    /// The pass as a widget's value reads see it — see
+    /// [`Tree::value_pass`](Tree::value_pass).
+    pub fn value_pass(&self) -> ValuePass {
+        self.tree.value_pass()
+    }
+
+    /// Whether this pass reads where animations are going rather than where
+    /// they are — true while a natural size is being measured.
+    pub fn measuring(&self) -> bool {
+        self.tree.measuring()
+    }
+
+    /// Say that what this widget's children paint is bounded by its own edges
+    /// — a scroller, or an `Overflow::Hidden` box.
+    ///
+    /// Published when the layout returns, because the reach it recomputes is
+    /// measured against the size this layout is about to answer with.
+    pub fn clips_children(&mut self, clips: bool) {
+        self.clips_children = clips;
+    }
+
+    /// Lay a child out under `constraints`, and answer with its size.
+    ///
+    /// The one place a child's layout is reached from. It skips a child that
+    /// has nothing to redo, opens the child's own tracking scope, runs it in
+    /// the pass that is running, and writes what it answered into the cache.
+    pub fn layout_child(&mut self, child: WidgetId, constraints: Constraints) -> Option<Size> {
+        self.tree.layout_widget(child, constraints)
     }
 }

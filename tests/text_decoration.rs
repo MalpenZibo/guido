@@ -15,9 +15,7 @@ fn draws(widget: impl Widget + 'static) -> Vec<(f32, f32, Color)> {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.with_widget_mut(root, |w, id, t| {
-        w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-    });
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
 
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {
@@ -285,10 +283,8 @@ fn decoration_does_not_change_how_much_room_the_text_takes() {
         };
         let root = tree.register(Box::new(container().child(label)));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-        })
-        .unwrap()
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0))
+            .unwrap()
     };
     assert_eq!(measure(true), measure(false));
 }

@@ -5,7 +5,7 @@ use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{OwnerId, dispose_owner_now, under_owner};
 use crate::renderer::PaintContext;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::Widget;
 use super::widget::{Event, EventResponse};
@@ -590,8 +590,8 @@ impl Widget for OwnedWidget {
     /// lays out — two containers, and every declared property on them is a
     /// signal. That is ten per row against `fold_enabled`'s one, and it needs
     /// nothing of the caller but `.scroll(..)`.
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
-        under_owner(self.owner.id(), || self.inner.layout(tree, id, constraints))
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        under_owner(self.owner.id(), || self.inner.layout(ctx, constraints))
     }
 
     fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {

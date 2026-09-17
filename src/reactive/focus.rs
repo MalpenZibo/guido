@@ -263,9 +263,7 @@ mod tests {
             text_input(crate::reactive::create_signal(String::new())).widget_ref(field),
         )));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 200.0, 40.0))
-        });
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 200.0, 40.0));
         crate::widget_ref::update_widget_refs(&tree);
         assert!(field.widget().is_some(), "laid out, so it names a widget");
 

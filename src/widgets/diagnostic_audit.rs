@@ -49,7 +49,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     tree.with_widget(root, |w| w.layout_hints());
 
     let constraints = Constraints::new(0.0, 0.0, 300.0, 300.0);
-    tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints));
+    tree.layout_widget(root, constraints);
 
     let mut node = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {
@@ -94,7 +94,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
 
     // A second pass: the first one seeded caches, this one exercises the
     // steady-state paths (early-outs, paint-cache reuse, target re-sync).
-    tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints));
+    tree.layout_widget(root, constraints);
     let mut node2 = RenderNode::new(root.as_u64());
     tree.with_widget_mut(root, |w, id, t| {
         let mut ctx = PaintContext::new(&mut node2);

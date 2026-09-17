@@ -38,9 +38,7 @@ impl Field {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(input));
         tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(id, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 400.0, 40.0))
-        });
+        tree.layout_widget(id, Constraints::new(0.0, 0.0, 400.0, 40.0));
         request_focus(&tree, id);
 
         Self { tree, id, value }

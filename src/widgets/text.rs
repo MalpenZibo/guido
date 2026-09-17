@@ -4,7 +4,8 @@ use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
 use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_full};
-use crate::tree::{Tree, WidgetId};
+use crate::tree::ValuePass;
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::container::get_animated_value;
 use super::control::Control;
@@ -180,9 +181,14 @@ impl Text {
     ///
     /// Returns how far the decoration reaches past the glyphs, which the
     /// caller records as damage slop.
+    ///
+    /// The reads belong to this text because the call it is made inside does:
+    /// `LayoutCtx::layout_child` opens the Layout scope around a widget's whole
+    /// layout, so a change to a declared metric re-measures this text and
+    /// nothing else.
     fn refresh(&mut self, tree: &Tree, id: WidgetId) -> (f32, Option<Color>) {
-        let mut declared_color = None;
-        let overflow = with_signal_tracking(id, JobType::Layout, || {
+        let declared_color;
+        let overflow = {
             let style = self.resolved_text_style(tree, id);
             self.cached_text = self.content.get();
             self.cached_font_size = style.font_size(id);
@@ -195,7 +201,7 @@ impl Text {
             self.cached_font_weight = style.font_weight();
             self.cached_wrap = self.wrap.get_or(true);
             decoration_overflow(style.stroke(), style.shadow())
-        });
+        };
         (overflow, declared_color)
     }
 }
@@ -223,39 +229,23 @@ impl Widget for Text {
         self.advance_text_anims(tree, id)
     }
 
-    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let id = ctx.id();
         // Text widgets are never relayout boundaries
-        tree.set_relayout_boundary(id, false);
-
-        // Same early-out as Container: an unchanged text under unchanged
-        // constraints neither re-measures nor gets repainted, even when an
-        // ancestor re-runs its layout. Content and style changes come through
-        // signals tracked below, which mark this widget for layout.
-        let constraints_changed = tree.cached_constraints(id) != Some(constraints);
-        let reactive_changed = tree.needs_layout(id);
-        if !(constraints_changed || reactive_changed) {
-            crate::render_stats::record_layout_skipped();
-            return tree.cached_size(id).unwrap_or_default();
-        }
-        crate::render_stats::record_layout_executed_with_reasons(
-            crate::render_stats::LayoutReasons {
-                constraints_changed,
-                reactive_changed,
-            },
-        );
+        ctx.tree().set_relayout_boundary(id, false);
 
         // Refresh cached values from content and declared style.
         // This reads signals and registers layout dependencies.
-        let (overflow, declared_color) = self.refresh(tree, id);
+        let (overflow, declared_color) = self.refresh(ctx.tree(), id);
         // Pointed at the freshly resolved target here, where both it and the
         // frame's instant are in hand.
         self.cached_font_size = self.retarget_text_anims(
-            tree,
+            ctx.tree(),
             id,
             declared_color.unwrap_or(Color::WHITE),
             self.cached_font_size,
         );
-        tree.set_own_paint_reach(id, overflow);
+        ctx.tree().set_own_paint_reach(id, overflow);
 
         // Determine the effective max_width for measurement
         // An unwrapped text is measured with no maximum, so it runs on one line
@@ -279,9 +269,9 @@ impl Widget for Text {
 
         // A parent aligning on the baseline needs this; it comes out of the
         // same shaping pass, so reporting it is free.
-        tree.set_baseline(id, measured.baseline);
+        ctx.tree().set_baseline(id, measured.baseline);
 
-        let size = Size::new(
+        Size::new(
             measured
                 .size
                 .width
@@ -292,15 +282,7 @@ impl Widget for Text {
                 .height
                 .max(constraints.min_height)
                 .min(constraints.max_height),
-        );
-
-        // Cache constraints and size for partial layout
-        tree.cache_layout(id, constraints, size);
-
-        // Clear needs_layout flag since layout is complete
-        tree.clear_needs_layout(id);
-
-        size
+        )
     }
 
     /// Notice the pointer, but only for a text that is its own interaction
@@ -343,9 +325,11 @@ impl Widget for Text {
         let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
             let style = self.resolved_text_style(tree, id);
             (
-                get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
-                    style.color(id)
-                }),
+                get_animated_value(
+                    &ValuePass::PAINTING,
+                    self.anims.as_ref().and_then(|a| a.color.as_ref()),
+                    || style.color(id),
+                ),
                 style.stroke(),
                 style.shadow(),
                 self.backdrop_blur.map(|radius| radius.get()),
@@ -604,10 +588,7 @@ mod tests {
         // where the layouts after it are tight.
         let t0 = std::time::Instant::now();
         tree.set_frame_instant(Some(t0));
-        crate::widgets::container::with_measure_final(|| {
-            let _ =
-                jobs::pump_and_layout(&mut tree, root, Constraints::new(0.0, 0.0, 800.0, 800.0));
-        });
+        let _ = jobs::pump_and_measure(&mut tree, root, Constraints::new(0.0, 0.0, 800.0, 800.0));
         tree.set_frame_instant(None);
 
         all_text(&mut tree, root, t0);
@@ -639,10 +620,7 @@ mod tests {
 
         let t0 = std::time::Instant::now();
         tree.set_frame_instant(Some(t0));
-        crate::widgets::container::with_measure_final(|| {
-            let _ =
-                jobs::pump_and_layout(&mut tree, root, Constraints::new(200.0, 0.0, 200.0, 300.0));
-        });
+        let _ = jobs::pump_and_measure(&mut tree, root, Constraints::new(200.0, 0.0, 200.0, 300.0));
         tree.set_frame_instant(None);
 
         all_text(&mut tree, root, t0);
@@ -1121,9 +1099,7 @@ mod tests {
         let mut tree = Tree::new();
         let root = tree.register(Box::new(widget));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-        });
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
         tree.with_widget_mut(root, |w, id, t| {
             let mut ctx = PaintContext::new(&mut node);
@@ -1140,9 +1116,7 @@ mod tests {
         let mut tree = Tree::new();
         let root = tree.register(Box::new(widget));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-        tree.with_widget_mut(root, |w, id, t| {
-            w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-        });
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
         tree.with_widget_mut(root, |w, id, t| {
             let mut ctx = PaintContext::new(&mut node);
@@ -1237,9 +1211,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 
         let paint = |tree: &mut Tree| {
-            tree.with_widget_mut(root, |w, id, t| {
-                w.layout(t, id, Constraints::new(0.0, 0.0, 800.0, 600.0))
-            });
+            tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
             let mut node = RenderNode::new(root.as_u64());
             tree.with_widget_mut(root, |w, id, t| {
                 let mut ctx = PaintContext::new(&mut node);

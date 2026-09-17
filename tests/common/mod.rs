@@ -83,9 +83,7 @@ impl Harness {
     pub fn lay_out(&mut self, width: f32, height: f32) -> Size {
         let root = self.root;
         self.tree
-            .with_widget_mut(root, |w, id, t| {
-                w.layout(t, id, Constraints::new(0.0, 0.0, width, height))
-            })
+            .layout_widget(root, Constraints::new(0.0, 0.0, width, height))
             .expect("the root is registered")
     }
 

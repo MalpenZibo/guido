@@ -106,8 +106,12 @@ macro still emits all five. **Add a spelling to the first in the same change.**
 
 Two methods are required, the rest default:
 
-- `layout(&mut self, tree, id, constraints) -> Size` — measure, then
-  `tree.cache_layout(..)`
+- `layout(&mut self, ctx, constraints) -> Size` — measure, and place the
+  children with `ctx.layout_child(child, constraints)`. Nothing else: the skip
+  when there is nothing to redo, the tracking scope, which pass is running and
+  the cache write all belong to that call, which is the only way a layout is
+  ever reached. `ctx.measuring()` says whether this is the measure a
+  content-sized surface is configured from
 - `paint(&self, tree, id, ctx)` — draw into the `PaintContext`
 - `event(&mut self, tree, id, event) -> EventResponse` — defaults to `Ignored`
 - `advance_animations`, `reconcile_children`, `layout_hints`,
@@ -116,10 +120,10 @@ Two methods are required, the rest default:
   itself has to override: a parent narrows its children to the visible rect
   before painting them, by their laid-out bounds, so a widget that draws
   somewhere else says how far with `Tree::set_own_paint_reach`. Called from the
-  Paint job, which is where a reach that follows a paint-only property belongs —
-  a transform must not reflow anything. A reach that follows a layout-tracked
-  signal is published from `layout` instead, as `Text` and `TextInput` do for
-  their stroke and shadow
+  Paint job *and* after every layout, which is where a reach that follows a
+  paint-only property belongs — a transform must not reflow anything. A reach
+  that follows a layout-tracked signal is published from `layout` instead, as
+  `Text` and `TextInput` do for their stroke and shadow
 
 Position and bounds live in the `Tree`, never on the widget. Writing a widget
 from outside the crate needs `guido::widget_prelude::*` alongside the ordinary

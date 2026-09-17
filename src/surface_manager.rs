@@ -144,9 +144,7 @@ impl ManagedSurface {
     pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
 
-        tree.with_widget_mut(self.widget_id, |widget, id, tree| {
-            widget.layout(tree, id, constraints);
-        });
+        tree.layout_widget(self.widget_id, constraints);
         // Set root widget origin after layout
         tree.set_origin(self.widget_id, 0.0, 0.0);
     }
@@ -271,13 +269,14 @@ mod tests {
     use crate::layout::{Constraints, Size};
     use crate::reactive::owner::{dispose_owner_now as dispose, with_owner};
     use crate::reactive::{create_memo, create_signal};
+    use crate::tree::LayoutCtx;
     use crate::widgets::Widget;
     use crate::widgets::children::ChildrenSource;
     use crate::widgets::into_child::{DynamicChild, IntoChild};
 
     struct TestWidget;
     impl Widget for TestWidget {
-        fn layout(&mut self, _: &mut Tree, _: crate::tree::WidgetId, _: Constraints) -> Size {
+        fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
             Size::zero()
         }
         fn paint(&self, _: &Tree, _: crate::tree::WidgetId, _: &mut crate::renderer::PaintContext) {
