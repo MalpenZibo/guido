@@ -489,6 +489,28 @@ fn researching_a_design_decision_is_asked_for_where_the_alternatives_are_written
     );
 }
 
+/// The inventory test checks that a reason is written; the reviewer asks
+/// whether it holds, so both have to point at the same table.
+#[test]
+fn a_new_thread_local_is_questioned_where_it_is_listed() {
+    let agents = unwrapped(&read("AGENTS.md"));
+    let reviewer = unwrapped(&read(".claude/agents/reviewer.md"));
+
+    const TEST: &str = "tests/ambient_state_inventory.rs";
+    const TABLE: &str = "**Ambient state**";
+    for (name, text) in [("AGENTS.md", &agents), ("the reviewer", &reviewer)] {
+        assert!(
+            text.contains(TEST) && text.contains(TABLE),
+            "{name} does not name both {TEST} and the {TABLE} table, so one half \
+             of the thread-local rule is missing from it"
+        );
+    }
+    assert!(
+        reviewer.contains("could carry the value"),
+        "the reviewer names the table but no longer asks whether the reason holds"
+    );
+}
+
 /// Four of the template's five questions are answered by the change and die
 /// with it. **Left undone** is the one that points forward, and the place it is
 /// written is a merged pull request's body — which nobody opens again. So the

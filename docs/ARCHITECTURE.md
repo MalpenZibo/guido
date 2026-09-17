@@ -401,6 +401,73 @@ draw — the clipboard and the cursor used to be drained inside the per-surface
 pass, which meant an application with no surface configured yet could queue a
 copy that nothing would ever take.
 
+## Ambient state
+
+State nothing passes: a `thread_local!` cell, or a `static` `GlobalSignal`,
+which is a thread's signal reached through a `static`. It reaches whoever reads
+it without appearing in any signature, and it outlives the `App` that filled it
+unless `App::drop` resets it. Each has a row saying why neither the `Tree`, a
+pass nor an existing struct carries it, and `tests/ambient_state_inventory.rs`
+fails on one without.
+
+Most follow from one choice: a signal read inside a `move ||` closure subscribes
+by itself, and an event handler is a closure with no arguments, so the reactive
+system has to know who is reading and a handler needs somewhere to leave its
+requests.
+
+| cell | file | why nothing explicit carries it |
+| --- | --- | --- |
+| `RUNTIME` | `src/reactive/runtime.rs` | Effects and their subscriptions: a `set` anywhere must reach them, and a signal handle is `Copy` with nothing to point through |
+| `EFFECT_TRACKING` | `src/reactive/runtime.rs` | Reads made while an effect runs, buffered because `RUNTIME` is already borrowed then |
+| `BATCH_DEPTH` | `src/reactive/runtime.rs` | `batch()` nests across calls that share no argument |
+| `FLUSHING` | `src/reactive/runtime.rs` | Reentrancy guard for a write made inside an effect, which has no handle to the flush it is inside |
+| `STORAGE` | `src/reactive/storage.rs` | Signal values, reached from `Copy` handles that carry only an index |
+| `OWNERS` | `src/reactive/owner.rs` | The owner tree that disposal walks, reached from handles that carry only an id |
+| `CURRENT_OWNER` | `src/reactive/owner.rs` | Which scope a signal created now belongs to: `create_signal` takes no scope argument |
+| `ROOT_OWNER` | `src/reactive/owner.rs` | The application's own scope, reachable from any depth for state with one instance per application |
+| `PENDING_DISPOSALS` | `src/reactive/owner.rs` | Disposal is deferred to the loop, and the code that asks for it holds no loop |
+| `GLOBALS` | `src/reactive/global.rs` | Which signal each `GlobalSignal` resolved to: a `static` cannot hold a thread's signal |
+| `TRACKING_CONTEXT` | `src/reactive/invalidation.rs` | Which widget and job a read belongs to: a read inside `layout` or `paint` has no argument naming the widget. #371 would open the scope around every call |
+| `REGISTRY` | `src/reactive/invalidation.rs` | Signal-to-widget subscriptions, written by a read and consumed by a write that share no argument |
+| `DIRTY_SEGMENTS` | `src/reactive/invalidation.rs` | Dynamic-children segments a write dirtied, waiting for the reconciliation that has the tree |
+| `PENDING_JOBS` | `src/jobs.rs` | Widget jobs, queued by signal writes that have no `Tree`, sorted per surface by `distribute_jobs` |
+| `SCHEDULED_JOBS` | `src/jobs.rs` | Jobs owed to a clock (the caret), queued from widget code that has no loop |
+| `SURFACE_COMMANDS` | `src/surface.rs` | `SurfaceHandle` calls from application code, which has no platform |
+| `LIVE_POPUPS` | `src/surface.rs` | A `PopupHandle` is `Copy` and outlives its popup, so the registry is the only truth about whether it is still open |
+| `WIDGET_REF_REGISTRY` | `src/widget_ref.rs` | Application code names a widget with a `WidgetRef` before any `WidgetId` exists |
+| `PENDING` | `src/reactive/focus.rs` | A focus request from application code, which has no tree, parked until one is laid out |
+| `CURRENT_CURSOR` | `src/reactive/cursor.rs` | The last shape `set_cursor` was asked for, so asking again for the same one sends nothing; widget code that calls it has no platform |
+| `OUTGOING_CURSOR` | `src/reactive/cursor.rs` | That shape, waiting for the loop to hand it to the compositor |
+| `CLIPBOARD` | `src/reactive/clipboard.rs` | What a copy in a handler put there, readable by a paste in another handler |
+| `OUTGOING_CLIPBOARD` | `src/reactive/clipboard.rs` | A copy waiting for the loop to hand it to the compositor |
+| `SYSTEM_CLIPBOARD` | `src/reactive/clipboard.rs` | The compositor's selection, prefetched so a paste in a handler can answer synchronously |
+| `PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `CLIPBOARD` |
+| `OUTGOING_PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `OUTGOING_CLIPBOARD` |
+| `SYSTEM_PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `SYSTEM_CLIPBOARD` |
+| `LOCK` | `src/session_lock.rs` | The lock-screen factory and each output's lock surface while locked. Nothing requires it: every reader already holds the surface manager and the platform, so it could be a field of either (#372) |
+| `REQUEST` | `src/session_lock.rs` | A lock or unlock asked for by application code, waiting for the loop |
+| `DEFAULT_FONT_FAMILY` | `src/lib.rs` | Read by every text widget at construction, before any tree or surface exists. Not reset by `App::drop` (#372) |
+| `CUSTOM_FONTS` | `src/lib.rs` | Font bytes loaded before any renderer exists, handed to each font system when it is built |
+| `CUSTOM_FONT_HASHES` | `src/lib.rs` | Which of those were already loaded, so loading twice is idempotent |
+| `FONTS_CONSUMED` | `src/lib.rs` | Whether a font system already took the list, so a late load can say it came too late |
+| `TEXT_MEASURER` | `src/renderer/text_measurer.rs` | One shaping cache for every `layout` that measures text, none of which is handed one |
+| `BATCHING` | `src/platform/wayland.rs` | Which surface a `batch_layer_requests` group is open on. Not a field of `WaylandState`: the closure holds `&mut WaylandState`, so a guard could not restore a field if it panics, and a scope left open would hold every later commit |
+| `MEASURE_FINAL` | `src/widgets/container/animations.rs` | Whether layout is a measure: `AnimationState::displayed` has no tree or pass to ask. #371 removes it |
+| `DIFFERS_BETWEEN_PASSES` | `src/widgets/container/animations.rs` | A read a measure would answer differently, handed to the next `Tree::cache_layout` for the same reason. #371 removes it |
+| `DEPTH` | `src/reactive/diagnostics.rs` | Debug builds: nesting of `snapshot_zone`, inside which a read with no reactive scope is not warned about |
+| `REPORTED` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about, so a hot path warns once |
+| `REPORTS` | `src/reactive/diagnostics.rs` | Debug builds: the number of warnings, for the diagnostic's own tests |
+| `NON_FINITE` | `src/reactive/diagnostics.rs` | Debug builds: widgets already warned about a non-finite value, with a rate limit of their own |
+| `CLOCKS` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about reading a clock outside its pass |
+| `STATS` | `src/render_stats.rs` | The `render-stats` feature only: counters bumped from every pass, compiled out otherwise |
+| `MODIFIERS` | `src/keyboard.rs` | `GlobalSignal`: the keyboard modifiers, read by any handler, which has no platform |
+| `OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: the connected outputs, read by application code that decides which surfaces to spawn |
+| `SURFACE_OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: which output each surface is on, read through `surface_output` by code that holds only a `SurfaceId` |
+| `EFFECTS` | `src/compositor.rs` | `GlobalSignal`: what the compositor supports (blur), learned by the platform and read by widget code that has none |
+| `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `LOCK` |
+| `FOCUS` | `src/reactive/focus.rs` | `GlobalSignal`: the focused widget and its ancestors, so resolving a `when_focused` subscribes to it |
+| `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `LIVE_POPUPS` reactive, owned by the application rather than by whichever popup opened first |
+
 ## Widget Trait
 
 All widgets implement this trait:

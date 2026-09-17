@@ -51,6 +51,11 @@ them.
   is the drift #226 closed: it gives the closure form and not the signal one,
   which compiles fine and refuses at a call site months later.
 - Position and bounds live in the `Tree`, never on the widget.
+- **New per-thread state is a decision, not a line.** A `thread_local!` or a
+  `static` `GlobalSignal` gets a row under **Ambient state** in
+  `docs/ARCHITECTURE.md` saying why neither the `Tree`, a pass nor an existing
+  struct could carry the value. `tests/ambient_state_inventory.rs` checks the
+  row exists; whether the reason holds is this question.
 - Performance claims come with a measurement, before and after.
 - Commits are atomic and their subjects are sentences saying what is now true.
 - Public API changes: are `docs/` and the affected `book/` chapters updated, and
