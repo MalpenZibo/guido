@@ -2508,7 +2508,13 @@ mod restart_tests {
     /// was a hand-written list of calls rather than a value.
     #[test]
     fn a_second_app_does_not_inherit_the_font_the_first_one_declared() {
-        drop(App::new().default_font_family(FontFamily::Name("Inter".into())));
+        let first = App::new().default_font_family(FontFamily::Name("Inter".into()));
+        assert_eq!(
+            default_font_family(),
+            FontFamily::Name("Inter".into()),
+            "the declaration reaches the widgets that will read it"
+        );
+        drop(first);
 
         let _next = App::new();
 
