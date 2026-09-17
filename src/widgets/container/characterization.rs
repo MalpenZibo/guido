@@ -5669,3 +5669,234 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         "a hover layer nobody can compute replaced the background anyway"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Every animated property, from the table that generates them
+// ---------------------------------------------------------------------------
+
+/// The fill, corners, border and shadow of the first rounded rect a node draws.
+fn painted_style(
+    node: &RenderNode,
+) -> (
+    Color,
+    CornerRadii,
+    Option<crate::renderer::Border>,
+    Option<Shadow>,
+) {
+    node.commands
+        .iter()
+        .find_map(|c| match &**c {
+            DrawCommand::RoundedRect {
+                color,
+                radius,
+                border,
+                shadow,
+                ..
+            } => Some((*color, *radius, *border, *shadow)),
+            _ => None,
+        })
+        .expect("the container draws a rounded rect")
+}
+
+/// How far a node has been turned, in degrees, read back off its matrix.
+fn turned_degrees(node: &RenderNode) -> f32 {
+    let m = node.local_transform.data;
+    m[3].atan2(m[0]).to_degrees()
+}
+
+/// Run frames from `start` up to and including `start + span`, sixty a second,
+/// and read the probe off the last one.
+///
+/// A cadence rather than two frames at the ends: an animation moves on the
+/// frames that run, and the loop runs them at vsync.
+fn run_to(
+    h: &mut H,
+    start: std::time::Instant,
+    span: std::time::Duration,
+    probe: impl Fn(&mut H) -> f32,
+) -> f32 {
+    let step = std::time::Duration::from_millis(10);
+    let mut at = start;
+    while at < start + span {
+        at += step;
+        frame_at(h, at.min(start + span), 400.0, 400.0);
+    }
+    probe(h)
+}
+
+/// The timeline half, for the rows that can carry one.
+///
+/// `width` and `height` cannot, and are not asked to: they declare a `Length`
+/// and animate the `f32` inside it, so `Keyframes<Length>` has no constructor
+/// to build. That is the one place the two facts a row states are not enough
+/// on their own, and a row says it by having no target of its own to read.
+macro_rules! emit_timeline_test {
+    (none, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr, $to:expr,
+        $base:expr) => {};
+    ($target:ident, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr,
+        $to:expr, $base:expr) => {
+        /// A sequence plays when its trigger moves, and is halfway through at
+        /// half its duration.
+        #[test]
+        fn its_timeline_plays_when_the_trigger_moves() {
+            let value = $value;
+            let probe = $probe;
+            let plays = create_signal(0u32);
+            let mut h = H::new(($declared_as)(
+                value($base).timeline(
+                    Keyframes::new(100.0)
+                        .at(0.0, value($from))
+                        .at(1.0, value($to))
+                        .played_by(plays),
+                ),
+            ));
+
+            let t0 = std::time::Instant::now();
+            frame_at(&mut h, t0, 400.0, 400.0);
+            let at_rest = probe(&mut h);
+            assert!(
+                (at_rest - $base).abs() < 0.01,
+                "{}: a sequence nobody asked for has not played, so the property \
+                 sits at the value it was declared with: got {at_rest}, wanted {}",
+                stringify!($name),
+                $base,
+            );
+
+            plays.set(1);
+            let t1 = t0 + std::time::Duration::from_millis(100);
+            frame_at(&mut h, t1, 400.0, 400.0);
+            let halfway = run_to(&mut h, t1, HALF, probe);
+            let midpoint = ($from + $to) / 2.0;
+            assert!(
+                (halfway - midpoint).abs() < 0.01,
+                "{}: half a linear sequence is half the distance: got {halfway}, \
+                 wanted {midpoint}",
+                stringify!($name),
+            );
+        }
+    };
+}
+
+/// A property's own test, written once and emitted for every row of
+/// [`animated_properties!`].
+///
+/// Four things have to hold for each of them, and each is a different one of
+/// the sites the table generates: it **enters** from where it was declared to
+/// (the seed), it is **halfway at half the duration** (the advance), a write
+/// underneath it is **adopted** (the drift check and the retarget), and the
+/// ease that follows lands **where the write sent it**.
+///
+/// Checked alone on its container, which is the shape the two shadow tests
+/// above had to be written by hand for: a `||` chain over nine slots drifts
+/// without a container that animates two things noticing.
+macro_rules! emit_property_tests {
+    ($($name:ident: $anim:ty = $decl:ty, target: $target:tt, layout: $layout:ident,
+        test {
+            value: $value:expr,
+            declared_as: $declared_as:expr,
+            probe: $probe:expr,
+            from: $from:expr, to: $to:expr, then: $then:expr, base: $base:expr,
+        };)*) => {
+        $(
+            mod $name {
+                use super::*;
+
+                /// Half of the hundred milliseconds every row is declared with.
+                const HALF: std::time::Duration = std::time::Duration::from_millis(50);
+
+                #[test]
+                fn it_enters_eases_and_follows_a_write_underneath_it() {
+                    let value = $value;
+                    // Once per frame: a probe paints, and a second paint of the
+                    // same frame is a frame the loop never runs.
+                    let probe = $probe;
+                    let declared = create_signal($to);
+                    let mut h = H::new(($declared_as)((move || value(declared.get()))
+                        .transition(Transition::new(100.0, TimingFunction::Linear))
+                        .entering_from(value($from))));
+
+                    // Frames at a steady cadence, as the loop runs them.
+                    // The properties do not all start moving on the same one —
+                    // a size is advanced by the layout that measured it, while
+                    // `padding` waits for the paint that resyncs its target —
+                    // but each reads the clock, so by any given instant they
+                    // are all the same distance along.
+                    let t0 = std::time::Instant::now();
+                    frame_at(&mut h, t0, 400.0, 400.0);
+                    let opened = probe(&mut h);
+                    assert!(
+                        (opened - $from).abs() < 0.01,
+                        "{}: an enter starts where it was declared to, not at its \
+                         target: got {opened}, wanted {}",
+                        stringify!($name),
+                        $from
+                    );
+
+                    let halfway = run_to(&mut h, t0, HALF, probe);
+                    let midpoint = ($from + $to) / 2.0;
+                    assert!(
+                        (halfway - midpoint).abs() < 0.01,
+                        "{}: half of a linear hundred milliseconds is half the \
+                         distance: got {halfway}, wanted {midpoint}",
+                        stringify!($name),
+                    );
+
+                    // Settle, then move the signal underneath it. The write
+                    // lands between frames, which is the case the drift check
+                    // in `resync_animation_targets` exists for.
+                    run_to(&mut h, t0, HALF * 2, probe);
+                    declared.set($then);
+                    let t1 = t0 + HALF * 4;
+                    frame_at(&mut h, t1, 400.0, 400.0);
+                    let adopted = run_to(&mut h, t1, HALF, probe);
+
+                    let midpoint = ($to + $then) / 2.0;
+                    assert!(
+                        (adopted - midpoint).abs() < 0.01,
+                        "{}: a write underneath has to be adopted and eased to: \
+                         got {adopted}, wanted {midpoint}",
+                        stringify!($name),
+                    );
+                }
+
+                emit_timeline_test!(
+                    $target, $name, $value, $declared_as, $probe, $from, $to, $base
+                );
+            }
+        )*
+    };
+}
+
+crate::widgets::container::animated_properties::animated_properties!(emit_property_tests);
+
+#[test]
+fn tmp_shadow_timeline() {
+    let plays = create_signal(0u32);
+    let mut h = H::new(
+        container()
+            .width(200.0)
+            .height(100.0)
+            .background(Color::RED)
+            .shadow(
+                Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK).timeline(
+                    Keyframes::new(100.0)
+                        .at(0.0, Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK))
+                        .at(1.0, Shadow::new((0.0, 0.0), 20.0, 0.0, Color::BLACK))
+                        .played_by(plays),
+                ),
+            ),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    h.paint();
+    plays.set(1);
+    for ms in [100u64, 110, 150, 200] {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(ms),
+            400.0,
+            400.0,
+        );
+        println!("{ms} -> {:?}", painted_style(&h.paint()).3.map(|s| s.blur));
+    }
+}

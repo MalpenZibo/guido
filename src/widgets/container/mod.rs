@@ -1,6 +1,7 @@
 //! Container widget and related functionality.
 
 mod anim_bridge;
+mod animated_properties;
 mod animations;
 mod box_model;
 mod interaction;
