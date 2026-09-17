@@ -226,8 +226,9 @@ struct CachedLayout {
 /// pass rather than in a thread-local anybody could have set.
 pub struct ValuePass {
     measuring: bool,
-    /// Raised by a read whose answer the pass decided. `None` outside a
-    /// layout, where nothing is deciding anything.
+    /// Raised by a read whose answer the pass decided. `None` for
+    /// [`PAINTING`](Self::PAINTING), where there is nothing to decide — a paint
+    /// has one answer and reuses nothing.
     noticed: Option<std::rc::Rc<std::cell::Cell<bool>>>,
 }
 
@@ -596,7 +597,7 @@ impl Tree {
             },
         );
 
-        let size = self.with_widget_mut(id, |widget, id, tree| {
+        let laid_out = self.with_widget_mut(id, |widget, id, tree| {
             let mut ctx = LayoutCtx {
                 tree,
                 id,
@@ -628,19 +629,19 @@ impl Tree {
             // a widget publishing from inside its own layout was publishing
             // against the box it had last time.
             //
-            // A measure only asks how big this would be; nothing is placed and
-            // nothing is drawn, so there is no reach to publish and no damage
-            // to expand for one.
-            if tree.pass == LayoutPass::Layout {
-                widget.refresh_paint_bounds(tree, id);
-            }
+            // On either pass, because either may be the last one that ran: a
+            // popup is measured before it is ever laid out, and the layout
+            // after it reads that answer back where the subtree is settled.
+            widget.refresh_paint_bounds(tree, id);
             size
-        })?;
+        });
 
-        // Upward, to whatever is laying this one out.
+        // Upward, to whatever is laying this one out — on both ways out, so an
+        // id the tree cannot answer for does not drop what the widget around
+        // it has already said.
         let mine = self.pass_dependent.get();
         self.pass_dependent.set(enclosing || mine);
-        Some(size)
+        laid_out
     }
 
     /// The same, as a measure: animations read where they are going, and what
@@ -1358,6 +1359,7 @@ impl Tree {
                 })
             });
         let pass = self.pass;
+        self.dense[idx].cached = [None; LayoutPass::COUNT];
         self.dense[idx].cached[pass as usize] = Some(CachedLayout {
             constraints,
             size,

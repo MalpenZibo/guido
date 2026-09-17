@@ -480,7 +480,8 @@ pub trait Widget {
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
     /// Publish how far this widget's paint lands outside its bounds, before
-    /// anything decides whether to paint it. Called from the Paint job.
+    /// anything decides whether to paint it. Called from the Paint job, and by
+    /// the layout entry point after every layout.
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;

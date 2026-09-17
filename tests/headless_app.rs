@@ -886,3 +886,32 @@ fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
         "a surface with nothing to blur and nothing published says nothing"
     );
 }
+
+/// A content-sized surface follows its content when the content grows.
+///
+/// The measure that sizes such a surface is asked the same constraints every
+/// frame — they come from the output, not from the content — so a cache that
+/// answers it from an entry written before the content changed says the
+/// surface is the size it used to be, for ever. A toast that grows, an OSD
+/// that gains a line, a popup whose list fills: none of them would ever ask
+/// the compositor for the new height.
+#[test]
+fn a_content_sized_surface_follows_content_that_grows() {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(24.0f32);
+    let bar = app.surface(content_bar(), move || {
+        container().height(move || height.get())
+    });
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+
+    height.set(80.0);
+    app.step();
+    app.step();
+
+    assert!(
+        app.exclusive_zones_asked(bar).contains(&80),
+        "the content grew to 80 and the surface never asked for it: {:?}",
+        app.exclusive_zones_asked(bar)
+    );
+}
