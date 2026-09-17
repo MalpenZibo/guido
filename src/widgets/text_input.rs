@@ -164,15 +164,15 @@ impl History {
         self.last_edit_type = Some(edit_type);
     }
 
+    /// Reset coalescing state (call after non-edit operations like undo/redo)
+    fn reset_coalescing(&mut self) {
+        self.last_edit_type = None;
+    }
+
     /// Undo: pop from undo stack, push current to redo stack
-    ///
-    /// Also ends the coalescing window, so the next edit starts an entry of its
-    /// own — which clears the redo stack. A redo therefore always finds the
-    /// window closed already, and needs no reset of its own.
     fn undo(&mut self, current: HistoryEntry) -> Option<HistoryEntry> {
         if let Some(previous) = self.undo_stack.pop_back() {
             self.redo_stack.push_back(current);
-            self.last_edit_type = None;
             Some(previous)
         } else {
             None
@@ -1097,6 +1097,7 @@ impl TextInput {
             self.measurements_dirty = true;
             self.selection.cursor = previous.cursor;
             self.selection.anchor = previous.anchor;
+            self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink(edit.at);
             self.ensure_cursor_visible(edit.width);
@@ -1116,6 +1117,7 @@ impl TextInput {
             self.measurements_dirty = true;
             self.selection.cursor = next.cursor;
             self.selection.anchor = next.anchor;
+            self.history.reset_coalescing();
             self.notify_change();
             self.reset_cursor_blink(edit.at);
             self.ensure_cursor_visible(edit.width);

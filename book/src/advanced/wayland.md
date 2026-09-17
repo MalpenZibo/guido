@@ -228,6 +228,12 @@ SurfaceConfig::new()
 
 Without exclusive zone, windows can cover the surface.
 
+The compositor adds a margin on the anchored edge on top of the zone (wlroots
+compositors such as sway, and smithay ones such as niri, both do), so
+`.margin([8, 0, 0, 0])` with `.exclusive_zone(32)` keeps windows 40px from the
+top. `ExclusiveZone::Auto` reserves the surface's own size plus the margin facing
+away from the edge: a gap below a top bar is `.margin([0, 0, 8, 0])`.
+
 ## Multi-Surface Applications
 
 Guido supports creating multiple surfaces within a single application. All surfaces share the same reactive state, allowing for coordinated updates.

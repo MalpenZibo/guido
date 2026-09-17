@@ -269,26 +269,14 @@ fn close_surface_now<P: Platform>(
     wayland_state.destroy_surface(id);
 }
 
-/// Re-publish the reservation after something it *follows* has moved — the
-/// size, the margin, the anchor.
-///
-/// Only [`ExclusiveZone::Auto`] follows anything: every other policy is a
-/// number, and republishing it would send the compositor a value it already has
-/// and log a line saying so, on every resize and every margin change.
-/// `measured` is for the one caller that knows a size the compositor has not
-/// been told about yet: the content-measure pass, which has just computed it.
-fn resync_exclusive_zone<S: Surface>(
-    surface: &mut S,
-    config: &SurfaceConfig,
-    measured: Option<(u32, u32)>,
-) {
-    if config.exclusive_zone == surface::ExclusiveZone::Auto {
-        publish_exclusive_zone(surface, config, measured);
-    }
-}
-
 /// Resolve the reservation policy against what the surface is anchored to and
-/// how big it is, and send the protocol value.
+/// how big it is, and send the protocol value if the compositor does not
+/// already have it.
+///
+/// Called whenever something a reservation can follow has moved — the size,
+/// the margin, the anchor, a measure — for every policy: `published` is what
+/// keeps a constant from being sent again, rather than each caller deciding
+/// which policies are worth resolving.
 ///
 /// The size is the one just *asked* for, not the one the compositor last told us
 /// about: `set_surface_size` only sends a request, and `WaylandSurfaceState`
@@ -306,6 +294,7 @@ fn publish_exclusive_zone<S: Surface>(
     surface: &mut S,
     config: &SurfaceConfig,
     measured: Option<(u32, u32)>,
+    published: &mut Option<i32>,
 ) {
     // A content axis waiting to be measured has no size to reserve for, and the
     // confirmed one is the wrong answer rather than an old one: a surface
@@ -314,11 +303,9 @@ fn publish_exclusive_zone<S: Surface>(
     // it into a side dock and that number becomes a reservation for the whole
     // screen, pushing every other window off it, until the measure lands.
     //
-    // So it waits for the measure, which resyncs whenever it runs — but only
+    // So it waits for the measure, which publishes whenever it runs — but only
     // `Auto` waits, because only `Auto` reads a size. `Fixed`, `None` and
-    // `Ignore` are constants, and deferring one defers it for ever: nothing
-    // republishes a policy that is not `Auto`, so a `set_exclusive_zone(Fixed(40))`
-    // on a `content()` surface would simply never reach the compositor.
+    // `Ignore` are constants with nothing to wait for.
     if config.exclusive_zone == surface::ExclusiveZone::Auto
         && measured.is_none()
         && surface::needs_content_measure(config)
@@ -332,7 +319,10 @@ fn publish_exclusive_zone<S: Surface>(
     let zone = config
         .exclusive_zone
         .resolve(config.anchor, config.margin, width, height);
-    surface.set_exclusive_zone(zone);
+    if *published != Some(zone) {
+        surface.set_exclusive_zone(zone);
+        *published = Some(zone);
+    }
 }
 
 /// Process dynamic surface commands (create, close, property changes).
@@ -409,21 +399,12 @@ fn process_surface_commands<P: Platform>(
                 }
             }
             SurfaceCommand::SetExclusiveZone { id, zone } => {
-                // Recorded through `reconfigure` like the rest; the publishing is
-                // left to the resync it already does, which for `Auto` is exactly
-                // this. Doing it inside the closure too sent the request twice —
-                // and logged it twice — for the one policy the resync is for.
-                //
-                // The other policies are numbers the resync skips, so they
-                // publish here.
-                let asked = reconfigure(id, surface_manager, wayland_state, |managed, surface| {
+                // Recorded through `reconfigure` like the rest, which publishes
+                // the reservation after the change.
+                let asked = reconfigure(id, surface_manager, wayland_state, |managed, _| {
                     managed.config.exclusive_zone = zone;
-                    if zone != surface::ExclusiveZone::Auto {
-                        publish_exclusive_zone(surface, &managed.config, None);
-                    }
                     // Like its three sisters. Declaring `Auto` on a content
-                    // surface leaves the resync waiting for a measure — this arm
-                    // publishes nothing itself for `Auto`, on purpose — so
+                    // surface leaves the publish waiting for a measure, so
                     // without asking for a layout the measure pass never runs on
                     // a settled UI and the reservation is never sent at all.
                     (
@@ -441,7 +422,7 @@ fn process_surface_commands<P: Platform>(
                     surface.set_margin(margin);
                     // Like its three sisters. An `Auto` reservation is the margin
                     // *plus* the extent, so moving the margin moves it — and on a
-                    // content axis the resync declines to guess and waits for a
+                    // content axis the publish declines to guess and waits for a
                     // measure. Without asking for one, nothing lays anything out,
                     // the measure pass never runs, and the reservation keeps the
                     // old margin for as long as the surface lives.
@@ -1644,7 +1625,7 @@ fn layout_pass<P: Platform>(
         let asking = surface::honour_owned_axes(surface.config.anchor, nw, nh);
         let resizing =
             asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height);
-        // The resize is conditional; the resync is not. This is the only place
+        // The resize is conditional; the publish is not. This is the only place
         // the measurement is known, and the reservation may be waiting on it even
         // when the size did not move — `publish_exclusive_zone` declines to
         // resolve `Auto` against an unmeasured content axis, so a re-anchoring
@@ -1656,6 +1637,7 @@ fn layout_pass<P: Platform>(
             // frame show the compositor the new size against the old reservation
             // in between.
             let config = &surface.config;
+            let published = &mut surface.exclusive_zone;
             if let Some(mut handle) = wayland_state.surface(id) {
                 handle.batch_layer_requests(|surface| {
                     if resizing {
@@ -1670,7 +1652,7 @@ fn layout_pass<P: Platform>(
                     // is the one caller that knows the measured size before the
                     // compositor does — so it passes it rather than letting the
                     // helper look it up.
-                    resync_exclusive_zone(surface, config, Some((nw, nh)));
+                    publish_exclusive_zone(surface, config, Some((nw, nh)), published);
                 });
             }
         }
@@ -1727,8 +1709,8 @@ fn send_size<S: Surface>(managed: &ManagedSurface, surface: &mut S) -> (bool, Wi
 
 /// Apply a change to a surface, then re-publish what follows from it.
 ///
-/// Every property an [`ExclusiveZone::Auto`] reservation follows — the anchor,
-/// the size, the margin — goes through here, so the resync happens in one place
+/// Every property a reservation can follow — the anchor, the size, the margin,
+/// the policy itself — goes through here, so the publish happens in one place
 /// and a fifth trigger cannot be added to three of the four. Forgetting exactly
 /// that is how a re-anchored dock went on reserving a bar's height at the top of
 /// the screen.
@@ -1749,7 +1731,7 @@ fn reconfigure<P: Platform, R>(
     // compositor two intermediate surfaces on the way.
     handle.batch_layer_requests(|surface| {
         result = Some(change(managed, surface));
-        resync_exclusive_zone(surface, &managed.config, None);
+        publish_exclusive_zone(surface, &managed.config, None, &mut managed.exclusive_zone);
     });
     result
 }
@@ -2549,9 +2531,8 @@ mod exclusive_zone_resync_tests {
         let height = surface::requested_extent(SurfaceExtent::Fixed(48), live_height);
         assert_eq!(height, 48, "the request wins over the stale configure");
 
-        let zone =
-            ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::from([6, 0, 0, 0]), 800, height);
-        assert_eq!(zone, 48 + 6);
+        let zone = ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::default(), 800, height);
+        assert_eq!(zone, 48);
     }
 
     /// A content axis has no number of its own yet — `initial()` is 1px, which
@@ -2585,16 +2566,16 @@ mod exclusive_zone_resync_tests {
     /// `SetAnchor` was the one command that recorded nothing on the config.
     #[test]
     fn a_reservation_follows_the_anchor_it_was_given() {
-        let margin = Margin::from([6, 20, 9, 20]);
+        let margin = Margin::default();
 
-        // A 800x32 bar at the top reserves its height plus the top margin.
+        // A 800x32 bar at the top reserves its height.
         let bar = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
-        assert_eq!(bar, 32 + 6);
+        assert_eq!(bar, 32);
 
         // The same surface, re-anchored as a 48-wide dock on the left, has to
-        // reserve its width plus the left margin instead.
+        // reserve its width instead.
         let dock = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
-        assert_eq!(dock, 48 + 20);
+        assert_eq!(dock, 48);
         assert_ne!(dock, bar, "the axis genuinely changes with the anchor");
     }
 
@@ -2694,9 +2675,9 @@ mod exclusive_zone_resync_tests {
     }
 
     /// Only `Auto` waits, because only `Auto` reads a size. The other three are
-    /// constants, and nothing republishes a policy that is not `Auto` — so a
-    /// deferred one is a lost one: `set_exclusive_zone(Fixed(40))` on a surface
-    /// with a `content()` axis would never reach the compositor at all.
+    /// constants: deferring one would hold `set_exclusive_zone(Fixed(40))` on a
+    /// surface with a `content()` axis until something happened to measure it,
+    /// for a number that needs no measure.
     #[test]
     fn only_a_reservation_that_reads_a_size_waits_for_one() {
         let toast = |zone| SurfaceConfig {
@@ -3436,26 +3417,31 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn a_bar_reserving_automatically_asks_for_the_height_it_declared() {
         let mut surface = confirmed(800, 32);
-        resync_exclusive_zone(&mut surface, &bar(), None);
+        publish_exclusive_zone(&mut surface, &bar(), None, &mut None);
         assert_eq!(surface.exclusive_zones, vec![32]);
     }
 
-    /// The margin on the anchored edge is part of the reservation: a bar held
-    /// eight pixels off the top edge occupies forty.
+    /// The margin on the anchored edge is the compositor's to add, and the one
+    /// facing away is the bar's: a bar held eight pixels off the top with eight
+    /// below it asks for forty, and the compositor reserves forty-eight.
     #[test]
-    fn a_margin_on_the_anchored_edge_is_reserved_too() {
+    fn only_the_margin_facing_away_from_the_anchor_is_asked_for() {
         let mut surface = confirmed(800, 32);
-        resync_exclusive_zone(&mut surface, &bar().margin(Margin::all(8)), None);
-        assert_eq!(surface.exclusive_zones, vec![40]);
-    }
+        publish_exclusive_zone(
+            &mut surface,
+            &bar().margin(Margin::from([8, 0, 0, 0])),
+            None,
+            &mut None,
+        );
+        assert_eq!(
+            surface.exclusive_zones,
+            vec![32],
+            "the top margin is not ours to add"
+        );
 
-    /// A policy that is not `Auto` sends nothing from here — it was sent once,
-    /// when the surface was configured.
-    #[test]
-    fn a_fixed_reservation_is_not_republished_every_frame() {
-        let mut surface = Recorder::default();
-        resync_exclusive_zone(&mut surface, &bar().exclusive_zone(48u32), None);
-        assert!(surface.exclusive_zones.is_empty());
+        let mut surface = confirmed(800, 32);
+        publish_exclusive_zone(&mut surface, &bar().margin(Margin::all(8)), None, &mut None);
+        assert_eq!(surface.exclusive_zones, vec![40], "the bottom margin is");
     }
 
     /// A dock down the left edge, as wide as whatever it holds. Its reservation
@@ -3481,7 +3467,7 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn a_dock_whose_width_is_unmeasured_reserves_nothing_rather_than_the_whole_output() {
         let mut surface = confirmed(1920, 1080);
-        resync_exclusive_zone(&mut surface, &side_dock(), None);
+        publish_exclusive_zone(&mut surface, &side_dock(), None, &mut None);
         assert!(
             surface.exclusive_zones.is_empty(),
             "reserved {:?} against a width the compositor imposed",
@@ -3495,7 +3481,7 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn the_dock_reserves_the_measured_width_not_the_confirmed_one() {
         let mut surface = confirmed(1920, 1080);
-        resync_exclusive_zone(&mut surface, &side_dock(), Some((240, 1080)));
+        publish_exclusive_zone(&mut surface, &side_dock(), Some((240, 1080)), &mut None);
         assert_eq!(surface.exclusive_zones, vec![240]);
     }
 
@@ -3539,16 +3525,15 @@ mod a_second_host_can_answer_for_a_compositor {
     /// A constant on the same unmeasured surface goes out at once: the guard is
     /// `Auto`-only, and `publish_exclusive_zone` says what deferring one would
     /// cost.
-    ///
-    /// This is the one test here that calls `publish_exclusive_zone` rather than
-    /// `resync_exclusive_zone`, because `resync` drops everything that is not
-    /// `Auto` before the guard ever sees it — the layer above is proved by
-    /// `a_fixed_reservation_is_not_republished_every_frame`, and going through it
-    /// would assert nothing about the guard.
     #[test]
     fn a_constant_reservation_on_an_unmeasured_dock_is_not_deferred() {
         let mut surface = Recorder::default();
-        publish_exclusive_zone(&mut surface, &side_dock().exclusive_zone(48u32), None);
+        publish_exclusive_zone(
+            &mut surface,
+            &side_dock().exclusive_zone(48u32),
+            None,
+            &mut None,
+        );
         assert_eq!(surface.exclusive_zones, vec![48]);
     }
 }
