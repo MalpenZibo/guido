@@ -66,8 +66,8 @@ pub struct Selections {
     /// Bumped on every new offer. A reader thread stamps its result with the
     /// generation it started from, and a result that no longer matches is
     /// dropped: the selection moved on while the pipe was still open.
-    pub(super) selection_generation: u64,
-    pub(super) primary_generation: u64,
+    selection_generation: u64,
+    primary_generation: u64,
 }
 
 impl Selections {
@@ -86,6 +86,56 @@ impl Selections {
             primary_source: None,
             selection_generation: 0,
             primary_generation: 0,
+        }
+    }
+
+    /// Apply a prefetched clipboard/primary content update. Reads made stale by
+    /// a newer offer are dropped via the generation check.
+    pub(super) fn apply(&self, kind: SelectionKind, generation: u64, content: Option<String>) {
+        let current = match kind {
+            SelectionKind::Clipboard => self.selection_generation,
+            SelectionKind::Primary => self.primary_generation,
+        };
+        if generation != current {
+            log::debug!("Dropping stale {kind:?} content (gen {generation} != {current})");
+            return;
+        }
+        match kind {
+            SelectionKind::Clipboard => match content {
+                Some(text) => crate::reactive::set_system_clipboard(text),
+                None => crate::reactive::clear_system_clipboard(),
+            },
+            SelectionKind::Primary => crate::reactive::set_system_primary(content),
+        }
+    }
+
+    fn next_generation(&mut self, kind: SelectionKind) -> u64 {
+        let generation = match kind {
+            SelectionKind::Clipboard => &mut self.selection_generation,
+            SelectionKind::Primary => &mut self.primary_generation,
+        };
+        *generation += 1;
+        *generation
+    }
+
+    /// A selection with no content: cleared, or offered in nothing readable.
+    pub(super) fn clear(&mut self, kind: SelectionKind) {
+        let generation = self.next_generation(kind);
+        self.apply(kind, generation, None);
+    }
+
+    /// A new offer for `kind`, read by `start_reader`, which is handed the
+    /// offer's generation to stamp its result with and answers whether the read
+    /// could start. One that could not is an offer with no content.
+    pub(super) fn offer(
+        &mut self,
+        kind: SelectionKind,
+        start_reader: impl FnOnce(u64) -> Result<(), String>,
+    ) {
+        let generation = self.next_generation(kind);
+        if let Err(e) = start_reader(generation) {
+            log::warn!("Selection prefetch skipped: {e}");
+            self.apply(kind, generation, None);
         }
     }
 
@@ -162,29 +212,14 @@ impl WaylandState {
     }
 
     /// Apply a prefetched clipboard/primary content update (from the loop's
-    /// ingress channel callback). Reads made stale by a newer offer are
-    /// dropped via the generation check.
+    /// ingress channel callback).
     pub(crate) fn apply_clipboard_update(
         &mut self,
         kind: SelectionKind,
         generation: u64,
         content: Option<String>,
     ) {
-        let current = match kind {
-            SelectionKind::Clipboard => self.selections.selection_generation,
-            SelectionKind::Primary => self.selections.primary_generation,
-        };
-        if generation != current {
-            log::debug!("Dropping stale {kind:?} content (gen {generation} != {current})");
-            return;
-        }
-        match kind {
-            SelectionKind::Clipboard => match content {
-                Some(text) => crate::reactive::set_system_clipboard(text),
-                None => crate::reactive::clear_system_clipboard(),
-            },
-            SelectionKind::Primary => crate::reactive::set_system_primary(content),
-        }
+        self.selections.apply(kind, generation, content);
     }
 
     /// Start an async prefetch of an offer's content on a reader thread.
@@ -195,17 +230,6 @@ impl WaylandState {
     where
         R: FnOnce(&str) -> Option<ReadPipe>,
     {
-        let generation = match kind {
-            SelectionKind::Clipboard => {
-                self.selections.selection_generation += 1;
-                self.selections.selection_generation
-            }
-            SelectionKind::Primary => {
-                self.selections.primary_generation += 1;
-                self.selections.primary_generation
-            }
-        };
-
         // Preferred mime order; take the first one offered.
         const PREFERRED: [&str; 5] = [
             "text/plain;charset=utf-8",
@@ -220,36 +244,30 @@ impl WaylandState {
             .copied();
 
         let Some(pipe) = mime.and_then(receive) else {
-            // Nothing readable as text — treat as cleared. We're on the main
-            // thread (called from a selection handler), so apply directly.
-            self.apply_clipboard_update(kind, generation, None);
+            self.selections.clear(kind);
             return;
         };
-
-        // Bound to the loop that is running now, because the read below has
-        // three seconds to finish and a loop that restarts in the meantime
-        // starts its generation counters over: a result delivered into the
-        // next session would pass the check in `apply_clipboard_update`
-        // against a matching generation that means something else.
-        let Some(sender) = crate::ingress::sender_handle() else {
-            // No running event loop to deliver the result to.
-            log::warn!("Selection prefetch skipped: no event loop running");
-            return;
-        };
-
-        if let Err(e) = std::thread::Builder::new()
-            .name("guido-clipboard-read".into())
-            .spawn(move || {
-                let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
-                sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
-                    kind,
-                    generation,
-                    content,
-                });
-            })
-        {
-            log::warn!("Failed to spawn clipboard reader thread: {e}");
-        }
+        self.selections.offer(kind, |generation| {
+            // Bound to the loop that is running now, because the read below has
+            // three seconds to finish and a loop that restarts in the meantime
+            // starts its generation counters over: a result delivered into the
+            // next session would pass the check in `Selections::apply` against a
+            // matching generation that means something else.
+            let sender = crate::ingress::sender_handle()
+                .ok_or_else(|| "no event loop running".to_string())?;
+            std::thread::Builder::new()
+                .name("guido-clipboard-read".into())
+                .spawn(move || {
+                    let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
+                    sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
+                        kind,
+                        generation,
+                        content,
+                    });
+                })
+                .map(|_| ())
+                .map_err(|e| format!("failed to spawn clipboard reader thread: {e}"))
+        });
     }
 }
 
@@ -362,9 +380,7 @@ impl DataDeviceHandler for WaylandState {
         match offer {
             None => {
                 // Selection cleared — main thread, apply directly.
-                self.selections.selection_generation += 1;
-                let generation = self.selections.selection_generation;
-                self.apply_clipboard_update(SelectionKind::Clipboard, generation, None);
+                self.selections.clear(SelectionKind::Clipboard);
             }
             Some(offer) => {
                 let mimes = offer.with_mime_types(|t| t.to_vec());
@@ -396,9 +412,7 @@ impl PrimarySelectionDeviceHandler for WaylandState {
         match offer {
             None => {
                 // Primary selection cleared — main thread, apply directly.
-                self.selections.primary_generation += 1;
-                let generation = self.selections.primary_generation;
-                self.apply_clipboard_update(SelectionKind::Primary, generation, None);
+                self.selections.clear(SelectionKind::Primary);
             }
             Some(offer) => {
                 let mimes = offer.with_mime_types(|t| t.to_vec());
@@ -546,3 +560,86 @@ impl DataSourceHandler for WaylandState {
 
 delegate_data_device!(WaylandState);
 delegate_primary_selection!(WaylandState);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::{
+        clipboard_paste, primary_paste, set_system_clipboard, set_system_primary,
+    };
+
+    /// An offer whose read cannot start — no event loop to deliver to, no thread
+    /// to read on — has no content, as one with nothing readable does.
+    #[test]
+    fn an_offer_whose_read_cannot_start_leaves_nothing_to_paste() {
+        let mut selections = Selections::new(None, None);
+
+        set_system_clipboard("copied two selections ago".into());
+        selections.offer(SelectionKind::Clipboard, |_| {
+            Err("failed to spawn clipboard reader thread".into())
+        });
+        assert_eq!(clipboard_paste(), None);
+
+        set_system_primary(Some("selected two selections ago".into()));
+        selections.offer(SelectionKind::Primary, |_| {
+            Err("no event loop running".into())
+        });
+        assert_eq!(
+            primary_paste(),
+            None,
+            "and the middle click has the same hole"
+        );
+    }
+
+    /// A reader that did start is left to deliver: the text is replaced when its
+    /// result arrives, not before.
+    #[test]
+    fn an_offer_being_read_keeps_the_text_until_the_read_lands() {
+        let mut selections = Selections::new(None, None);
+        set_system_clipboard("the last owner's".into());
+
+        let mut started = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            started = Some(generation);
+            Ok(())
+        });
+        assert_eq!(clipboard_paste().as_deref(), Some("the last owner's"));
+
+        selections.apply(
+            SelectionKind::Clipboard,
+            started.unwrap(),
+            Some("this one's".into()),
+        );
+        assert_eq!(clipboard_paste().as_deref(), Some("this one's"));
+    }
+
+    /// A read that lands after a newer offer is dropped: the slow pipe of the
+    /// last owner does not get to overwrite the one that replaced it.
+    #[test]
+    fn a_read_overtaken_by_a_newer_offer_is_dropped() {
+        let mut selections = Selections::new(None, None);
+
+        let mut first = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            first = Some(generation);
+            Ok(())
+        });
+        let mut second = None;
+        selections.offer(SelectionKind::Clipboard, |generation| {
+            second = Some(generation);
+            Ok(())
+        });
+
+        selections.apply(
+            SelectionKind::Clipboard,
+            second.unwrap(),
+            Some("newer".into()),
+        );
+        selections.apply(
+            SelectionKind::Clipboard,
+            first.unwrap(),
+            Some("older".into()),
+        );
+        assert_eq!(clipboard_paste().as_deref(), Some("newer"));
+    }
+}

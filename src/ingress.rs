@@ -29,7 +29,7 @@ pub(crate) enum IngressMessage {
     BgWritesQueued,
     /// Prefetched clipboard/primary-selection content from a reader thread.
     /// Applied by the channel callback (generation-checked against the
-    /// current offer in `WaylandState::apply_clipboard_update`).
+    /// current offer in `Selections::apply`).
     ClipboardUpdate {
         kind: crate::platform::SelectionKind,
         generation: u64,
