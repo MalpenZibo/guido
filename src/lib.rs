@@ -2549,9 +2549,8 @@ mod exclusive_zone_resync_tests {
         let height = surface::requested_extent(SurfaceExtent::Fixed(48), live_height);
         assert_eq!(height, 48, "the request wins over the stale configure");
 
-        let zone =
-            ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::from([6, 0, 0, 0]), 800, height);
-        assert_eq!(zone, 48 + 6);
+        let zone = ExclusiveZone::Auto.resolve(Anchor::TOP, Margin::default(), 800, height);
+        assert_eq!(zone, 48);
     }
 
     /// A content axis has no number of its own yet — `initial()` is 1px, which
@@ -2585,16 +2584,16 @@ mod exclusive_zone_resync_tests {
     /// `SetAnchor` was the one command that recorded nothing on the config.
     #[test]
     fn a_reservation_follows_the_anchor_it_was_given() {
-        let margin = Margin::from([6, 20, 9, 20]);
+        let margin = Margin::default();
 
-        // A 800x32 bar at the top reserves its height plus the top margin.
+        // A 800x32 bar at the top reserves its height.
         let bar = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
-        assert_eq!(bar, 32 + 6);
+        assert_eq!(bar, 32);
 
         // The same surface, re-anchored as a 48-wide dock on the left, has to
-        // reserve its width plus the left margin instead.
+        // reserve its width instead.
         let dock = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
-        assert_eq!(dock, 48 + 20);
+        assert_eq!(dock, 48);
         assert_ne!(dock, bar, "the axis genuinely changes with the anchor");
     }
 
@@ -3440,13 +3439,26 @@ mod a_second_host_can_answer_for_a_compositor {
         assert_eq!(surface.exclusive_zones, vec![32]);
     }
 
-    /// The margin on the anchored edge is part of the reservation: a bar held
-    /// eight pixels off the top edge occupies forty.
+    /// The margin on the anchored edge is the compositor's to add, and the one
+    /// facing away is the bar's: a bar held eight pixels off the top with eight
+    /// below it asks for forty, and the compositor reserves forty-eight.
     #[test]
-    fn a_margin_on_the_anchored_edge_is_reserved_too() {
+    fn only_the_margin_facing_away_from_the_anchor_is_asked_for() {
+        let mut surface = confirmed(800, 32);
+        resync_exclusive_zone(
+            &mut surface,
+            &bar().margin(Margin::from([8, 0, 0, 0])),
+            None,
+        );
+        assert_eq!(
+            surface.exclusive_zones,
+            vec![32],
+            "the top margin is not ours to add"
+        );
+
         let mut surface = confirmed(800, 32);
         resync_exclusive_zone(&mut surface, &bar().margin(Margin::all(8)), None);
-        assert_eq!(surface.exclusive_zones, vec![40]);
+        assert_eq!(surface.exclusive_zones, vec![40], "the bottom margin is");
     }
 
     /// A policy that is not `Auto` sends nothing from here — it was sent once,

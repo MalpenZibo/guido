@@ -439,18 +439,21 @@ pub fn content() -> SurfaceExtent {
 /// SurfaceConfig::new().exclusive_zone(ExclusiveZone::None);   // reserve nothing (toasts, OSD)
 /// SurfaceConfig::new().exclusive_zone(ExclusiveZone::Ignore); // overlap panels too
 /// ```
+///
+/// Whatever the policy, the compositor adds the margin on the anchored edge on
+/// top of the zone: wlroots and smithay both reserve `zone + margin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExclusiveZone {
     /// Reserve the surface's own extent on the anchored axis, plus the
-    /// margin on that edge (gtk-layer-shell's "auto exclusive zone"): the
-    /// height of a top/bottom bar, the width of a left/right dock — the
-    /// axis follows from the anchor, it is never a choice. Content-sized
+    /// margin facing away from the anchor (gtk-layer-shell's "auto exclusive
+    /// zone"): the height of a top/bottom bar, the width of a left/right dock —
+    /// the axis follows from the anchor, it is never a choice. Content-sized
     /// surfaces keep the reservation in sync when they resize. Per the
     /// layer-shell spec a zone is only meaningful anchored to one edge
     /// (plus optionally both perpendicular ones); on other anchors this
     /// resolves to no reservation.
     Auto,
-    /// Reserve exactly this many logical pixels.
+    /// Reserve this many logical pixels.
     Fixed(u32),
     /// Reserve nothing; the surface is moved by other surfaces' zones.
     None,
@@ -461,25 +464,26 @@ pub enum ExclusiveZone {
 
 impl ExclusiveZone {
     /// Protocol value. [`Auto`](ExclusiveZone::Auto) resolves against the
-    /// surface extent on the anchored axis plus that edge's margin.
+    /// surface extent on the anchored axis plus the margin facing away from the
+    /// anchor.
     pub(crate) fn resolve(self, anchor: Anchor, margin: Margin, width: u32, height: u32) -> i32 {
         match self {
             ExclusiveZone::Auto => match Self::follow_axis(anchor) {
                 Some(FollowAxis::Height) => {
-                    let edge_margin = if anchor.contains(Anchor::TOP) {
-                        margin.top
-                    } else {
+                    let inner_margin = if anchor.contains(Anchor::TOP) {
                         margin.bottom
+                    } else {
+                        margin.top
                     };
-                    height as i32 + edge_margin
+                    height as i32 + inner_margin
                 }
                 Some(FollowAxis::Width) => {
-                    let edge_margin = if anchor.contains(Anchor::LEFT) {
-                        margin.left
-                    } else {
+                    let inner_margin = if anchor.contains(Anchor::LEFT) {
                         margin.right
+                    } else {
+                        margin.left
                     };
-                    width as i32 + edge_margin
+                    width as i32 + inner_margin
                 }
                 None => {
                     log::warn!(
@@ -1211,19 +1215,34 @@ mod tests {
         );
     }
 
-    /// An `Auto` reservation counts the margin on the edge it is anchored to,
-    /// and only that one.
+    /// The anchored edge's margin is the compositor's to add, so `Auto` counts
+    /// only the one facing away.
     #[test]
-    fn an_auto_zone_adds_the_anchored_edges_margin() {
-        let margin = Margin::from([6, 20, 9, 20]);
+    fn an_auto_zone_adds_the_margin_facing_away_from_its_anchor() {
+        let margin = Margin::from([6, 20, 9, 30]);
         let top = ExclusiveZone::Auto.resolve(Anchor::TOP, margin, 800, 32);
-        assert_eq!(top, 32 + 6);
+        assert_eq!(top, 32 + 9, "a top bar counts its bottom margin");
 
         let bottom = ExclusiveZone::Auto.resolve(Anchor::BOTTOM, margin, 800, 32);
-        assert_eq!(bottom, 32 + 9);
+        assert_eq!(bottom, 32 + 6, "a bottom bar counts its top margin");
 
         let left = ExclusiveZone::Auto.resolve(Anchor::LEFT, margin, 48, 600);
-        assert_eq!(left, 48 + 20);
+        assert_eq!(left, 48 + 20, "a left dock counts its right margin");
+
+        let right = ExclusiveZone::Auto.resolve(Anchor::RIGHT, margin, 48, 600);
+        assert_eq!(right, 48 + 30, "a right dock counts its left margin");
+
+        let full_width = ExclusiveZone::Auto.resolve(
+            Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
+            margin,
+            800,
+            32,
+        );
+        assert_eq!(
+            full_width,
+            32 + 9,
+            "and a full-width bar the same as a top one"
+        );
     }
 
     /// A corner anchor names one edge of each axis, so neither axis is the one
