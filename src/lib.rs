@@ -76,7 +76,11 @@ pub fn default_font_family() -> FontFamily {
 /// The font bytes will be loaded into all internal FontSystem instances,
 /// making the font available for use via `FontFamily::Name(...)`.
 ///
-/// This should be called before creating any widgets or surfaces.
+/// This should be called before creating any widgets or surfaces — and
+/// before *each* [`App::run`], not once for the process: the fonts belong to
+/// the `App` that loaded them and are forgotten with it, so a program that
+/// restarts in a loop loads them again on every turn. Loading the same bytes
+/// twice within one run registers them once.
 ///
 /// # Example
 ///
@@ -2512,6 +2516,30 @@ mod restart_tests {
             default_font_family(),
             FontFamily::SansSerif,
             "an App that declares no font gets the default, not the last App's"
+        );
+    }
+
+    /// Font *data* goes the same way as the family, which is a change: the
+    /// bytes used to outlive every `App` on the thread, so a restarting
+    /// program that loaded its font once above the loop kept it. It reloads
+    /// it each run now — `load_font` says so, and the hash beside it is what
+    /// makes reloading the same bytes cost nothing.
+    #[test]
+    fn a_second_app_does_not_inherit_the_fonts_the_first_one_loaded() {
+        let first = App::new();
+        load_font(vec![11u8; 64]);
+        assert_eq!(
+            get_registered_fonts().len(),
+            1,
+            "the App under test has a font to forget"
+        );
+        drop(first);
+
+        let _next = App::new();
+
+        assert!(
+            get_registered_fonts().is_empty(),
+            "the next App would draw in a font it was never given"
         );
     }
 

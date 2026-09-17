@@ -231,8 +231,14 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             }
 
             let output_id = info.id;
-            let widget = with_lock(|lock| {
-                lock.factory
+            // A shared borrow, not `with_lock`: the factory is the
+            // application's own closure and builds a widget tree, so anything
+            // it touches runs while this borrow is open. A shared one nests;
+            // the `&mut` every other site here takes would not.
+            let widget = with_app_state(|app| {
+                app.lock
+                    .borrow()
+                    .factory
                     .as_ref()
                     .map(|f| with_owner(|| f(info.clone())))
             });
