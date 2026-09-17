@@ -178,7 +178,9 @@ pull request CI mutates only the lines the diff touched, which asks the one
 question worth asking of new code — if this were wrong, would anything have
 noticed. That job builds the tests and not the sixty examples, which is what
 keeps it inside the runner's disk, and the price is the doc tests: a mutant only
-a doc test would have killed reports there as missed. That job reports; it does not block, until somebody decides the
+a doc test would have killed reports there as missed. It builds with every
+feature on and lavapipe as its adapter, as the rasterizer job does, so
+feature-gated code and the tests that need a GPU are watched there too. That job reports; it does not block, until somebody decides the
 ratchet is worth the friction.
 
 ## Where the rest of it is
