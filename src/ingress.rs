@@ -115,10 +115,11 @@ mod tests {
     /// ping rather than dropped, or the work sits in the write queue with
     /// nothing coming to flush it.
     ///
-    /// Retried: `reactive::memo`'s tests call `jobs::reset_jobs()` without
-    /// taking the lock above, and that drops the ping handle this one just
-    /// installed. A regression fails every attempt — the fallback either
-    /// wakes or it does not — so one clean window out of many is enough.
+    /// Retried: other tests in this binary touch the same process-wide
+    /// wakeup state without taking the lock above, and one of them landing
+    /// between this ping's installation and the assertion costs an attempt. A
+    /// regression fails every attempt — the fallback either wakes or it does
+    /// not — so one clean window out of many is enough.
     #[test]
     fn giving_up_on_the_channel_hands_the_wakeup_to_the_ping() {
         let _state = crate::jobs::wakeup_test_lock();

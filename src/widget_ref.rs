@@ -18,9 +18,7 @@
 //! request from a post-frame callback, because during `initState` the widget is
 //! not mounted yet. Guido already had the handle — this gives it the verb.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-
+use crate::app_state::with_app_state;
 use crate::reactive::focus::{focus_path, release_focus, request_focus_deferred};
 use crate::reactive::{RwSignal, Signal, create_signal};
 use crate::tree::{Tree, WidgetId};
@@ -131,15 +129,6 @@ pub fn create_widget_ref() -> WidgetRef {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Thread-local registry: WidgetId → WidgetRef
-// ---------------------------------------------------------------------------
-
-thread_local! {
-    static WIDGET_REF_REGISTRY: RefCell<HashMap<WidgetId, WidgetRef>> =
-        RefCell::new(HashMap::new());
-}
-
 /// Register (or re-register) a widget ref mapping.
 ///
 /// Called from the layout of every widget that carries a `WidgetRef`. Idempotent
@@ -157,16 +146,7 @@ pub(crate) fn register_widget_ref(id: WidgetId, widget_ref: WidgetRef) {
     if attached != Some(id) {
         widget_ref.widget.set(Some(id));
     }
-    WIDGET_REF_REGISTRY.with(|reg| {
-        reg.borrow_mut().insert(id, widget_ref);
-    });
-}
-
-/// Reset the widget ref registry.
-///
-/// Called during `App::drop()` to clear stale widget ref entries.
-pub(crate) fn reset_widget_refs() {
-    WIDGET_REF_REGISTRY.with(|r| r.borrow_mut().clear());
+    with_app_state(|app| app.widget_refs.borrow_mut().insert(id, widget_ref));
 }
 
 /// Update all registered widget ref signals with current bounds from `tree`.
@@ -174,8 +154,8 @@ pub(crate) fn reset_widget_refs() {
 /// Entries whose widget no longer exists in the tree are removed (GC).
 /// Called once per surface after layout completes.
 pub(crate) fn update_widget_refs(tree: &Tree) {
-    WIDGET_REF_REGISTRY.with(|reg| {
-        reg.borrow_mut().retain(|&id, widget_ref| {
+    with_app_state(|app| {
+        app.widget_refs.borrow_mut().retain(|&id, widget_ref| {
             // A ref's signals belong to the scope that created it — a popup's
             // widget tree, a dynamic child — and this registry outlives every
             // one of them, so the handle is asked whether it is still there
@@ -249,7 +229,7 @@ mod tests {
         update_widget_refs(&Tree::new());
 
         assert!(
-            WIDGET_REF_REGISTRY.with(|reg| reg.borrow().is_empty()),
+            with_app_state(|app| app.widget_refs.borrow().is_empty()),
             "the dead ref is evicted, not carried into the next frame"
         );
     }

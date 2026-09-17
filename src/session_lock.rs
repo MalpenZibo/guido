@@ -21,9 +21,9 @@
 //! unlocking (it idles waiting for the next [`lock_session`] call) — unlike
 //! ordinary surfaces, closing lock surfaces never exits the app.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::app_state::with_app_state;
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::platform::LockEvent;
 use crate::reactive::global::GlobalSignal;
@@ -49,7 +49,7 @@ pub enum LockState {
 type LockWidgetFn = Box<dyn Fn(OutputInfo) -> Box<dyn Widget>>;
 
 #[derive(Default)]
-struct LockData {
+pub(crate) struct LockData {
     /// Builds the lock screen widget for an output. Kept for as long as the
     /// session stays locked, so an output plugged in meanwhile gets a surface.
     factory: Option<LockWidgetFn>,
@@ -58,7 +58,7 @@ struct LockData {
 }
 
 /// What the application last asked for, waiting for the state machine.
-enum LockRequest {
+pub(crate) enum LockRequest {
     /// Lock, building each output's screen with this factory. The factory
     /// travels with the request rather than being installed by the caller:
     /// a request that is replaced takes its factory with it, and the one the
@@ -67,19 +67,17 @@ enum LockRequest {
     Unlock,
 }
 
-thread_local! {
-    static LOCK: RefCell<LockData> = RefCell::new(LockData::default());
+/// The platform's lock bookkeeping, which lives in
+/// [`AppState`](crate::app_state::AppState) because the widget code that asks
+/// for a lock holds no platform.
+fn with_lock<R>(f: impl FnOnce(&mut LockData) -> R) -> R {
+    with_app_state(|app| f(&mut app.lock.borrow_mut()))
+}
 
-    /// A slot, not two flags: "lock" and "unlock" are two answers to one
-    /// question, and asking twice in a frame means the second answer is the
-    /// one meant. Two independent booleans let both be true at once, which
-    /// the loop then acted on in order — a lock sent to the compositor and
-    /// undone in the same iteration.
-    ///
-    /// Setting it is what wakes the loop, so the state machine cannot be
-    /// asked for something and left asleep — see `crate::deferred`.
-    static REQUEST: crate::deferred::DeferredSlot<LockRequest> =
-        const { crate::deferred::DeferredSlot::new() };
+/// Forget the lock-screen factory: the request it came with is over, either
+/// because it was refused or because the session is unlocked.
+fn forget_factory() {
+    with_lock(|lock| lock.factory = None);
 }
 
 /// The lifecycle the application watches. Its own global rather than a field
@@ -136,16 +134,17 @@ where
         log::warn!("lock_session() called while already locked or locking");
         return;
     }
-    REQUEST.with(|request| {
-        request.set(LockRequest::Lock(Box::new(move |info| {
-            Box::new(widget_fn(info))
-        })))
+    with_app_state(|app| {
+        app.lock_request
+            .set(LockRequest::Lock(Box::new(move |info| {
+                Box::new(widget_fn(info))
+            })))
     });
 }
 
 /// Unlock the session and drop all lock surfaces.
 pub fn unlock_session() {
-    REQUEST.with(|request| request.set(LockRequest::Unlock));
+    with_app_state(|app| app.lock_request.set(LockRequest::Unlock));
 }
 
 /// Drive the session-lock state machine. Called once per main-loop
@@ -160,13 +159,13 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
     // iteration must land before the teardown, or the state ends up `Locked`
     // with no surfaces under it.
     let mut unlock_requested = false;
-    match REQUEST.with(|request| request.take()) {
+    match with_app_state(|app| app.lock_request.take()) {
         Some(LockRequest::Lock(factory)) => {
-            LOCK.with(|l| l.borrow_mut().factory = Some(factory));
+            with_lock(|lock| lock.factory = Some(factory));
             if wayland_state.start_session_lock() {
                 set_state(LockState::Locking);
             } else {
-                LOCK.with(|l| l.borrow_mut().factory = None);
+                forget_factory();
                 set_state(LockState::Unlocked);
             }
         }
@@ -181,7 +180,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             LockEvent::Finished => {
                 // Denied, or the lock ended without our unlock_session().
                 teardown_lock_surfaces(surface_manager, wayland_state, tree);
-                LOCK.with(|l| l.borrow_mut().factory = None);
+                forget_factory();
                 set_state(LockState::Unlocked);
             }
         }
@@ -191,7 +190,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
     if unlock_requested && state_signal().get_untracked() != LockState::Unlocked {
         wayland_state.unlock_session();
         teardown_lock_surfaces(surface_manager, wayland_state, tree);
-        LOCK.with(|l| l.borrow_mut().factory = None);
+        forget_factory();
         set_state(LockState::Unlocked);
     }
 
@@ -201,8 +200,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
         let current = outputs::current_outputs();
 
         // Drop surfaces for disconnected outputs
-        let stale: Vec<(OutputId, SurfaceId)> = LOCK.with(|l| {
-            let mut lock = l.borrow_mut();
+        let stale: Vec<(OutputId, SurfaceId)> = with_lock(|lock| {
             let stale: Vec<(OutputId, SurfaceId)> = lock
                 .surfaces
                 .iter()
@@ -223,8 +221,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
 
         // Create surfaces for new outputs
         for info in current {
-            let already = LOCK.with(|l| l.borrow().surfaces.contains_key(&info.id));
-            if already {
+            if with_lock(|lock| lock.surfaces.contains_key(&info.id)) {
                 continue;
             }
 
@@ -234,9 +231,8 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             }
 
             let output_id = info.id;
-            let widget = LOCK.with(|l| {
-                l.borrow()
-                    .factory
+            let widget = with_lock(|lock| {
+                lock.factory
                     .as_ref()
                     .map(|f| with_owner(|| f(info.clone())))
             });
@@ -251,7 +247,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             let config = SurfaceConfig::new().width(0).height(0);
             let managed = ManagedSurface::new(id, config, widget, owner_id, tree);
             surface_manager.add(managed);
-            LOCK.with(|l| l.borrow_mut().surfaces.insert(output_id, id));
+            with_lock(|lock| lock.surfaces.insert(output_id, id));
         }
     }
 }
@@ -261,13 +257,8 @@ fn teardown_lock_surfaces<P: crate::Platform>(
     wayland_state: &mut P,
     tree: &mut crate::tree::Tree,
 ) {
-    let surfaces: Vec<SurfaceId> = LOCK.with(|l| {
-        l.borrow_mut()
-            .surfaces
-            .drain()
-            .map(|(_, sid)| sid)
-            .collect()
-    });
+    let surfaces: Vec<SurfaceId> =
+        with_lock(|lock| lock.surfaces.drain().map(|(_, sid)| sid).collect());
     for sid in surfaces {
         // Removed directly — not via SurfaceCommand::Close — so an app whose
         // only surfaces were lock surfaces keeps running after unlock.
@@ -276,14 +267,6 @@ fn teardown_lock_surfaces<P: crate::Platform>(
         }
         wayland_state.destroy_surface(sid);
     }
-}
-
-/// Reset session-lock state.
-///
-/// Called during `App::drop()`.
-pub(crate) fn reset_session_lock() {
-    LOCK.with(|lock| *lock.borrow_mut() = LockData::default());
-    REQUEST.with(|request| request.clear());
 }
 
 #[cfg(test)]
@@ -300,22 +283,25 @@ mod tests {
     #[test]
     fn the_last_request_of_a_frame_is_the_one_that_counts() {
         create_root_owner();
-        reset_session_lock();
+        crate::app_state::reset();
         set_state(LockState::Unlocked);
 
         lock_session(|_| crate::widgets::container());
         unlock_session();
 
         assert!(
-            matches!(REQUEST.with(|r| r.take()), Some(LockRequest::Unlock)),
+            matches!(
+                with_app_state(|app| app.lock_request.take()),
+                Some(LockRequest::Unlock)
+            ),
             "the later request replaces the earlier one rather than joining it"
         );
         assert!(
-            REQUEST.with(|r| r.take()).is_none(),
+            with_app_state(|app| app.lock_request.take()).is_none(),
             "and there is only ever the one"
         );
 
-        reset_session_lock();
+        crate::app_state::reset();
     }
 
     /// The lock state is process-wide and lives behind a thread-local built on

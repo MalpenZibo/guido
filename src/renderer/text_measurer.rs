@@ -1,8 +1,8 @@
+use crate::app_state::with_app_state;
 use crate::layout::Size;
 use crate::widgets::font::{FontFamily, FontWeight};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
 use rustc_hash::FxHashMap;
-use std::cell::RefCell;
 
 /// The smallest font size guido will hand to the shaper.
 ///
@@ -376,13 +376,24 @@ impl TextMeasurer {
     }
 }
 
-thread_local! {
-    static TEXT_MEASURER: RefCell<TextMeasurer> = RefCell::new(TextMeasurer::new());
+/// Measure through the application's one measurer, building it on first use.
+///
+/// Lazily, because it is a whole `FontSystem` and it reads the custom fonts
+/// the application has loaded: built with the rest of [`AppState`] it would
+/// predate every `load_font` call, and pay for a font system in a process
+/// that never draws a character.
+///
+/// [`AppState`]: crate::app_state::AppState
+fn with_measurer<R>(f: impl FnOnce(&mut TextMeasurer) -> R) -> R {
+    with_app_state(|app| {
+        let mut measurer = app.text_measurer.borrow_mut();
+        f(measurer.get_or_insert_with(TextMeasurer::new))
+    })
 }
 
 /// Measure text dimensions using the font system
 pub fn measure_text(text: &str, font_size: f32, max_width: Option<f32>) -> Size {
-    TEXT_MEASURER.with_borrow_mut(|m| m.measure(text, font_size, max_width))
+    with_measurer(|m| m.measure(text, font_size, max_width))
 }
 
 /// Measure text dimensions with specified font family and weight
@@ -393,8 +404,7 @@ pub fn measure_text_styled(
     font_family: &FontFamily,
     font_weight: FontWeight,
 ) -> Size {
-    TEXT_MEASURER
-        .with_borrow_mut(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
+    with_measurer(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
 }
 
 /// Measure text and report where its first line sits on the baseline.
@@ -405,13 +415,12 @@ pub fn measure_text_full(
     font_family: &FontFamily,
     font_weight: FontWeight,
 ) -> Measured {
-    TEXT_MEASURER
-        .with_borrow_mut(|m| m.measure_full(text, font_size, max_width, font_family, font_weight))
+    with_measurer(|m| m.measure_full(text, font_size, max_width, font_family, font_weight))
 }
 
 /// Measure text width up to a specific character index (for cursor positioning)
 pub fn measure_text_to_char(text: &str, font_size: f32, char_index: usize) -> f32 {
-    TEXT_MEASURER.with_borrow_mut(|m| m.measure_to_char(text, font_size, char_index))
+    with_measurer(|m| m.measure_to_char(text, font_size, char_index))
 }
 
 /// Measure text width up to a character index with font styling
@@ -422,7 +431,7 @@ pub fn measure_text_to_char_styled(
     font_family: &FontFamily,
     font_weight: FontWeight,
 ) -> f32 {
-    TEXT_MEASURER.with_borrow_mut(|m| {
+    with_measurer(|m| {
         m.measure_to_char_styled(text, font_size, char_index, font_family, font_weight)
     })
 }
@@ -435,13 +444,12 @@ pub fn measure_char_positions_styled(
     font_family: &FontFamily,
     font_weight: FontWeight,
 ) -> Vec<f32> {
-    TEXT_MEASURER
-        .with_borrow_mut(|m| m.char_positions_styled(text, font_size, font_family, font_weight))
+    with_measurer(|m| m.char_positions_styled(text, font_size, font_family, font_weight))
 }
 
 /// Find the character index from an x-coordinate (for click-to-position)
 pub fn char_index_from_x(text: &str, font_size: f32, x: f32) -> usize {
-    TEXT_MEASURER.with_borrow_mut(|m| m.char_from_x(text, font_size, x))
+    with_measurer(|m| m.char_from_x(text, font_size, x))
 }
 
 /// Find character index from x-coordinate with font styling
@@ -452,8 +460,7 @@ pub fn char_index_from_x_styled(
     font_family: &FontFamily,
     font_weight: FontWeight,
 ) -> usize {
-    TEXT_MEASURER
-        .with_borrow_mut(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
+    with_measurer(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
 }
 
 #[cfg(test)]

@@ -227,3 +227,117 @@ static PLAIN: u32 = 0;
         ]
     );
 }
+
+/// The `APP` row of that table stands for twenty-two values rather than one,
+/// so what keeps `AppState` honest is not the row — it is that
+/// `app_state::reset` names every field. Two claims, and this is what holds
+/// them: that each field says why it is ambient, which the table used to ask
+/// of each cell separately, and that the reset's pattern is exhaustive.
+///
+/// The compiler already refuses a field the pattern does not mention, and
+/// `-D warnings` refuses one it mentions and does not use. What it offers
+/// instead, in the same error, is `..` — and taking that suggestion reopens
+/// #372 silently, with every test still green. So the pattern is read here as
+/// text.
+mod the_application_state {
+    use std::path::Path;
+
+    fn source() -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app_state.rs"))
+            .expect("src/app_state.rs is readable")
+    }
+
+    /// The names declared between `struct AppState {` and its closing brace.
+    fn fields(source: &str) -> Vec<String> {
+        source
+            .split_once("pub(crate) struct AppState {")
+            .expect("src/app_state.rs declares `AppState`")
+            .1
+            .split("\n}")
+            .next()
+            .expect("the struct closes")
+            .lines()
+            .filter_map(|line| {
+                let name = line.trim().strip_prefix("pub(crate) ")?;
+                Some(name.split(':').next()?.to_string())
+            })
+            .collect()
+    }
+
+    /// The names bound by `reset`'s `let AppState { .. } = app;`.
+    fn bound_by_reset(source: &str) -> Vec<String> {
+        let pattern = source
+            .split_once("let AppState {")
+            .expect("`reset` destructures the struct")
+            .1
+            .split_once("} = app;")
+            .expect("and the pattern closes")
+            .0;
+        assert!(
+            !pattern.contains("..") && !pattern.contains(": _"),
+            "`app_state::reset` binds its fields with `..` or `: _`:\n{pattern}\n\
+             Both are what the compiler suggests when a field is missing, and both \
+             let the next field be forgotten — which is #372, again. Name every one."
+        );
+        pattern
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.trim_end_matches(',').to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_field_is_given_back_by_the_reset() {
+        let source = source();
+        let fields = fields(&source);
+        assert!(
+            fields.len() > 15,
+            "found only {} fields: the scan is broken, not the struct",
+            fields.len()
+        );
+        assert_eq!(
+            bound_by_reset(&source),
+            fields,
+            "`app_state::reset` does not name the fields of `AppState`, in order"
+        );
+    }
+
+    #[test]
+    fn every_field_says_why_nothing_explicit_carries_it() {
+        let source = source();
+        let body = source
+            .split_once("pub(crate) struct AppState {")
+            .expect("src/app_state.rs declares `AppState`")
+            .1
+            .split("\n}")
+            .next()
+            .expect("the struct closes");
+
+        let mut undocumented = Vec::new();
+        let mut documented = false;
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("//") && !line.starts_with("///") {
+                continue;
+            }
+            if line.starts_with("///") {
+                documented = true;
+                continue;
+            }
+            if let Some(name) = line.strip_prefix("pub(crate) ")
+                && !documented
+            {
+                undocumented.push(name.split(':').next().unwrap_or(name).to_string());
+            }
+            documented = false;
+        }
+
+        assert!(
+            undocumented.is_empty(),
+            "fields of `AppState` with no line saying why nothing explicit carries \
+             them: {undocumented:?}. The **Ambient state** table asks that of every \
+             cell, and `APP` is one row for all of these"
+        );
+    }
+}

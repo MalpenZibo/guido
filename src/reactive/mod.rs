@@ -81,8 +81,6 @@ pub(crate) fn reset_reactive() {
     runtime::reset_runtime();
     storage::reset_storage();
     invalidation::reset_invalidation();
-    clipboard::reset_clipboard();
-    cursor::reset_cursor();
     diagnostics::reset();
 }
 

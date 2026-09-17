@@ -44,6 +44,12 @@ pub(crate) struct DeferredQueue<T> {
     items: RefCell<Vec<T>>,
 }
 
+impl<T> Default for DeferredQueue<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> DeferredQueue<T> {
     pub(crate) const fn new() -> Self {
         Self {
@@ -87,13 +93,15 @@ pub(crate) struct DeferredSlot<T> {
     item: RefCell<Option<T>>,
 }
 
-impl<T> DeferredSlot<T> {
-    pub(crate) const fn new() -> Self {
+impl<T> Default for DeferredSlot<T> {
+    fn default() -> Self {
         Self {
             item: RefCell::new(None),
         }
     }
+}
 
+impl<T> DeferredSlot<T> {
     /// Put the value in the slot, replacing whatever was there, and ask for
     /// the pass that will take it.
     pub(crate) fn set(&self, value: T) {
@@ -134,7 +142,7 @@ mod tests {
         assert_eq!(queue.drain(), vec![1, 2], "a queue owes every item");
         assert!(queue.is_empty(), "and is ready for the next batch");
 
-        let slot: DeferredSlot<u8> = DeferredSlot::new();
+        let slot: DeferredSlot<u8> = DeferredSlot::default();
         assert!(slot.is_empty());
         slot.set(1);
         slot.set(2);

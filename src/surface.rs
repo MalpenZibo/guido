@@ -39,9 +39,9 @@
 //! handle.close();
 //! ```
 
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::app_state::with_app_state;
 use crate::outputs::OutputId;
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
 use crate::reactive::Trigger;
@@ -911,29 +911,15 @@ pub(crate) enum SurfaceCommand {
     },
 }
 
-// Thread-local storage for the surface command queue.
-// Both sender and receiver are on the main thread — this is just a deferred command queue.
-thread_local! {
-    static SURFACE_COMMANDS: crate::deferred::DeferredQueue<SurfaceCommand> =
-        const { crate::deferred::DeferredQueue::new() };
-}
-
-/// Push a surface command to the thread-local queue, waking the loop that
+/// Push a surface command to the application's queue, waking the loop that
 /// will carry it out.
 pub(crate) fn push_surface_command(cmd: SurfaceCommand) {
-    SURFACE_COMMANDS.with(|cmds| cmds.push(cmd));
-}
-
-/// Reset the surface command queue.
-///
-/// Called during `App::drop()` to clear stale surface commands.
-pub(crate) fn reset_surface_commands() {
-    SURFACE_COMMANDS.with(|cmds| cmds.clear());
+    with_app_state(|app| app.surface_commands.push(cmd));
 }
 
 /// Drain all pending surface commands. Called by the main event loop.
 pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
-    SURFACE_COMMANDS.with(|cmds| cmds.drain())
+    with_app_state(|app| app.surface_commands.drain())
 }
 
 /// Spawn a new surface at runtime.
@@ -1019,7 +1005,7 @@ impl PopupHandle {
     /// Safe to read after the popup is gone — including from a submenu whose
     /// parent was dismissed by the same click.
     pub fn dismissed(&self) -> bool {
-        let live = LIVE_POPUPS.with(|live| live.borrow().contains(&self.id));
+        let live = with_app_state(|app| app.live_popups.borrow().contains(&self.id));
         if live {
             // Tracked only while there is still something to wait for. One
             // notifier serves every popup, so a watcher that stayed subscribed
@@ -1035,17 +1021,6 @@ impl PopupHandle {
     }
 }
 
-// The popups that are still open, and one notifier for every change to that
-// set. A `PopupHandle` is `Copy` and outlives its popup by design, so
-// dismissal cannot be announced through anything scoped to whoever called
-// `spawn_popup`: for a nested popup that scope is the *parent* popup, which
-// dies at the same moment the child does. Here the registry is the truth —
-// absent means gone — and nothing is scoped to dispose.
-thread_local! {
-    static LIVE_POPUPS: RefCell<std::collections::HashSet<SurfaceId>> =
-        RefCell::new(std::collections::HashSet::new());
-}
-
 /// The notifier that makes reading the registry reactive. It belongs to the
 /// application, not to whichever popup happened to be opened first.
 static POPUP_DISMISSAL: GlobalSignal<()> = GlobalSignal::new(|| ());
@@ -1057,18 +1032,10 @@ fn popup_dismissal() -> Trigger {
 /// Mark a popup dismissed (called by the platform layer on popup_done, and
 /// on close). Removes the registry entry and notifies every watcher.
 pub(crate) fn mark_popup_dismissed(id: SurfaceId) {
-    let was_open = LIVE_POPUPS.with(|live| live.borrow_mut().remove(&id));
+    let was_open = with_app_state(|app| app.live_popups.borrow_mut().remove(&id));
     if was_open {
         popup_dismissal().notify();
     }
-}
-
-/// Reset popup registry state.
-///
-/// Called during `App::drop()`. The notifier needs nothing here — a global
-/// signal is forgotten with the rest of the reactive state.
-pub(crate) fn reset_popups() {
-    LIVE_POPUPS.with(|live| live.borrow_mut().clear());
 }
 
 /// Spawn an xdg popup anchored to a parent surface.
@@ -1110,9 +1077,7 @@ where
     F: FnOnce() -> W + 'static,
 {
     let id = SurfaceId::next();
-    LIVE_POPUPS.with(|live| {
-        live.borrow_mut().insert(id);
-    });
+    with_app_state(|app| app.live_popups.borrow_mut().insert(id));
 
     push_surface_command(SurfaceCommand::CreatePopup {
         id,
@@ -1289,8 +1254,7 @@ mod tests {
     /// `CreatePopup`s these tests push and nobody consumes.
     fn fresh() {
         crate::reactive::owner::create_root_owner();
-        reset_popups();
-        let _ = drain_surface_commands();
+        crate::app_state::reset();
     }
 
     fn popup() -> PopupHandle {
@@ -1388,7 +1352,7 @@ mod tests {
         popup.close();
 
         assert!(!popup.dismissed(), "still open until the loop closes it");
-        let queued = SURFACE_COMMANDS.with(|cmds| cmds.drain());
+        let queued = drain_surface_commands();
         assert!(
             queued
                 .iter()

@@ -24,6 +24,7 @@ use std::cell::RefCell;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
+use crate::app_state::with_app_state;
 use crate::jobs::{JobRequest, JobType, request_job};
 use crate::reactive::runtime::SignalId;
 use crate::tree::WidgetId;
@@ -212,18 +213,13 @@ thread_local! {
     /// Subscriber registry. All access is on the main thread — background writes go
     /// through `queue_bg_write()` → `flush_bg_writes()` which executes on the main thread.
     static REGISTRY: RefCell<SubscriberRegistry> = RefCell::new(SubscriberRegistry::new());
-
-    /// Dynamic-children segments dirtied by signal writes, per container.
-    /// Consumed by reconciliation via `take_dirty_segments()`.
-    static DIRTY_SEGMENTS: RefCell<FxHashMap<WidgetId, SmallVec<[u32; 4]>>> =
-        RefCell::new(FxHashMap::default());
 }
 
 /// Take (and clear) the set of dirty dynamic-children segments for a widget.
 /// `None` means no segment-tracked signal of this widget changed since the
 /// last call.
 pub(crate) fn take_dirty_segments(widget_id: WidgetId) -> Option<SmallVec<[u32; 4]>> {
-    DIRTY_SEGMENTS.with(|d| d.borrow_mut().remove(&widget_id))
+    with_app_state(|app| app.dirty_segments.borrow_mut().remove(&widget_id))
 }
 
 /// Register a widget as a subscriber for a signal with a specific job type.
@@ -278,8 +274,8 @@ pub fn notify_signal_change(signal_id: SignalId) {
         };
         for sub in subs {
             if let Some(segment) = sub.segment {
-                DIRTY_SEGMENTS.with(|d| {
-                    let mut d = d.borrow_mut();
+                with_app_state(|app| {
+                    let mut d = app.dirty_segments.borrow_mut();
                     let dirty = d.entry(sub.widget_id).or_default();
                     if !dirty.contains(&segment) {
                         dirty.push(segment);
@@ -345,8 +341,8 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
             }
         }
     });
-    DIRTY_SEGMENTS.with(|d| {
-        d.borrow_mut().remove(&widget_id);
+    with_app_state(|app| {
+        app.dirty_segments.borrow_mut().remove(&widget_id);
     });
 }
 
@@ -356,7 +352,6 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
 pub(crate) fn reset_invalidation() {
     TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().clear());
     REGISTRY.with(|reg| *reg.borrow_mut() = SubscriberRegistry::new());
-    DIRTY_SEGMENTS.with(|d| d.borrow_mut().clear());
 }
 
 /// Get the number of signals with active subscribers (for testing).

@@ -348,7 +348,7 @@ it a calloop source of its own.
 
 **Main thread, but due later → `jobs::request_job_at()`.**
 Work owed to a *clock* rather than to a frame — the blinking caret — is held in
-`SCHEDULED_JOBS`, outside the queues, and deliberately does not make
+`AppState::scheduled_jobs`, outside the queues, and deliberately does not make
 `has_pending_jobs()` true. The wakeup is the dispatch timeout itself: the loop
 asks `jobs::next_deadline()`, blocks exactly that long, and `promote_due_jobs()`
 turns whatever is due into an ordinary job at the top of the next iteration.
@@ -415,6 +415,12 @@ by itself, and an event handler is a closure with no arguments, so the reactive
 system has to know who is reading and a handler needs somewhere to leave its
 requests.
 
+A row is a *cell*, not a value. `APP` is one row and twenty-two values: what the
+application leaves for its loop lives in one struct, `AppState`, so that
+`App::drop` can forget all of it at once rather than through a list somebody
+has to keep true. A new piece of application state is a field there — reviewed
+beside the others, reset with them — and not a new cell with a row of its own.
+
 | cell | file | why nothing explicit carries it |
 | --- | --- | --- |
 | `RUNTIME` | `src/reactive/runtime.rs` | Effects and their subscriptions: a `set` anywhere must reach them, and a signal handle is `Copy` with nothing to point through |
@@ -429,28 +435,7 @@ requests.
 | `GLOBALS` | `src/reactive/global.rs` | Which signal each `GlobalSignal` resolved to: a `static` cannot hold a thread's signal |
 | `TRACKING_CONTEXT` | `src/reactive/invalidation.rs` | Which widget and job a read belongs to: a read inside `layout` or `paint` has no argument naming the widget. #371 would open the scope around every call |
 | `REGISTRY` | `src/reactive/invalidation.rs` | Signal-to-widget subscriptions, written by a read and consumed by a write that share no argument |
-| `DIRTY_SEGMENTS` | `src/reactive/invalidation.rs` | Dynamic-children segments a write dirtied, waiting for the reconciliation that has the tree |
-| `PENDING_JOBS` | `src/jobs.rs` | Widget jobs, queued by signal writes that have no `Tree`, sorted per surface by `distribute_jobs` |
-| `SCHEDULED_JOBS` | `src/jobs.rs` | Jobs owed to a clock (the caret), queued from widget code that has no loop |
-| `SURFACE_COMMANDS` | `src/surface.rs` | `SurfaceHandle` calls from application code, which has no platform |
-| `LIVE_POPUPS` | `src/surface.rs` | A `PopupHandle` is `Copy` and outlives its popup, so the registry is the only truth about whether it is still open |
-| `WIDGET_REF_REGISTRY` | `src/widget_ref.rs` | Application code names a widget with a `WidgetRef` before any `WidgetId` exists |
-| `PENDING` | `src/reactive/focus.rs` | A focus request from application code, which has no tree, parked until one is laid out |
-| `CURRENT_CURSOR` | `src/reactive/cursor.rs` | The last shape `set_cursor` was asked for, so asking again for the same one sends nothing; widget code that calls it has no platform |
-| `OUTGOING_CURSOR` | `src/reactive/cursor.rs` | That shape, waiting for the loop to hand it to the compositor |
-| `CLIPBOARD` | `src/reactive/clipboard.rs` | What a copy in a handler put there, readable by a paste in another handler |
-| `OUTGOING_CLIPBOARD` | `src/reactive/clipboard.rs` | A copy waiting for the loop to hand it to the compositor |
-| `SYSTEM_CLIPBOARD` | `src/reactive/clipboard.rs` | The compositor's selection, prefetched so a paste in a handler can answer synchronously |
-| `PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `CLIPBOARD` |
-| `OUTGOING_PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `OUTGOING_CLIPBOARD` |
-| `SYSTEM_PRIMARY` | `src/reactive/clipboard.rs` | The primary-selection counterpart of `SYSTEM_CLIPBOARD` |
-| `LOCK` | `src/session_lock.rs` | The lock-screen factory and each output's lock surface while locked. Nothing requires it: every reader already holds the surface manager and the platform, so it could be a field of either (#372) |
-| `REQUEST` | `src/session_lock.rs` | A lock or unlock asked for by application code, waiting for the loop |
-| `DEFAULT_FONT_FAMILY` | `src/lib.rs` | Read by every text widget at construction, before any tree or surface exists. Not reset by `App::drop` (#372) |
-| `CUSTOM_FONTS` | `src/lib.rs` | Font bytes loaded before any renderer exists, handed to each font system when it is built |
-| `CUSTOM_FONT_HASHES` | `src/lib.rs` | Which of those were already loaded, so loading twice is idempotent |
-| `FONTS_CONSUMED` | `src/lib.rs` | Whether a font system already took the list, so a late load can say it came too late |
-| `TEXT_MEASURER` | `src/renderer/text_measurer.rs` | One shaping cache for every `layout` that measures text, none of which is handed one |
+| `APP` | `src/app_state.rs` | The application's own state — what it has queued for the loop, what it and the compositor last told each other, and the fonts — in one struct, because a handler is a closure with no arguments and the loop is not reachable from one. It was twenty-two cells, and `App::drop` reset them by a hand-written list that had grown wrong (#372); `app_state::reset` destructures the struct instead, so a field added there and forgotten here is a compile error. Each field says at its declaration why nothing explicit carries it |
 | `BATCHING` | `src/platform/wayland.rs` | Which surface a `batch_layer_requests` group is open on. Not a field of `WaylandState`: the closure holds `&mut WaylandState`, so a guard could not restore a field if it panics, and a scope left open would hold every later commit |
 | `DEPTH` | `src/reactive/diagnostics.rs` | Debug builds: nesting of `snapshot_zone`, inside which a read with no reactive scope is not warned about |
 | `REPORTED` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about, so a hot path warns once |
@@ -462,9 +447,9 @@ requests.
 | `OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: the connected outputs, read by application code that decides which surfaces to spawn |
 | `SURFACE_OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: which output each surface is on, read through `surface_output` by code that holds only a `SurfaceId` |
 | `EFFECTS` | `src/compositor.rs` | `GlobalSignal`: what the compositor supports (blur), learned by the platform and read by widget code that has none |
-| `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `LOCK` |
+| `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `AppState::lock` |
 | `FOCUS` | `src/reactive/focus.rs` | `GlobalSignal`: the focused widget and its ancestors, so resolving a `when_focused` subscribes to it |
-| `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `LIVE_POPUPS` reactive, owned by the application rather than by whichever popup opened first |
+| `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `AppState::live_popups` reactive, owned by the application rather than by whichever popup opened first |
 
 ## Widget Trait
 

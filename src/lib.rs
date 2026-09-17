@@ -1,4 +1,5 @@
 pub mod animation;
+mod app_state;
 pub mod backdrop;
 mod blur;
 pub mod clock;
@@ -32,7 +33,6 @@ pub mod renderer;
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
 
-use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use layout::Constraints;
@@ -51,15 +51,6 @@ use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 use smithay_client_toolkit::reexports::calloop::ping::make_ping;
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 
-// Thread-local storage for the default font family
-thread_local! {
-    static DEFAULT_FONT_FAMILY: RefCell<FontFamily> = const { RefCell::new(FontFamily::SansSerif) };
-    static CUSTOM_FONTS: RefCell<Vec<Arc<Vec<u8>>>> = const { RefCell::new(Vec::new()) };
-    static CUSTOM_FONT_HASHES: RefCell<rustc_hash::FxHashSet<u64>> =
-        RefCell::new(rustc_hash::FxHashSet::default());
-    static FONTS_CONSUMED: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Set the application-wide default font family.
 ///
 /// This should be called before creating any widgets. Widgets created after this
@@ -72,14 +63,12 @@ thread_local! {
 /// set_default_font_family(FontFamily::Name("Inter".into()));
 /// ```
 pub fn set_default_font_family(family: FontFamily) {
-    DEFAULT_FONT_FAMILY.with(|f| {
-        *f.borrow_mut() = family;
-    });
+    with_app_state(|app| *app.default_font_family.borrow_mut() = family);
 }
 
 /// Get the current application-wide default font family.
 pub fn default_font_family() -> FontFamily {
-    DEFAULT_FONT_FAMILY.with(|f| f.borrow().clone())
+    with_app_state(|app| app.default_font_family.borrow().clone())
 }
 
 /// Load custom font data into the application.
@@ -98,23 +87,21 @@ pub fn default_font_family() -> FontFamily {
 /// guido::load_font(NERD_FONT.to_vec());
 /// ```
 pub fn load_font(data: Vec<u8>) {
-    if FONTS_CONSUMED.with(|f| f.get()) {
+    if with_app_state(|app| app.fonts_consumed.get()) {
         log::warn!(
             "load_font() called after FontSystem initialization — \
              this font will not be available. Call load_font() before App::run()."
         );
     }
-    // Idempotent: an app that reloads its config re-registers the same fonts
-    // on every run, and without this each run would keep another copy.
     let mut hasher = std::hash::BuildHasher::build_hasher(&rustc_hash::FxBuildHasher);
     std::hash::Hasher::write(&mut hasher, &data);
     let hash = std::hash::Hasher::finish(&hasher);
-    let is_new = CUSTOM_FONT_HASHES.with(|seen| seen.borrow_mut().insert(hash));
-    if !is_new {
-        return;
-    }
-    CUSTOM_FONTS.with(|fonts| {
-        fonts.borrow_mut().push(Arc::new(data));
+    with_app_state(|app| {
+        // Idempotent: an app that reloads its config re-registers the same
+        // fonts on every run, and without this each run would keep a copy.
+        if app.custom_font_hashes.borrow_mut().insert(hash) {
+            app.custom_fonts.borrow_mut().push(Arc::new(data));
+        }
     });
 }
 
@@ -123,8 +110,10 @@ pub fn load_font(data: Vec<u8>) {
 /// Returns cloned `Arc` pointers so every FontSystem (measurer, renderer)
 /// receives the same set of fonts.
 pub(crate) fn get_registered_fonts() -> Vec<Arc<Vec<u8>>> {
-    FONTS_CONSUMED.with(|f| f.set(true));
-    CUSTOM_FONTS.with(|fonts| fonts.borrow().clone())
+    with_app_state(|app| {
+        app.fonts_consumed.set(true);
+        app.custom_fonts.borrow().clone()
+    })
 }
 
 /// The reason the application's main loop exited.
@@ -236,6 +225,7 @@ pub mod widget_prelude {
     pub use crate::widgets::{LayoutHints, Widget};
 }
 
+use crate::app_state::with_app_state;
 use crate::{
     jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_wake_request},
     tree::{DamageRegion, Tree, WidgetId},
@@ -2488,20 +2478,86 @@ impl Drop for App {
 
         // Reset all thread-local and static state so the next App can start clean.
         reactive::reset_reactive();
-        jobs::reset_jobs();
+        app_state::reset();
+        jobs::reset_wakeup();
         ingress::reset_ingress();
-        surface::reset_surface_commands();
-        surface::reset_popups();
-        widget_ref::reset_widget_refs();
-        reactive::focus::reset_pending_focus();
-        session_lock::reset_session_lock();
-        FONTS_CONSUMED.with(|f| f.set(false));
     }
 }
 
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    use crate::jobs::{JobRequest, has_pending_jobs, request_job};
+    use crate::reactive::owner::create_root_owner;
+    use crate::reactive::{clipboard_copy, clipboard_paste};
+    use crate::surface::drain_surface_commands;
+    use crate::widget_ref::create_widget_ref;
+
+    /// The font the last `App` declared is state of the last `App`. It was the
+    /// one cell `App::drop` never reset, and nothing noticed because the reset
+    /// was a hand-written list of calls rather than a value.
+    #[test]
+    fn a_second_app_does_not_inherit_the_font_the_first_one_declared() {
+        drop(App::new().default_font_family(FontFamily::Name("Inter".into())));
+
+        let _next = App::new();
+
+        assert_eq!(
+            default_font_family(),
+            FontFamily::SansSerif,
+            "an App that declares no font gets the default, not the last App's"
+        );
+    }
+
+    /// Everything the application queues for the loop dies with the `App` that
+    /// queued it: the next one starts on an empty outbox, not on work aimed at
+    /// a tree that no longer exists.
+    #[test]
+    fn nothing_the_last_app_queued_survives_its_drop() {
+        create_root_owner();
+        let mut app = App::new();
+
+        let widget = app
+            .tree
+            .register(Box::new(crate::widgets::container()) as Box<dyn Widget>);
+        request_job(widget, JobRequest::Paint);
+        crate::surface::spawn_surface(crate::surface::SurfaceConfig::new(), || {
+            crate::widgets::container()
+        });
+        clipboard_copy("a secret");
+        create_widget_ref().focus();
+        crate::session_lock::unlock_session();
+
+        assert!(has_pending_jobs(), "the App under test has work to forget");
+
+        drop(app);
+
+        assert!(!has_pending_jobs(), "a job is still aimed at the old tree");
+        assert!(
+            drain_surface_commands().is_empty(),
+            "the loop would open a surface the old App asked for"
+        );
+        assert_eq!(
+            clipboard_paste(),
+            None,
+            "the next App would paste the last one's copy"
+        );
+        with_app_state(|app| {
+            assert!(
+                app.pending_focus.borrow().is_none(),
+                "a focus request outlived the widget it named"
+            );
+            assert!(
+                app.lock_request.is_empty(),
+                "the next App would answer a lock question it was never asked"
+            );
+        });
     }
 }
 
@@ -2741,20 +2797,22 @@ mod exclusive_zone_resync_tests {
 
 #[cfg(test)]
 mod font_registry_tests {
+    use super::*;
+
     /// An app that reloads its config calls load_font again on every run.
     /// Without dedup each run kept another copy of the same bytes.
     #[test]
     fn loading_the_same_font_twice_registers_it_once() {
         let font = vec![7u8; 64];
         super::load_font(font.clone());
-        let after_first = super::CUSTOM_FONTS.with(|f| f.borrow().len());
+        let after_first = with_app_state(|app| app.custom_fonts.borrow().len());
         super::load_font(font);
-        let after_second = super::CUSTOM_FONTS.with(|f| f.borrow().len());
+        let after_second = with_app_state(|app| app.custom_fonts.borrow().len());
         assert_eq!(after_first, after_second);
 
         super::load_font(vec![9u8; 64]);
         assert_eq!(
-            super::CUSTOM_FONTS.with(|f| f.borrow().len()),
+            with_app_state(|app| app.custom_fonts.borrow().len()),
             after_second + 1,
             "a different font must still register"
         );

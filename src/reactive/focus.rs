@@ -22,10 +22,9 @@
 //! focus change, not just the two on the path — but it is bounded by a rare
 //! declaration, and it is what lets a focus change reach a descendant's text.
 
-use std::cell::RefCell;
-
 use smallvec::SmallVec;
 
+use crate::app_state::with_app_state;
 use crate::jobs::{JobRequest, request_job};
 use crate::reactive::global::GlobalSignal;
 use crate::reactive::signal::RwSignal;
@@ -109,15 +108,6 @@ pub fn request_focus(tree: &Tree, id: WidgetId) {
     request_job(id, JobRequest::Paint);
 }
 
-thread_local! {
-    /// A focus request from application code, waiting for a tree.
-    ///
-    /// One slot, not a queue: two requests in the same frame are two answers to
-    /// "where should the keyboard be", and the last one is the one the caller
-    /// meant.
-    static PENDING: RefCell<Option<crate::widget_ref::WidgetRef>> = const { RefCell::new(None) };
-}
-
 /// Ask for the focus to move to whatever `widget_ref` names, on the next frame.
 ///
 /// The caller has no tree — see
@@ -126,7 +116,7 @@ thread_local! {
 /// an id so that asking before the widget's first layout works: the id does not
 /// exist yet, and by the time the loop applies the request, it does.
 pub(crate) fn request_focus_deferred(widget_ref: crate::widget_ref::WidgetRef) {
-    PENDING.with(|pending| *pending.borrow_mut() = Some(widget_ref));
+    with_app_state(|app| *app.pending_focus.borrow_mut() = Some(widget_ref));
     // The loop may be blocked with nothing else to do, and a focus change is work.
     crate::jobs::wake_loop();
 }
@@ -137,7 +127,7 @@ pub(crate) fn request_focus_deferred(widget_ref: crate::widget_ref::WidgetRef) {
 /// Public for the same reason [`request_focus`] is: anything driving frames needs
 /// it, and it is only meaningful with a laid-out tree in hand.
 pub fn apply_pending_focus(tree: &Tree) {
-    let Some(widget_ref) = PENDING.with(|pending| *pending.borrow()) else {
+    let Some(widget_ref) = with_app_state(|app| *app.pending_focus.borrow()) else {
         return;
     };
     // One read of the handle, three outcomes. A request whose ref died with
@@ -147,10 +137,10 @@ pub fn apply_pending_focus(tree: &Tree) {
     // tree *yet* stays parked: that is the ordinary shape of `focus()` from a
     // startup effect. One that names a widget applies.
     match widget_ref.attachment() {
-        Attachment::Gone => PENDING.with(|pending| *pending.borrow_mut() = None),
+        Attachment::Gone => with_app_state(|app| *app.pending_focus.borrow_mut() = None),
         Attachment::Unattached => {}
         Attachment::To(id) => {
-            PENDING.with(|pending| *pending.borrow_mut() = None);
+            with_app_state(|app| *app.pending_focus.borrow_mut() = None);
             request_focus(tree, id);
         }
     }
@@ -165,17 +155,12 @@ pub fn apply_pending_focus(tree: &Tree) {
 /// left parked it would fire at whatever takes that ref next, stealing the
 /// keyboard from wherever the user had put it.
 pub(crate) fn drop_pending_focus_for(widget_ref: crate::widget_ref::WidgetRef) {
-    PENDING.with(|pending| {
-        let mut pending = pending.borrow_mut();
+    with_app_state(|app| {
+        let mut pending = app.pending_focus.borrow_mut();
         if *pending == Some(widget_ref) {
             *pending = None;
         }
     });
-}
-
-/// Drop any parked request. Called during `App::drop()`.
-pub(crate) fn reset_pending_focus() {
-    PENDING.with(|pending| *pending.borrow_mut() = None);
 }
 
 /// Release keyboard focus from a widget.
@@ -275,7 +260,7 @@ mod tests {
         crate::widget_ref::update_widget_refs(&tree);
 
         assert!(
-            PENDING.with(|pending| pending.borrow().is_none()),
+            with_app_state(|app| app.pending_focus.borrow().is_none()),
             "a request for a widget that has left does not wait for its ref to be reused"
         );
     }
@@ -297,7 +282,7 @@ mod tests {
         apply_pending_focus(&tree);
 
         assert!(
-            PENDING.with(|pending| pending.borrow().is_none()),
+            with_app_state(|app| app.pending_focus.borrow().is_none()),
             "a request that can never be honoured does not stay parked"
         );
     }
