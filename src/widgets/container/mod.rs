@@ -2,6 +2,7 @@
 
 mod anim_bridge;
 mod animated_properties;
+pub(in crate::widgets::container) use animated_properties::{AnimKind, AnimSlot, ContainerAnims};
 mod animations;
 mod box_model;
 mod interaction;
@@ -23,7 +24,6 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::advance_anim;
 use crate::animation::{Animatable, IntoAnimated, Motion};
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
@@ -200,26 +200,6 @@ pub(super) struct TransformProps {
     pub(super) rotate: Option<Signal<f32>>,
     pub(super) scale: Option<Signal<Scale>>,
     pub(super) pivot: Option<Signal<Pivot>>,
-}
-
-/// Boxed animation states. Only allocated when a declared value arrives
-/// carrying a motion, which is what keeps them off a `Container` that declares
-/// none: the struct measures ~2.4KB, and `AnimationState<Shadow>` is the
-/// largest slot in it at 296 bytes — four copies of a 32-byte value with no
-/// niche to pack the `Option` into.
-#[derive(Default)]
-pub(super) struct ContainerAnims {
-    pub(super) width: Option<AnimationState<f32>>,
-    pub(super) height: Option<AnimationState<f32>>,
-    pub(super) background: Option<AnimationState<Color>>,
-    pub(super) corners: Option<AnimationState<crate::widgets::Corners>>,
-    pub(super) shadow: Option<AnimationState<Shadow>>,
-    pub(super) padding: Option<AnimationState<Padding>>,
-    pub(super) border_width: Option<AnimationState<f32>>,
-    pub(super) border_color: Option<AnimationState<Color>>,
-    pub(super) translate: Option<AnimationState<Translate>>,
-    pub(super) rotate: Option<AnimationState<f32>>,
-    pub(super) scale: Option<AnimationState<Scale>>,
 }
 
 bitflags::bitflags! {
@@ -661,7 +641,10 @@ impl Container {
     /// - `padding(signal)` or `padding(move || ...)` — reactive
     /// - `padding(8.0.transition(200.0))` — eased instead of jumped to
     pub fn padding<M>(mut self, value: impl IntoAnimated<Padding, M>) -> Self {
-        self.padding = Some(declare(&mut self.anims, value, |a| &mut a.padding));
+        self.padding = Some(animated_properties::declare::padding(
+            &mut self.anims,
+            value,
+        ));
         self
     }
 
@@ -684,7 +667,10 @@ impl Container {
     /// container().background(theme.surface.timeline(flash().played_by(errors)));
     /// ```
     pub fn background<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
-        self.background = Some(declare(&mut self.anims, color, |a| &mut a.background));
+        self.background = Some(animated_properties::declare::background(
+            &mut self.anims,
+            color,
+        ));
         self
     }
 
@@ -717,7 +703,10 @@ impl Container {
     /// and the formula that draws it (and the one that answers a click) is a
     /// different one. Within a family it is continuous.
     pub fn corners<M>(mut self, corners: impl IntoAnimated<crate::widgets::Corners, M>) -> Self {
-        self.corners = Some(declare(&mut self.anims, corners, |a| &mut a.corners));
+        self.corners = Some(animated_properties::declare::corners(
+            &mut self.anims,
+            corners,
+        ));
         self
     }
 
@@ -858,8 +847,14 @@ impl Container {
         width: impl IntoAnimated<f32, M1>,
         color: impl IntoAnimated<Color, M2>,
     ) -> Self {
-        self.border_width = Some(declare(&mut self.anims, width, |a| &mut a.border_width));
-        self.border_color = Some(declare(&mut self.anims, color, |a| &mut a.border_color));
+        self.border_width = Some(animated_properties::declare::border_width(
+            &mut self.anims,
+            width,
+        ));
+        self.border_color = Some(animated_properties::declare::border_color(
+            &mut self.anims,
+            color,
+        ));
         self
     }
 
@@ -893,14 +888,17 @@ impl Container {
     /// jumping. A size follows the content it holds as well as the length
     /// declared here, so the animation is over the resolved extent.
     pub fn width<M>(mut self, width: impl IntoAnimated<Length, M>) -> Self {
-        self.width = Some(declare_size(&mut self.anims, width, |a| &mut a.width));
+        self.width = Some(animated_properties::declare::width(&mut self.anims, width));
         self
     }
 
     /// Set the height of the container. Eases the same way
     /// [`width`](Self::width) does.
     pub fn height<M>(mut self, height: impl IntoAnimated<Length, M>) -> Self {
-        self.height = Some(declare_size(&mut self.anims, height, |a| &mut a.height));
+        self.height = Some(animated_properties::declare::height(
+            &mut self.anims,
+            height,
+        ));
         self
     }
 
@@ -1104,7 +1102,10 @@ impl Container {
     ///     .when_hovered(|s| s.shadow(LIFTED));
     /// ```
     pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
-        self.shadow = Some(declare(&mut self.anims, shadow, |a| &mut a.shadow));
+        self.shadow = Some(animated_properties::declare::shadow(
+            &mut self.anims,
+            shadow,
+        ));
         self
     }
 
@@ -1129,7 +1130,7 @@ impl Container {
     /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)));
     /// ```
     pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
-        let signal = declare(&mut self.anims, t, |a| &mut a.translate);
+        let signal = animated_properties::declare::translate(&mut self.anims, t);
         self.transform_mut().translate = Some(signal);
         self
     }
@@ -1164,7 +1165,7 @@ impl Container {
     /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
     /// use one curve both ways.
     pub fn rotate<M>(mut self, degrees: impl IntoAnimated<f32, M>) -> Self {
-        let signal = declare(&mut self.anims, degrees, |a| &mut a.rotate);
+        let signal = animated_properties::declare::rotate(&mut self.anims, degrees);
         self.transform_mut().rotate = Some(signal);
         self
     }
@@ -1185,7 +1186,7 @@ impl Container {
     /// container().scale(Scale::NONE.timeline(pulse().played_by(beats)));
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
-        let signal = declare(&mut self.anims, factor, |a| &mut a.scale);
+        let signal = animated_properties::declare::scale(&mut self.anims, factor);
         self.transform_mut().scale = Some(signal);
         self
     }
@@ -1336,163 +1337,7 @@ impl Widget for Container {
         // own a few microseconds later than the rest.
         let now = tree.frame_instant();
 
-        #[allow(clippy::unnecessary_unwrap)]
-        // Intentional: compute targets with &self before &mut borrow
-        if self.anims.is_some() {
-            // Compute targets before borrowing anims mutably (&self methods conflict
-            // with &mut self.anims). Skipped entirely for the majority of non-animated
-            // containers since self.anims is None.
-            //
-            // A snapshot on purpose: this pass consumes the target, it does not
-            // subscribe to it. The subscriptions for these very properties are
-            // established by `seed_animations` at the first layout and refreshed
-            // by `resync_animation_targets` at every paint, both under an
-            // Animation tracking scope — see anim_bridge.rs. Without saying so,
-            // the debug diagnostic reports each of these reads as a value that
-            // "will not update", which is the opposite of true and trains the
-            // reader to ignore a warning that is usually right.
-            // Which of the three are actually animated, read before the
-            // mutable borrow below. `anims` is `Some` — the block is guarded
-            // on it and unwraps it two statements down.
-            // *Animated*, which is a narrower question than the one
-            // `animated_transform` asks under three names that look the same:
-            // there a component counts if anything could move it, here only if
-            // there is an animation to aim.
-            let declared = self.anims.as_ref().expect("guarded above");
-            let (animates_translate, animates_rotate, animates_scale) = (
-                declared.translate.is_some(),
-                declared.rotate.is_some(),
-                declared.scale.is_some(),
-            );
-            let (
-                padding_target,
-                border_width_target,
-                bg_target,
-                corners_target,
-                shadow_target,
-                border_color_target,
-                translate_target,
-                rotate_target,
-                scale_target,
-            ) = crate::reactive::diagnostics::snapshot_zone(|| {
-                (
-                    self.effective_padding_target(id),
-                    self.effective_border_width_target(id),
-                    self.effective_background_target(id),
-                    self.effective_corners_target(id),
-                    self.effective_shadow_target(id),
-                    self.effective_border_color_target(id),
-                    // Only where there is an animation to aim: each of these
-                    // walks the state layers, and all three used to run for a
-                    // container that animates nothing but its background. The
-                    // neutral value where there is not, rather than an
-                    // `Option` the macro would have to unwrap against an
-                    // invariant stated only in prose.
-                    if animates_translate {
-                        self.effective_translate_target(id)
-                    } else {
-                        Translate::NONE
-                    },
-                    if animates_rotate {
-                        self.effective_rotate_target(id)
-                    } else {
-                        0.0
-                    },
-                    if animates_scale {
-                        self.effective_scale_target(id)
-                    } else {
-                        Scale::NONE
-                    },
-                )
-            });
-            let anims = self.anims.as_mut().unwrap();
-
-            // A trigger that has moved starts the sequence, before the frame
-            // that will show its first value. The read is a snapshot: the
-            // subscription belongs to `resync_animation_targets`, which asks
-            // the same question inside its tracking scope.
-            macro_rules! start_timeline {
-                ($field:ident) => {
-                    if let Some(anim) = anims.$field.as_mut()
-                        && anim.take_play()
-                    {
-                        anim.play(now);
-                    }
-                };
-            }
-            // Every property that can carry one, not the three transform
-            // components a timeline used to be limited to. Width and height
-            // are the only pair left out, and they are left out by
-            // construction: they declare a `Length`, and `Keyframes<Length>`
-            // has no constructor.
-            crate::reactive::diagnostics::snapshot_zone(|| {
-                start_timeline!(padding);
-                start_timeline!(border_width);
-                start_timeline!(background);
-                start_timeline!(corners);
-                start_timeline!(shadow);
-                start_timeline!(border_color);
-                start_timeline!(translate);
-                start_timeline!(rotate);
-                start_timeline!(scale);
-            });
-
-            // Layout-affecting animations: width, height, padding
-            advance_anim!(anims, width, id, any_animating, now, layout);
-            advance_anim!(anims, height, id, any_animating, now, layout);
-            advance_anim!(
-                anims,
-                padding,
-                padding_target,
-                id,
-                any_animating,
-                now,
-                layout
-            );
-
-            // Paint-only animations: border_width, background, corners,
-            // border_color, and the three transform components
-            advance_anim!(
-                anims,
-                border_width,
-                border_width_target,
-                id,
-                any_animating,
-                now,
-                paint
-            );
-            advance_anim!(anims, background, bg_target, id, any_animating, now, paint);
-            advance_anim!(
-                anims,
-                corners,
-                corners_target,
-                id,
-                any_animating,
-                now,
-                paint
-            );
-            advance_anim!(anims, shadow, shadow_target, id, any_animating, now, paint);
-            advance_anim!(
-                anims,
-                border_color,
-                border_color_target,
-                id,
-                any_animating,
-                now,
-                paint
-            );
-            advance_anim!(
-                anims,
-                translate,
-                translate_target,
-                id,
-                any_animating,
-                now,
-                paint
-            );
-            advance_anim!(anims, rotate, rotate_target, id, any_animating, now, paint);
-            advance_anim!(anims, scale, scale_target, id, any_animating, now, paint);
-        }
+        any_animating |= self.advance_declared_animations(id, now);
 
         // Advance ripple animation
         if let Some(ref mut ix) = self.interaction
@@ -1528,7 +1373,8 @@ impl Widget for Container {
         }
 
         // Note: No final Animation push needed here - each animation source
-        // (advance_anim! macro, ripple, kinetic scroll) handles its own continuation
+        // (the declared animations, the ripple, the kinetic scroll) handles its
+        // own continuation
 
         any_animating
     }
@@ -2067,31 +1913,64 @@ fn sorted_axis(tree: &Tree, children: &[WidgetId]) -> Option<Axis> {
 /// never two declarations for one property to reconcile, only the one written
 /// last.
 ///
-/// The animation is seeded from the signal's value at builder time, and that
-/// seed is replaced at the first layout by `seed_animations`, which reads the
-/// signal rather than this snapshot. Padding and border width used to be the
-/// exception, read there only for their subscription — which left them the two
-/// properties `is_initial()` was never false for, and so the two the drift
-/// check in `resync_animation_targets` could never speak for.
+/// The animation is seeded from the signal's value at builder time — see
+/// [`install`], which is where that seed and its replacement are argued.
 pub(crate) fn declare<A: Default, T: Animatable, M>(
     anims: &mut Option<Box<A>>,
     value: impl IntoAnimated<T, M>,
     slot: impl FnOnce(&mut A) -> &mut Option<AnimationState<T>>,
 ) -> Signal<T> {
-    let (signal, motion) = value.into_animated().into_parts();
-    let installed = motion.map(|motion| {
-        let seed = signal.get_untracked();
-        match *motion {
-            Motion::Ease { config, enter_from } => {
-                AnimationState::new(seed, config).with_enter_from(enter_from)
-            }
-            Motion::Play { keyframes } => {
-                AnimationState::new(seed, instant_transition()).with_timeline(keyframes)
-            }
-        }
-    });
-    write_slot(anims, slot, installed);
+    let (signal, installed) = declared_motion(value);
+    match anims.as_deref_mut() {
+        Some(anims) => *slot(anims) = installed,
+        None if installed.is_some() => *slot(anims.get_or_insert_with(Box::default)) = installed,
+        None => {}
+    }
     signal
+}
+
+/// The same for a `Container`, which keeps a slot per *declaration* rather
+/// than a field per property — so a property nobody gave a motion to costs
+/// nothing, and one whose motion is taken away leaves nothing behind.
+///
+/// Reached through `animated_properties::declare`, which is one function per
+/// row: the kind and the variant are paired there rather than at the setter.
+pub(crate) fn declare_anim<T: Animatable, M>(
+    anims: &mut Option<Box<ContainerAnims>>,
+    value: impl IntoAnimated<T, M>,
+    kind: AnimKind,
+    into_slot: fn(AnimationState<T>) -> AnimSlot,
+) -> Signal<T> {
+    let (signal, installed) = declared_motion(value);
+    put(anims, kind, into_slot, installed);
+    signal
+}
+
+/// The signal a declaration keeps, and the animation its motion asks for.
+fn declared_motion<T: Animatable, M>(
+    value: impl IntoAnimated<T, M>,
+) -> (Signal<T>, Option<AnimationState<T>>) {
+    let (signal, motion) = value.into_animated().into_parts();
+    let installed = motion.map(|motion| install(signal.get_untracked(), *motion));
+    (signal, installed)
+}
+
+/// The animation a motion asks for, seeded with the value declared beside it.
+///
+/// That seed is replaced at the first layout by `seed_animations`, which reads
+/// the signal rather than this snapshot. Padding and border width used to be
+/// the exception, read there only for their subscription — which left them the
+/// two properties `is_initial()` was never false for, and so the two the drift
+/// check in `resync_animation_targets` could never speak for.
+fn install<T: Animatable>(seed: T, motion: Motion<T>) -> AnimationState<T> {
+    match motion {
+        Motion::Ease { config, enter_from } => {
+            AnimationState::new(seed, config).with_enter_from(enter_from)
+        }
+        Motion::Play { keyframes } => {
+            AnimationState::new(seed, instant_transition()).with_timeline(keyframes)
+        }
+    }
 }
 
 /// Put an animation, or the absence of one, where the property keeps it.
@@ -2099,15 +1978,17 @@ pub(crate) fn declare<A: Default, T: Animatable, M>(
 /// Nothing into a container that has no animation box is the overwhelmingly
 /// common case — every plain `background(RED)` — so it must not be the thing
 /// that allocates one.
-fn write_slot<A: Default, T: Animatable>(
-    anims: &mut Option<Box<A>>,
-    slot: impl FnOnce(&mut A) -> &mut Option<AnimationState<T>>,
+fn put<T: Animatable>(
+    anims: &mut Option<Box<ContainerAnims>>,
+    kind: AnimKind,
+    into_slot: fn(AnimationState<T>) -> AnimSlot,
     installed: Option<AnimationState<T>>,
 ) {
-    match anims.as_deref_mut() {
-        Some(anims) => *slot(anims) = installed,
-        None if installed.is_some() => *slot(anims.get_or_insert_with(Box::default)) = installed,
-        None => {}
+    match (anims.as_deref_mut(), installed) {
+        (Some(anims), Some(anim)) => anims.set(into_slot(anim)),
+        (Some(anims), None) => anims.clear(kind),
+        (None, Some(anim)) => anims.get_or_insert_with(Box::default).set(into_slot(anim)),
+        (None, None) => {}
     }
 }
 
@@ -2121,17 +2002,23 @@ fn write_slot<A: Default, T: Animatable>(
 fn declare_size<M>(
     anims: &mut Option<Box<ContainerAnims>>,
     value: impl IntoAnimated<Length, M>,
-    slot: impl FnOnce(&mut ContainerAnims) -> &mut Option<AnimationState<f32>>,
+    kind: AnimKind,
+    into_slot: fn(AnimationState<f32>) -> AnimSlot,
 ) -> Signal<Length> {
     let (signal, ease) = value.into_animated().into_eased();
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
     let resolved = |length: Length| length.exact.or(length.min).unwrap_or(0.0);
     let installed = ease.map(|(config, enter_from)| {
-        AnimationState::new(resolved(signal.get_untracked()), config)
-            .with_enter_from(enter_from.map(resolved))
+        install(
+            resolved(signal.get_untracked()),
+            Motion::Ease {
+                config,
+                enter_from: enter_from.map(resolved),
+            },
+        )
     });
-    write_slot(anims, slot, installed);
+    put(anims, kind, into_slot, installed);
     signal
 }
 

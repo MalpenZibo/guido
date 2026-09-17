@@ -61,10 +61,10 @@ impl Container {
     pub(super) fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
         // A layout-affecting animation re-sizes the container every frame, so
         // the parent has to keep repositioning its siblings: not a boundary.
-        let has_active_layout_anim = self.anims.as_ref().is_some_and(|a| {
-            a.width.as_ref().is_some_and(|x| x.is_animating())
-                || a.height.as_ref().is_some_and(|x| x.is_animating())
-                || a.padding.as_ref().is_some_and(|x| x.is_animating())
+        let has_active_layout_anim = self.anims.as_deref().is_some_and(|declared| {
+            declared
+                .slots()
+                .any(|slot| slot.moves_the_box() && slot.is_animating())
         });
         if has_active_layout_anim {
             return false;
@@ -163,12 +163,12 @@ impl Container {
     ) -> ChildLayout {
         let padding = lengths.padding;
         let layout_width = self.animated_extent(
-            self.anims.as_ref().and_then(|a| a.width.as_ref()),
+            self.anims.as_ref().and_then(|a| a.width()),
             &lengths.width,
             constraints.max_width,
         );
         let layout_height = self.animated_extent(
-            self.anims.as_ref().and_then(|a| a.height.as_ref()),
+            self.anims.as_ref().and_then(|a| a.height()),
             &lengths.height,
             constraints.max_height,
         );
@@ -291,8 +291,8 @@ impl Container {
         parent_max: f32,
     ) -> f32 {
         let anim = self.anims.as_ref().and_then(|a| match axis {
-            Axis::Horizontal => a.width.as_ref(),
-            Axis::Vertical => a.height.as_ref(),
+            Axis::Horizontal => a.width(),
+            Axis::Vertical => a.height(),
         });
         let animating = anim.is_some_and(|a| a.is_animating());
         let has_exact = length.exact.is_some();

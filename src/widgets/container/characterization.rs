@@ -1297,7 +1297,7 @@ fn a_shadow_alone_is_an_animated_property_on_both_lists() {
     assert!(
         container()
             .shadow(Shadow::none().transition(t()))
-            .has_signal_animated_props(),
+            .follows_a_signal_anywhere(),
         "a shadow animation mirrors a signal, so it re-syncs at paint"
     );
 }
@@ -1356,25 +1356,25 @@ fn each_animated_transform_component_is_a_signal_animated_prop() {
     assert!(
         container()
             .translate(Translate::NONE.transition(t()))
-            .has_signal_animated_props(),
+            .follows_a_signal_anywhere(),
         "a translate animation mirrors a signal, so it re-syncs at paint"
     );
     assert!(
         container()
             .rotate(0.0.transition(t()))
-            .has_signal_animated_props(),
+            .follows_a_signal_anywhere(),
         "and a rotate"
     );
     assert!(
         container()
             .scale(Scale::NONE.transition(t()))
-            .has_signal_animated_props(),
+            .follows_a_signal_anywhere(),
         "and a scale"
     );
     assert!(
         !container()
             .width(0.0.transition(t()))
-            .has_signal_animated_props(),
+            .follows_a_signal_anywhere(),
         "a width follows the content it measured, and is retargeted at layout"
     );
 }
@@ -2042,6 +2042,17 @@ fn a_transition_on_the_value_is_what_makes_that_value_ease() {
     );
 }
 
+/// Whether anything this container declared reads its own target from a
+/// signal — the question `resync_animation_targets` opens with, asked of a
+/// container a test has just built.
+impl Container {
+    fn follows_a_signal_anywhere(&self) -> bool {
+        self.anims
+            .as_deref()
+            .is_some_and(|declared| declared.slots().any(AnimSlot::follows_a_signal))
+    }
+}
+
 /// A container that declares no motion carries no animation box.
 ///
 /// `ContainerAnims` holds eleven `AnimationState`s and is boxed precisely so
@@ -2068,9 +2079,46 @@ fn declaring_no_motion_allocates_no_animation_box() {
             .background(Color::RED.transition(200.0))
             .background(Color::BLUE)
             .anims
-            .as_ref()
-            .is_some_and(|a| a.background.is_none()),
+            .as_deref()
+            .is_some_and(|a| a.background().is_none()),
         "restating it plainly empties the slot rather than the box"
+    );
+}
+
+/// A container pays for the animations it declared, not for the eleven it
+/// could have.
+///
+/// The struct of eleven `Option<AnimationState<T>>`s this replaced measured
+/// 2464 bytes, allocated whole the moment one property carried a motion — and
+/// `.when_hovered(|s| s.lighter(0.1))` is that moment on most buttons. A slot
+/// is the size of the largest animation there is, so one of them is what one
+/// declaration costs.
+#[test]
+fn a_container_carries_one_slot_per_declared_animation() {
+    let one = container().background(Color::RED.transition(200.0));
+    assert_eq!(
+        one.anims.as_deref().map(ContainerAnims::declared_count),
+        Some(1),
+        "one motion is one slot"
+    );
+
+    let two = container()
+        .background(Color::RED.transition(200.0))
+        .rotate(0.0.transition(200.0));
+    assert_eq!(
+        two.anims.as_deref().map(ContainerAnims::declared_count),
+        Some(2),
+        "and a second is a second"
+    );
+
+    // Two slots and the vector's own length: what the store is, rather than a
+    // ceiling generous enough for a slot to grow by half and still pass.
+    assert!(
+        std::mem::size_of::<ContainerAnims>()
+            <= 2 * std::mem::size_of::<AnimSlot>() + 2 * std::mem::size_of::<usize>(),
+        "the store is sized by what a container declares, not by the eleven \
+         properties it could declare: {} bytes",
+        std::mem::size_of::<ContainerAnims>()
     );
 }
 
@@ -5704,6 +5752,27 @@ fn turned_degrees(node: &RenderNode) -> f32 {
     m[3].atan2(m[0]).to_degrees()
 }
 
+/// The jobs a write queues anywhere in the tree, rather than on the root.
+///
+/// The per-property tests declare some properties on a child — a transform is
+/// read off the matrix its parent wrote — so the widget that asks for the
+/// frame is not always the root. What is asserted of every property is that
+/// the write asks *somebody* for one: a declared value's only subscription is
+/// the read the drift check makes of it, and without that read the write
+/// reaches the next frame somebody else happened to want.
+fn jobs_anywhere(h: &mut H, write: impl FnOnce()) -> Vec<JobType> {
+    h.drain_jobs();
+    write();
+    let roots = h.roots();
+    jobs::distribute_jobs(&h.tree, &roots);
+    let drained = jobs::drain_surface_jobs(h.root);
+    let mut types: Vec<JobType> = drained.iter().map(|job| job.job_type).collect();
+    types.sort_by_key(|t| format!("{t:?}"));
+    types.dedup();
+    jobs::recycle_job_buffer(drained);
+    types
+}
+
 /// Run frames from `start` up to and including `start + span`, sixty a second,
 /// and read the probe off the last one.
 ///
@@ -5724,16 +5793,31 @@ fn run_to(
     probe(h)
 }
 
+/// What a write underneath a property has to have queued.
+///
+/// A property that reads its own target is woken by the drift check's read of
+/// it, which is an Animation job. A size is woken by the layout that tracks
+/// the length it was declared with, and the Animation job follows from the
+/// retarget that layout performs.
+macro_rules! woken_by {
+    (none, $queued:expr) => {
+        !$queued.is_empty()
+    };
+    ($target:ident, $queued:expr) => {
+        $queued.contains(&JobType::Animation)
+    };
+}
+
 /// The timeline half, for the rows that can carry one.
 ///
 /// `width` and `height` cannot, and are not asked to: they declare a `Length`
 /// and animate the `f32` inside it, so `Keyframes<Length>` has no constructor
-/// to build. That is the one place the two facts a row states are not enough
-/// on their own, and a row says it by having no target of its own to read.
+/// to build. Their rows say `timeline: no`, which is a fact of its own rather
+/// than one inferred from their having no target to read.
 macro_rules! emit_timeline_test {
-    (none, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr, $to:expr,
+    (no, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr, $to:expr,
         $base:expr) => {};
-    ($target:ident, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr,
+    (yes, $name:ident, $value:expr, $declared_as:expr, $probe:expr, $from:expr,
         $to:expr, $base:expr) => {
         /// A sequence plays when its trigger moves, and is halfway through at
         /// half its duration.
@@ -5773,6 +5857,17 @@ macro_rules! emit_timeline_test {
                  wanted {midpoint}",
                 stringify!($name),
             );
+
+            // And a trigger moving is what asks for the frame the sequence
+            // plays on: the drift check reads it, and nothing else does. Last,
+            // because reading the queue drains it.
+            let queued = jobs_anywhere(&mut h, || plays.set(2));
+            assert!(
+                queued.contains(&JobType::Animation),
+                "{}: a play has to wake the container that would show it, got \
+                 {queued:?}",
+                stringify!($name),
+            );
         }
     };
 }
@@ -5783,14 +5878,16 @@ macro_rules! emit_timeline_test {
 /// Four things have to hold for each of them, and each is a different one of
 /// the sites the table generates: it **enters** from where it was declared to
 /// (the seed), it is **halfway at half the duration** (the advance), a write
-/// underneath it is **adopted** (the drift check and the retarget), and the
-/// ease that follows lands **where the write sent it**.
+/// underneath it **wakes the container** (the drift check, which is the only
+/// subscription that write has), and the ease that follows lands **where the
+/// write sent it** (the retarget).
 ///
 /// Checked alone on its container, which is the shape the two shadow tests
 /// above had to be written by hand for: a `||` chain over nine slots drifts
 /// without a container that animates two things noticing.
 macro_rules! emit_property_tests {
-    ($($name:ident: $anim:ty = $decl:ty, target: $target:tt, layout: $layout:ident,
+    ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
+        timeline: $timeline:ident,
         test {
             value: $value:expr,
             declared_as: $declared_as:expr,
@@ -5842,8 +5939,8 @@ macro_rules! emit_property_tests {
                     );
 
                     // Settle, then move the signal underneath it. The write
-                    // lands between frames, which is the case the drift check
-                    // in `resync_animation_targets` exists for.
+                    // lands between frames, which is what the drift check in
+                    // `resync_animation_targets` subscribes for.
                     run_to(&mut h, t0, HALF * 2, probe);
                     declared.set($then);
                     let t1 = t0 + HALF * 4;
@@ -5857,10 +5954,22 @@ macro_rules! emit_property_tests {
                          got {adopted}, wanted {midpoint}",
                         stringify!($name),
                     );
+
+                    // And the write is what asks for the frame that adopts it:
+                    // the drift check's read of the target is the only
+                    // subscription a declared value has. Last, because reading
+                    // the queue drains it — the frames above need theirs.
+                    let queued = jobs_anywhere(&mut h, || declared.set($from));
+                    assert!(
+                        woken_by!($target, queued),
+                        "{}: a write underneath has to wake the container that \
+                         would show it, got {queued:?}",
+                        stringify!($name),
+                    );
                 }
 
                 emit_timeline_test!(
-                    $target, $name, $value, $declared_as, $probe, $from, $to, $base
+                    $timeline, $name, $value, $declared_as, $probe, $from, $to, $base
                 );
             }
         )*
@@ -5868,35 +5977,3 @@ macro_rules! emit_property_tests {
 }
 
 crate::widgets::container::animated_properties::animated_properties!(emit_property_tests);
-
-#[test]
-fn tmp_shadow_timeline() {
-    let plays = create_signal(0u32);
-    let mut h = H::new(
-        container()
-            .width(200.0)
-            .height(100.0)
-            .background(Color::RED)
-            .shadow(
-                Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK).timeline(
-                    Keyframes::new(100.0)
-                        .at(0.0, Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK))
-                        .at(1.0, Shadow::new((0.0, 0.0), 20.0, 0.0, Color::BLACK))
-                        .played_by(plays),
-                ),
-            ),
-    );
-    let t0 = std::time::Instant::now();
-    frame_at(&mut h, t0, 400.0, 400.0);
-    h.paint();
-    plays.set(1);
-    for ms in [100u64, 110, 150, 200] {
-        frame_at(
-            &mut h,
-            t0 + std::time::Duration::from_millis(ms),
-            400.0,
-            400.0,
-        );
-        println!("{ms} -> {:?}", painted_style(&h.paint()).3.map(|s| s.blur));
-    }
-}
