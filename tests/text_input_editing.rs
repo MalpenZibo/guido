@@ -186,7 +186,6 @@ impl Field {
     }
 
     /// Where the caret is drawn, if it is showing.
-    /// Where the caret is drawn, if it is showing.
     fn caret_x(&mut self) -> Option<f32> {
         self.caret().map(|c| c.x)
     }
@@ -315,6 +314,30 @@ fn backspace_at_the_start_and_delete_at_the_end_do_nothing() {
     field.key(Key::End);
     field.key(Key::Delete);
     assert_eq!(field.text(), "hi");
+
+    // Nor off the character count End goes to.
+    field.key(Key::End);
+    field.key(Key::Backspace);
+    assert_eq!(
+        field.text(),
+        "h",
+        "End landed short of the real end, so Backspace took the wrong character"
+    );
+}
+
+#[test]
+fn a_delete_with_nothing_in_front_of_it_leaves_nothing_to_undo() {
+    // A keystroke that changed nothing is not a step for Ctrl+Z to spend.
+    let mut field = Field::focused("");
+    field.type_text("a");
+    field.key(Key::Delete);
+
+    field.ctrl('z');
+    assert_eq!(
+        field.text(),
+        "",
+        "the undo was spent on a Delete that deleted nothing"
+    );
 }
 
 #[test]
@@ -512,6 +535,24 @@ fn a_delete_is_undoable_too() {
 
     field.ctrl('z');
     assert_eq!(field.text(), "hi");
+}
+
+#[test]
+fn an_undo_puts_the_caret_back_where_the_undone_edit_found_it() {
+    // Asked by typing: left at the end, the Y would follow the text.
+    let mut field = Field::focused("hello");
+    field.type_text("X");
+    field.key(Key::End);
+
+    field.ctrl('z');
+    assert_eq!(field.text(), "hello");
+
+    field.type_text("Y");
+    assert_eq!(
+        field.text(),
+        "Yhello",
+        "the undo restored the text and left the caret where the End put it"
+    );
 }
 
 #[test]
