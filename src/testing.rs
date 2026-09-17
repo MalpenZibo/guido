@@ -315,19 +315,20 @@ impl Headless {
     /// the frame that carries them opens — the same order the compositor's own
     /// events arrive in.
     pub fn click(&mut self, id: SurfaceId, x: f32, y: f32) {
-        self.click_at(id, x, y, Instant::now());
+        let now = Instant::now();
+        self.event_at(id, Event::mouse_down(x, y, MouseButton::Left), now);
+        self.event_at(id, Event::mouse_up(x, y, MouseButton::Left), now);
     }
 
-    /// [`click`](Self::click), at a moment you name — so a gesture can be
-    /// played through the application at the speed it is meant to have.
-    pub fn click_at(&mut self, id: SurfaceId, x: f32, y: f32, now: Instant) {
-        let surface = self.host.get_mut(id);
-        surface
-            .events
-            .push((now, Event::mouse_down(x, y, MouseButton::Left)));
-        surface
-            .events
-            .push((now, Event::mouse_up(x, y, MouseButton::Left)));
+    /// Queue any event for one surface, at a moment you name — so a gesture
+    /// can be played through the application at the speed it is meant to
+    /// have. A widget handed it reads that moment from
+    /// [`Tree::event_instant`](crate::tree::Tree::event_instant).
+    ///
+    /// Delivered by the next [`step`](Self::step), in the order queued, as
+    /// [`click`](Self::click)'s are.
+    pub fn event_at(&mut self, id: SurfaceId, event: Event, at: Instant) {
+        self.host.get_mut(id).events.push((at, event));
     }
 
     /// One frame: open it, route what is queued, measure, paint, present.

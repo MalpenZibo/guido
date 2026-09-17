@@ -12,8 +12,13 @@
 //! so a default `cargo test` still builds. With it, a machine that has no GPU
 //! adapter skips, unless `GUIDO_GPU_REQUIRED` says a skip is a failure.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use guido::prelude::*;
 use guido::testing::Headless;
+use guido::widget_prelude::*;
 
 /// A bar of the shape the acceptance criterion names: anchored to the top,
 /// reserving automatically, with something clickable in it.
@@ -691,5 +696,141 @@ fn a_declaration_inside_a_hole_is_an_island_in_it() {
     assert!(
         app.input_reaches(surface, 150.0, 40.0),
         "the bar around that"
+    );
+}
+
+/// A widget that writes down the moment each event it is handed happened, as
+/// the tree declared it.
+struct Stamps(Rc<RefCell<Vec<Instant>>>);
+
+impl Widget for Stamps {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        let size = Size::new(constraints.max_width, constraints.max_height);
+        tree.cache_layout(id, constraints, size);
+        size
+    }
+
+    fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut PaintContext) {}
+
+    fn event(&mut self, tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
+        self.0.borrow_mut().push(tree.event_instant().into_inner());
+        EventResponse::Handled
+    }
+}
+
+/// Two events queued at two moments arrive in one frame, each carrying its
+/// own. Both are in the past, so no clock the frame could read would answer
+/// with either: the widget can only have been told.
+#[test]
+fn each_queued_event_arrives_at_the_moment_it_was_queued_for() {
+    let Some(mut app) = headless() else { return };
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let spy = seen.clone();
+    let surface = app.surface(fixed_bar(), move || Stamps(spy));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let now = Instant::now();
+    let pressed = now - Duration::from_secs(2);
+    let released = now - Duration::from_secs(1);
+    app.event_at(
+        surface,
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        pressed,
+    );
+    app.event_at(
+        surface,
+        Event::mouse_up(10.0, 10.0, MouseButton::Left),
+        released,
+    );
+    app.step();
+
+    assert_eq!(*seen.borrow(), [pressed, released]);
+}
+
+/// A scroll area as tall as its surface, over content whose top 500px are one
+/// colour and the rest another — so where the edge between them is drawn says
+/// how far the content has moved.
+fn scroll_over_an_edge() -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+        .child(
+            container()
+                .layout(Flex::column())
+                .width(fill())
+                .child(
+                    container()
+                        .width(fill())
+                        .height(500.0)
+                        .background(Color::rgb(1.0, 0.0, 0.0)),
+                )
+                .child(
+                    container()
+                        .width(fill())
+                        .height(1500.0)
+                        .background(Color::rgb(0.0, 0.0, 1.0)),
+                ),
+        )
+}
+
+/// How far the content has scrolled, read off the frame: 500 less the first
+/// row drawn more blue than red. To the pixel, which is as fine as a frame
+/// can say it. Halved rather than walked, because every read copies the frame
+/// back from the device.
+fn scrolled(app: &Headless, surface: SurfaceId) -> f32 {
+    let blue = |y| {
+        let [r, _, b, _] = app.read_pixel(surface, 50, y);
+        b > r
+    };
+    assert!(!blue(0), "the edge has left the top of the surface");
+    let (mut above, mut below) = (0, 600);
+    while below - above > 1 {
+        let mid = (above + below) / 2;
+        if blue(mid) { below = mid } else { above = mid }
+    }
+    assert!(below < 600, "the edge has left the bottom of the surface");
+    500.0 - below as f32
+}
+
+/// A flick played through the application: six samples eight milliseconds
+/// apart, the finger lifted, then frames at sixty a second. The same shape
+/// `tests/scroll_momentum.rs` asserts on a tree, one layer up — through the
+/// routing, the frame's phases and the paint.
+#[test]
+fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(600)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        scroll_over_an_edge,
+    );
+    app.configure(surface, 100, 600, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    app.step_at(at);
+    let at_lift = scrolled(&app, surface);
+    assert_eq!(at_lift, 60.0, "the samples themselves moved the content");
+
+    for _ in 0..60 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    let coasted = scrolled(&app, surface) - at_lift;
+    assert!(
+        coasted > 10.0,
+        "the finger lifted after a 60px flick and the content coasted {coasted}px"
     );
 }
