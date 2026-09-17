@@ -59,6 +59,9 @@ struct RecordedSurface {
     /// Every derived region published, oldest first — the base a surface takes
     /// input in, and what the frame declared about it.
     input_requests: Vec<crate::region::InputRegionRequest>,
+    /// Every blur region the loop handed over, oldest first — an empty one is
+    /// a withdrawal, and is kept.
+    blur_regions: Vec<Vec<Rect>>,
     sizes_asked: Vec<(u32, u32)>,
     frame_callbacks: u32,
 }
@@ -130,6 +133,21 @@ impl Surface for &mut RecordedSurface {
         self.input_requests.push(request.clone());
     }
 
+    fn has_published_blur(&self) -> bool {
+        self.blur_regions
+            .last()
+            .is_some_and(|rects| !rects.is_empty())
+    }
+
+    fn sync_blur_region(&mut self, rects: Vec<crate::region::RegionRect>, _commit: bool) {
+        self.blur_regions.push(
+            rects
+                .iter()
+                .map(|r| Rect::new(r.x as f32, r.y as f32, r.width as f32, r.height as f32))
+                .collect(),
+        );
+    }
+
     fn request_frame_callback(&mut self) {
         self.frame_callbacks += 1;
     }
@@ -144,6 +162,12 @@ impl Platform for Recorder {
 
     fn surface(&mut self, id: SurfaceId) -> Option<&mut RecordedSurface> {
         self.surfaces.get_mut(&id)
+    }
+
+    /// A compositor with `ext-background-effect-v1`: without it the loop never
+    /// asks for a blur region, and the recorder would have nothing to keep.
+    fn supports_blur_region(&self) -> bool {
+        true
     }
 
     fn create_surface(&mut self, id: SurfaceId, config: &crate::surface::SurfaceConfig) {
@@ -433,6 +457,15 @@ impl Headless {
     /// that changes nothing must not add to this.
     pub fn input_regions_published(&self, id: SurfaceId) -> usize {
         self.host.get(id).input_requests.len()
+    }
+
+    /// Every blur region a surface was handed, oldest first, in logical
+    /// pixels. An empty one withdraws the last.
+    ///
+    /// Every call, not every change: a frame that repaints under an unchanged
+    /// blur hands it over again, and it is the platform that drops the repeat.
+    pub fn blur_regions_asked(&self, id: SurfaceId) -> &[Vec<Rect>] {
+        &self.host.get(id).blur_regions
     }
 
     /// The sizes a surface has asked for, oldest first.

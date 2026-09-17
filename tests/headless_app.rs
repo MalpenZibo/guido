@@ -834,3 +834,57 @@ fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
         "the finger lifted after a 60px flick and the content coasted {coasted}px"
     );
 }
+
+/// A child that asks the compositor to blur behind it while `on` says so, over
+/// a background that can be changed to make a frame repaint for another reason.
+fn blurring(on: RwSignal<bool>, tint: RwSignal<Color>) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .background(tint)
+        .child(container().width(80.0).height(20.0).backdrop_blur(move || {
+            let sources = if on.get() {
+                BackdropSources::COMPOSITOR
+            } else {
+                BackdropSources::empty()
+            };
+            BackdropBlur::new(0.0).sources(sources)
+        }))
+}
+
+/// The region is handed to the compositor, not only computed — every test of
+/// what a region contains stops at the command list. And a blur that goes away
+/// is withdrawn on the frame it went, with an empty region, and then nothing
+/// more is said however often the surface repaints.
+#[test]
+fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
+    let Some(mut app) = headless() else { return };
+    let on = create_signal(true);
+    let tint = create_signal(Color::BLACK);
+    let surface = app.surface(fixed_bar(), move || blurring(on, tint));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    assert_eq!(
+        app.blur_regions_asked(surface),
+        [vec![Rect::new(0.0, 0.0, 80.0, 20.0)]],
+        "the frame that blurs has to publish the region"
+    );
+
+    on.set(false);
+    app.step();
+    let asked = app.blur_regions_asked(surface);
+    assert_eq!(
+        asked.last(),
+        Some(&vec![]),
+        "the frame the blur went has to withdraw it"
+    );
+    let withdrawn = asked.len();
+
+    tint.set(Color::WHITE);
+    app.step();
+    assert_eq!(
+        app.blur_regions_asked(surface).len(),
+        withdrawn,
+        "a surface with nothing to blur and nothing published says nothing"
+    );
+}
