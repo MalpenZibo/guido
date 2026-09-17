@@ -125,6 +125,7 @@ every run for months.
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
 | API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 32% are `ignore`: samples that describe internals, or that cannot stand alone |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
+| new per-thread state — a `thread_local!` or a `static` `GlobalSignal` | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
 | the application above the compositor — a surface configuring, a frame opening, input routing, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
