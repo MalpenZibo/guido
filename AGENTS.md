@@ -180,7 +180,9 @@ noticed. That job builds the tests and not the sixty examples, which is what
 keeps it inside the runner's disk, and the price is the doc tests: a mutant only
 a doc test would have killed reports there as missed. It builds with every
 feature on and lavapipe as its adapter, as the rasterizer job does, so
-feature-gated code and the tests that need a GPU are watched there too. That job reports; it does not block, until somebody decides the
+feature-gated code and the tests that need a GPU are watched there too, and it
+is split across four runners that wait for the rasterizer job's green instead of
+each running the unmutated suite again. That job reports; it does not block, until somebody decides the
 ratchet is worth the friction.
 
 ## Where the rest of it is
