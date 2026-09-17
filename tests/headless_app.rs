@@ -194,6 +194,33 @@ fn a_surface_configured_taller_than_its_content_asks_to_shrink_to_it() {
     );
 }
 
+/// A content-sized surface is measured on every frame with layout to do, and a
+/// reservation the compositor already has is not sent again for it.
+#[test]
+fn a_reservation_that_did_not_move_is_not_sent_again() {
+    let Some(mut app) = headless() else { return };
+    let width = create_signal(40.0f32);
+    let bar = app.surface(content_bar(), move || {
+        container()
+            .height(24.0)
+            .child(container().width(move || width.get()).height(24.0))
+    });
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+    assert_eq!(app.exclusive_zones_asked(bar), [1, 24]);
+
+    for w in [60.0, 80.0, 100.0] {
+        width.set(w);
+        app.step();
+    }
+
+    assert_eq!(
+        app.exclusive_zones_asked(bar),
+        [1, 24],
+        "three frames re-measured a bar that stayed 24 tall, and resent 24 each time"
+    );
+}
+
 /// And the pixels: what the compositor would have been handed.
 ///
 /// The assertion is the surface's own background — the least interesting thing

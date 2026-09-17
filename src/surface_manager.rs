@@ -49,6 +49,11 @@ pub struct ManagedSurface {
     /// same rule: once, when it changes, and never for a surface whose tree has
     /// said nothing about input.
     pub input_region: Option<crate::region::InputRegionRequest>,
+    /// The reservation this surface last asked the compositor for, starting
+    /// with the one a layer surface is created with, so a number the compositor
+    /// already has is not sent again. Popups and lock surfaces carry one too and
+    /// never send it.
+    pub exclusive_zone: Option<i32>,
 }
 
 impl ManagedSurface {
@@ -62,6 +67,7 @@ impl ManagedSurface {
         tree: &mut Tree,
     ) -> Self {
         let config_input_region = config.input_region.clone();
+        let exclusive_zone = Some(crate::surface::initial_declaration(&config).exclusive_zone);
 
         // Register root widget - tree assigns the ID
         let widget_id = tree.register(widget);
@@ -83,6 +89,7 @@ impl ManagedSurface {
             command_layers: Vec::new(),
             input_base: config_input_region,
             input_region: None,
+            exclusive_zone,
         }
     }
 
