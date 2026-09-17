@@ -166,7 +166,7 @@ impl Container {
     /// re-lays out the container when it moves.
     pub(super) fn max_shadow_extent(&self, id: WidgetId) -> f32 {
         let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
-        let anim = self.anims.as_ref().and_then(|a| a.shadow.as_ref());
+        let anim = self.anims.as_ref().and_then(|a| a.shadow());
         let declared = self
             .interaction
             .iter()
@@ -210,13 +210,13 @@ impl Container {
         Moves {
             translate: declared.translate
                 || self.translate_signal().is_some()
-                || anims.is_some_and(|a| a.translate.is_some()),
+                || anims.is_some_and(|a| a.translate().is_some()),
             rotate: declared.rotate
                 || self.rotate_signal().is_some()
-                || anims.is_some_and(|a| a.rotate.is_some()),
+                || anims.is_some_and(|a| a.rotate().is_some()),
             scale: declared.scale
                 || self.scale_signal().is_some()
-                || anims.is_some_and(|a| a.scale.is_some()),
+                || anims.is_some_and(|a| a.scale().is_some()),
         }
     }
 
@@ -342,9 +342,9 @@ impl Container {
         // past whatever overshoot it had, is folded in flat.
         if let Some(anims) = anims {
             let overshoot = [
-                anims.translate.as_ref().map(|a| a.peak_overshoot()),
-                anims.rotate.as_ref().map(|a| a.peak_overshoot()),
-                anims.scale.as_ref().map(|a| a.peak_overshoot()),
+                anims.translate().map(|a| a.peak_overshoot()),
+                anims.rotate().map(|a| a.peak_overshoot()),
+                anims.scale().map(|a| a.peak_overshoot()),
             ]
             .into_iter()
             .flatten()
@@ -352,12 +352,9 @@ impl Container {
             reach *= 1.0 + overshoot;
 
             let flying = Transform::compose(
-                anims
-                    .translate
-                    .as_ref()
-                    .map_or(base_translate, |a| *a.current()),
-                anims.rotate.as_ref().map_or(base_rotate, |a| *a.current()),
-                anims.scale.as_ref().map_or(base_scale, |a| *a.current()),
+                anims.translate().map_or(base_translate, |a| *a.current()),
+                anims.rotate().map_or(base_rotate, |a| *a.current()),
+                anims.scale().map_or(base_scale, |a| *a.current()),
             );
             reach = reach.max(outset_of(flying, painted, bounds, pivot));
         }
@@ -400,36 +397,33 @@ impl Container {
     }
 
     pub(super) fn animated_padding(&self, id: WidgetId) -> Padding {
-        get_animated_value(self.anims.as_ref().and_then(|a| a.padding.as_ref()), || {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.padding()), || {
             self.effective_padding_target(id)
         })
     }
 
     pub(super) fn animated_background(&self, id: WidgetId) -> Color {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.background.as_ref()),
-            || self.effective_background_target(id),
-        )
+        get_animated_value(self.anims.as_ref().and_then(|a| a.background()), || {
+            self.effective_background_target(id)
+        })
     }
 
     pub(super) fn animated_corners(&self, id: WidgetId) -> crate::widgets::Corners {
-        get_animated_value(self.anims.as_ref().and_then(|a| a.corners.as_ref()), || {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.corners()), || {
             self.effective_corners_target(id)
         })
     }
 
     pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.border_width.as_ref()),
-            || self.effective_border_width_target(id),
-        )
+        get_animated_value(self.anims.as_ref().and_then(|a| a.border_width()), || {
+            self.effective_border_width_target(id)
+        })
     }
 
     pub(super) fn animated_border_color(&self, id: WidgetId) -> Color {
-        get_animated_value(
-            self.anims.as_ref().and_then(|a| a.border_color.as_ref()),
-            || self.effective_border_color_target(id),
-        )
+        get_animated_value(self.anims.as_ref().and_then(|a| a.border_color()), || {
+            self.effective_border_color_target(id)
+        })
     }
 
     /// The shadow to draw, never reaching further than the rect the layout
@@ -454,7 +448,7 @@ impl Container {
     /// making for the tip of a bounce nobody asked for. See
     /// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect`.
     pub(super) fn animated_shadow(&self, id: WidgetId) -> Shadow {
-        let anim = self.anims.as_ref().and_then(|a| a.shadow.as_ref());
+        let anim = self.anims.as_ref().and_then(|a| a.shadow());
         let shadow = get_animated_value(anim, || self.effective_shadow_target(id));
         match anim {
             Some(_) => shadow.shrunk_to(self.shadow_reach.get()),
@@ -500,21 +494,21 @@ impl Container {
         }
 
         let translate = if has_translate {
-            get_animated_value(anims.and_then(|a| a.translate.as_ref()), || {
+            get_animated_value(anims.and_then(|a| a.translate()), || {
                 self.effective_translate_target(id)
             })
         } else {
             Translate::NONE
         };
         let rotate = if has_rotate {
-            get_animated_value(anims.and_then(|a| a.rotate.as_ref()), || {
+            get_animated_value(anims.and_then(|a| a.rotate()), || {
                 self.effective_rotate_target(id)
             })
         } else {
             0.0
         };
         let scale = if has_scale {
-            get_animated_value(anims.and_then(|a| a.scale.as_ref()), || {
+            get_animated_value(anims.and_then(|a| a.scale()), || {
                 self.effective_scale_target(id)
             })
         } else {
@@ -527,39 +521,17 @@ impl Container {
     /// whether hovering or pressing needs an Animation job rather than a plain
     /// repaint.
     ///
-    /// `border_width` belongs here now that a state layer's border is declared
-    /// as a pair: `when_hovered(|s| s.border(14.0, GREEN))` moves the width as
-    /// well as the colour, and without it the enter queued no Animation job at
-    /// all. The spring then started a frame late, and only if something else had
-    /// forced that paint.
+    /// A border belongs here now that a state layer declares it as a pair:
+    /// `when_hovered(|s| s.border(14.0, GREEN))` moves the width as well as the
+    /// colour, and without the width the enter queued no Animation job at all.
+    /// The spring then started a frame late, and only if something else had
+    /// forced that paint. Both halves are in by construction now: a property
+    /// counts here when it follows a signal and does not move the box.
     pub(super) fn has_animated_state_properties(&self) -> bool {
-        self.anims.as_ref().is_some_and(|a| {
-            a.background.is_some()
-                || a.corners.is_some()
-                || a.shadow.is_some()
-                || a.border_width.is_some()
-                || a.border_color.is_some()
-                || a.translate.is_some()
-                || a.rotate.is_some()
-                || a.scale.is_some()
-        })
-    }
-
-    /// Whether any animation follows a signal-backed target, as opposed to
-    /// width/height whose targets are content-driven and recomputed at every
-    /// layout. These are the ones holding a copy of signal state, so they are
-    /// the ones needing the paint-time target re-sync.
-    pub(super) fn has_signal_animated_props(&self) -> bool {
-        self.anims.as_ref().is_some_and(|a| {
-            a.padding.is_some()
-                || a.border_width.is_some()
-                || a.background.is_some()
-                || a.corners.is_some()
-                || a.shadow.is_some()
-                || a.border_color.is_some()
-                || a.translate.is_some()
-                || a.rotate.is_some()
-                || a.scale.is_some()
+        self.anims.as_deref().is_some_and(|declared| {
+            declared
+                .slots()
+                .any(|slot| slot.follows_a_signal() && !slot.moves_the_box())
         })
     }
 }

@@ -236,8 +236,18 @@ Three rules the shape depends on, in order of how easily they are broken:
   `height` declare a `Length` and move an `f32` — so `width(w.timeline(..))`
   does not compile rather than compiling and playing nothing.
 
-A new animatable property adds its name to five lists that nothing keeps in
-step: `ContainerAnims`'s fields, `start_timeline!` and the `advance_anim!`
-block in `advance_animations`, the seed block in `seed_animations`, and the
-drift block in `resync_animation_targets`. Miss one and the property silently
-never plays, never wakes, or keeps whatever value the builder happened to see.
+A new animatable property is declared the way every property is — a field, a
+setter, and an `effective_*_target` that resolves it through the state layers
+— plus one row in `animated_properties!`
+(`src/widgets/container/animated_properties.rs`). The row
+states what it animates, the `&self` method that reads where it is heading —
+or `none` for `width` and `height`, whose target the layout supplies —
+whether moving it re-measures the box, and its own test recipe. Everything
+else is emitted from that: the store, the seed, the drift check, the advance,
+the timeline start, and the test that asks the property whether it enters,
+eases, adopts a write and plays.
+
+It used to be five lists, and was really nine. Missing one made the property
+silently never play, never wake, or keep whatever value the builder happened
+to see; two of those were found by tests written after the fact, and the rest
+by nobody.
