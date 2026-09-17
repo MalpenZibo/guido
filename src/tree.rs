@@ -1333,11 +1333,6 @@ impl Tree {
             })
     }
 
-    /// The constraints the running pass last laid this widget out under.
-    pub fn cached_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.dense[self.get_dense_index(id)?].cached[self.pass as usize].map(|e| e.constraints)
-    }
-
     /// The constraints a real layout last ran this widget under, whichever
     /// pass is asking.
     ///
@@ -2416,8 +2411,8 @@ mod clock_diagnostics {
 /// A parent used to call a child's `layout` itself, through
 /// `Tree::with_widget_mut`, so everything that should happen around every
 /// layout was left to each widget to remember — the skip check, the tracking
-/// scope, which pass is running, the cache write. [`layout_child`](Self::
-/// layout_child) is that call, once, for everybody.
+/// scope, which pass is running, the cache write.
+/// [`layout_child`](Self::layout_child) is that call, once, for everybody.
 pub struct LayoutCtx<'a> {
     tree: &'a mut Tree,
     id: WidgetId,
