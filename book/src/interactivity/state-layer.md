@@ -49,6 +49,10 @@ State layers can override these properties:
 # }
 ```
 
+On a container with a gradient, `lighter`, `darker` and `alpha` apply to both
+of its ends, and an explicit `background` replaces the gradient while the state
+is active.
+
 ### Border
 
 ```rust

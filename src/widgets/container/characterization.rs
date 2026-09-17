@@ -3235,6 +3235,76 @@ fn a_gradient_follows_the_signals_it_was_built_from() {
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::GREEN)));
 }
 
+/// A state layer's background overrides reach a gradient: `lighter`, `darker`
+/// and `alpha` apply to both ends, the way they apply to a solid fill.
+#[test]
+fn hovering_a_gradient_lightens_both_of_its_ends() {
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
+            .when_hovered(|s| s.lighter(0.1).alpha(0.5)),
+    );
+    h.fit(500.0, 500.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+
+    h.send(Event::mouse_move(25.0, 10.0));
+    assert_eq!(
+        gradient_ends(&h.paint()),
+        Some((
+            Color::RED.lighter(0.1).with_alpha(0.5),
+            Color::BLUE.lighter(0.1).with_alpha(0.5)
+        )),
+        "the hover resolved an override and the gradient drew its own colours"
+    );
+
+    h.send(Event::mouse_move(300.0, 10.0));
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+}
+
+/// An exact background is a fill of its own, so while it is active it replaces
+/// the gradient rather than tinting it.
+#[test]
+fn an_exact_background_on_hover_replaces_a_gradient() {
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
+            .when_hovered(|s| s.background(Color::GREEN)),
+    );
+    h.fit(500.0, 500.0);
+
+    h.send(Event::mouse_move(25.0, 10.0));
+    let node = h.paint();
+    assert_eq!(gradient_ends(&node), None, "the gradient gives way");
+    assert!(
+        rects(&node)
+            .iter()
+            .any(|(_, colour)| *colour == Color::GREEN),
+        "to the colour the hover declared, got {:?}",
+        rects(&node)
+    );
+}
+
+/// An exact background that is not a number is passed over on a gradient as it
+/// is on a solid fill, rather than removing the gradient for nothing.
+#[test]
+fn a_non_finite_exact_background_leaves_the_gradient() {
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
+            .when_hovered(|s| s.background(Color::rgb(f32::NAN, 0.0, 0.0))),
+    );
+    h.fit(500.0, 500.0);
+
+    h.send(Event::mouse_move(25.0, 10.0));
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+}
+
 /// `overflow` decides both whether children are clipped and whether the box may
 /// shrink below its content, so a write to it has to reach layout as well as
 /// paint.
