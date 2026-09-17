@@ -230,7 +230,9 @@ static PLAIN: u32 = 0;
 
 /// The `APP` and `REACTIVE` rows stand for thirty-four values between them, so
 /// what keeps those two structs honest is not the row — it is that each
-/// `reset` names every field. Two claims, and this is what holds them: that
+/// `reset` names every field. Names: that a bound field is also *given back*
+/// is the compiler's, through the unused-binding warning `-D warnings` makes
+/// an error. Two claims, and this is what holds them: that
 /// each field says why it is ambient, which the table used to ask of each cell
 /// separately, and that the reset's pattern is exhaustive.
 ///
@@ -301,7 +303,7 @@ mod the_two_structs {
     }
 
     #[test]
-    fn every_field_is_given_back_by_the_reset() {
+    fn every_field_is_named_by_the_reset() {
         for (file, name, at_least) in STRUCTS {
             let source = source(file);
             let fields = fields(body(&source, name));

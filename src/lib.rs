@@ -2543,11 +2543,52 @@ mod restart_tests {
         );
     }
 
+    /// The order inside the reset, which is the one thing about it the
+    /// compiler cannot check.
+    ///
+    /// A queued surface command carries a widget factory, and what that
+    /// factory captured is dropped with it — a `ChildrenSource` among them,
+    /// whose own `Drop` asks for an Unregister job
+    /// (`src/widgets/children.rs`). So the queue holding the command has to
+    /// be emptied *before* the job queue, and a value that queues from its
+    /// `Drop` is what says so: reorder those two lines in
+    /// `app_state::reset` and this goes red.
+    #[test]
+    fn a_job_queued_while_the_app_is_being_forgotten_is_forgotten_too() {
+        let _wakeup = crate::jobs::wakeup_test_lock();
+        struct QueuesOnDrop(WidgetId);
+        impl Drop for QueuesOnDrop {
+            fn drop(&mut self) {
+                request_job(self.0, JobRequest::Unregister);
+            }
+        }
+
+        create_root_owner();
+        let mut app = App::new();
+        let widget = app
+            .tree
+            .register(Box::new(crate::widgets::container()) as Box<dyn Widget>);
+
+        let late = QueuesOnDrop(widget);
+        crate::surface::spawn_surface(crate::surface::SurfaceConfig::new(), move || {
+            let _captured = &late;
+            crate::widgets::container()
+        });
+
+        drop(app);
+
+        assert!(
+            !has_pending_jobs(),
+            "a command dropped by the reset queued a job the reset had already emptied"
+        );
+    }
+
     /// Everything the application queues for the loop dies with the `App` that
     /// queued it: the next one starts on an empty outbox, not on work aimed at
     /// a tree that no longer exists.
     #[test]
     fn nothing_the_last_app_queued_survives_its_drop() {
+        let _wakeup = crate::jobs::wakeup_test_lock();
         create_root_owner();
         let mut app = App::new();
 

@@ -104,16 +104,21 @@ pub(crate) struct ReactiveState {
 /// Read `src/app_state.rs`'s `reset` for why this is a destructure and a `take`
 /// each: the same two guarantees, from the same two compiler errors.
 ///
-/// The order *is* load-bearing, in one place. Three of these hold values the
-/// application wrote — a signal's `T`, an effect's callback, an owner's
-/// cleanups — so dropping them runs whatever `Drop` those have, and this
-/// crate's own `OwnerGuard` and `OwnedWidget` dispose an owner from theirs.
-/// A disposal queued that way has to be forgotten *after* it can be queued,
-/// which is why `pending_disposals` is cleared below the three and not above
-/// them: owner ids restart from zero with the arena, so a disposal left over
-/// from the `App` that is going away names a live owner in the one that comes
-/// next — the same hazard `App::drop` clears the tree for, where a late
-/// Unregister job would destroy a new widget that reused its id.
+/// The order matters in one place, and it is insurance rather than a chain
+/// this crate has: three of these hold values the application wrote — a
+/// signal's `T`, an effect's callback, an owner's cleanups — so dropping them
+/// runs whatever `Drop` those have, and `dispose_owner` is public and takes no
+/// argument a `Drop` impl could not supply. Nothing in guido queues a disposal
+/// that way today (`OwnerGuard` and `OwnedWidget` call `dispose_owner_now`,
+/// which takes the owner out of the arena and queues nothing), so this costs
+/// an ordering and buys the case where an application does.
+///
+/// What it buys: owner ids restart from zero with the arena, so a disposal
+/// left over from the `App` that is going away names a live owner in the one
+/// that comes next — the same hazard `App::drop` clears the tree for, where a
+/// late Unregister job would destroy a new widget that reused its id. So
+/// `pending_disposals` is cleared below the three fields and not above them,
+/// and the test at the foot of this file is what says so.
 pub(crate) fn reset() {
     with_reactive(|reactive| {
         let ReactiveState {
@@ -150,4 +155,43 @@ pub(crate) fn reset() {
         batch_depth.take();
         flushing.take();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reactive::owner::{dispose_owner, with_owner};
+    use crate::reactive::signal::create_signal;
+
+    /// The order inside the reset, which is the one thing about it the
+    /// compiler cannot check.
+    ///
+    /// `dispose_owner` is public and defers, and a value an application stored
+    /// in a signal can call it from its own `Drop` — so dropping the arena is
+    /// itself a moment when a disposal can be queued. The queue is therefore
+    /// emptied after the arena and not before: reorder those two lines above
+    /// and this goes red.
+    #[test]
+    fn a_disposal_queued_while_the_runtime_is_being_forgotten_is_forgotten_too() {
+        #[derive(Clone)]
+        struct DisposesOnDrop(OwnerId);
+        impl Drop for DisposesOnDrop {
+            fn drop(&mut self) {
+                dispose_owner(self.0);
+            }
+        }
+
+        crate::reactive::owner::create_root_owner();
+        let ((), scope) = with_owner(|| ());
+        let _stored = create_signal(DisposesOnDrop(scope));
+
+        reset();
+
+        assert!(
+            with_reactive(|reactive| reactive.pending_disposals.is_empty()),
+            "a value dropped by the reset queued a disposal the reset had already \
+             emptied — and owner ids restart from zero, so it names a live owner \
+             in the next App"
+        );
+    }
 }

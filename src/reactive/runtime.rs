@@ -591,25 +591,15 @@ pub(crate) fn reset_bg_writes() {
 /// `flush_effects()` until the batch completes. Widget invalidation (paint/layout
 /// jobs) is NOT batched — widgets still get per-field jobs immediately.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
-    fn step(by: i32) -> u32 {
-        with_reactive(|reactive| {
-            let depth = reactive.batch_depth.get().saturating_add_signed(by);
-            reactive.batch_depth.set(depth);
-            depth
-        })
-    }
-
-    step(1);
+    with_reactive(|reactive| reactive.batch_depth.set(reactive.batch_depth.get() + 1));
     // Restore the depth even if `f` panics: a caught panic must not leave
     // the batch depth stuck > 0 (which would stop every effect in the app from
     // ever flushing again). Effects queued by the failed batch stay pending
     // and run on the next notify — we deliberately don't flush during unwind.
     let guard = super::guard::defer(|| {
-        step(-1);
+        with_reactive(|reactive| reactive.batch_depth.set(reactive.batch_depth.get() - 1));
     });
     let result = f();
-    // The leave and the question it answers are one visit: `defer` runs on the
-    // way out of a panic too, and only the ordinary way out flushes.
     drop(guard);
     if with_reactive(|reactive| reactive.batch_depth.get()) == 0 {
         flush_pending_effects();
