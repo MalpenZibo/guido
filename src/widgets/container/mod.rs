@@ -12,8 +12,8 @@ mod style;
 mod characterization;
 
 use animations::instant_transition;
-pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
+pub(crate) use animations::{take_differs_between_passes, with_measure_final};
 use interaction::{HitContext, untransform_point};
 pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;

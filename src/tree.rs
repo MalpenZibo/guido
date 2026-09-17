@@ -113,6 +113,8 @@ struct Slot {
     is_relayout_boundary: bool,
     /// Cached constraints from last layout
     cached_constraints: Option<Constraints>,
+    /// Whether a measure and a layout of this subtree would come out differently
+    differs_between_passes: bool,
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -379,6 +381,7 @@ impl Tree {
             needs_paint: true,
             is_relayout_boundary: false,
             cached_constraints: None,
+            differs_between_passes: false,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -1124,6 +1127,14 @@ impl Tree {
         }
         let idx = self.get_dense_index(id).expect("checked above");
         self.dense[idx].cached_constraints = Some(constraints);
+        // A child skipped from its cache read nothing this pass, and still
+        // carries what it read last time.
+        self.dense[idx].differs_between_passes =
+            crate::widgets::container::take_differs_between_passes()
+                || self.dense[idx].children.iter().any(|&child| {
+                    self.get_dense_index(child)
+                        .is_some_and(|c| self.dense[c].differs_between_passes)
+                });
         self.dense[idx].cached_size = Some(size);
         // Damages the new rect and marks the ancestors, which have to redraw
         // to re-emit this widget at its new geometry.

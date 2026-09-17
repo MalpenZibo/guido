@@ -565,7 +565,9 @@ impl<T: Animatable> AnimationState<T> {
         self.target = value;
         self.start = value;
         self.progress = 1.0;
-        if !measuring_final() {
+        if measuring_final() {
+            differs_between_passes();
+        } else {
             self.initialized = true;
         }
     }
@@ -662,6 +664,23 @@ pub(crate) fn measuring_final() -> bool {
     MEASURE_FINAL.with(|m| m.get())
 }
 
+thread_local! {
+    /// Raised by a read a measure and a layout would answer differently: a
+    /// value still moving, or one a measure placed without it appearing. Taken
+    /// by the next `Tree::cache_layout`, which is in the subtree of the widget
+    /// that read it as long as that widget reads before it caches its layout —
+    /// as every widget in the crate does.
+    static DIFFERS_BETWEEN_PASSES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn differs_between_passes() {
+    DIFFERS_BETWEEN_PASSES.with(|d| d.set(true));
+}
+
+pub(crate) fn take_differs_between_passes() -> bool {
+    DIFFERS_BETWEEN_PASSES.with(|d| d.replace(false))
+}
+
 impl<T: Animatable + Copy> AnimationState<T> {
     /// The value this animation contributes right now.
     ///
@@ -675,6 +694,9 @@ impl<T: Animatable + Copy> AnimationState<T> {
     /// stated once.
     #[inline]
     pub fn displayed(&self) -> T {
+        if self.is_animating() {
+            differs_between_passes();
+        }
         if measuring_final() {
             *self.target()
         } else {
