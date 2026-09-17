@@ -415,27 +415,21 @@ by itself, and an event handler is a closure with no arguments, so the reactive
 system has to know who is reading and a handler needs somewhere to leave its
 requests.
 
-A row is a *cell*, not a value. `APP` is one row and twenty-two values: what the
-application leaves for its loop lives in one struct, `AppState`, so that
-`App::drop` can forget all of it at once rather than through a list somebody
-has to keep true. A new piece of application state is a field there — reviewed
-beside the others, reset with them — and not a new cell with a row of its own.
+A row is a *cell*, not a value. `APP` and `REACTIVE` are two rows and
+thirty-four values, in two structs: `AppState` is what the running application
+has queued, mirrored or declared, and `ReactiveState` is the machinery that
+makes a `move ||` closure reactive at all. Each is forgotten as one value, by a
+`reset` that destructures it, rather than through a list somebody has to keep
+true — which is what #372 was: `DEFAULT_FONT_FAMILY` was missing from one, and
+nothing could say so. New state of either kind is a field in one of them,
+reviewed beside the others and reset with them, and not a new cell with a row
+of its own. `tests/ambient_state_inventory.rs` holds both structs to the
+promise this paragraph makes.
 
 | cell | file | why nothing explicit carries it |
 | --- | --- | --- |
-| `RUNTIME` | `src/reactive/runtime.rs` | Effects and their subscriptions: a `set` anywhere must reach them, and a signal handle is `Copy` with nothing to point through |
-| `EFFECT_TRACKING` | `src/reactive/runtime.rs` | Reads made while an effect runs, buffered because `RUNTIME` is already borrowed then |
-| `BATCH_DEPTH` | `src/reactive/runtime.rs` | `batch()` nests across calls that share no argument |
-| `FLUSHING` | `src/reactive/runtime.rs` | Reentrancy guard for a write made inside an effect, which has no handle to the flush it is inside |
-| `STORAGE` | `src/reactive/storage.rs` | Signal values, reached from `Copy` handles that carry only an index |
-| `OWNERS` | `src/reactive/owner.rs` | The owner tree that disposal walks, reached from handles that carry only an id |
-| `CURRENT_OWNER` | `src/reactive/owner.rs` | Which scope a signal created now belongs to: `create_signal` takes no scope argument |
-| `ROOT_OWNER` | `src/reactive/owner.rs` | The application's own scope, reachable from any depth for state with one instance per application |
-| `PENDING_DISPOSALS` | `src/reactive/owner.rs` | Disposal is deferred to the loop, and the code that asks for it holds no loop |
-| `GLOBALS` | `src/reactive/global.rs` | Which signal each `GlobalSignal` resolved to: a `static` cannot hold a thread's signal |
-| `TRACKING_CONTEXT` | `src/reactive/invalidation.rs` | Which widget and job a read belongs to: a read inside `layout` or `paint` has no argument naming the widget. #371 would open the scope around every call |
-| `REGISTRY` | `src/reactive/invalidation.rs` | Signal-to-widget subscriptions, written by a read and consumed by a write that share no argument |
-| `APP` | `src/app_state.rs` | The application's own state — what it has queued for the loop, what it and the compositor last told each other, and the fonts — in one struct, because a handler is a closure with no arguments and the loop is not reachable from one. It was twenty-two cells, and `App::drop` reset them by a hand-written list that had grown wrong (#372); `app_state::reset` destructures the struct instead, so a field added there and forgotten here is a compile error. Each field says at its declaration why nothing explicit carries it |
+| `REACTIVE` | `src/reactive/state.rs` | The reactive runtime: the arena signals live in, the owners that dispose them, who is reading right now, and who has to be told when a value changes. A signal read inside a reactive closure subscribes by itself, so none of it can be an argument — floem and leptos keep a runtime for the same reason |
+| `APP` | `src/app_state.rs` | The application's own state — what it has queued for the loop, what it and the compositor last told each other, and the fonts — in one struct, because a handler is a closure with no arguments and the loop is not reachable from one |
 | `BATCHING` | `src/platform/wayland.rs` | Which surface a `batch_layer_requests` group is open on. Not a field of `WaylandState`: the closure holds `&mut WaylandState`, so a guard could not restore a field if it panics, and a scope left open would hold every later commit |
 | `DEPTH` | `src/reactive/diagnostics.rs` | Debug builds: nesting of `snapshot_zone`, inside which a read with no reactive scope is not warned about |
 | `REPORTED` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about, so a hot path warns once |

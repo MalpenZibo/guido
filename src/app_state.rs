@@ -20,13 +20,12 @@
 //!
 //! The line this draws is what the state is *for*, not which module it was
 //! written in: everything the running application has queued, mirrored or
-//! declared lives here, while the reactive runtime's own bookkeeping — the
-//! arena, the owners, the subscriptions, twelve cells of it — stays in
-//! `src/reactive/` and is reset with `reset_reactive`. So the clipboard
-//! buffers and the cursor come here from `src/reactive/`, and
-//! `invalidation.rs` keeps its registry while its dirtied segments, which are
-//! a queue the reconciler drains, do not. The diagnostics stay out of both:
-//! they outlive an `App` on purpose.
+//! declared lives here, and the machinery that makes a reactive closure
+//! reactive at all is its twin, `ReactiveState` in `src/reactive/state.rs`.
+//! So the clipboard buffers and the cursor come here from `src/reactive/`,
+//! and `invalidation.rs` keeps its subscriber registry over there while its
+//! dirtied segments, which are a queue the reconciler drains, come here. The
+//! diagnostics stay out of both: they outlive an `App` on purpose.
 
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
@@ -162,26 +161,34 @@ pub(crate) fn reset() {
         // `take` rather than a value per line: the struct derives `Default`,
         // so what a field starts an `App` with and what it is given back here
         // are the same expression, and neither can drift from the other.
+        //
+        // What holds an application closure goes first. A queued surface
+        // command carries a widget factory and a lock request carries a
+        // lock-screen one, and dropping either drops what it captured — a
+        // `ChildrenSource` among them, whose own `Drop` queues a job. So the
+        // queues those land in are emptied below, after everything that can
+        // still push into them.
+        surface_commands.clear();
+        lock_request.clear();
+        lock.take();
+        widget_refs.take();
+        text_measurer.take();
+
         pending_jobs.take();
         scheduled_jobs.take();
         dirty_segments.take();
-        surface_commands.clear();
         outgoing_cursor.clear();
         outgoing_clipboard.clear();
         outgoing_primary.clear();
         pending_focus.take();
-        lock_request.clear();
 
         current_cursor.take();
         clipboard.take();
         system_clipboard.take();
         primary.take();
         system_primary.take();
-        lock.take();
         live_popups.take();
-        widget_refs.take();
 
-        text_measurer.take();
         default_font_family.take();
         custom_fonts.take();
         custom_font_hashes.take();

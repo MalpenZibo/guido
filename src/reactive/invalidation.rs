@@ -19,29 +19,23 @@
 //! When a signal is written, [`notify_signal_change()`] creates jobs for all
 //! subscribers. The jobs system deduplicates these and wakes the event loop.
 
-use std::cell::RefCell;
-
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
+use super::state::{ReactiveState, with_reactive};
 use crate::app_state::with_app_state;
 use crate::jobs::{JobRequest, JobType, request_job};
 use crate::reactive::runtime::SignalId;
 use crate::tree::WidgetId;
 
 /// Context for tracking signal reads and associating them with a widget
-struct SignalTrackingContext {
+pub(crate) struct SignalTrackingContext {
     widget_id: WidgetId,
     job_type: JobType,
     /// For reconciliation: which dynamic-children segment of the widget is
     /// reading. Lets a signal write dirty exactly one segment instead of
     /// re-running every dynamic segment of the container.
     segment: Option<u32>,
-}
-
-thread_local! {
-    /// Stack of tracking contexts (supports nesting)
-    static TRACKING_CONTEXT: RefCell<Vec<SignalTrackingContext>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Run a closure while tracking signal reads for a widget.
@@ -96,18 +90,21 @@ fn with_tracking_context<F, R>(
 where
     F: FnOnce() -> R,
 {
-    TRACKING_CONTEXT.with(|ctx| {
-        ctx.borrow_mut().push(SignalTrackingContext {
-            widget_id,
-            job_type,
-            segment,
-        });
+    with_reactive(|reactive| {
+        reactive
+            .tracking_context
+            .borrow_mut()
+            .push(SignalTrackingContext {
+                widget_id,
+                job_type,
+                segment,
+            });
     });
     // Pop on unwind too: a leaked frame would silently attribute every
     // later signal read in the app to this widget.
     let _guard = crate::reactive::guard::defer(|| {
-        TRACKING_CONTEXT.with(|ctx| {
-            ctx.borrow_mut().pop();
+        with_reactive(|reactive| {
+            reactive.tracking_context.borrow_mut().pop();
         });
     });
     f()
@@ -119,16 +116,17 @@ where
 /// Used during effect execution to prevent effects from polluting the widget
 /// tracking context when an effect runs inside a factory during reconciliation.
 ///
-/// Effect-level tracking (via EFFECT_TRACKING in runtime.rs) is unaffected.
+/// Effect-level tracking (`ReactiveState::effect_tracking`) is unaffected.
 pub fn suspend_widget_tracking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let saved: Vec<_> = TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().drain(..).collect());
+    let saved: Vec<_> =
+        with_reactive(|reactive| reactive.tracking_context.borrow_mut().drain(..).collect());
     // Restore on unwind too: losing the saved stack would permanently
     // disable widget invalidation for every context that was active.
     let _guard = crate::reactive::guard::defer(move || {
-        TRACKING_CONTEXT.with(|ctx| *ctx.borrow_mut() = saved);
+        with_reactive(|reactive| *reactive.tracking_context.borrow_mut() = saved);
     });
     f()
 }
@@ -139,15 +137,19 @@ where
 /// `debug_assertions` — so does this, or release builds warn about it.
 #[cfg(debug_assertions)]
 pub(crate) fn widget_tracking_active() -> bool {
-    TRACKING_CONTEXT.with(|ctx| !ctx.borrow().is_empty())
+    with_reactive(|reactive| !reactive.tracking_context.borrow().is_empty())
 }
 
 /// Record that a signal was read. Called from Signal::get().
 /// If tracking is active, registers the current widget as a subscriber.
 pub fn record_signal_read(signal_id: SignalId) {
-    TRACKING_CONTEXT.with(|ctx| {
-        if let Some(tracking) = ctx.borrow().last() {
-            register_subscriber_impl(
+    with_reactive(|reactive| {
+        // One visit for both fields: this runs on every tracked read, and the
+        // scope that says who is reading and the registry that records it are
+        // fields of the same struct.
+        if let Some(tracking) = reactive.tracking_context.borrow().last() {
+            register_subscriber_in(
+                reactive,
                 tracking.widget_id,
                 signal_id,
                 tracking.job_type,
@@ -176,7 +178,8 @@ type SubscriberList = SmallVec<[Subscriber; 2]>;
 /// Most widgets subscribe to 2-6 signals (background, padding, etc.).
 type SignalList = SmallVec<[SignalId; 4]>;
 
-struct SubscriberRegistry {
+#[derive(Default)]
+pub(crate) struct SubscriberRegistry {
     /// Forward index: signal index → subscribers. Direct Vec indexing
     /// (signal slot indices are dense; disposal clears the entry, so a
     /// recycled index always starts with an empty list).
@@ -192,14 +195,6 @@ struct SubscriberRegistry {
 }
 
 impl SubscriberRegistry {
-    fn new() -> Self {
-        Self {
-            signal_to_widgets: Vec::new(),
-            widget_to_signals: FxHashMap::default(),
-            active: FxHashSet::default(),
-        }
-    }
-
     /// Ensure the forward index has capacity for the given signal ID.
     fn ensure_signal_capacity(&mut self, signal_id: SignalId) {
         if signal_id.index() >= self.signal_to_widgets.len() {
@@ -207,12 +202,6 @@ impl SubscriberRegistry {
                 .resize_with(signal_id.index() + 1, SmallVec::new);
         }
     }
-}
-
-thread_local! {
-    /// Subscriber registry. All access is on the main thread — background writes go
-    /// through `queue_bg_write()` → `flush_bg_writes()` which executes on the main thread.
-    static REGISTRY: RefCell<SubscriberRegistry> = RefCell::new(SubscriberRegistry::new());
 }
 
 /// Take (and clear) the set of dirty dynamic-children segments for a widget.
@@ -228,37 +217,40 @@ pub(crate) fn take_dirty_segments(widget_id: WidgetId) -> Option<SmallVec<[u32; 
 /// overwhelming majority — widgets re-read their signals every frame) is a
 /// single hash-set lookup.
 pub fn register_subscriber(widget_id: WidgetId, signal_id: SignalId, job_type: JobType) {
-    register_subscriber_impl(widget_id, signal_id, job_type, None);
+    with_reactive(|reactive| {
+        register_subscriber_in(reactive, widget_id, signal_id, job_type, None);
+    });
 }
 
-fn register_subscriber_impl(
+/// Takes the state rather than reaching for it, so a caller already inside
+/// `with_reactive` — which the read path is — pays one visit rather than two.
+fn register_subscriber_in(
+    reactive: &ReactiveState,
     widget_id: WidgetId,
     signal_id: SignalId,
     job_type: JobType,
     segment: Option<u32>,
 ) {
-    REGISTRY.with(|reg| {
-        let mut reg = reg.borrow_mut();
+    let mut reg = reactive.subscribers.borrow_mut();
 
-        let sub = Subscriber {
-            widget_id,
-            job_type,
-            segment,
-        };
-        if !reg.active.insert((signal_id.index(), sub)) {
-            return; // Already subscribed — the hot path
-        }
+    let sub = Subscriber {
+        widget_id,
+        job_type,
+        segment,
+    };
+    if !reg.active.insert((signal_id.index(), sub)) {
+        return; // Already subscribed — the hot path
+    }
 
-        reg.ensure_signal_capacity(signal_id);
-        reg.signal_to_widgets[signal_id.index()].push(sub);
+    reg.ensure_signal_capacity(signal_id);
+    reg.signal_to_widgets[signal_id.index()].push(sub);
 
-        // Update reverse index (deduped: the same widget/signal pair can
-        // arrive with several job types, but only one entry is needed)
-        let signals = reg.widget_to_signals.entry(widget_id).or_default();
-        if !signals.contains(&signal_id) {
-            signals.push(signal_id);
-        }
-    });
+    // Update reverse index (deduped: the same widget/signal pair can
+    // arrive with several job types, but only one entry is needed)
+    let signals = reg.widget_to_signals.entry(widget_id).or_default();
+    if !signals.contains(&signal_id) {
+        signals.push(signal_id);
+    }
 }
 
 /// Notify all subscribers of a signal change by creating jobs.
@@ -267,8 +259,8 @@ fn register_subscriber_impl(
 /// queue and wake state, never the registry, so no re-entrant
 /// borrow is possible and no snapshot allocation is needed.
 pub fn notify_signal_change(signal_id: SignalId) {
-    REGISTRY.with(|reg| {
-        let reg = reg.borrow();
+    with_reactive(|reactive| {
+        let reg = reactive.subscribers.borrow();
         let Some(subs) = reg.signal_to_widgets.get(signal_id.index()) else {
             return;
         };
@@ -296,8 +288,8 @@ pub fn notify_signal_change(signal_id: SignalId) {
 
 /// Clear signal subscribers for a specific signal (when signal is disposed)
 pub fn clear_signal_subscribers(signal_id: SignalId) {
-    REGISTRY.with(|reg| {
-        let mut reg = reg.borrow_mut();
+    with_reactive(|reactive| {
+        let mut reg = reactive.subscribers.borrow_mut();
         if signal_id.index() < reg.signal_to_widgets.len() {
             // Remove this signal from the reverse index of each subscriber
             let subs = std::mem::take(&mut reg.signal_to_widgets[signal_id.index()]);
@@ -318,8 +310,8 @@ pub fn clear_signal_subscribers(signal_id: SignalId) {
 /// Called when a widget is unregistered to prevent stale subscribers
 /// from causing wasted job creation.
 pub fn clear_widget_subscribers(widget_id: WidgetId) {
-    REGISTRY.with(|reg| {
-        let mut reg = reg.borrow_mut();
+    with_reactive(|reactive| {
+        let mut reg = reactive.subscribers.borrow_mut();
         // Use reverse index: only touch the signals this widget actually subscribes to
         if let Some(signal_ids) = reg.widget_to_signals.remove(&widget_id) {
             for signal_id in signal_ids {
@@ -346,19 +338,13 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
     });
 }
 
-/// Reset all invalidation state (tracking context + subscriber registry).
-///
-/// Called during `App::drop()` to wipe stale widget-signal subscriptions.
-pub(crate) fn reset_invalidation() {
-    TRACKING_CONTEXT.with(|ctx| ctx.borrow_mut().clear());
-    REGISTRY.with(|reg| *reg.borrow_mut() = SubscriberRegistry::new());
-}
-
 /// Get the number of signals with active subscribers (for testing).
 #[cfg(test)]
 fn subscriber_count() -> usize {
-    REGISTRY.with(|reg| {
-        reg.borrow()
+    with_reactive(|reactive| {
+        reactive
+            .subscribers
+            .borrow()
             .signal_to_widgets
             .iter()
             .filter(|s| !s.is_empty())
@@ -398,8 +384,8 @@ mod tests {
         });
 
         let subscribers = |sig: u32| {
-            REGISTRY.with(|reg| {
-                let reg = reg.borrow();
+            with_reactive(|reactive| {
+                let reg = reactive.subscribers.borrow();
                 reg.signal_to_widgets
                     .get(sig as usize)
                     .map(|s| s.iter().map(|e| e.widget_id).collect::<Vec<_>>())
@@ -420,8 +406,8 @@ mod tests {
         clear_signal_subscribers(signal_id(42));
 
         // Signal 42 should have no subscribers
-        REGISTRY.with(|reg| {
-            let reg = reg.borrow();
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
             assert!(reg.signal_to_widgets.get(42).is_none_or(|s| s.is_empty()));
         });
     }
@@ -439,8 +425,8 @@ mod tests {
 
         clear_widget_subscribers(wid);
 
-        REGISTRY.with(|reg| {
-            let reg = reg.borrow();
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
             // Signal 10 should still have widget 201
             let s10 = &reg.signal_to_widgets[10];
             assert!(s10.iter().all(|s| s.widget_id != wid));
@@ -464,8 +450,10 @@ mod tests {
         use crate::reactive::{create_derived, create_signal};
 
         let subscribed = |wid: WidgetId| {
-            REGISTRY.with(|reg| {
-                reg.borrow()
+            with_reactive(|reactive| {
+                reactive
+                    .subscribers
+                    .borrow()
                     .widget_to_signals
                     .get(&wid)
                     .is_some_and(|signals| !signals.is_empty())
@@ -514,8 +502,8 @@ mod tests {
             record_signal_read(sid);
         });
 
-        REGISTRY.with(|reg| {
-            let reg = reg.borrow();
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
             let s = &reg.signal_to_widgets[sid.index()];
             assert!(s.contains(&Subscriber {
                 widget_id: wid,
@@ -534,8 +522,8 @@ mod tests {
         register_subscriber(wid, signal_id(50), JobType::Paint);
         register_subscriber(wid, signal_id(51), JobType::Layout);
 
-        REGISTRY.with(|reg| {
-            let reg = reg.borrow();
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
             let signals = reg.widget_to_signals.get(&wid).unwrap();
             assert!(signals.contains(&signal_id(50)));
             assert!(signals.contains(&signal_id(51)));
@@ -543,8 +531,8 @@ mod tests {
 
         clear_widget_subscribers(wid);
 
-        REGISTRY.with(|reg| {
-            let reg = reg.borrow();
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
             assert!(!reg.widget_to_signals.contains_key(&wid));
         });
     }

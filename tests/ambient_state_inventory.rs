@@ -228,54 +228,67 @@ static PLAIN: u32 = 0;
     );
 }
 
-/// The `APP` row of that table stands for twenty-two values rather than one,
-/// so what keeps `AppState` honest is not the row — it is that
-/// `app_state::reset` names every field. Two claims, and this is what holds
-/// them: that each field says why it is ambient, which the table used to ask
-/// of each cell separately, and that the reset's pattern is exhaustive.
+/// The `APP` and `REACTIVE` rows stand for thirty-four values between them, so
+/// what keeps those two structs honest is not the row — it is that each
+/// `reset` names every field. Two claims, and this is what holds them: that
+/// each field says why it is ambient, which the table used to ask of each cell
+/// separately, and that the reset's pattern is exhaustive.
 ///
 /// The compiler already refuses a field the pattern does not mention, and
 /// `-D warnings` refuses one it mentions and does not use. What it offers
 /// instead, in the same error, is `..` — and taking that suggestion reopens
 /// #372 silently, with every test still green. So the pattern is read here as
 /// text.
-mod the_application_state {
+mod the_two_structs {
     use std::path::Path;
 
-    fn source() -> String {
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app_state.rs"))
-            .expect("src/app_state.rs is readable")
+    /// Each struct a row of the table stands for: its file, its name, and how
+    /// many fields it has at least. The count is the scan's own canary — a
+    /// parser that stopped finding fields would otherwise pass this file by
+    /// comparing two truncated lists.
+    const STRUCTS: [(&str, &str, usize); 2] = [
+        ("src/app_state.rs", "AppState", 22),
+        ("src/reactive/state.rs", "ReactiveState", 12),
+    ];
+
+    fn source(file: &str) -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+            .unwrap_or_else(|_| panic!("{file} is readable"))
     }
 
-    /// The names declared between `struct AppState {` and its closing brace.
-    fn fields(source: &str) -> Vec<String> {
+    /// Everything between `struct <name> {` and its closing brace.
+    fn body<'a>(source: &'a str, name: &str) -> &'a str {
         source
-            .split_once("pub(crate) struct AppState {")
-            .expect("src/app_state.rs declares `AppState`")
+            .split_once(&format!("pub(crate) struct {name} {{"))
+            .unwrap_or_else(|| panic!("the struct `{name}` is declared there"))
             .1
             .split("\n}")
             .next()
             .expect("the struct closes")
-            .lines()
+    }
+
+    /// The names it declares.
+    fn fields(body: &str) -> Vec<String> {
+        body.lines()
             .filter_map(|line| {
-                let name = line.trim().strip_prefix("pub(crate) ")?;
-                Some(name.split(':').next()?.to_string())
+                let field = line.trim().strip_prefix("pub(crate) ")?;
+                Some(field.split(':').next()?.to_string())
             })
             .collect()
     }
 
-    /// The names bound by `reset`'s `let AppState { .. } = app;`.
-    fn bound_by_reset(source: &str) -> Vec<String> {
+    /// The names bound by that module's `let <name> { .. } = ..;`.
+    fn bound_by_reset(source: &str, name: &str) -> Vec<String> {
         let pattern = source
-            .split_once("let AppState {")
-            .expect("`reset` destructures the struct")
+            .split_once(&format!("let {name} {{"))
+            .unwrap_or_else(|| panic!("`reset` destructures `{name}`"))
             .1
-            .split_once("} = app;")
+            .split_once('}')
             .expect("and the pattern closes")
             .0;
         assert!(
             !pattern.contains("..") && !pattern.contains(": _"),
-            "`app_state::reset` binds its fields with `..` or `: _`:\n{pattern}\n\
+            "`{name}`'s reset binds its fields with `..` or `: _`:\n{pattern}\n\
              Both are what the compiler suggests when a field is missing, and both \
              let the next field be forgotten — which is #372, again. Name every one."
         );
@@ -289,55 +302,52 @@ mod the_application_state {
 
     #[test]
     fn every_field_is_given_back_by_the_reset() {
-        let source = source();
-        let fields = fields(&source);
-        assert!(
-            fields.len() > 15,
-            "found only {} fields: the scan is broken, not the struct",
-            fields.len()
-        );
-        assert_eq!(
-            bound_by_reset(&source),
-            fields,
-            "`app_state::reset` does not name the fields of `AppState`, in order"
-        );
+        for (file, name, at_least) in STRUCTS {
+            let source = source(file);
+            let fields = fields(body(&source, name));
+            assert!(
+                fields.len() >= at_least,
+                "found only {} of `{name}`'s {at_least} fields: the scan is broken, \
+                 not the struct",
+                fields.len()
+            );
+            assert_eq!(
+                bound_by_reset(&source, name),
+                fields,
+                "`{file}`'s reset does not name the fields of `{name}`, in order"
+            );
+        }
     }
 
     #[test]
     fn every_field_says_why_nothing_explicit_carries_it() {
-        let source = source();
-        let body = source
-            .split_once("pub(crate) struct AppState {")
-            .expect("src/app_state.rs declares `AppState`")
-            .1
-            .split("\n}")
-            .next()
-            .expect("the struct closes");
+        for (file, name, _) in STRUCTS {
+            let source = source(file);
+            let mut undocumented = Vec::new();
+            let mut documented = false;
+            for line in body(&source, name).lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with("//") && !line.starts_with("///") {
+                    continue;
+                }
+                if line.starts_with("///") {
+                    documented = true;
+                    continue;
+                }
+                if let Some(field) = line.strip_prefix("pub(crate) ")
+                    && !documented
+                {
+                    undocumented.push(field.split(':').next().unwrap_or(field).to_string());
+                }
+                documented = false;
+            }
 
-        let mut undocumented = Vec::new();
-        let mut documented = false;
-        for line in body.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with("//") && !line.starts_with("///") {
-                continue;
-            }
-            if line.starts_with("///") {
-                documented = true;
-                continue;
-            }
-            if let Some(name) = line.strip_prefix("pub(crate) ")
-                && !documented
-            {
-                undocumented.push(name.split(':').next().unwrap_or(name).to_string());
-            }
-            documented = false;
+            assert!(
+                undocumented.is_empty(),
+                "fields of `{name}` with no line saying why nothing explicit carries \
+                 them: {undocumented:?}. The **Ambient state** table asks that of every \
+                 cell, and one row stands for all of these"
+            );
         }
-
-        assert!(
-            undocumented.is_empty(),
-            "fields of `AppState` with no line saying why nothing explicit carries \
-             them: {undocumented:?}. The **Ambient state** table asks that of every \
-             cell, and `APP` is one row for all of these"
-        );
     }
 }

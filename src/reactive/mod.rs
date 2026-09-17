@@ -14,6 +14,7 @@ pub mod owner;
 pub mod runtime;
 pub mod service;
 pub mod signal;
+pub(crate) mod state;
 pub mod storage;
 mod trigger;
 
@@ -74,13 +75,8 @@ pub use signal::{
 /// Called during `App::drop()` to wipe all thread-local reactive state,
 /// enabling clean restart of the application.
 pub(crate) fn reset_reactive() {
-    owner::reset_owners();
-    // Before `reset_storage`, with the same reason the focus release below has:
-    // these hold ids into the arena that is about to be replaced.
-    global::reset_globals();
-    runtime::reset_runtime();
-    storage::reset_storage();
-    invalidation::reset_invalidation();
+    state::reset();
+    runtime::reset_bg_writes();
     diagnostics::reset();
 }
 

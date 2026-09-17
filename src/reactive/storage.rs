@@ -21,8 +21,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::owner::{OwnerId, current_owner, under_scope};
+use super::owner::{OwnerId, under_scope};
 use super::runtime::SignalId;
+use super::state::with_reactive;
 
 type SignalValue = Rc<dyn Any>;
 
@@ -34,7 +35,8 @@ struct Slot {
     generation: u32,
 }
 
-struct SignalStorage {
+#[derive(Default)]
+pub(crate) struct SignalStorage {
     slots: Vec<Slot>,
     /// Vacant slot indices available for reuse.
     free_indices: Vec<u32>,
@@ -43,28 +45,14 @@ struct SignalStorage {
     derived: HashMap<SignalId, Rc<dyn Any>>,
 }
 
-impl SignalStorage {
-    fn new() -> Self {
-        Self {
-            slots: Vec::new(),
-            free_indices: Vec::new(),
-            derived: HashMap::new(),
-        }
-    }
-}
-
-thread_local! {
-    static STORAGE: RefCell<SignalStorage> = RefCell::new(SignalStorage::new());
-}
-
 /// Briefly borrow storage to Rc::clone a signal's value handle.
 ///
 /// Leptos-style: clone the Rc (O(1)), release the storage borrow, then let
 /// the caller work with the value. Prevents re-entrant borrow panics when
 /// user callbacks create new signals.
 fn clone_slot_rc(id: SignalId, operation: &str) -> Rc<dyn Any> {
-    STORAGE.with(|storage| {
-        let storage = storage.borrow();
+    with_reactive(|reactive| {
+        let storage = reactive.storage.borrow();
         let slot = storage.slots.get(id.index()).unwrap_or_else(|| {
             panic!(
                 "Invalid signal ID {}: out of bounds (storage has {} slots)",
@@ -97,8 +85,8 @@ fn clone_slot_rc(id: SignalId, operation: &str) -> Rc<dyn Any> {
 /// design (queued `WriteSignal` flushes, delayed timers) and must degrade
 /// to a no-op, not a crash.
 fn try_clone_slot_rc(id: SignalId) -> Option<Rc<dyn Any>> {
-    STORAGE.with(|storage| {
-        let storage = storage.borrow();
+    with_reactive(|reactive| {
+        let storage = reactive.storage.borrow();
         let slot = storage.slots.get(id.index())?;
         if slot.generation != id.generation() {
             return None;
@@ -127,8 +115,8 @@ fn with_signal_cell<T: 'static, R>(
 /// Allocate a slot and store the given value. Reuses slot indices from
 /// disposed signals, bumping the generation so stale handles stay invalid.
 fn alloc_slot(value: Rc<dyn Any>) -> SignalId {
-    STORAGE.with(|storage| {
-        let mut storage = storage.borrow_mut();
+    with_reactive(|reactive| {
+        let mut storage = reactive.storage.borrow_mut();
         if let Some(index) = storage.free_indices.pop() {
             let slot = &mut storage.slots[index as usize];
             slot.generation = slot.generation.wrapping_add(1);
@@ -185,12 +173,16 @@ struct Derived<T> {
 
 /// Store a derived closure for the given signal ID.
 pub fn store_derived_closure<T: Clone + 'static>(id: SignalId, closure: impl Fn() -> T + 'static) {
-    let derived = Derived {
-        scope: current_owner(),
-        call: Box::new(closure),
-    };
-    STORAGE.with(|storage| {
-        storage.borrow_mut().derived.insert(id, Rc::new(derived));
+    with_reactive(|reactive| {
+        let derived = Derived {
+            scope: reactive.current_owner.get(),
+            call: Box::new(closure),
+        };
+        reactive
+            .storage
+            .borrow_mut()
+            .derived
+            .insert(id, Rc::new(derived));
     });
 }
 
@@ -202,7 +194,7 @@ pub fn store_derived_closure<T: Clone + 'static>(id: SignalId, closure: impl Fn(
 pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
     // Phase 1: briefly borrow storage to Rc::clone the closure handle
     let closure_rc: Option<Rc<dyn Any>> =
-        STORAGE.with(|storage| storage.borrow().derived.get(&id).map(Rc::clone));
+        with_reactive(|reactive| reactive.storage.borrow().derived.get(&id).map(Rc::clone));
 
     // Phase 2: storage borrow released — call the closure
     closure_rc.map(|rc| {
@@ -222,8 +214,8 @@ pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
 /// After disposal, any attempt to read or write the signal will panic
 /// with a clear error message. The ID will be reused by the next `create_signal_value`.
 pub fn dispose_signal(id: SignalId) {
-    STORAGE.with(|storage| {
-        let mut storage = storage.borrow_mut();
+    with_reactive(|reactive| {
+        let mut storage = reactive.storage.borrow_mut();
         let Some(slot) = storage
             .slots
             .get_mut(id.index())
@@ -381,14 +373,17 @@ fn downcast_cell<T: 'static>(rc: &Rc<dyn Any>, id: SignalId) -> &RefCell<T> {
 /// Test-only: the cost of a primitive is only assertable against a number.
 #[cfg(test)]
 pub(crate) fn slot_count() -> usize {
-    STORAGE.with(|storage| storage.borrow().slots.len())
+    with_reactive(|reactive| reactive.storage.borrow().slots.len())
 }
 
-/// Reset all signal storage.
+/// Throw the signal arena away without the rest of a teardown.
 ///
-/// Called during `App::drop()` to wipe all stored signal values.
-pub(crate) fn reset_storage() {
-    STORAGE.with(|s| *s.borrow_mut() = SignalStorage::new());
+/// What `App::drop` does to it, on its own: for the tests that ask what a
+/// handle answers once the values it names are gone. The whole teardown is
+/// [`crate::reactive::state::reset`].
+#[cfg(test)]
+pub(crate) fn discard_all_signals() {
+    with_reactive(|reactive| reactive.storage.take());
 }
 
 /// How many signal slots currently hold a value.
@@ -396,8 +391,9 @@ pub(crate) fn reset_storage() {
 /// For leak tests: build something, tear it down, and the count has to come
 /// back to where it started.
 pub fn live_signal_count() -> usize {
-    STORAGE.with(|storage| {
-        storage
+    with_reactive(|reactive| {
+        reactive
+            .storage
             .borrow()
             .slots
             .iter()
@@ -410,8 +406,8 @@ pub fn live_signal_count() -> usize {
 /// Used by `WriteSignal` to determine if we can write directly (same thread)
 /// or must queue the write for the main thread.
 pub fn has_signal(id: SignalId) -> bool {
-    STORAGE.with(|storage| {
-        let storage = storage.borrow();
+    with_reactive(|reactive| {
+        let storage = reactive.storage.borrow();
         storage
             .slots
             .get(id.index())
