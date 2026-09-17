@@ -197,6 +197,10 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .when_pressed(|s| s.darker(0.1))  // 10% darker
 ```
 
+On a container with a gradient, `lighter`, `darker` and `alpha` apply to both
+of its ends, and an explicit `background` replaces the gradient while the state
+is active.
+
 ### Border
 
 ```rust

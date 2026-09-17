@@ -20,6 +20,7 @@
 
 use super::*;
 use crate::finite::{AllFinite, FiniteOr};
+use crate::widgets::BackgroundOverride;
 
 impl Container {
     // -----------------------------------------------------------------------
@@ -74,24 +75,31 @@ impl Container {
         let base = self
             .background
             .get_finite_or(Color::TRANSPARENT, id, "background");
-        self.resolve_state_value(id, base, |state| {
-            let bg_color = state
-                .background
-                .as_ref()
-                .map(|bg| resolve_background(base, bg));
-            match (bg_color, state.alpha.map(|s| s.get())) {
-                (Some(mut c), Some(a)) => {
-                    c.a = a;
-                    Some(c)
-                }
-                (Some(c), None) => Some(c),
-                (None, Some(a)) => {
-                    let mut c = base;
-                    c.a = a;
-                    Some(c)
-                }
-                (None, None) => None,
+        self.resolve_state_value(id, base, |state| state_colour(base, state))
+    }
+
+    /// The gradient a state layer resolves to: each end resolved the way
+    /// [`effective_background_target`] resolves a solid fill, or no gradient at
+    /// all while an exact background replaces it.
+    ///
+    /// [`effective_background_target`]: Self::effective_background_target
+    pub(super) fn effective_gradient(&self, id: WidgetId) -> Option<LinearGradient> {
+        let base = self.gradient.as_ref().and_then(|g| g.get())?;
+        self.resolve_state_value(id, Some(base), |state| {
+            if let Some(BackgroundOverride::Exact(_)) = state.background {
+                // Passed over, as the solid fill passes it over, when the colour
+                // it would replace the gradient with is not a number.
+                return state_colour(base.start_color, state)
+                    .filter(AllFinite::all_finite)
+                    .map(|_| None);
             }
+            let (start_color, end_color) =
+                state_colour(base.start_color, state).zip(state_colour(base.end_color, state))?;
+            Some(Some(LinearGradient {
+                start_color,
+                end_color,
+                ..base
+            }))
         })
     }
 
@@ -676,6 +684,20 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
         transform.about(pivot, bounds).map_rect(painted)
     };
     moved.outset_beyond(bounds)
+}
+
+/// A colour as a state layer resolves it: its background override, then its
+/// alpha, or `None` where the layer declares neither.
+fn state_colour(base: Color, state: &StateStyle) -> Option<Color> {
+    let alpha = state.alpha.map(|a| a.get());
+    if state.background.is_none() && alpha.is_none() {
+        return None;
+    }
+    let colour = state
+        .background
+        .as_ref()
+        .map_or(base, |bg| resolve_background(base, bg));
+    Some(alpha.map_or(colour, |a| colour.with_alpha(a)))
 }
 
 /// `outset_of` is the arithmetic every cull and every damage rect is grown by,

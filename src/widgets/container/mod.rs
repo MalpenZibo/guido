@@ -1852,7 +1852,7 @@ impl Widget for Container {
                 self.resolved_pivot(id),
                 self.animated_border_width(id),
                 self.animated_border_color(id),
-                self.gradient.as_ref().and_then(|g| g.get()),
+                self.effective_gradient(id),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
                 self.takes_input.as_ref().map(|t| t.get()),
                 self.overflow.get_or(Overflow::Visible),

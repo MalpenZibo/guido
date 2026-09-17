@@ -138,6 +138,19 @@ finite_by_channels!(
     crate::transform::Scale,
 );
 
+impl AllFinite for crate::widgets::LinearGradient {
+    fn all_finite(&self) -> bool {
+        self.start_color.all_finite() && self.end_color.all_finite()
+    }
+}
+
+impl<T: AllFinite> AllFinite for Option<T> {
+    /// An absent value cannot be a bad one.
+    fn all_finite(&self) -> bool {
+        self.as_ref().is_none_or(AllFinite::all_finite)
+    }
+}
+
 impl AllFinite for crate::layout::Length {
     /// Four optional numbers and a flag. An absent one cannot be bad, and
     /// `fill` is not a number at all.
