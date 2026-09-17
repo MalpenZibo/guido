@@ -12,8 +12,13 @@
 //! so a default `cargo test` still builds. With it, a machine that has no GPU
 //! adapter skips, unless `GUIDO_GPU_REQUIRED` says a skip is a failure.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use guido::prelude::*;
 use guido::testing::Headless;
+use guido::widget_prelude::*;
 
 /// A bar of the shape the acceptance criterion names: anchored to the top,
 /// reserving automatically, with something clickable in it.
@@ -692,4 +697,53 @@ fn a_declaration_inside_a_hole_is_an_island_in_it() {
         app.input_reaches(surface, 150.0, 40.0),
         "the bar around that"
     );
+}
+
+/// A widget that writes down the moment each event it is handed happened, as
+/// the tree declared it.
+struct Stamps(Rc<RefCell<Vec<Instant>>>);
+
+impl Widget for Stamps {
+    fn layout(&mut self, tree: &mut Tree, id: WidgetId, constraints: Constraints) -> Size {
+        let size = Size::new(constraints.max_width, constraints.max_height);
+        tree.cache_layout(id, constraints, size);
+        size
+    }
+
+    fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut PaintContext) {}
+
+    fn event(&mut self, tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
+        self.0.borrow_mut().push(tree.event_instant().into_inner());
+        EventResponse::Handled
+    }
+}
+
+/// Two events queued at two moments arrive in one frame, each carrying its
+/// own. Both are in the past, so no clock the frame could read would answer
+/// with either: the widget can only have been told.
+#[test]
+fn each_queued_event_arrives_at_the_moment_it_was_queued_for() {
+    let Some(mut app) = headless() else { return };
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let spy = seen.clone();
+    let surface = app.surface(fixed_bar(), move || Stamps(spy));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let now = Instant::now();
+    let pressed = now - Duration::from_secs(2);
+    let released = now - Duration::from_secs(1);
+    app.event_at(
+        surface,
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        pressed,
+    );
+    app.event_at(
+        surface,
+        Event::mouse_up(10.0, 10.0, MouseButton::Left),
+        released,
+    );
+    app.step();
+
+    assert_eq!(*seen.borrow(), [pressed, released]);
 }
