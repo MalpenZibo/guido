@@ -3633,6 +3633,154 @@ fn a_measure_pass_leaves_the_appearance_for_the_first_real_layout() {
     );
 }
 
+/// A container of exact size whose child enters, and where the child's width is
+/// fifty milliseconds into its hundred, with or without a measure pass first.
+fn a_child_entering_at_50ms(measure_first: bool) -> f32 {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container().width(200.0).height(100.0).child(
+            container().height(20.0).width(
+                150.0f32
+                    .transition(Transition::new(100.0, TimingFunction::Linear))
+                    .entering_from(0.0),
+            ),
+        ),
+    );
+    if measure_first {
+        // The popup shape: the width pinned, the height loose.
+        with_measure_final(|| {
+            h.layout(Constraints::new(200.0, 0.0, 200.0, 300.0));
+        });
+    }
+    frame_at(&mut h, t0, 200.0, 100.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        200.0,
+        100.0,
+    );
+    let child = h.tree.get_children(h.root)[0];
+    h.tree.cached_size(child).unwrap().width
+}
+
+#[test]
+fn a_child_whose_constraints_never_change_enters_halfway_at_half_its_duration() {
+    assert_eq!(a_child_entering_at_50ms(false), 75.0);
+}
+
+/// A child a measure placed without letting it appear is laid out for real
+/// after the measure, even where its constraints are the same in both passes.
+///
+/// The root differs, measured loose and laid out tight. Its child does not: a
+/// container derives the child's constraints from its own box, which an exact
+/// size resolves the same in both passes, so the real layout found the
+/// measure's entry and the dirty flag it had cleared, skipped the child, and
+/// the enter it declared never played.
+#[test]
+fn a_child_a_measure_placed_is_laid_out_for_real_after_it() {
+    assert_eq!(
+        a_child_entering_at_50ms(true),
+        75.0,
+        "the child has to open from the value it enters from, as it does without \
+         the measure pass"
+    );
+}
+
+/// A measure reads targets even where a real layout has just cached an
+/// in-flight size.
+///
+/// The frame lays out its layout roots before it measures. A capped height
+/// hands the child the same constraints in both passes, so the measure found
+/// the real layout's constraints and the dirty flag it had cleared, skipped the
+/// child, and reported where the animation was rather than where it is going —
+/// asking the compositor for a new size on every frame of it.
+#[test]
+fn a_measure_after_a_real_layout_reports_the_target_not_the_frame() {
+    let t0 = std::time::Instant::now();
+    let tall = create_signal(false);
+    let mut h = H::new(
+        container().layout(Flex::column()).child(
+            container().width(100.0).height(at_most(300.0)).child(
+                container().width(50.0).height(
+                    (move || if tall.get() { 200.0 } else { 20.0 })
+                        .transition(Transition::new(100.0, TimingFunction::Linear)),
+                ),
+            ),
+        ),
+    );
+    // The loop's order: jobs, then the layout roots they queued — the capped
+    // container is one — each at the constraints it last had, then the measure.
+    let frame = |h: &mut H, ms: u64| {
+        h.tree
+            .set_frame_instant(Some(t0 + std::time::Duration::from_millis(ms)));
+        let roots = h.roots();
+        jobs::distribute_jobs(&h.tree, &roots);
+        let drained = jobs::drain_surface_jobs(h.root);
+        let mut layout_roots = Vec::new();
+        jobs::process_jobs(&drained, &mut h.tree, &mut layout_roots);
+        jobs::recycle_job_buffer(drained);
+        let fallback = Constraints::new(400.0, 0.0, 400.0, 1000.0);
+        for root in layout_roots {
+            let c = h.tree.last_constraints(root).unwrap_or(fallback);
+            h.tree.with_widget_mut(root, |w, id, t| w.layout(t, id, c));
+        }
+        h.tree.set_frame_instant(None);
+    };
+    h.layout(Constraints::new(400.0, 0.0, 400.0, 1000.0));
+    tall.set(true);
+    for ms in [16, 32, 50] {
+        frame(&mut h, ms);
+    }
+    let child = h.tree.get_children(h.root)[0];
+    let in_flight = h.tree.cached_size(child).unwrap().height;
+    assert!(
+        in_flight > 20.0 && in_flight < 200.0,
+        "the control: mid-animation, got {in_flight}"
+    );
+
+    let measured = with_measure_final(|| h.layout(Constraints::new(400.0, 0.0, 400.0, 800.0)));
+    assert_eq!(measured.height, 200.0);
+}
+
+/// Where the two passes read the same values — nothing moving, nothing still
+/// to appear — each answers from the other's cache.
+///
+/// Hiding every entry from the other pass is also correct, and costs a surface
+/// that measures two full layouts on every frame with layout to do. The
+/// grandchild's origin is written only by its parent's layout, so a sentinel
+/// survives a pass exactly when that layout was skipped: the measure reusing
+/// what the real layout left, and the real layout reusing what the measure did.
+#[test]
+fn a_settled_subtree_is_reused_by_a_measure_and_by_the_layout_after_it() {
+    let mut h = H::new(
+        container().width(200.0).height(100.0).child(
+            container()
+                .width(100.0)
+                .height(50.0)
+                .child(box_of(40.0, 20.0)),
+        ),
+    );
+    h.fit(200.0, 100.0);
+    let grandchild = h.tree.get_children(h.children()[0])[0];
+    h.tree.set_origin(grandchild, 999.0, 999.0);
+
+    with_measure_final(|| {
+        h.layout(Constraints::new(200.0, 0.0, 200.0, 300.0));
+    });
+    assert_eq!(
+        h.tree.get_origin(grandchild).unwrap().0,
+        999.0,
+        "the measure laid out a subtree the real layout had left settled"
+    );
+
+    h.fit(200.0, 100.0);
+    assert_eq!(
+        h.tree.get_origin(grandchild).unwrap().0,
+        999.0,
+        "the layout after the measure laid it out again"
+    );
+}
+
 /// The verb reaches the properties whose first value is placed somewhere other
 /// than the seed pass — a size, which `update_size_targets` initialises, and a
 /// padding, which reaches `seed_or_enter` last of the nine.

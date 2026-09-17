@@ -1578,7 +1578,7 @@ fn layout_pass<P: Platform>(
         std::mem::swap(&mut roots, layout_roots);
         for root_id in &roots {
             // Use cached constraints for boundaries, or fall back to parent constraints
-            let cached = tree.cached_constraints(*root_id).unwrap_or(constraints);
+            let cached = tree.last_constraints(*root_id).unwrap_or(constraints);
 
             tree.with_widget_mut(*root_id, |widget, id, tree| {
                 widget.layout(tree, id, cached);

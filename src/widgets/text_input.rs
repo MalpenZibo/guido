@@ -2053,6 +2053,67 @@ mod tests {
         );
     }
 
+    /// A field's font size appears after a measure too, under a box of exact
+    /// size that hands it the same constraints in both passes.
+    ///
+    /// The field is never skipped itself; the box around it is, and nothing
+    /// that box declares moves. What keeps it laid out for real is the size the
+    /// measure placed in the field without letting it appear.
+    /// Read off the glyphs rather than the box: the field's height only grows.
+    #[test]
+    fn a_font_size_under_an_exact_box_appears_after_a_measure() {
+        use crate::prelude::*;
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container().width(200.0).height(100.0).child(
+                container().width(200.0).height(60.0).child(
+                    text_input(create_signal(String::from("entering"))).font_size(
+                        40.0f32
+                            .transition(Transition::new(100.0, TimingFunction::Linear))
+                            .entering_from(10.0),
+                    ),
+                ),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let field = tree.get_children(tree.get_children(root)[0])[0];
+
+        let t0 = std::time::Instant::now();
+        // The loop's order: jobs, the layout roots they queued — the inner box
+        // is one — at the constraints they last had, then the surface root.
+        let frame = |tree: &mut Tree, ms: u64, constraints: Constraints| {
+            tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(ms)));
+            let roots = [root].into_iter().collect();
+            crate::jobs::distribute_jobs(tree, &roots);
+            let drained = crate::jobs::drain_surface_jobs(root);
+            let mut layout_roots = Vec::new();
+            crate::jobs::process_jobs(&drained, tree, &mut layout_roots);
+            crate::jobs::recycle_job_buffer(drained);
+            for boundary in layout_roots {
+                let c = tree.last_constraints(boundary).unwrap_or(constraints);
+                tree.with_widget_mut(boundary, |w, id, t| w.layout(t, id, c));
+            }
+            tree.with_widget_mut(root, |w, id, t| w.layout(t, id, constraints));
+            let node = paint_once(tree, field);
+            tree.set_frame_instant(None);
+            node.commands.iter().find_map(|cmd| match &**cmd {
+                crate::renderer::DrawCommand::Text { font_size, .. } => Some(*font_size),
+                _ => None,
+            })
+        };
+        crate::widgets::container::with_measure_final(|| {
+            frame(&mut tree, 0, Constraints::new(200.0, 0.0, 200.0, 300.0))
+        });
+        let loose = Constraints::new(0.0, 0.0, 200.0, 100.0);
+        frame(&mut tree, 0, loose);
+        let midway = frame(&mut tree, 50, loose).expect("the field draws its text");
+        assert!(
+            midway > 10.0 && midway < 40.0,
+            "the size has to grow rather than be grown, got {midway}"
+        );
+    }
+
     /// A laid-out input, focused unless told otherwise.
     fn field(input: TextInput, focused: bool) -> (Tree, WidgetId) {
         clear_pending_jobs();

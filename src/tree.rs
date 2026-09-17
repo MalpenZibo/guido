@@ -113,6 +113,10 @@ struct Slot {
     is_relayout_boundary: bool,
     /// Cached constraints from last layout
     cached_constraints: Option<Constraints>,
+    /// Whether that layout was a measure
+    cached_by_measure: bool,
+    /// Whether a measure and a layout of this subtree would come out differently
+    differs_between_passes: bool,
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -379,6 +383,8 @@ impl Tree {
             needs_paint: true,
             is_relayout_boundary: false,
             cached_constraints: None,
+            cached_by_measure: false,
+            differs_between_passes: false,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -1124,6 +1130,15 @@ impl Tree {
         }
         let idx = self.get_dense_index(id).expect("checked above");
         self.dense[idx].cached_constraints = Some(constraints);
+        self.dense[idx].cached_by_measure = crate::widgets::container::measuring_final();
+        // A child skipped from its cache read nothing this pass, and still
+        // carries what it read last time.
+        self.dense[idx].differs_between_passes =
+            crate::widgets::container::take_differs_between_passes()
+                || self.dense[idx].children.iter().any(|&child| {
+                    self.get_dense_index(child)
+                        .is_some_and(|c| self.dense[c].differs_between_passes)
+                });
         self.dense[idx].cached_size = Some(size);
         // Damages the new rect and marks the ancestors, which have to redraw
         // to re-emit this widget at its new geometry.
@@ -1131,9 +1146,28 @@ impl Tree {
     }
 
     /// Get cached constraints for a widget.
+    ///
+    /// Constraints cached by a measure answer a layout, and the other way
+    /// round, only where nothing below would come out differently: a skip
+    /// across the passes otherwise returns the other pass's size, or never
+    /// places what a measure declined to.
     pub fn cached_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.get_dense_index(id)
-            .and_then(|idx| self.dense[idx].cached_constraints)
+        let slot = &self.dense[self.get_dense_index(id)?];
+        if slot.differs_between_passes
+            && slot.cached_by_measure != crate::widgets::container::measuring_final()
+        {
+            return None;
+        }
+        slot.cached_constraints
+    }
+
+    /// The constraints this widget was last laid out with, by either pass.
+    ///
+    /// For re-laying out a relayout boundary from where it stands, which wants
+    /// the constraints its parent gave it whichever pass that was. Deciding
+    /// whether a layout can be skipped is [`cached_constraints`](Self::cached_constraints).
+    pub(crate) fn last_constraints(&self, id: WidgetId) -> Option<Constraints> {
+        self.dense[self.get_dense_index(id)?].cached_constraints
     }
 
     /// Get cached size for a widget.

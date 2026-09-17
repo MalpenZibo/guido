@@ -12,8 +12,8 @@ mod style;
 mod characterization;
 
 use animations::instant_transition;
-pub(crate) use animations::with_measure_final;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
+pub(crate) use animations::{measuring_final, take_differs_between_passes, with_measure_final};
 use interaction::{HitContext, untransform_point};
 pub use ripple::{MAX_LIVE_RIPPLES, Ripple, RippleState};
 use style::Decoration;
@@ -2224,7 +2224,8 @@ mod tests {
         let id = tree.register(Box::new(widget));
         // The real flow measures under DIFFERENT constraints than the
         // render layout (loose caps vs the exact surface size), which is
-        // also what defeats the layout cache here
+        // what defeats the layout cache for this root. Not for its children,
+        // whose constraints come from its box and can coincide.
         let render = Constraints::new(0.0, 0.0, 400.0, 400.0);
         let measure = Constraints::new(0.0, 0.0, 500.0, 500.0);
 

@@ -619,6 +619,40 @@ mod tests {
         );
     }
 
+    /// And not by leaving its cache behind, which a text under a box of exact
+    /// size is handed the same constraints for in both passes.
+    ///
+    /// The container above it declares nothing that moves; it is the colour the
+    /// measure placed without it appearing that keeps the layout after it from
+    /// skipping the text.
+    #[test]
+    fn a_text_colour_under_an_exact_box_appears_after_a_measure() {
+        const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(1.0, 1.0, 1.0);
+
+        let mut tree = Tree::new();
+        let root =
+            tree.register(Box::new(container().width(200.0).height(50.0).child(
+                Text::new("entering").color(TO.transition(400.0).entering_from(FROM)),
+            )));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        tree.set_frame_instant(Some(t0));
+        crate::widgets::container::with_measure_final(|| {
+            let _ =
+                jobs::pump_and_layout(&mut tree, root, Constraints::new(200.0, 0.0, 200.0, 300.0));
+        });
+        tree.set_frame_instant(None);
+
+        all_text(&mut tree, root, t0);
+        let midway = all_text(&mut tree, root, t0 + std::time::Duration::from_millis(100))[0].0;
+        assert!(
+            midway.r > 0.01 && midway.r < 0.99,
+            "the colour has to arrive rather than be arrived, got {midway:?}"
+        );
+    }
+
     /// The same for a size, which moves layout rather than paint — so the claim
     /// is what the *container* measured, not what the text drew.
     ///
