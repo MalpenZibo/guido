@@ -4,7 +4,6 @@ use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
 use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
 use crate::renderer::{PaintContext, measure_text_full};
-use crate::tree::ValuePass;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::container::get_animated_value;
@@ -240,7 +239,7 @@ impl Widget for Text {
         // Pointed at the freshly resolved target here, where both it and the
         // frame's instant are in hand.
         self.cached_font_size = self.retarget_text_anims(
-            ctx.tree(),
+            ctx,
             id,
             declared_color.unwrap_or(Color::WHITE),
             self.cached_font_size,
@@ -325,11 +324,9 @@ impl Widget for Text {
         let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
             let style = self.resolved_text_style(tree, id);
             (
-                get_animated_value(
-                    &ValuePass::PAINTING,
-                    self.anims.as_ref().and_then(|a| a.color.as_ref()),
-                    || style.color(id),
-                ),
+                get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
+                    style.color(id)
+                }),
                 style.stroke(),
                 style.shadow(),
                 self.backdrop_blur.map(|radius| radius.get()),

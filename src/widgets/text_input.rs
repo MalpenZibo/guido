@@ -8,7 +8,6 @@
 //!
 //! Styling (background, borders, etc.) should be handled by wrapping in a Container.
 
-use crate::tree::ValuePass;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -641,9 +640,9 @@ impl TextInput {
     /// The reads belong to this input because the call its layout is made
     /// inside does — see `LayoutCtx::layout_child` — so a change to a declared
     /// metric re-lays-out this input and nothing else.
-    fn refresh(&mut self, tree: &Tree, id: WidgetId) -> f32 {
+    fn refresh(&mut self, ctx: &mut LayoutCtx, id: WidgetId) -> f32 {
         let (new_value, new_font_size, new_font_family, new_font_weight, overflow, new_color) = {
-            let style = self.resolved_text_style(tree, id);
+            let style = self.resolved_text_style(ctx.tree_ref(), id);
 
             // Assigned here rather than returned, as the font metrics are:
             // the rule in this function is that a value comes back through
@@ -687,7 +686,7 @@ impl TextInput {
         // same two properties `Text` animates, from the same list — see
         // `declares_text_style`.
         let new_font_size =
-            self.retarget_text_anims(tree, id, new_color.unwrap_or(Color::WHITE), new_font_size);
+            self.retarget_text_anims(ctx, id, new_color.unwrap_or(Color::WHITE), new_font_size);
 
         // Check font properties - only set dirty flag if changed
         if (new_font_size - self.cached_font_size).abs() > f32::EPSILON {
@@ -1305,7 +1304,7 @@ impl Widget for TextInput {
 
         // Refresh cached values from reactive properties. The reads belong to
         // this layout, which is the scope the call was made inside.
-        let overflow = self.refresh(ctx.tree(), id);
+        let overflow = self.refresh(ctx, id);
         ctx.tree().set_own_paint_reach(id, overflow);
 
         // Update measurement cache (has internal dirty check)
@@ -1366,7 +1365,6 @@ impl Widget for TextInput {
                 let style = self.resolved_text_style(tree, id);
                 let input = self.resolved_input_style();
                 let text_color = crate::widgets::container::get_animated_value(
-                    &ValuePass::PAINTING,
                     self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
                     || style.color(id),
                 );

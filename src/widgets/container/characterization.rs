@@ -11,7 +11,6 @@
 //! desirable value — pinning reality is the job; fixing it is a separate
 //! change with its own test.
 
-use crate::tree::ValuePass;
 use rustc_hash::FxHashSet;
 
 use super::*;
@@ -5787,7 +5786,7 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         let (px, py) = pivot.resolve(Rect::new(0.0, 0.0, 50.0, 50.0));
         finite("pivot", vec![px, py]);
         let lengths = c.read_box_lengths(
-            &ValuePass::PAINTING,
+            &mut crate::tree::LayoutCtx::detached(&mut Tree::new()),
             id,
             Constraints::new(0.0, 0.0, 200.0, 200.0),
         );

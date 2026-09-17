@@ -45,7 +45,6 @@
 use super::box_model::BoxLengths;
 use super::*;
 use crate::tree::LayoutCtx;
-use crate::tree::ValuePass;
 
 impl Container {
     /// Point the size animations at the content just measured.
@@ -75,13 +74,12 @@ impl Container {
                 content.height + lengths.padding.vertical_total(),
             ),
         ];
-        let pass = &ctx.value_pass();
         let parent = ctx.tree_ref().get_parent(id);
+        let frame_instant = ctx.tree_ref().frame_instant();
         let Some(ref mut anims) = self.anims else {
             return;
         };
         let mut retargeted = false;
-        let tree = ctx.tree_ref();
 
         // The two size slots, in the order the targets above are written, and
         // whichever of them was declared.
@@ -109,13 +107,13 @@ impl Container {
                 // was waiting for and the size animates from there. A measure
                 // pass places without marking, so the appearance is still to
                 // come: see `set_immediate`.
-                if anim.begin_enter(pass, target, || tree.frame_instant()) {
+                if anim.begin_enter(ctx, target, || frame_instant) {
                     retargeted = true;
                 } else {
-                    anim.set_immediate(pass, target);
+                    anim.set_immediate(ctx, target);
                 }
             } else if (target - *anim.target()).abs() > 0.001 {
-                anim.animate_to(target, tree.frame_instant());
+                anim.animate_to(target, frame_instant);
                 retargeted = true;
             }
         }
@@ -137,14 +135,14 @@ impl Container {
 /// Called from the arm the table generates for each property, which is where
 /// the type it animates is known.
 pub(super) fn seed_or_enter<T: crate::animation::Animatable>(
-    pass: &ValuePass,
+    ctx: &mut LayoutCtx,
     anim: &mut AnimationState<T>,
     target: T,
     now: impl FnOnce() -> crate::clock::FrameInstant,
 ) -> bool {
-    let entered = anim.begin_enter(pass, target, now);
+    let entered = anim.begin_enter(ctx, target, now);
     if !entered {
-        anim.set_immediate(pass, target);
+        anim.set_immediate(ctx, target);
     }
     // A sequence with no trigger is owed a play, and only this pass can ask for
     // the frame that gives it one: a triggered sequence wakes its container

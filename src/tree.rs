@@ -215,52 +215,6 @@ struct CachedLayout {
     pass_dependent: bool,
 }
 
-/// Which pass is reading an animated value, and somewhere to say that the
-/// answer depended on it.
-///
-/// A measure reads where an animation is going and a layout reads where it is,
-/// so a value in flight answers the two differently — and a subtree whose
-/// answer is the same either way can be skipped by one pass on what the other
-/// cached. Noticing that is the job of the reads themselves, which is where it
-/// was noticed before: what has changed is that the notice travels with the
-/// pass rather than in a thread-local anybody could have set.
-pub struct ValuePass {
-    measuring: bool,
-    /// Raised by a read whose answer the pass decided. `None` for
-    /// [`PAINTING`](Self::PAINTING), where there is nothing to decide — a paint
-    /// has one answer and reuses nothing.
-    noticed: Option<std::rc::Rc<std::cell::Cell<bool>>>,
-}
-
-impl ValuePass {
-    /// Paint, where there is only ever one answer: where the animation is now,
-    /// and nothing is deciding what may be reused.
-    pub const PAINTING: Self = Self {
-        measuring: false,
-        noticed: None,
-    };
-
-    pub(crate) fn laying_out(measuring: bool, noticed: std::rc::Rc<std::cell::Cell<bool>>) -> Self {
-        Self {
-            measuring,
-            noticed: Some(noticed),
-        }
-    }
-
-    /// Whether this pass reads where animations are going.
-    pub fn measuring(&self) -> bool {
-        self.measuring
-    }
-
-    /// Say that what was just read would have answered the other pass
-    /// differently.
-    pub(crate) fn depends_on_the_pass(&self) {
-        if let Some(ref noticed) = self.noticed {
-            noticed.set(true);
-        }
-    }
-}
-
 pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Slot>,
@@ -293,9 +247,9 @@ pub struct Tree {
     pass: LayoutPass,
     /// Raised while a widget lays out, by a read whose answer the pass
     /// decided: a value in flight, or one a measure placed without letting it
-    /// appear. Taken by the cache write, which is what makes a settled subtree
+    /// appear. Read by the cache write, which is what makes a settled subtree
     /// reusable by the pass that did not lay it out.
-    pass_dependent: std::rc::Rc<std::cell::Cell<bool>>,
+    pass_dependent: bool,
     /// When the event now being dispatched happened.
     ///
     /// Not the same question as `frame_instant`: a frame advances what is
@@ -341,7 +295,7 @@ impl Tree {
             damage: std::collections::HashMap::new(),
             frame_instant: None,
             pass: LayoutPass::Layout,
-            pass_dependent: std::rc::Rc::new(std::cell::Cell::new(false)),
+            pass_dependent: false,
             event_instant: None,
             focus_claimed_the_press: false,
         }
@@ -577,7 +531,7 @@ impl Tree {
         // Whether *this* subtree's answer belongs to the pass that asked is
         // the question the reads below answer; whatever the subtree around it
         // has already said is put back when this one is done.
-        let enclosing = self.pass_dependent.replace(false);
+        let enclosing = std::mem::replace(&mut self.pass_dependent, false);
 
         // Nothing to redo: this pass asked the same question last time and
         // nothing has marked the widget since.
@@ -587,7 +541,7 @@ impl Tree {
             crate::render_stats::record_layout_skipped();
             // A skipped subtree read nothing this pass, and still answers what
             // it answered last time.
-            self.pass_dependent.set(enclosing || entry.pass_dependent);
+            self.pass_dependent = enclosing || entry.pass_dependent;
             return Some(entry.size);
         }
         crate::render_stats::record_layout_executed_with_reasons(
@@ -639,8 +593,7 @@ impl Tree {
         // Upward, to whatever is laying this one out — on both ways out, so an
         // id the tree cannot answer for does not drop what the widget around
         // it has already said.
-        let mine = self.pass_dependent.get();
-        self.pass_dependent.set(enclosing || mine);
+        self.pass_dependent |= enclosing;
         laid_out
     }
 
@@ -656,15 +609,6 @@ impl Tree {
     /// where they are.
     pub fn measuring(&self) -> bool {
         self.pass.is_measure()
-    }
-
-    /// The pass, as a widget's value reads see it: which way to read an
-    /// animation, and somewhere to say that the answer depended on the pass.
-    pub fn value_pass(&self) -> ValuePass {
-        ValuePass::laying_out(
-            self.pass.is_measure(),
-            std::rc::Rc::clone(&self.pass_dependent),
-        )
     }
 
     /// Run `f` under `pass`, and put back whatever pass was running.
@@ -1346,18 +1290,10 @@ impl Tree {
         let idx = self.get_dense_index(id).expect("checked above");
         // A subtree answers the passes differently when something in it is in
         // flight, or when a measure placed a value without letting it appear.
-        // The reads say so as they happen; a child that was skipped read
-        // nothing this pass and still carries what it said last time.
-        let pass_dependent = self.pass_dependent.replace(false)
-            || self.dense[idx].children.iter().any(|&child| {
-                self.get_dense_index(child).is_some_and(|c| {
-                    self.dense[c]
-                        .cached
-                        .iter()
-                        .flatten()
-                        .any(|e| e.pass_dependent)
-                })
-            });
+        // The reads say so as they happen, and each child folded its own
+        // subtree's answer into the same flag on its way out — so this is the
+        // whole subtree's, and there is nothing to walk.
+        let pass_dependent = self.pass_dependent;
         let pass = self.pass;
         self.dense[idx].cached = [None; LayoutPass::COUNT];
         self.dense[idx].cached[pass as usize] = Some(CachedLayout {
@@ -2508,10 +2444,16 @@ impl LayoutCtx<'_> {
         self.tree
     }
 
-    /// The pass as a widget's value reads see it — see
-    /// [`Tree::value_pass`](Tree::value_pass).
-    pub fn value_pass(&self) -> ValuePass {
-        self.tree.value_pass()
+    /// Say that what was just read would have answered the other pass
+    /// differently — a value in flight, or one this measure placed without
+    /// letting it appear.
+    ///
+    /// Called by the value reads themselves, which is the only place that
+    /// knows. What it decides is whether the pass that did *not* run may read
+    /// this subtree's answer: a settled one may, and one that said this may
+    /// not.
+    pub fn answer_depends_on_the_pass(&mut self) {
+        self.tree.pass_dependent = true;
     }
 
     /// Whether this pass reads where animations are going rather than where
@@ -2527,6 +2469,18 @@ impl LayoutCtx<'_> {
     /// measured against the size this layout is about to answer with.
     pub fn clips_children(&mut self, clips: bool) {
         self.clips_children = clips;
+    }
+
+    /// A context for the tests of what a layout *reads*, which are about the
+    /// values rather than about any widget: a layout pass, over a tree, with
+    /// nothing in it.
+    #[cfg(test)]
+    pub(crate) fn detached(tree: &mut Tree) -> LayoutCtx<'_> {
+        LayoutCtx {
+            id: WidgetId::new(0, 0),
+            tree,
+            clips_children: false,
+        }
     }
 
     /// Lay a child out under `constraints`, and answer with its size.

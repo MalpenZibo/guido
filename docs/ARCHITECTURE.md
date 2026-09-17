@@ -540,9 +540,17 @@ every time their parent did.
 Which pass is running travels on the context: `ctx.measuring()` is true while a
 natural size is being measured — the popup path, and a content-sized surface —
 and it is what makes an animated value read as where it is going rather than
-where it is. A measure's answers are cached apart from a layout's, and either
-may reuse the other's only for a subtree that is settled: `ValuePass` is how a
-read says that its answer belonged to the pass that asked.
+where it is. Only the reads that ask it are told, through
+`AnimationState::displayed_in`, which is also where one says
+`ctx.answer_depends_on_the_pass()` for a value in flight. A paint asks nothing:
+`displayed` has one answer.
+
+What that decides is the cache. A widget's answer is kept under the pass that
+laid it out, and the pass that did not may read it only where the subtree is
+settled — so a measure reads a layout's work rather than repeating it (42
+widget layouts a frame rather than 242, on a bar of 121), and a subtree with an
+animation in flight, or one a measure placed without letting it appear, is
+never handed across.
 
 ### Widgets written outside the crate
 

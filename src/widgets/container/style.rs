@@ -20,7 +20,7 @@
 
 use super::*;
 use crate::finite::{AllFinite, FiniteOr};
-use crate::tree::ValuePass;
+use crate::tree::LayoutCtx;
 use crate::widgets::BackgroundOverride;
 
 impl Container {
@@ -397,44 +397,35 @@ impl Container {
             .get_finite_or(Padding::default(), id, "padding")
     }
 
-    pub(super) fn animated_padding(&self, pass: &ValuePass, id: WidgetId) -> Padding {
-        get_animated_value(pass, self.anims.as_ref().and_then(|a| a.padding()), || {
-            self.effective_padding_target(id)
+    pub(super) fn animated_padding(&self, ctx: &mut LayoutCtx, id: WidgetId) -> Padding {
+        match self.anims.as_ref().and_then(|a| a.padding()) {
+            Some(anim) => anim.displayed_in(ctx),
+            None => self.effective_padding_target(id),
+        }
+    }
+
+    pub(super) fn animated_background(&self, id: WidgetId) -> Color {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.background()), || {
+            self.effective_background_target(id)
         })
     }
 
-    pub(super) fn animated_background(&self, pass: &ValuePass, id: WidgetId) -> Color {
-        get_animated_value(
-            pass,
-            self.anims.as_ref().and_then(|a| a.background()),
-            || self.effective_background_target(id),
-        )
-    }
-
-    pub(super) fn animated_corners(
-        &self,
-        pass: &ValuePass,
-        id: WidgetId,
-    ) -> crate::widgets::Corners {
-        get_animated_value(pass, self.anims.as_ref().and_then(|a| a.corners()), || {
+    pub(super) fn animated_corners(&self, id: WidgetId) -> crate::widgets::Corners {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.corners()), || {
             self.effective_corners_target(id)
         })
     }
 
-    pub(super) fn animated_border_width(&self, pass: &ValuePass, id: WidgetId) -> f32 {
-        get_animated_value(
-            pass,
-            self.anims.as_ref().and_then(|a| a.border_width()),
-            || self.effective_border_width_target(id),
-        )
+    pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.border_width()), || {
+            self.effective_border_width_target(id)
+        })
     }
 
-    pub(super) fn animated_border_color(&self, pass: &ValuePass, id: WidgetId) -> Color {
-        get_animated_value(
-            pass,
-            self.anims.as_ref().and_then(|a| a.border_color()),
-            || self.effective_border_color_target(id),
-        )
+    pub(super) fn animated_border_color(&self, id: WidgetId) -> Color {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.border_color()), || {
+            self.effective_border_color_target(id)
+        })
     }
 
     /// The shadow to draw, never reaching further than the rect the layout
@@ -458,9 +449,9 @@ impl Container {
     /// ζ = 0.05, and sizing every damage rect for that is not a trade worth
     /// making for the tip of a bounce nobody asked for. See
     /// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect`.
-    pub(super) fn animated_shadow(&self, pass: &ValuePass, id: WidgetId) -> Shadow {
+    pub(super) fn animated_shadow(&self, id: WidgetId) -> Shadow {
         let anim = self.anims.as_ref().and_then(|a| a.shadow());
-        let shadow = get_animated_value(pass, anim, || self.effective_shadow_target(id));
+        let shadow = get_animated_value(anim, || self.effective_shadow_target(id));
         match anim {
             Some(_) => shadow.shrunk_to(self.shadow_reach.get()),
             // Only where something is in flight, because `shadow_reach` is the
@@ -480,7 +471,7 @@ impl Container {
     /// This is the only place the two forms meet. Everything above it says
     /// `translate`, `rotate`, `scale`; everything below it takes a matrix and
     /// never has to ask how the matrix was arrived at.
-    pub(super) fn animated_transform(&self, pass: &ValuePass, id: WidgetId) -> Transform {
+    pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
         let anims = self.anims.as_ref();
 
         // What could move each component: its own declaration, its own
@@ -505,21 +496,21 @@ impl Container {
         }
 
         let translate = if has_translate {
-            get_animated_value(pass, anims.and_then(|a| a.translate()), || {
+            get_animated_value(anims.and_then(|a| a.translate()), || {
                 self.effective_translate_target(id)
             })
         } else {
             Translate::NONE
         };
         let rotate = if has_rotate {
-            get_animated_value(pass, anims.and_then(|a| a.rotate()), || {
+            get_animated_value(anims.and_then(|a| a.rotate()), || {
                 self.effective_rotate_target(id)
             })
         } else {
             0.0
         };
         let scale = if has_scale {
-            get_animated_value(pass, anims.and_then(|a| a.scale()), || {
+            get_animated_value(anims.and_then(|a| a.scale()), || {
                 self.effective_scale_target(id)
             })
         } else {

@@ -13,7 +13,6 @@ mod style;
 #[cfg(test)]
 mod characterization;
 
-use crate::tree::ValuePass;
 use animations::instant_transition;
 pub use animations::{AdvanceResult, AnimationState, get_animated_value};
 use interaction::{HitContext, untransform_point};
@@ -1455,11 +1454,10 @@ impl Widget for Container {
         // Above it rather than at the top of the function: a layout that skips
         // must not seed, and the gate is what decides that. Below the gate the
         // first layout never skips, because it has no cached constraints.
-        self.seed_animations(ctx.tree_ref(), id);
+        self.seed_animations(ctx, id);
 
-        let pass = &ctx.value_pass();
-        let lengths = self.read_box_lengths(pass, id, constraints);
-        let child = self.child_layout(pass, &lengths, constraints);
+        let lengths = self.read_box_lengths(ctx, id, constraints);
+        let child = self.child_layout(ctx, &lengths, constraints);
         let padding = lengths.padding;
 
         let children = self.children_source.reconcile_and_get(ctx.tree());
@@ -1503,7 +1501,7 @@ impl Widget for Container {
 
         self.update_size_targets(ctx, id, &lengths, content_size);
 
-        let size = self.resolve_size(pass, &lengths, constraints, content_size);
+        let size = self.resolve_size(ctx, &lengths, constraints, content_size);
 
         self.layout_scrollbar_containers(ctx, id, size);
 
@@ -1568,8 +1566,8 @@ impl Widget for Container {
 
         let hit = HitContext {
             bounds: tree.get_bounds(id).unwrap_or_default(),
-            corners: self.animated_corners(&ValuePass::PAINTING, id),
-            transform: self.animated_transform(&ValuePass::PAINTING, id),
+            corners: self.animated_corners(id),
+            transform: self.animated_transform(id),
             pivot: self.resolved_pivot(id),
         };
 
@@ -1664,13 +1662,13 @@ impl Widget for Container {
             overflow,
         ) = with_signal_tracking(id, JobType::Paint, || {
             (
-                self.animated_background(&ValuePass::PAINTING, id),
-                self.animated_corners(&ValuePass::PAINTING, id),
-                self.animated_shadow(&ValuePass::PAINTING, id),
-                self.animated_transform(&ValuePass::PAINTING, id),
+                self.animated_background(id),
+                self.animated_corners(id),
+                self.animated_shadow(id),
+                self.animated_transform(id),
                 self.resolved_pivot(id),
-                self.animated_border_width(&ValuePass::PAINTING, id),
-                self.animated_border_color(&ValuePass::PAINTING, id),
+                self.animated_border_width(id),
+                self.animated_border_color(id),
                 self.effective_gradient(id),
                 self.backdrop_blur.as_ref().map(|b| b.get()),
                 self.takes_input.as_ref().map(|t| t.get()),
