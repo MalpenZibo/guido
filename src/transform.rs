@@ -528,6 +528,23 @@ mod tests {
                 .is_pure_translation(),
             "and so does one composed with a move"
         );
+
+        // One wrong component at a time, because every case above has more
+        // than one wrong at once — and a predicate that had lost a condition
+        // would still answer those correctly on the strength of the others.
+        // `data` is `[a, b, tx, c, d, ty]`.
+        for (label, data) in [
+            ("x scaled", [2.0, 0.0, 7.0, 0.0, 1.0, 9.0]),
+            ("sheared along x", [1.0, 0.5, 7.0, 0.0, 1.0, 9.0]),
+            ("sheared along y", [1.0, 0.0, 7.0, 0.5, 1.0, 9.0]),
+            ("y scaled", [1.0, 0.0, 7.0, 0.0, 2.0, 9.0]),
+        ] {
+            assert!(
+                !Transform { data }.is_pure_translation(),
+                "{label}: one component is enough to make undoing it more than \
+                 negating the move"
+            );
+        }
     }
 
     fn approx_eq(a: f32, b: f32) -> bool {
