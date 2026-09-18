@@ -11,7 +11,7 @@
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{PaintContext, RenderNode};
+use guido::renderer::RenderNode;
 use guido::tree::Tree;
 
 fn three_level(gp: f32, p: f32, c: f32) -> Container {
@@ -38,10 +38,7 @@ fn angles_down_the_chain(gp: f32, p: f32, c: f32) -> Vec<f32> {
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
     tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0));
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
 
     let mut out = Vec::new();
     let mut running = 0.0;

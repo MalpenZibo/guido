@@ -13,13 +13,12 @@ use std::time::{Duration, Instant};
 
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
-use crate::jobs::{JobRequest, JobType, RequiredJob, request_job, request_job_at};
+use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
     CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
     has_focus, primary_copy, primary_paste, release_focus, request_focus, set_cursor,
-    with_signal_tracking,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
@@ -1351,51 +1350,51 @@ impl Widget for TextInput {
         size
     }
 
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, ctx: &mut PaintContext) {
+        let (tree, id) = (ctx.tree(), ctx.id());
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let bounds = tree.get_bounds(id).unwrap_or_default();
         let display = self.display_text_cached();
         let is_focused = has_focus(id);
 
-        // Read the declared colours with tracking, so a change to one repaints
-        // this input and nothing else.
-        let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) =
-            with_signal_tracking(id, JobType::Paint, || {
-                let style = self.resolved_text_style(tree, id);
-                let input = self.resolved_input_style();
-                let text_color = crate::widgets::container::get_animated_value(
-                    self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
-                    || style.color(id),
-                );
-                // Only when there is nothing to show instead. Read inside the
-                // tracking scope like every other paint input, so a prompt that
-                // changes repaints the field.
-                let placeholder = self
-                    .placeholder
-                    .filter(|_| self.cached_value.is_empty())
-                    .map(|signal| {
-                        let color = input.placeholder_color.get_or(Color::rgba(
-                            text_color.r,
-                            text_color.g,
-                            text_color.b,
-                            text_color.a * PLACEHOLDER_ALPHA,
-                        ));
-                        (signal.get(), color)
-                    });
-                (
-                    text_color,
-                    input
-                        .selection_color
-                        .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
-                    // The caret defaults to the text colour: an input that
-                    // only sets `text_color` should not sprout a blue cursor.
-                    input.cursor_color.get_or(text_color),
-                    style.stroke(),
-                    style.shadow(),
-                    placeholder,
-                )
-            });
+        // Read inside the scope the framework opened around this call, so a
+        // change to one repaints this input and nothing else.
+        let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) = {
+            let style = self.resolved_text_style(tree, id);
+            let input = self.resolved_input_style();
+            let text_color = crate::widgets::container::get_animated_value(
+                self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
+                || style.color(id),
+            );
+            // Only when there is nothing to show instead. Read inside the
+            // tracking scope like every other paint input, so a prompt that
+            // changes repaints the field.
+            let placeholder = self
+                .placeholder
+                .filter(|_| self.cached_value.is_empty())
+                .map(|signal| {
+                    let color = input.placeholder_color.get_or(Color::rgba(
+                        text_color.r,
+                        text_color.g,
+                        text_color.b,
+                        text_color.a * PLACEHOLDER_ALPHA,
+                    ));
+                    (signal.get(), color)
+                });
+            (
+                text_color,
+                input
+                    .selection_color
+                    .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
+                // The caret defaults to the text colour: an input that
+                // only sets `text_color` should not sprout a blue cursor.
+                input.cursor_color.get_or(text_color),
+                style.stroke(),
+                style.shadow(),
+                placeholder,
+            )
+        };
 
         // The text scrolls horizontally under a fixed viewport, so whatever
         // slid past either edge has to be cut at the widget's bounds.
@@ -1612,6 +1611,7 @@ pub fn text_input(signal: RwSignal<String>) -> TextInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jobs::JobType;
     use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
@@ -2144,10 +2144,7 @@ mod tests {
 
     fn paint_once(tree: &mut Tree, id: WidgetId) -> crate::renderer::RenderNode {
         let mut node = crate::renderer::RenderNode::new(id.as_u64());
-        tree.with_widget_mut(id, |w, id, t| {
-            let mut ctx = crate::renderer::PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(id, &mut node);
         node
     }
 

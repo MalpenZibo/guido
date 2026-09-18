@@ -1,8 +1,7 @@
 use crate::default_font_family;
-use crate::jobs::JobType;
 use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
-use crate::reactive::{IntoSignal, OptionSignalExt, Signal, with_signal_tracking};
+use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
 use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -314,14 +313,16 @@ impl Widget for Text {
         EventResponse::Ignored
     }
 
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, ctx: &mut PaintContext) {
+        let (tree, id) = (ctx.tree(), ctx.id());
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let size = tree.cached_size(id).unwrap_or_default();
         let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-        // Read the painted properties with tracking so a change on whichever
-        // ancestor supplied them repaints this text and nothing else.
-        let (color, stroke, shadow, blur) = with_signal_tracking(id, JobType::Paint, || {
+        // Read inside the scope the framework opened around this call, so a
+        // change on whichever ancestor supplied them repaints this text and
+        // nothing else.
+        let (color, stroke, shadow, blur) = {
             let style = self.resolved_text_style(tree, id);
             (
                 get_animated_value(self.anims.as_ref().and_then(|a| a.color.as_ref()), || {
@@ -331,7 +332,7 @@ impl Widget for Text {
                 style.shadow(),
                 self.backdrop_blur.map(|radius| radius.get()),
             )
-        });
+        };
         // A frosted text takes its stroke as a contour instead: drawn from the
         // same coverage mask, outside the letter rather than under it, so the
         // glass keeps what the frost put in it.
@@ -386,6 +387,7 @@ mod tests {
     use super::*;
     use crate::animation::{Animatable, Animate};
     use crate::jobs;
+    use crate::jobs::JobType;
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
     use crate::renderer::{DrawCommand, RenderNode};
@@ -436,10 +438,7 @@ mod tests {
         tree.set_frame_instant(Some(at));
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
         tree.set_frame_instant(None);
 
         fn walk(node: &RenderNode, out: &mut Vec<(Color, f32)>) {
@@ -1041,10 +1040,7 @@ mod tests {
     fn painted_style(tree: &mut Tree, root: WidgetId) -> (FontFamily, FontWeight) {
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
         fn find(node: &RenderNode) -> Option<(FontFamily, FontWeight)> {
             for cmd in &node.commands {
                 if let DrawCommand::Text {
@@ -1072,10 +1068,7 @@ mod tests {
     fn frame(tree: &mut Tree, root: WidgetId) -> (Color, f32) {
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
 
         fn find(node: &RenderNode) -> Option<(Color, f32)> {
             for cmd in &node.commands {
@@ -1098,10 +1091,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
         node.commands.iter().find_map(|cmd| match &**cmd {
             DrawCommand::TextBackdropBlur { stroke, .. } => *stroke,
             _ => None,
@@ -1115,10 +1105,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
         node.commands
             .iter()
             .map(|cmd| match &**cmd {
@@ -1210,10 +1197,7 @@ mod tests {
         let paint = |tree: &mut Tree| {
             tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
             let mut node = RenderNode::new(root.as_u64());
-            tree.with_widget_mut(root, |w, id, t| {
-                let mut ctx = PaintContext::new(&mut node);
-                w.paint(t, id, &mut ctx);
-            });
+            tree.paint_widget(root, &mut node);
             node.commands
                 .iter()
                 .filter(|cmd| matches!(&***cmd, DrawCommand::TextBackdropBlur { .. }))

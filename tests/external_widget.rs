@@ -2,10 +2,11 @@
 //!
 //! Two things have to hold for a third-party widget to be a first-class one:
 //! it has to compile without reaching into the crate, and its signal reads
-//! have to belong to *it*. The second is the reason `with_signal_tracking` and
-//! `JobType` are exported — without them a leaf still updates, but its reads
-//! register against the nearest ancestor that opened a scope, so a change to
-//! its own content re-lays-out every sibling it has.
+//! have to belong to *it*. The second is the framework's job on both passes
+//! now — `layout_child` since #387, `paint_child` since #390 — so a widget
+//! that opens no scope of its own is not punished for it. It was: a paint that
+//! read a signal without a scope subscribed to nothing at all, drew once, and
+//! then stayed as it was. The last test in this file is that one.
 //!
 //! This file covers the first: the two preludes are the only imports, which is
 //! the point of `widget_prelude` existing — the tree, the paint context and the
@@ -58,7 +59,7 @@ impl Widget for Bar {
         EventResponse::Ignored
     }
 
-    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, ctx: &mut PaintContext) {
         ctx.draw_rounded_rect(
             Rect::new(0.0, 0.0, self.measured, self.measured),
             Color::RED,
@@ -80,7 +81,7 @@ fn lay_out(widget: impl Widget + 'static) -> (Tree, WidgetId, Size) {
 #[test]
 fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     let extent = create_signal(20.0f32);
-    let (mut tree, root, size) = lay_out(Bar {
+    let (tree, root, size) = lay_out(Bar {
         extent: extent.into(),
         measured: 0.0,
         layouts: Rc::new(Cell::new(0)),
@@ -90,10 +91,7 @@ fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     assert_eq!(size, Size::new(20.0, 20.0));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
     assert!(!node.commands.is_empty(), "the widget drew nothing");
 }
 
@@ -189,4 +187,104 @@ fn a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer() {
         1,
         "the same constraints, and nothing dirty: there is nothing to ask"
     );
+}
+
+/// A leaf written outside the crate whose `paint` reads a signal and opens no
+/// scope of its own — which is what the book tells its reader costs an
+/// over-broad repaint, and in fact costs every repaint.
+///
+/// Needs an adapter, because the only honest way to ask "did it repaint" from
+/// outside the crate is to look at the pixels.
+#[cfg(feature = "testing")]
+mod a_paint_that_opens_no_scope {
+    use super::*;
+    use guido::testing::Headless;
+
+    /// A parent written outside the crate, which paints its one child through
+    /// the call the framework provides — the reason `paint_child` and the
+    /// options it takes are exported at all.
+    struct Frame {
+        child: Option<Box<dyn Widget>>,
+        child_id: Option<WidgetId>,
+    }
+
+    impl Widget for Frame {
+        fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+            let child = self.child.take().expect("registered once");
+            let child_id = tree.register(child);
+            tree.set_parent(child_id, id);
+            self.child_id = Some(child_id);
+        }
+
+        fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+            let child = self.child_id.expect("registered before layout");
+            let size = ctx.layout_child(child, constraints).unwrap_or_default();
+            ctx.tree().set_origin(child, 0.0, 0.0);
+            size
+        }
+
+        fn paint(&self, ctx: &mut PaintContext) {
+            let child = self.child_id.expect("registered before paint");
+            ctx.paint_child(child, &ChildPaintOptions::default());
+        }
+    }
+
+    /// Draws a colour straight from the signal. No `with_signal_tracking`.
+    struct Swatch {
+        colour: Signal<Color>,
+    }
+
+    impl Widget for Swatch {
+        fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+            Size::new(constraints.max_width, constraints.max_height)
+        }
+
+        fn paint(&self, ctx: &mut PaintContext) {
+            let bounds = Rect::new(0.0, 0.0, 100.0, 32.0);
+            ctx.draw_rounded_rect(bounds, self.colour.get(), 0.0);
+        }
+    }
+
+    #[test]
+    fn a_widget_that_opens_no_paint_scope_still_follows_its_signal() {
+        let Some(mut app) = Headless::new() else {
+            if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() {
+                panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found");
+            }
+            eprintln!("no GPU adapter; skipping");
+            return;
+        };
+
+        let colour = create_signal(Color::rgb(1.0, 0.0, 0.0));
+        let surface = app.surface(
+            SurfaceConfig::new()
+                .height(32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+            move || Frame {
+                child: Some(Box::new(Swatch {
+                    colour: colour.into(),
+                })),
+                child_id: None,
+            },
+        );
+        app.configure(surface, 100, 32, 1.0);
+        app.step();
+
+        let [r, _, b, _] = app.read_pixel(surface, 50, 16);
+        assert!(
+            r > b,
+            "the first frame drew the colour it was given: {r} vs {b}"
+        );
+
+        colour.set(Color::rgb(0.0, 0.0, 1.0));
+        app.step();
+
+        let [r, _, b, _] = app.read_pixel(surface, 50, 16);
+        assert!(
+            b > r,
+            "the write reached nothing: the widget still shows the colour it \
+             was built with. Its paint read the signal, so the read belongs to \
+             it — but no scope was open to hear it ({r} vs {b})"
+        );
+    }
 }

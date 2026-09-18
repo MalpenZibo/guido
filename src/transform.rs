@@ -412,6 +412,14 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// Whether this moves without turning, scaling or skewing — so that
+    /// undoing it is negating its two components and nothing more.
+    #[inline]
+    pub fn is_pure_translation(&self) -> bool {
+        let [a, b, _, c, d, _] = self.data;
+        a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0
+    }
+
     /// Get the X translation component
     #[inline]
     pub fn tx(&self) -> f32 {
@@ -498,6 +506,46 @@ impl Default for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the paint cache leans on: it undoes a child's old placement by
+    /// negating the two translation components, which is only undoing when
+    /// there is nothing else in the matrix. The `debug_assert` in
+    /// `reuse_cached` asks this, so a predicate that answered `true` for
+    /// everything would take the guard with it.
+    #[test]
+    fn only_a_move_is_a_pure_translation() {
+        assert!(Transform::IDENTITY.is_pure_translation());
+        assert!(Transform::translate(12.0, -4.0).is_pure_translation());
+
+        assert!(
+            !Transform::scale(2.0).is_pure_translation(),
+            "a scale survives negating the translation, which is the bug"
+        );
+        assert!(!Transform::rotate_degrees(90.0).is_pure_translation());
+        assert!(
+            !Transform::translate(3.0, 3.0)
+                .then(&Transform::scale(0.5))
+                .is_pure_translation(),
+            "and so does one composed with a move"
+        );
+
+        // One wrong component at a time, because every case above has more
+        // than one wrong at once — and a predicate that had lost a condition
+        // would still answer those correctly on the strength of the others.
+        // `data` is `[a, b, tx, c, d, ty]`.
+        for (label, data) in [
+            ("x scaled", [2.0, 0.0, 7.0, 0.0, 1.0, 9.0]),
+            ("sheared along x", [1.0, 0.5, 7.0, 0.0, 1.0, 9.0]),
+            ("sheared along y", [1.0, 0.0, 7.0, 0.5, 1.0, 9.0]),
+            ("y scaled", [1.0, 0.0, 7.0, 0.0, 2.0, 9.0]),
+        ] {
+            assert!(
+                !Transform { data }.is_pure_translation(),
+                "{label}: one component is enough to make undoing it more than \
+                 negating the move"
+            );
+        }
+    }
 
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5

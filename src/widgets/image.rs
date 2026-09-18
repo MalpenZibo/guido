@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
 use crate::renderer::PaintContext;
-use crate::tree::{LayoutCtx, Tree, WidgetId};
+use crate::tree::LayoutCtx;
 
 use super::widget::{Rect, Widget};
 
@@ -232,7 +232,8 @@ impl Widget for Image {
         self.calculate_size(&constraints)
     }
 
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, ctx: &mut PaintContext) {
+        let (tree, id) = (ctx.tree(), ctx.id());
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         if let Some(ref source) = self.cached_source {
@@ -275,6 +276,7 @@ mod tests {
     use super::*;
     use crate::jobs;
     use crate::reactive::create_signal;
+    use crate::tree::{Tree, WidgetId};
 
     fn measured(tree: &mut Tree, root: WidgetId, c: Constraints) -> Size {
         jobs::pump_and_layout(tree, root, c).expect("the root is registered")
@@ -301,10 +303,7 @@ mod tests {
         measured(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 40.0));
 
         let mut node = crate::renderer::RenderNode::new(root.as_u64());
-        tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = crate::renderer::PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(root, &mut node);
 
         let drawn = node
             .commands

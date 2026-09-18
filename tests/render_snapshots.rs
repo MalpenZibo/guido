@@ -37,7 +37,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
+use guido::renderer::{DrawCommand, RenderNode};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -54,10 +54,7 @@ fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
     tree.layout_widget(root, Constraints::new(0.0, 0.0, width, height));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
 
     let mut out = String::new();
     dump_node(&node, 0, &mut out);

@@ -24,11 +24,15 @@ use guido::widget_prelude::*;
 ```
 
 `widget_prelude` adds what the `Widget` and `Layout` signatures name — `Tree`,
-`WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints` — plus
-`with_signal_tracking` and `JobType`, which are explained below, and
-`Transform`, which is what a widget positions what it paints with. An
-application never names `Transform`: it declares `translate`, `rotate` and
-`scale`, and those compose into one.
+`WidgetId`, `Constraints`, `PaintContext`, `RenderNode`, `LayoutHints`,
+`ChildPaintOptions` — and `Transform`, which is what a widget positions what
+it draws with. An application never names `Transform`: it declares `translate`,
+`rotate` and `scale`, and those compose into one.
+
+It also carries `with_signal_tracking` and `JobType`. Neither is needed to
+write a widget any more — the framework scopes both passes — but they are what
+a widget reaches for to claim a *narrower* attribution than its own pass: one
+dynamic-children segment rather than the whole of it.
 
 ## A widget
 
@@ -62,7 +66,7 @@ impl Widget for Bar {
         Size::new(extent, extent)
     }
 
-    fn paint(&self, _tree: &Tree, _id: WidgetId, ctx: &mut PaintContext) {
+    fn paint(&self, ctx: &mut PaintContext) {
         // Local coordinates: the parent has already placed this node.
         ctx.draw_rounded_rect(
             Rect::new(0.0, 0.0, self.measured, self.measured),
@@ -86,11 +90,17 @@ widget's reads belong to *it*, the pass it is in, and the cache the size goes
 into. So there is nothing to remember: read the signals plainly and return a
 size.
 
-**Paint is still yours to scope.** `with_signal_tracking(id, JobType::Paint,
-..)` around whatever you draw from, because nothing wraps a paint yet. Without
-it a read registers against the nearest ancestor that opened a scope — the
-parent container — so a change to what this widget draws repaints every one of
-its siblings too.
+**A paint draws; it does not scope itself either.** The framework calls it
+through `PaintContext::paint_child`, and that call holds the cull test that
+skips a widget nobody can see, the cache a clean one is served from, and the
+same scope layout gets — so a signal read while drawing belongs to this widget
+and repaints this widget. `ctx.id()` is which widget it is and `ctx.tree()` is
+the tree it is in.
+
+This is newer than it looks: until #390 a paint really did have to open its
+own scope, and a widget that did not subscribed to *nothing* — it drew once and
+then stayed as it was. The advice here used to say that the read fell through
+to the parent container. It did not.
 
 **Which pass is running is `ctx.measuring()`.** True while a natural size is
 being measured, before a surface exists, which is when an animated value reads

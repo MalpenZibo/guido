@@ -30,11 +30,11 @@
 use crate::layout::Axis;
 use crate::renderer::PaintContext;
 use crate::transform::Transform;
-use crate::tree::{Tree, WidgetId};
+use crate::tree::WidgetId;
 use crate::widgets::Rect;
 
 /// How a parent wants its children painted.
-pub(crate) struct ChildPaintOptions {
+pub struct ChildPaintOptions {
     /// Subtracted from each child's laid-out position — the scroll offset for
     /// a scrolling parent, zero for everyone else.
     pub scroll_offset: (f32, f32),
@@ -84,11 +84,11 @@ impl Default for ChildPaintOptions {
 /// cached as though it had, or the rect moves on and the cache serves the
 /// children it skipped.
 fn visible_window<'a>(
-    tree: &Tree,
     children: &'a [WidgetId],
     ctx: &mut PaintContext,
     opts: &ChildPaintOptions,
 ) -> &'a [WidgetId] {
+    let tree = ctx.tree();
     // One child cannot be narrowed to fewer than one, and none cannot be
     // narrowed at all. Before the counting, not after: a scroller's subtree is
     // mostly single-child wrappers and childless leaves, and counting those as
@@ -132,18 +132,32 @@ fn visible_window<'a>(
 }
 
 /// Paint `children` into `ctx`, culling and reusing cached paint where possible.
-pub(crate) fn paint_children(
-    tree: &Tree,
-    ctx: &mut PaintContext,
-    children: &[WidgetId],
-    opts: &ChildPaintOptions,
-) {
-    let (offset_x, offset_y) = opts.scroll_offset;
-    let children = visible_window(tree, children, ctx, opts);
+pub fn paint_children(ctx: &mut PaintContext, children: &[WidgetId], opts: &ChildPaintOptions) {
+    // The only thing left here that is about a *sequence* of children: which
+    // slice of an ordered row can be seen at all. Everything about painting
+    // one of them belongs to `paint_child`, so a widget with a single child
+    // can have it too.
+    for &child_id in visible_window(children, ctx, opts) {
+        ctx.paint_child(child_id, opts);
+    }
+}
 
-    for &child_id in children {
+impl PaintContext<'_> {
+    /// Paint one child of the widget this context is painting.
+    ///
+    /// The one way a child is painted below the root — `Tree::paint_widget` is
+    /// the root's — and what makes the guarantees the same either way: the
+    /// child is culled if it cannot be seen, taken from its cache if it has
+    /// one, given its place in this node, and given its own `JobType::Paint`
+    /// scope, so what it reads while drawing belongs to *it*.
+    ///
+    /// A widget that forgot the scope used to subscribe to nothing: it drew
+    /// once and then stayed as it was, because no scope was open to hear the
+    /// read. There is nothing to forget now.
+    pub fn paint_child(&mut self, child_id: WidgetId, opts: &ChildPaintOptions) {
+        let (offset_x, offset_y) = opts.scroll_offset;
         // Child bounds come from the tree in the parent's local coordinates
-        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
+        let child_bounds = self.tree().get_bounds(child_id).unwrap_or_default();
         let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
         let (child_x, child_y) = (child_bounds.x, child_bounds.y);
         let child_position = Transform::translate(child_x - offset_x, child_y - offset_y);
@@ -153,101 +167,130 @@ pub(crate) fn paint_children(
         // shadow falls outside the box that cast it, and a transform moves the
         // box. Its own reach is what the two have in common.
         if let Some(ref cull) = opts.cull_rect
-            && !tree.needs_paint(child_id)
+            && !self.tree().needs_paint(child_id)
         {
-            let drawn = child_bounds.outset(tree.paint_overflow(child_id));
+            let drawn = child_bounds.outset(self.tree().paint_overflow(child_id));
             if !cull.intersects(&drawn) {
                 crate::render_stats::record_paint_child_culled();
-                ctx.mark_partial();
-                continue;
+                self.mark_partial();
+                return;
             }
         }
 
-        if reuse_cached(
-            tree,
-            ctx,
+        if self.reuse_cached(
             child_id,
             (child_x, child_y),
             child_local,
             child_position,
             opts,
         ) {
-            continue;
+            return;
         }
 
         // Full paint: the child is dirty, has no usable cache, or is only
         // partially visible inside a scrolling parent.
-        let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-        child_ctx.set_transform(child_position);
+        let cull_in_child_space = opts.cull_rect.map(|cull| {
+            // The cull rect travels into the child's own coordinate space
+            Rect::new(cull.x - child_x, cull.y - child_y, cull.width, cull.height)
+        });
+        self.paint_child_placed(child_id, child_local, child_position, cull_in_child_space);
+    }
 
-        // The cull rect travels into the child's own coordinate space
-        if let Some(ref cull) = opts.cull_rect {
-            child_ctx.set_cull_rect(Rect::new(
-                cull.x - child_x,
-                cull.y - child_y,
-                cull.width,
-                cull.height,
-            ));
+    /// Paint a child at a placement the caller decides, rather than at the one
+    /// its bounds give it.
+    ///
+    /// For a child whose placement is not a translation: the scrollbar parts,
+    /// which are scaled by the animation that shows and hides them. They are
+    /// never *served* from the paint cache for that reason — reusing a moved node
+    /// undoes its old placement by negating it, which is only undoing if the
+    /// placement was a translation — and none in culling, because a scrollbar
+    /// is inside the box it belongs to by construction.
+    ///
+    /// What it does share is the part that must not be optional: the child's
+    /// own `JobType::Paint` scope.
+    pub(crate) fn paint_child_placed(
+        &mut self,
+        child_id: WidgetId,
+        child_local: Rect,
+        placement: Transform,
+        cull_rect: Option<Rect>,
+    ) {
+        let mut child_ctx = self.add_child(child_id, child_local);
+        child_ctx.set_transform(placement);
+        if let Some(cull) = cull_rect {
+            child_ctx.set_cull_rect(cull);
         }
 
-        tree.with_widget(child_id, |child| {
-            child.paint(tree, child_id, &mut child_ctx)
+        child_ctx.tree().with_widget(child_id, |child| {
+            crate::reactive::with_signal_tracking(child_id, crate::jobs::JobType::Paint, || {
+                child.paint(&mut child_ctx)
+            })
         });
         crate::render_stats::record_paint_child_painted();
     }
-}
 
-/// Try to satisfy a child from its paint cache. Returns whether it worked.
-fn reuse_cached(
-    tree: &Tree,
-    ctx: &mut PaintContext,
-    child_id: WidgetId,
-    (child_x, child_y): (f32, f32),
-    child_local: Rect,
-    child_position: Transform,
-    opts: &ChildPaintOptions,
-) -> bool {
-    if opts.cache_requires_full_visibility {
-        let Some(ref cull) = opts.cull_rect else {
-            return false;
-        };
-        let fully_visible = child_x >= cull.x
-            && child_x + child_local.width <= cull.x + cull.width
-            && child_y >= cull.y
-            && child_y + child_local.height <= cull.y + cull.height;
-        if !fully_visible {
+    /// Try to satisfy a child from its paint cache. Returns whether it worked.
+    fn reuse_cached(
+        &mut self,
+        child_id: WidgetId,
+        (child_x, child_y): (f32, f32),
+        child_local: Rect,
+        child_position: Transform,
+        opts: &ChildPaintOptions,
+    ) -> bool {
+        if opts.cache_requires_full_visibility {
+            let Some(ref cull) = opts.cull_rect else {
+                return false;
+            };
+            let fully_visible = child_x >= cull.x
+                && child_x + child_local.width <= cull.x + cull.width
+                && child_y >= cull.y
+                && child_y + child_local.height <= cull.y + cull.height;
+            if !fully_visible {
+                return false;
+            }
+        }
+
+        if self.tree().needs_paint(child_id) {
             return false;
         }
-    }
+        let Some(cached) = self.tree().cached_paint(child_id) else {
+            return false;
+        };
+        // Never re-size a cached node — see the module docs.
+        if cached.bounds.width != child_local.width || cached.bounds.height != child_local.height {
+            return false;
+        }
 
-    if tree.needs_paint(child_id) {
-        return false;
-    }
-    let Some(cached) = tree.cached_paint(child_id) else {
-        return false;
-    };
-    // Never re-size a cached node — see the module docs.
-    if cached.bounds.width != child_local.width || cached.bounds.height != child_local.height {
-        return false;
-    }
+        // The branch below undoes the old placement by negating it, which is only
+        // undoing if the placement was a translation. `paint_child` builds one;
+        // anything else reaches a child through `paint_child_placed`, which does
+        // not come here. Said out loud, because the doc above is otherwise the
+        // only thing holding it.
+        debug_assert!(
+            cached.parent_position.is_pure_translation(),
+            "a cached child was placed with something other than a translation"
+        );
 
-    if cached.parent_position == child_position {
-        // Unchanged position: the render tree and the cache share the node.
-        ctx.add_child_rc(std::rc::Rc::clone(cached));
-    } else {
-        // Moved: shallow header clone (children and commands stay Rc-shared),
-        // with the user transform extracted and recomposed at the new position.
-        let mut reused = (**cached).clone();
-        // A position is a pure translation, so undoing it is negating it —
-        // no determinant, no inverse, and nothing to unwrap.
-        let pos = &cached.parent_position;
-        let user_part = Transform::translate(-pos.tx(), -pos.ty()).then(&cached.local_transform);
-        reused.local_transform = child_position.then(&user_part);
-        reused.parent_position = child_position;
-        reused.bounds = child_local;
-        reused.repainted.set(false);
-        ctx.add_child_rc(std::rc::Rc::new(reused));
+        if cached.parent_position == child_position {
+            // Unchanged position: the render tree and the cache share the node.
+            self.add_child_rc(std::rc::Rc::clone(cached));
+        } else {
+            // Moved: shallow header clone (children and commands stay Rc-shared),
+            // with the user transform extracted and recomposed at the new position.
+            let mut reused = (**cached).clone();
+            // A position is a pure translation, so undoing it is negating it —
+            // no determinant, no inverse, and nothing to unwrap.
+            let pos = &cached.parent_position;
+            let user_part =
+                Transform::translate(-pos.tx(), -pos.ty()).then(&cached.local_transform);
+            reused.local_transform = child_position.then(&user_part);
+            reused.parent_position = child_position;
+            reused.bounds = child_local;
+            reused.repainted.set(false);
+            self.add_child_rc(std::rc::Rc::new(reused));
+        }
+        crate::render_stats::record_paint_child_cached();
+        true
     }
-    crate::render_stats::record_paint_child_cached();
-    true
 }

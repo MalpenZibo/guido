@@ -416,9 +416,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.borrow_mut().as_mut().unwrap().layout(ctx, constraints)
             }
 
-            fn paint(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId, ctx: &mut ::guido::renderer::PaintContext) {
+            fn paint(&self, ctx: &mut ::guido::renderer::PaintContext) {
                 self.ensure_built();
-                self.__inner.borrow().as_ref().unwrap().paint(tree, id, ctx)
+                self.__inner.borrow().as_ref().unwrap().paint(ctx)
             }
 
             fn event(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId, event: &::guido::widgets::Event) -> ::guido::widgets::EventResponse {

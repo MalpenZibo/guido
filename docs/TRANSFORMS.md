@@ -160,8 +160,10 @@ Transforms are properly accounted for in hit testing. A rotated button will corr
 Not in `guido::prelude`, and **`Container` does not accept one** — an
 application declares the three components and nothing else. This is what they
 compose into on the way to the renderer, and it is in `guido::widget_prelude`
-for the other job: a widget written outside the crate positioning what it
-paints, through `PaintContext::set_transform`.
+for the other job: a widget written outside the crate turning or scaling
+*itself*, through `PaintContext::apply_transform` and
+`apply_transform_with_pivot`. Placing a child is not that job — that is
+`PaintContext::paint_child`, which takes the placement from the tree.
 
 So a shear, or a composition order other than translate → rotate → scale, is
 not expressible on a container. Where the old `.transform()` built a rotated

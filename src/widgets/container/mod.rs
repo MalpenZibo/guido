@@ -1636,8 +1636,9 @@ impl Widget for Container {
         self.publish_paint_reach(tree, id, Rect::from_size(size));
     }
 
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
-        let is_visible = with_signal_tracking(id, JobType::Paint, || self.visible.get_or(true));
+    fn paint(&self, ctx: &mut PaintContext) {
+        let (tree, id) = (ctx.tree(), ctx.id());
+        let is_visible = self.visible.get_or(true);
         if !is_visible {
             return;
         }
@@ -1645,9 +1646,8 @@ impl Widget for Container {
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
-        // Auto-track signal reads for paint properties.
-        // Any signals read here (including closures) will register this widget
-        // as a Paint subscriber so future changes trigger repaint.
+        // Read inside the scope the framework opened around this call, so a
+        // change to any of them repaints this container and nothing else.
         let (
             background,
             corners,
@@ -1660,21 +1660,19 @@ impl Widget for Container {
             backdrop_blur,
             takes_input,
             overflow,
-        ) = with_signal_tracking(id, JobType::Paint, || {
-            (
-                self.animated_background(id),
-                self.animated_corners(id),
-                self.animated_shadow(id),
-                self.animated_transform(id),
-                self.resolved_pivot(id),
-                self.animated_border_width(id),
-                self.animated_border_color(id),
-                self.effective_gradient(id),
-                self.backdrop_blur.as_ref().map(|b| b.get()),
-                self.takes_input.as_ref().map(|t| t.get()),
-                self.overflow.get_or(Overflow::Visible),
-            )
-        });
+        ) = (
+            self.animated_background(id),
+            self.animated_corners(id),
+            self.animated_shadow(id),
+            self.animated_transform(id),
+            self.resolved_pivot(id),
+            self.animated_border_width(id),
+            self.animated_border_color(id),
+            self.effective_gradient(id),
+            self.backdrop_blur.as_ref().map(|b| b.get()),
+            self.takes_input.as_ref().map(|t| t.get()),
+            self.overflow.get_or(Overflow::Visible),
+        );
         self.overflow_resolved.set(overflow);
 
         self.resync_animation_targets(id);
@@ -1774,7 +1772,6 @@ impl Widget for Container {
             (0.0, 0.0)
         };
         paint_children(
-            tree,
             ctx,
             all_children,
             &ChildPaintOptions {
@@ -1791,7 +1788,7 @@ impl Widget for Container {
 
         // Draw scrollbar containers
         if is_scrollable {
-            self.paint_scrollbar_containers(tree, id, ctx);
+            self.paint_scrollbar_containers(ctx);
         }
 
         // Ripples, oldest first. The state holds how far along each one is;
@@ -1803,14 +1800,12 @@ impl Widget for Container {
             // Clips the ripples without affecting children.
             ctx.set_overlay_clip(local_bounds, corner_radii, corner_curvature);
 
-            // Once for the frame rather than once per disc, and tracked: a
-            // ripple held past its growth stops animating on purpose so the
-            // loop can go quiet — see `Ripple::advance` — so a colour written
-            // while the finger is still down would reach nothing at all
-            // without the subscription. Its own scope rather than the block
-            // above, because that block runs whether or not a disc exists and
-            // this read is already inside the guard that says one does.
-            let declared = with_signal_tracking(id, JobType::Paint, || ripple_config.color.get());
+            // Once for the frame rather than once per disc, and inside the
+            // scope the framework opened around this paint: a ripple held past
+            // its growth stops animating on purpose so the loop can go quiet —
+            // see `Ripple::advance` — so a colour written while the finger is
+            // still down would reach nothing at all without the subscription.
+            let declared = ripple_config.color.get();
 
             for ripple in ix.ripple.iter() {
                 let opacity = ripple.opacity();
@@ -2003,7 +1998,6 @@ mod tests {
     use crate::jobs::{self, Job};
     use crate::layout::Constraints;
     use crate::reactive::create_signal;
-    use crate::renderer::PaintContext;
 
     /// Regression test for the missed-write race that left popup menus
     /// permanently collapsed: the Animation subscription for an animated
@@ -2050,10 +2044,7 @@ mod tests {
         // First paint: registers the subscription AND must notice the
         // animation target no longer matches the signal value.
         let mut root_node = crate::renderer::RenderNode::new(id.as_u64());
-        tree.with_widget_mut(id, |w, id, tree| {
-            let mut ctx = PaintContext::new(&mut root_node);
-            w.paint(tree, id, &mut ctx);
-        });
+        tree.paint_widget(id, &mut root_node);
 
         jobs::distribute_jobs(&tree, &roots);
         let drained = jobs::drain_surface_jobs(id);

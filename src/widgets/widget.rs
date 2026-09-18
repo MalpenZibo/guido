@@ -836,7 +836,17 @@ pub trait Widget {
     /// what it answers. A widget computes a size and places its children; it
     /// does not open a tracking scope, write a skip check, or cache anything.
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    /// Draw this widget.
+    ///
+    /// Called by the framework through `Tree::paint_widget` or
+    /// `PaintContext::paint_child`, which is what attributes the reads made
+    /// here to *this* widget, decides whether it runs at all, and places what
+    /// it draws. A widget draws; it does not open a tracking scope, test a
+    /// cull rect or reach for a cache.
+    ///
+    /// `ctx.id()` is which widget this is and `ctx.tree()` is the tree it is
+    /// in, for the bounds and the children a drawing needs.
+    fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         let _ = (tree, id, event);
         EventResponse::Ignored
@@ -922,8 +932,8 @@ impl Widget for Box<dyn Widget> {
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
         (**self).layout(ctx, constraints)
     }
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
-        (**self).paint(tree, id, ctx)
+    fn paint(&self, ctx: &mut PaintContext) {
+        (**self).paint(ctx)
     }
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         (**self).event(tree, id, event)
