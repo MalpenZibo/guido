@@ -6,30 +6,34 @@ This page explains how Guido renders widgets to the screen.
 
 ```text
 Main loop (once per iteration):
- 1. flush_bg_writes()              → Drain queued background-thread signal writes
- 2. take_frame_request()           → Check if a frame was requested
+ 1. init_pending_gpu()             → Give any surface born this iteration a
+                                     render target and its first layout, at
+                                     this iteration's instant — which is what
+                                     an enter animation is seeded from
+ 2. flush_bg_writes()              → Drain queued background-thread signal writes
+ 3. take_frame_request()           → Check if a frame was requested
 
 Per-surface rendering:
- 3. Dispatch events                → Route input events (MouseMoves coalesced),
+ 4. Dispatch events                → Route input events (MouseMoves coalesced),
                                      each one declaring when the compositor saw
                                      it happen — not when this loop got to it
- 4. Frame-pacing gate              → Return if the compositor hasn't shown the
+ 5. Frame-pacing gate              → Return if the compositor hasn't shown the
                                      previous frame yet (jobs stay queued)
- 5. set_frame_instant(now)         → What time it is, for this whole frame:
+ 6. set_frame_instant(now)         → What time it is, for this whole frame:
                                      everything below is asked about this one
                                      moment rather than reading a clock of its
-                                     own (cleared again after step 13)
- 6. drain_pending_jobs()           → Process jobs: unregister, advance
+                                     own (cleared again after step 14)
+ 7. drain_pending_jobs()           → Process jobs: unregister, advance
     + process_jobs()                 animations, reconcile children, mark dirty
- 7. Partial layout                 → Only dirty subtrees re-layout
- 8. Skip-frame check               → Skip paint if root is clean
- 9. Tree::paint_widget()        → Build render tree (Rc cache reuse for clean children)
-10. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
-11. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
+ 8. Partial layout                 → Only dirty subtrees re-layout
+ 9. Skip-frame check               → Skip paint if root is clean
+10. Tree::paint_widget()           → Build render tree (Rc cache reuse for clean children)
+11. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
+12. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
                                      both BEFORE presenting
-12. GPU rendering + present()      → Instanced SDF shapes with HiDPI scaling;
+13. GPU rendering + present()      → Instanced SDF shapes with HiDPI scaling;
                                      present() commits the surface
-13. cache_paint_results()          → Rc-share rendered nodes into the cache,
+14. cache_paint_results()          → Rc-share rendered nodes into the cache,
                                      clear needs_paint flags
 ```
 

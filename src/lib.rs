@@ -2248,41 +2248,29 @@ impl App {
         let mut surface_manager = SurfaceManager::new();
         let mut renderer: Option<Renderer> = None;
 
-        // Create entries for surfaces added via add_surface()
+        // Create entries for surfaces added via add_surface(). The widget and
+        // nothing else: a target and a first layout are what `iterate` gives
+        // any surface that has not got one, and a surface built here is built
+        // by the same lines as one spawned at runtime.
+        //
+        // That is not tidiness. The first layout seeds every enter animation,
+        // and the frame that advances them is the first iteration's — so a
+        // layout out here would be seeded before `Renderer::new`, before the
+        // Wayland source is even inserted, and an enter would have travelled
+        // the whole of start-up before its first frame. The loop's own
+        // `first_frame_presented` is false for all of these, so `wait_for`
+        // returns a 16ms timeout and the first iteration is immediate.
         for def in self.surface_definitions.drain(..) {
-            let wayland_surface = wayland_state
-                .get_surface(def.id)
-                .expect("Surface should exist after configure");
-
             // Create the widget inside an owner scope so that signals/effects
             // created in the factory (e.g. create_memo) are properly owned.
             let (widget, owner_id) = with_owner(|| (def.widget_fn)());
-            let mut managed =
-                ManagedSurface::new(def.id, def.config, widget, owner_id, &mut self.tree);
-
-            // Initialize GPU surface
-            managed.init_gpu(
-                &gpu_context,
-                &wayland_state,
-                wayland_surface.width,
-                wayland_surface.height,
-                wayland_surface.scale_factor,
+            surface_manager.add(ManagedSurface::new(
+                def.id,
+                def.config,
+                widget,
+                owner_id,
                 &mut self.tree,
-            );
-
-            // Create renderer from first surface
-            if renderer.is_none()
-                && let Some(ref wgpu_surface) = managed.wgpu_surface
-            {
-                let r = Renderer::new(
-                    wgpu_surface.device().clone(),
-                    wgpu_surface.queue().clone(),
-                    wgpu_surface.format(),
-                );
-                renderer = Some(r);
-            }
-
-            surface_manager.add(managed);
+            ));
         }
 
         // Insert Wayland source - this handles all Wayland protocol events
@@ -2338,11 +2326,14 @@ struct LoopContext<'a, P: Platform> {
 /// half and not the other. `run` calls it after every dispatch; #264 step 5
 /// is where something else does.
 ///
-/// `frame_at` names the moment every surface drawn this pass is drawn at, for a
-/// driver that wants to. `None` takes it at the render pass, which is what the
-/// loop passes: sampling before this function would date the frame from before
-/// the session lock, the surface commands and — on the iteration that builds
-/// one — the whole of `Renderer::new`.
+/// `frame_at` names the moment every surface drawn this pass is drawn at — and
+/// every surface *born* in it, whose first layout seeds the animations this
+/// pass then advances. `None` takes it where those two meet: after the session
+/// lock and the surface commands, before `init_pending_gpu`. Sampling it any
+/// earlier would date the frame from before work that has nothing to do with
+/// it; any later and a birth would fall outside the frame that draws it, which
+/// is #392. On the one iteration that builds a renderer, `Renderer::new` falls
+/// inside — once per process, against a surface that has no frame yet anyway.
 ///
 /// `Some` ends the loop with that reason.
 fn iterate<P: Platform>(
@@ -2386,8 +2377,15 @@ fn iterate<P: Platform>(
         return Some(ExitReason::Quit);
     }
 
+    // One instant for every surface this pass draws, and for every surface it
+    // gives birth to: a surface created here is laid out here and drawn here,
+    // and the enter animations that layout seeds are advanced by that draw. A
+    // birth outside the frame's moment is an enter that has already travelled
+    // when its first frame arrives. A driver that named an instant is obeyed.
+    let frame_at = frame_at.unwrap_or_else(std::time::Instant::now);
+
     // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
-    surface_manager.init_pending_gpu(gpu_context, wayland_state, tree);
+    surface_manager.init_pending_gpu(gpu_context, wayland_state, tree, frame_at);
 
     // Lazily create the shared renderer once the first surface has a
     // GPU state (apps may start with zero surfaces and spawn them
@@ -2409,11 +2407,6 @@ fn iterate<P: Platform>(
 
     // Take the wake request once for all surfaces (not per-surface)
     let woken = take_wake_request();
-
-    // One instant for every surface this pass draws, taken here rather than at
-    // the top of the iteration so it dates the frame and not the work ahead of
-    // it. A driver that named one is obeyed.
-    let frame_at = frame_at.unwrap_or_else(std::time::Instant::now);
 
     // Render each surface (no renderer yet means no surface has a
     // GPU state — nothing can be rendered this iteration)

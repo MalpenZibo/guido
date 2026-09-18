@@ -960,3 +960,51 @@ fn a_growing_child_configures_the_surface_once_to_where_it_is_going() {
         "and it has to arrive at the one the animation is going to: {asked:?}"
     );
 }
+
+/// A surface's first layout is a pass, and it dates from the moment the driver
+/// named rather than from the wall clock.
+///
+/// An enter animation is seeded at that first layout and advanced by the frame
+/// that follows it. Both happen inside this one `step_at`, so the width must
+/// still be where the enter starts: no time passed between them.
+///
+/// The instant is a minute from the wall clock on purpose. The two clocks tell
+/// apart only where they disagree, and a minute is longer than any transition —
+/// seeded from the wall clock, the animation reaches this frame already
+/// finished, at its full 200.
+#[test]
+fn a_first_layout_dates_from_the_frame_that_asked_for_it() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .width(200.0.transition(1000.0).entering_from(0.0))
+            .height(fill())
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let at = Instant::now() + Duration::from_secs(60);
+    app.step_at(at);
+
+    assert_eq!(
+        app.root_size(surface).0,
+        0.0,
+        "seeded and advanced in one frame, the enter has not begun to travel"
+    );
+
+    // And it does travel, from there. Without this the assertion above is also
+    // what an enter that never plays at all would produce. Half way is asserted
+    // as a range because the easing curve is not this test's business; the ends
+    // are what it is pinning.
+    app.step_at(at + Duration::from_millis(500));
+    let half = app.root_size(surface).0;
+    assert!(
+        half > 0.0 && half < 200.0,
+        "half a transition in, the enter is between its ends: {half}"
+    );
+
+    app.step_at(at + Duration::from_millis(2000));
+    assert_eq!(
+        app.root_size(surface).0,
+        200.0,
+        "a transition and a half in, it has arrived"
+    );
+}

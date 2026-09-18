@@ -391,11 +391,13 @@ impl Tree {
     /// Declare the instant of the frame about to run, or `None` when it is
     /// over.
     ///
-    /// `render_surface` is the caller in the loop. The other one is a test —
-    /// including a test of a widget written outside this crate, which is why
-    /// this is public: a widget that can read the frame's instant is a widget
-    /// whose behaviour over time can be asked about, and that needs somebody
-    /// able to name the moment.
+    /// The loop calls it twice: `render_surface` around a frame, and
+    /// `ManagedSurface::layout_widget` around a surface's first layout, which
+    /// is a pass of its own and the one every enter animation is seeded in.
+    /// The other caller is a test — including a test of a widget written
+    /// outside this crate, which is why this is public: a widget that can read
+    /// the frame's instant is a widget whose behaviour over time can be asked
+    /// about, and that needs somebody able to name the moment.
     pub fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
         self.frame_instant = now;
     }

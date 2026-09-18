@@ -94,14 +94,17 @@ impl ManagedSurface {
     }
 
     /// Initialize GPU surface. Returns true if successful.
+    ///
+    /// `at` is the moment the first layout runs at — see
+    /// [`Self::layout_widget`] for why it is the caller's to name.
     pub fn init_gpu<P: Platform>(
         &mut self,
         gpu_context: &GpuContext,
         platform: &P,
-        width: u32,
-        height: u32,
+        (width, height): (u32, u32),
         scale_factor: f32,
         tree: &mut Tree,
+        at: std::time::Instant,
     ) -> bool {
         if self.wgpu_surface.is_some() {
             return true; // Already initialized
@@ -130,7 +133,7 @@ impl ManagedSurface {
         self.previous_scale_factor = scale_factor;
 
         // Perform initial layout
-        self.layout_widget(tree, width as f32, height as f32);
+        self.layout_widget(tree, width as f32, height as f32, at);
 
         true
     }
@@ -140,13 +143,24 @@ impl ManagedSurface {
         self.wgpu_surface.is_some()
     }
 
-    /// Perform widget layout with the given dimensions.
-    pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32) {
+    /// Perform widget layout with the given dimensions, at the moment `at`.
+    ///
+    /// This is a surface's *first* layout, and a pass like any other: an enter
+    /// animation is seeded here and advanced by the frame that follows, so the
+    /// two have to be reading one clock. Undeclared, this one took the wall
+    /// clock while the frame took the loop's `frame_at`, which on a bar is
+    /// microseconds of nothing and to a driver that names its own instant is
+    /// an enter already over before its first frame.
+    pub fn layout_widget(&self, tree: &mut Tree, width: f32, height: f32, at: std::time::Instant) {
         let constraints = Constraints::new(0.0, 0.0, width, height);
 
+        tree.set_frame_instant(Some(at));
         tree.layout_widget(self.widget_id, constraints);
         // Set root widget origin after layout
         tree.set_origin(self.widget_id, 0.0, 0.0);
+        // The pass is over, and so is its instant — the rule `render_surface`
+        // keeps for the same reason: a stale clock fails silently.
+        tree.set_frame_instant(None);
     }
 }
 
@@ -225,7 +239,7 @@ impl SurfaceManager {
         self.surfaces.values().find_map(|s| s.wgpu_surface.as_ref())
     }
 
-    /// Initialize GPU for surfaces that need it.
+    /// Initialize GPU for surfaces that need it, laying each out at `at`.
     ///
     /// This iterates over all surfaces and initializes GPU for any
     /// that are configured in Wayland but don't yet have a wgpu surface.
@@ -234,6 +248,7 @@ impl SurfaceManager {
         gpu_context: &GpuContext,
         wayland_state: &mut P,
         tree: &mut Tree,
+        at: std::time::Instant,
     ) {
         for (id, surface) in self.surfaces.iter_mut() {
             if surface.is_gpu_ready() {
@@ -249,7 +264,7 @@ impl SurfaceManager {
             let Some(((width, height), scale)) = facts else {
                 continue;
             };
-            surface.init_gpu(gpu_context, wayland_state, width, height, scale, tree);
+            surface.init_gpu(gpu_context, wayland_state, (width, height), scale, tree, at);
         }
     }
 }
