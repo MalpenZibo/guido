@@ -40,6 +40,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      # And again with the features a consumer actually gets. Every other job
+      # that denies warnings passes --all-features, so code kept alive only by
+      # an optional feature can go dead in a default build and nothing here
+      # objects — `RegionRect::contains` and the offscreen render target did,
+      # and the first to read about it was whoever depends on guido.
+      - name: Run clippy with the default features
+        run: cargo clippy --all-targets -- -D warnings
       # The guard that refuses a re-bless and a commit on main decides by the
       # position a word occupies, not by whether it appears. Getting that wrong
       # is how it came to refuse a sed expression and to read the branch of the
