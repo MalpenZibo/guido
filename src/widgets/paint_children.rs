@@ -200,15 +200,15 @@ impl PaintContext<'_> {
     /// its bounds give it.
     ///
     /// For a child whose placement is not a translation: the scrollbar parts,
-    /// which are scaled by the animation that shows and hides them. They take
-    /// no part in the paint cache for that reason — reusing a moved node
+    /// which are scaled by the animation that shows and hides them. They are
+    /// never *served* from the paint cache for that reason — reusing a moved node
     /// undoes its old placement by negating it, which is only undoing if the
     /// placement was a translation — and none in culling, because a scrollbar
     /// is inside the box it belongs to by construction.
     ///
     /// What it does share is the part that must not be optional: the child's
     /// own `JobType::Paint` scope.
-    pub fn paint_child_placed(
+    pub(crate) fn paint_child_placed(
         &mut self,
         child_id: WidgetId,
         child_local: Rect,

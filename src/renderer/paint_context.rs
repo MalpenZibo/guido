@@ -124,7 +124,7 @@ impl<'a> PaintContext<'a> {
     ///
     /// This also records the transform as `parent_position` so that cached
     /// paint nodes can later decompose position vs. user-transform.
-    pub fn set_transform(&mut self, transform: Transform) {
+    pub(crate) fn set_transform(&mut self, transform: Transform) {
         self.node.local_transform = transform;
         self.node.parent_position = transform;
     }

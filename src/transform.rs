@@ -507,6 +507,29 @@ impl Default for Transform {
 mod tests {
     use super::*;
 
+    /// What the paint cache leans on: it undoes a child's old placement by
+    /// negating the two translation components, which is only undoing when
+    /// there is nothing else in the matrix. The `debug_assert` in
+    /// `reuse_cached` asks this, so a predicate that answered `true` for
+    /// everything would take the guard with it.
+    #[test]
+    fn only_a_move_is_a_pure_translation() {
+        assert!(Transform::IDENTITY.is_pure_translation());
+        assert!(Transform::translate(12.0, -4.0).is_pure_translation());
+
+        assert!(
+            !Transform::scale(2.0).is_pure_translation(),
+            "a scale survives negating the translation, which is the bug"
+        );
+        assert!(!Transform::rotate_degrees(90.0).is_pure_translation());
+        assert!(
+            !Transform::translate(3.0, 3.0)
+                .then(&Transform::scale(0.5))
+                .is_pure_translation(),
+            "and so does one composed with a move"
+        );
+    }
+
     fn approx_eq(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-5
     }

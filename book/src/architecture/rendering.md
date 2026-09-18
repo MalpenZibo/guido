@@ -23,7 +23,7 @@ Per-surface rendering:
     + process_jobs()                 animations, reconcile children, mark dirty
  7. Partial layout                 → Only dirty subtrees re-layout
  8. Skip-frame check               → Skip paint if root is clean
- 9. widget.paint(tree, ctx)        → Build render tree (Rc cache reuse for clean children)
+ 9. Tree::paint_widget()        → Build render tree (Rc cache reuse for clean children)
 10. flatten_root_into()            → Flatten to draw commands (incremental for clean subtrees)
 11. frame() + damage_buffer()      → Re-arm the frame callback and report damage,
                                      both BEFORE presenting

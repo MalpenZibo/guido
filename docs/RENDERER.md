@@ -62,7 +62,7 @@ cleared and rebuilt from dirty widgets every rendered frame.
 
 ### Local Coordinate System
 
-Widgets paint in local coordinates where (0,0) is the widget's top-left corner. The parent widget sets the child's position via `set_transform()` before calling `paint()`.
+Widgets paint in local coordinates where (0,0) is the widget's top-left corner. `PaintContext::paint_child` places the child, from its bounds in the tree — a widget does not position what it paints, and does not call another widget's `paint`.
 
 ### ClipRegion
 
@@ -85,9 +85,6 @@ pub struct ClipRegion {
 ```rust
 // Set bounds (for transform origin resolution)
 ctx.set_bounds(Rect::new(0.0, 0.0, width, height));
-
-// Set transform (replaces existing)
-ctx.set_transform(Transform::translate(x, y));
 
 // Apply transform (composes with existing): result = existing.then(transform)
 ctx.apply_transform(Transform::rotate_degrees(45.0));
@@ -147,10 +144,13 @@ ctx.draw_image(source, rect, content_fit);
 ### Children
 
 ```rust
-// Add a child and get its paint context
-let mut child_ctx = ctx.add_child(child_id, child_bounds);
-child_ctx.set_transform(Transform::translate(offset_x, offset_y));
-child.paint(&mut child_ctx);
+// One call per child, and it is the framework's: it culls a child nobody can
+// see, serves a clean one from its cache, places it from its bounds in the
+// tree, opens its own Paint scope and counts it.
+ctx.paint_child(child_id, &ChildPaintOptions::default());
+
+// For an ordered row, the loop that narrows to the visible window first.
+paint_children(ctx, &children, &opts);
 ```
 
 ### Overlay Commands
@@ -360,7 +360,7 @@ fn paint(&self, ctx: &mut PaintContext) {
     let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
     ctx.set_bounds(local_bounds);
 
-    // Apply user transform if set (parent already set position via set_transform)
+    // Apply user transform if set (`paint_child` already placed this node)
     if !self.transform.is_identity() {
         ctx.apply_transform_with_pivot(self.transform, self.pivot);
     }
