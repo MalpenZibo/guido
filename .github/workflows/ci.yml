@@ -72,8 +72,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - name: Run tests
         run: cargo test --all-features
-      # Every other job builds with --all-features, so a test file that needs an
-      # optional feature and does not say so compiles there and nowhere else.
+      # A test file that needs an optional feature and does not say so compiles
+      # under --all-features and nowhere else. The check job's default-features
+      # clippy run covers this too and denies warnings on it; this stays because
+      # it runs in a job with its own cache, and finds it without one.
       - name: Build the tests with the default features
         run: cargo check --tests
       # The book teaches through samples — two fifths of its lines are inside a

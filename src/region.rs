@@ -23,6 +23,10 @@ impl RegionRect {
     /// Whether this rectangle holds `(x, y)`, half-open on the far edges as
     /// [`Rect::contains`] is: the pixel a rectangle ends at belongs to the next
     /// one.
+    ///
+    /// Nothing the library does asks this — it is how a test reads back the
+    /// region the compositor was handed, here and in `Headless::input_reaches`.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
