@@ -68,9 +68,10 @@ Each widget:
 After layout, widgets paint to the `PaintContext`:
 
 ```rust,ignore
-fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+fn paint(&self, ctx: &mut PaintContext) {
     // Bounds come from the Tree — the single source of truth — and paint
     // happens in LOCAL coordinates, the parent having placed the node.
+    let (tree, id) = (ctx.tree(), ctx.id());
     let bounds = tree.get_bounds(id).unwrap_or_default();
     let local = Rect::new(0.0, 0.0, bounds.width, bounds.height);
 
@@ -78,9 +79,11 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
     // border, shadow and gradient.
     ctx.draw_rounded_rect(local, self.background, self.corner_radius);
 
-    // Paint children
+    // Paint children. One call each, and it is the framework's: it culls a
+    // child nobody can see, serves a clean one from its cache, places it, and
+    // opens its Paint scope.
     for &child_id in self.children.iter() {
-        tree.with_widget(child_id, |child| child.paint(tree, child_id, ctx));
+        ctx.paint_child(child_id, &ChildPaintOptions::default());
     }
 }
 ```
@@ -173,9 +176,9 @@ struct Border {
 The render tree handles transforms hierarchically:
 
 ```rust,ignore
-fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
+fn paint(&self, ctx: &mut PaintContext) {
     // Get bounds from Tree (single source of truth)
-    let bounds = tree.get_bounds(id).unwrap_or_default();
+    let bounds = ctx.tree().get_bounds(ctx.id()).unwrap_or_default();
 
     // Apply user transform (rotation, scale) if set
     if !self.user_transform.is_identity() {
@@ -186,16 +189,10 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
     let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
     ctx.draw_rounded_rect(local_bounds, Color::BLUE, 8.0);
 
-    // Paint children - parent sets their position transform
+    // Paint children. `paint_child` places each one from its bounds in the
+    // tree, so a parent that wants the ordinary placement writes nothing.
     for &child_id in self.children.iter() {
-        // Get child bounds from Tree - in LOCAL coordinates (relative to parent)
-        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
-        let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
-        let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-        child_ctx.set_transform(Transform::translate(child_bounds.x, child_bounds.y));
-        tree.with_widget(child_id, |child| {
-            child.paint(tree, child_id, &mut child_ctx);
-        });
+        ctx.paint_child(child_id, &ChildPaintOptions::default());
     }
 }
 ```

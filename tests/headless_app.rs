@@ -708,7 +708,7 @@ impl Widget for Stamps {
         Size::new(constraints.max_width, constraints.max_height)
     }
 
-    fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut PaintContext) {}
+    fn paint(&self, _ctx: &mut PaintContext) {}
 
     fn event(&mut self, tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
         self.0.borrow_mut().push(tree.event_instant().into_inner());

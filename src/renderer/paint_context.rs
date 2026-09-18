@@ -7,6 +7,7 @@ use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
 use crate::pivot::Pivot;
 use crate::transform::Transform;
+use crate::tree::{Tree, WidgetId};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
@@ -19,21 +20,24 @@ use crate::widgets::{Color, Rect};
 ///
 /// All drawing is done in LOCAL coordinates (0,0 is the widget's top-left).
 /// Positioning is handled via transforms:
-/// - Parent sets child's position via `set_transform` before calling `paint`
+/// - [`paint_child`](Self::paint_child) places the child, from its bounds in
+///   the tree — a widget does not position what it paints
 /// - Child applies its own user transform (rotation, scale) via `apply_transform`
 ///
 /// # Example
 ///
 /// ```ignore
 /// // not compiled: a fragment of a `Widget` impl, shown without the impl it
-/// // belongs to. `tests/external_widget.rs` is the compiled version of this.
+/// // belongs to. `tests/external_widget.rs` is the compiled version of this,
+/// // including a parent that paints its child through `paint_child`.
 /// fn paint(&self, ctx: &mut PaintContext) {
 ///     // Local bounds (0,0 origin with widget's own width/height)
-///     let local_bounds = Rect::new(0.0, 0.0, self.bounds.width, self.bounds.height);
+///     let bounds = ctx.tree().get_bounds(ctx.id()).unwrap_or_default();
+///     let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
 ///     ctx.set_bounds(local_bounds);
 ///
-///     // Apply user transform (rotation, scale) - composes with parent's position transform
-///     // Parent already set our position via set_transform before calling paint
+///     // Apply user transform (rotation, scale) - composes with the position
+///     // `paint_child` already gave this node
 ///     if !self.user_transform.is_identity() {
 ///         ctx.apply_transform_with_pivot(self.user_transform, self.pivot);
 ///     }
@@ -41,16 +45,9 @@ use crate::widgets::{Color, Rect};
 ///     // Draw background in LOCAL coordinates
 ///     ctx.draw_rounded_rect(local_bounds, Color::BLUE, 8.0);
 ///
-///     // Paint children - set their position, then let them apply their own transforms
-///     for child in &self.children {
-///         let child_global = child.bounds();
-///         let child_local = Rect::new(0.0, 0.0, child_global.width, child_global.height);
-///         let child_offset_x = child_global.x - self.bounds.x;
-///         let child_offset_y = child_global.y - self.bounds.y;
-///
-///         let mut child_ctx = ctx.add_child(child.id(), child_local);
-///         child_ctx.set_transform(Transform::translate(child_offset_x, child_offset_y));
-///         child.paint(&mut child_ctx);  // Child will apply its own user transform
+///     // Paint children. One call each: it culls, caches, places and scopes.
+///     for &child_id in &self.children {
+///         ctx.paint_child(child_id, &ChildPaintOptions::default());
 ///     }
 ///
 ///     // Draw overlay effects (after children) in LOCAL coords
@@ -64,15 +61,38 @@ pub struct PaintContext<'a> {
     /// Set by scrollable containers and propagated to descendants.
     /// Coordinates are in this node's local space.
     cull_rect: Option<Rect>,
+    /// The tree the widget being painted belongs to, for its bounds and its
+    /// children's.
+    tree: &'a Tree,
+    /// Which widget this context is painting. What
+    /// [`paint_child`](Self::paint_child) attributes a read to, and what a
+    /// widget asks for its own bounds with.
+    id: WidgetId,
 }
 
 impl<'a> PaintContext<'a> {
-    /// Create a context for painting to a node.
-    pub fn new(node: &'a mut RenderNode) -> Self {
+    /// Create a context for painting `id` into a node.
+    ///
+    /// The framework's, through [`Tree::paint_widget`](crate::tree::Tree::paint_widget):
+    /// a widget is painted through that call or through
+    /// [`paint_child`](Self::paint_child), never by reaching for this.
+    pub(crate) fn new(node: &'a mut RenderNode, tree: &'a Tree, id: WidgetId) -> Self {
         Self {
             node,
             cull_rect: None,
+            tree,
+            id,
         }
+    }
+
+    /// The widget being painted.
+    pub fn id(&self) -> WidgetId {
+        self.id
+    }
+
+    /// The tree, for a widget that needs to ask about itself or its children.
+    pub fn tree(&self) -> &'a Tree {
+        self.tree
     }
 
     /// Get the cull rect (viewport in this node's local space), if set by a scrollable ancestor.
@@ -523,7 +543,8 @@ impl<'a> PaintContext<'a> {
     ///
     /// The child will inherit transforms from this node automatically
     /// during tree flattening.
-    pub fn add_child(&mut self, id: NodeId, bounds: Rect) -> PaintContext<'_> {
+    pub(crate) fn add_child(&mut self, widget: WidgetId, bounds: Rect) -> PaintContext<'_> {
+        let id: NodeId = widget.as_u64();
         self.node
             .children
             .push(Rc::new(RenderNode::with_bounds(id, bounds)));
@@ -534,14 +555,14 @@ impl<'a> PaintContext<'a> {
                 .expect("child was just pushed"),
         )
         .expect("freshly created child Rc is unique");
-        PaintContext::new(child)
+        PaintContext::new(child, self.tree, widget)
     }
 
     /// Add a pre-built child node.
     ///
     /// Used by the paint cache: reusing a clean child is `Rc::clone` of its
     /// cached node (or a shallow header clone when its position changed).
-    pub fn add_child_rc(&mut self, node: Rc<RenderNode>) {
+    pub(crate) fn add_child_rc(&mut self, node: Rc<RenderNode>) {
         self.node.children.push(node);
     }
 

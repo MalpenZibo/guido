@@ -515,6 +515,22 @@ impl Tree {
             .map(|idx| f(&*self.dense[idx].widget))
     }
 
+    /// Paint `id` into `node`. The root's way in, as
+    /// [`layout_widget`](Self::layout_widget) is layout's.
+    ///
+    /// It opens the widget's own `JobType::Paint` scope, so what the widget
+    /// reads while drawing belongs to it. Below the root that is
+    /// [`PaintContext::paint_child`](crate::renderer::PaintContext::paint_child)'s
+    /// job, and there is no third way: a widget never calls another's `paint`.
+    pub fn paint_widget(&self, id: WidgetId, node: &mut crate::renderer::RenderNode) {
+        self.with_widget(id, |widget| {
+            let mut ctx = crate::renderer::PaintContext::new(node, self, id);
+            crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Paint, || {
+                widget.paint(&mut ctx)
+            });
+        });
+    }
+
     /// Lay a widget out, as the pass that is already running.
     ///
     /// The root of the entry point every layout goes through — `LayoutCtx::
@@ -639,7 +655,7 @@ impl Tree {
             fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
                 Size::zero()
             }
-            fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
+            fn paint(&self, _: &mut crate::renderer::PaintContext) {}
         }
 
         // Extract widget
@@ -1452,7 +1468,7 @@ mod tests {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
-        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _ctx: &mut crate::renderer::PaintContext) {}
     }
 
     #[test]

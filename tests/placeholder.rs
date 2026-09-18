@@ -6,7 +6,7 @@
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
+use guido::renderer::{DrawCommand, RenderNode};
 use guido::tree::Tree;
 
 /// Every text this widget draws, as (content, colour).
@@ -17,10 +17,7 @@ fn drawn(widget: impl Widget + 'static) -> Vec<(String, Color)> {
     tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 40.0));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
 
     let mut out = Vec::new();
     collect(&node, &mut out);

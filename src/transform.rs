@@ -412,6 +412,14 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// Whether this moves without turning, scaling or skewing — so that
+    /// undoing it is negating its two components and nothing more.
+    #[inline]
+    pub fn is_pure_translation(&self) -> bool {
+        let [a, b, _, c, d, _] = self.data;
+        a == 1.0 && b == 0.0 && c == 0.0 && d == 1.0
+    }
+
     /// Get the X translation component
     #[inline]
     pub fn tx(&self) -> f32 {

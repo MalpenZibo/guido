@@ -112,7 +112,10 @@ Two methods are required, the rest default:
   the cache write all belong to that call, which is the only way a layout is
   ever reached. `ctx.measuring()` says whether this is the measure a
   content-sized surface is configured from
-- `paint(&self, tree, id, ctx)` — draw into the `PaintContext`
+- `paint(&self, ctx)` — draw into the `PaintContext`, which carries the tree
+  and the widget id (`ctx.tree()`, `ctx.id()`). Called through
+  `PaintContext::paint_child`, which opens the widget's own Paint scope, so a
+  read made while drawing belongs to it without the widget asking
 - `event(&mut self, tree, id, event) -> EventResponse` — defaults to `Ignored`
 - `advance_animations`, `reconcile_children`, `layout_hints`,
   `register_children` — defaults

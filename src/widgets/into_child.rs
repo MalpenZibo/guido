@@ -508,7 +508,7 @@ mod tests {
         fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
             Size::zero()
         }
-        fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _: &mut crate::renderer::PaintContext) {}
     }
 
     /// A parented ChildrenSource ready for reconciliation.
@@ -636,7 +636,7 @@ mod tests {
             fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
                 Size::zero()
             }
-            fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
+            fn paint(&self, _: &mut crate::renderer::PaintContext) {}
             fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
                 let child = tree.register(Box::new(TestWidget));
                 tree.set_parent(child, id);

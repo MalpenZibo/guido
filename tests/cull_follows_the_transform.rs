@@ -144,11 +144,7 @@ fn a_row_its_own_transform_lifts_into_view_survives_both_frames() {
     for frame in 1..=2 {
         root.clear();
         root.bounds = guido::widgets::Rect::new(0.0, 0.0, 400.0, VIEWPORT);
-        let (tree, id) = (&mut harness.tree, harness.root);
-        tree.with_widget_mut(id, |w, id, t| {
-            let mut ctx = guido::renderer::PaintContext::new(&mut root);
-            w.paint(t, id, &mut ctx);
-        });
+        harness.tree.paint_widget(harness.root, &mut root);
 
         let mut found = Vec::new();
         tops_of_width(&root, MARKED_WIDTH, 0.0, &mut found);

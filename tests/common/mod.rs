@@ -22,7 +22,7 @@
 
 use guido::layout::{Constraints, Size};
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, PaintContext, RenderNode};
+use guido::renderer::{DrawCommand, RenderNode};
 use guido::tree::{Tree, WidgetId};
 use guido::widgets::widget::EventResponse;
 
@@ -157,10 +157,7 @@ impl Harness {
         let root = self.root;
         self.tree.set_frame_instant(Some(std::time::Instant::now()));
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        self.tree.paint_widget(root, &mut node);
         self.tree.set_frame_instant(None);
         node
     }

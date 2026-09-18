@@ -76,7 +76,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{GpuContext, PaintContext, RenderNode, Renderer, flatten_root_into};
+use guido::renderer::{GpuContext, RenderNode, Renderer, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -169,10 +169,7 @@ fn render_pixels(
     );
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
 
     let mut commands = Vec::new();
     let mut layers = Vec::new();

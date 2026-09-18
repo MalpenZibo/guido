@@ -351,9 +351,10 @@ instance.corner_radius = radius * scale;
 ## Example: Implementing paint()
 
 ```rust
-fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
-    // Get bounds from Tree (single source of truth)
-    let bounds = tree.get_bounds(id).unwrap_or_default();
+fn paint(&self, ctx: &mut PaintContext) {
+    // Get bounds from Tree (single source of truth), through the context that
+    // carries both it and the id being painted.
+    let bounds = ctx.tree().get_bounds(ctx.id()).unwrap_or_default();
 
     // Set local bounds (0,0 origin with widget dimensions)
     let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
@@ -367,17 +368,12 @@ fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
     // Draw background in LOCAL coordinates
     ctx.draw_rounded_rect(local_bounds, self.background, self.corner_radius);
 
-    // Paint children - set their position, then let them apply their own transforms
+    // Paint children. One call each, and it belongs to the framework: it culls
+    // a child nobody can see, serves a clean one from its cache, places it from
+    // its bounds in the tree, and opens its own Paint scope. A widget never
+    // calls another widget's `paint`.
     for &child_id in self.children.iter() {
-        // Get child bounds from Tree - these are in LOCAL coordinates (relative to parent)
-        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
-        let child_local = Rect::new(0.0, 0.0, child_bounds.width, child_bounds.height);
-
-        let mut child_ctx = ctx.add_child(child_id.as_u64(), child_local);
-        child_ctx.set_transform(Transform::translate(child_bounds.x, child_bounds.y));
-        tree.with_widget(child_id, |child| {
-            child.paint(tree, child_id, &mut child_ctx);
-        });
+        ctx.paint_child(child_id, &ChildPaintOptions::default());
     }
 
     // Draw overlay effects (after children) in LOCAL coords

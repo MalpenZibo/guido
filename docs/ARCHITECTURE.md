@@ -155,7 +155,7 @@ Hardware-accelerated rendering using wgpu.
 7. Partial layout from `layout_roots` - Only dirty subtrees re-layout
 8. Force full repaint on resize, scale change, or initialization
 9. **Skip frame** if root widget doesn't need paint
-10. `widget.paint(tree, ctx)` - Build render tree via PaintContext (clean children reuse Rc-shared cached nodes)
+10. `Tree::paint_widget()` - Build render tree via PaintContext (clean children reuse Rc-shared cached nodes)
 11. `flatten_root_into()` - Flatten render tree to draw commands (incremental: clean subtrees reuse cached commands)
 12. Re-arm the `wl_surface.frame` callback and report per-surface damage via
     `wl_surface.damage_buffer()` — both BEFORE presenting, so they ride the
@@ -464,7 +464,7 @@ pub trait Widget {
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext);
+    fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
 
     /// Check if a descendant has the given ID (for focus tracking)
@@ -534,13 +534,16 @@ never handed across.
 ### Widgets written outside the crate
 
 The trait is implementable from anywhere, and a leaf needs only `layout` and
-`paint`. Paint is still the widget's own to scope —
-`with_signal_tracking(id, JobType::Paint, ..)` around whatever it draws from —
-because nothing wraps a paint yet; layout is not.
+`paint`. Neither is the widget's own to scope: the framework calls both through
+one entry point each — `LayoutCtx::layout_child` and
+`PaintContext::paint_child` — and the scope is opened there, so a widget's
+reads belong to it and a change to its own content re-lays-out or repaints it
+rather than its parent and every sibling with it.
 
-Scopes nest and the innermost wins, so a widget's reads belong to it and a
-change to its own content re-lays-out it rather than its parent and every
-sibling with it.
+Paint was the widget's own until #390, and a widget that forgot did not merely
+attribute its reads to its parent — it subscribed to nothing, drew once, and
+stayed as it was. That is what `a_paint_that_opens_no_scope` in
+`tests/external_widget.rs` is.
 
 `tests/external_widget.rs` is a leaf written against the public API only;
 `a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer` is what

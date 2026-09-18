@@ -594,8 +594,8 @@ impl Widget for OwnedWidget {
         under_owner(self.owner.id(), || self.inner.layout(ctx, constraints))
     }
 
-    fn paint(&self, tree: &Tree, id: WidgetId, ctx: &mut PaintContext) {
-        self.inner.paint(tree, id, ctx)
+    fn paint(&self, ctx: &mut PaintContext) {
+        self.inner.paint(ctx)
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {

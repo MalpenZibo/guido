@@ -19,7 +19,7 @@ use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::create_signal;
-use crate::renderer::{DrawCommand, PaintContext, RenderNode};
+use crate::renderer::{DrawCommand, RenderNode};
 use crate::widgets::CornerRadii;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 
@@ -86,10 +86,7 @@ impl H {
     fn paint(&mut self) -> RenderNode {
         let root = self.root;
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        self.tree.paint_widget(root, &mut node);
         node
     }
 
@@ -124,10 +121,7 @@ impl H {
         }
 
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.with_widget_mut(root, |w, id, t| {
-            let mut ctx = PaintContext::new(&mut node);
-            w.paint(t, id, &mut ctx);
-        });
+        self.tree.paint_widget(root, &mut node);
 
         let node = std::rc::Rc::new(node);
         let mut commands = Vec::new();

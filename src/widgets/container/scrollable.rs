@@ -335,12 +335,8 @@ impl Container {
     /// Scrollbar containers are registered in Tree with real WidgetIds.
     /// Scrollbar bounds are in local coordinates (relative to container origin 0,0).
     /// Scale transforms are applied during paint (not stored on widgets).
-    pub(super) fn paint_scrollbar_containers(
-        &self,
-        tree: &Tree,
-        id: WidgetId,
-        ctx: &mut PaintContext,
-    ) {
+    pub(super) fn paint_scrollbar_containers(&self, ctx: &mut PaintContext) {
+        let (tree, id) = (ctx.tree(), ctx.id());
         let sd = self.scroll_data();
 
         if sd.scrollbar_visibility == ScrollbarVisibility::Hidden {
@@ -369,32 +365,34 @@ impl Container {
                 // Scrollbar bounds are already in local coordinates (relative to 0,0)
                 let track_local = Rect::new(0.0, 0.0, track_bounds.width, track_bounds.height);
 
-                let mut track_ctx = ctx.add_child(track_id.as_u64(), track_local);
-                track_ctx.set_transform(scrollbar_paint_transform(
-                    ScrollbarAxis::Vertical,
-                    v_scale,
-                    (track_bounds.x, track_bounds.y),
+                ctx.paint_child_placed(
+                    track_id,
                     track_local,
-                ));
-                tree.with_widget(track_id, |widget| {
-                    widget.paint(tree, track_id, &mut track_ctx);
-                });
+                    scrollbar_paint_transform(
+                        ScrollbarAxis::Vertical,
+                        v_scale,
+                        (track_bounds.x, track_bounds.y),
+                        track_local,
+                    ),
+                    None,
+                );
             }
             if let Some(handle_id) = sd.v_scrollbar_handle_id
                 && let Some(handle_bounds) = tree.get_bounds(handle_id)
             {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
 
-                let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
-                handle_ctx.set_transform(scrollbar_paint_transform(
-                    ScrollbarAxis::Vertical,
-                    v_scale,
-                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Vertical),
+                ctx.paint_child_placed(
+                    handle_id,
                     handle_local,
-                ));
-                tree.with_widget(handle_id, |widget| {
-                    widget.paint(tree, handle_id, &mut handle_ctx);
-                });
+                    scrollbar_paint_transform(
+                        ScrollbarAxis::Vertical,
+                        v_scale,
+                        self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Vertical),
+                        handle_local,
+                    ),
+                    None,
+                );
             }
         }
 
@@ -405,32 +403,34 @@ impl Container {
             {
                 let track_local = Rect::new(0.0, 0.0, track_bounds.width, track_bounds.height);
 
-                let mut track_ctx = ctx.add_child(track_id.as_u64(), track_local);
-                track_ctx.set_transform(scrollbar_paint_transform(
-                    ScrollbarAxis::Horizontal,
-                    h_scale,
-                    (track_bounds.x, track_bounds.y),
+                ctx.paint_child_placed(
+                    track_id,
                     track_local,
-                ));
-                tree.with_widget(track_id, |widget| {
-                    widget.paint(tree, track_id, &mut track_ctx);
-                });
+                    scrollbar_paint_transform(
+                        ScrollbarAxis::Horizontal,
+                        h_scale,
+                        (track_bounds.x, track_bounds.y),
+                        track_local,
+                    ),
+                    None,
+                );
             }
             if let Some(handle_id) = sd.h_scrollbar_handle_id
                 && let Some(handle_bounds) = tree.get_bounds(handle_id)
             {
                 let handle_local = Rect::new(0.0, 0.0, handle_bounds.width, handle_bounds.height);
 
-                let mut handle_ctx = ctx.add_child(handle_id.as_u64(), handle_local);
-                handle_ctx.set_transform(scrollbar_paint_transform(
-                    ScrollbarAxis::Horizontal,
-                    h_scale,
-                    self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Horizontal),
+                ctx.paint_child_placed(
+                    handle_id,
                     handle_local,
-                ));
-                tree.with_widget(handle_id, |widget| {
-                    widget.paint(tree, handle_id, &mut handle_ctx);
-                });
+                    scrollbar_paint_transform(
+                        ScrollbarAxis::Horizontal,
+                        h_scale,
+                        self.scrollbar_handle_origin(tree, id, ScrollbarAxis::Horizontal),
+                        handle_local,
+                    ),
+                    None,
+                );
             }
         }
     }

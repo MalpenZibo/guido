@@ -23,7 +23,7 @@ use crate::animation::{Animate, TimingFunction, Transition};
 use crate::layout::{Constraints, Flex};
 use crate::reactive::create_signal;
 use crate::reactive::diagnostics::report_count;
-use crate::renderer::{PaintContext, RenderNode, Shadow};
+use crate::renderer::{RenderNode, Shadow};
 use crate::tree::Tree;
 use crate::widgets::widget::{Event, Key, Modifiers, MouseButton, ScrollSource};
 use crate::widgets::{Color, ImageSource, LinearGradient, Overflow, Scroll};
@@ -52,10 +52,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     tree.layout_widget(root, constraints);
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node);
 
     // Animations advance between layout and the next paint
     tree.with_widget_mut(root, |w, id, t| {
@@ -96,10 +93,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     // steady-state paths (early-outs, paint-cache reuse, target re-sync).
     tree.layout_widget(root, constraints);
     let mut node2 = RenderNode::new(root.as_u64());
-    tree.with_widget_mut(root, |w, id, t| {
-        let mut ctx = PaintContext::new(&mut node2);
-        w.paint(t, id, &mut ctx);
-    });
+    tree.paint_widget(root, &mut node2);
 
     report_count() - before
 }

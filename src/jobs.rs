@@ -770,7 +770,7 @@ mod tests {
         fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
             Size::zero()
         }
-        fn paint(&self, _: &Tree, _: WidgetId, _: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _: &mut crate::renderer::PaintContext) {}
     }
 
     /// Two surfaces (roots), one child each. Returns (tree, roots, children).

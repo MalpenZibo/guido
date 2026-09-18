@@ -25,9 +25,7 @@ use guido::layout::Flex;
 mod common;
 use common::Harness;
 use guido::prelude::*;
-use guido::renderer::{
-    CommandLayer, DrawCommand, FlattenedCommand, PaintContext, RenderNode, flatten_root_into,
-};
+use guido::renderer::{CommandLayer, DrawCommand, FlattenedCommand, RenderNode, flatten_root_into};
 use guido::tree::WidgetId;
 use guido::widgets::Rect;
 use std::rc::Rc;
@@ -200,10 +198,7 @@ impl Surface {
             layers,
             ..
         } = self;
-        tree.with_widget_mut(*root, |w, id, t| {
-            let mut ctx = PaintContext::new(root_node);
-            w.paint(t, id, &mut ctx);
-        });
+        tree.paint_widget(*root, root_node);
         let _ = flatten_root_into(root_node, commands, layers);
         for child in &root_node.children {
             guido::cache_paint_results(tree, child);

@@ -39,7 +39,7 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
 use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
-use renderer::{GpuContext, PaintContext, Renderer, flatten_root_into};
+use renderer::{GpuContext, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -151,9 +151,8 @@ pub fn quit_app() {
 /// Everything an application needs, and nothing it does not.
 ///
 /// Writing a *widget* or a *layout* rather than an application is a different
-/// job with a different vocabulary — the tree, the paint context, the tracking
-/// scope. That lives in [`widget_prelude`], and is not
-/// re-exported here.
+/// job with a different vocabulary — the tree, the two contexts, the
+/// constraints. That lives in [`widget_prelude`], and is not re-exported here.
 pub mod prelude {
     pub use crate::animation::{
         Animate, Animated, IntoAnimated, Keyframes, Repeat, SpringConfig, TimingFunction,
@@ -212,10 +211,15 @@ pub mod prelude {
 ///
 /// [`Widget`] has two required methods — `layout` and
 /// `paint`; [`Layout`](crate::layout::Layout) has one. Everything else here is
-/// what those signatures name, plus
-/// [`with_signal_tracking`](crate::reactive::with_signal_tracking) — the scope
-/// that makes a widget's signal reads *its own*, so a change to its content
-/// re-runs it rather than the nearest ancestor that happened to open a scope.
+/// what those signatures name.
+///
+/// Neither pass asks the widget to scope its own reads: the framework calls
+/// both through one entry point each and opens the scope there, so a signal
+/// read while laying out or drawing belongs to the widget that read it.
+/// [`with_signal_tracking`](crate::reactive::with_signal_tracking) is still
+/// exported, for a widget that wants a *narrower* attribution than its own
+/// pass — a dynamic-children segment, which is what `JobType::Reconcile`
+/// names.
 pub mod widget_prelude {
     pub use crate::clock::{EventInstant, FrameInstant};
     pub use crate::layout::{Constraints, IntoF32, Layout};
@@ -226,6 +230,11 @@ pub mod widget_prelude {
     /// and for that it needs the thing those three compose into.
     pub use crate::transform::Transform;
     pub use crate::tree::{LayoutCtx, LayoutPass, Tree, WidgetId};
+    /// What [`PaintContext::paint_child`](crate::renderer::PaintContext::paint_child)
+    /// is given. A widget with the ordinary children of an ordinary box passes
+    /// `&ChildPaintOptions::default()`; the fields are for a parent that
+    /// scrolls, clips or orders them.
+    pub use crate::widgets::paint_children::{ChildPaintOptions, paint_children};
     pub use crate::widgets::{LayoutHints, Widget};
 }
 
@@ -1764,10 +1773,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
 
     time_phase!(render_stats::Phase::Paint, {
-        tree.with_widget_mut(surface.widget_id, |widget, id, tree| {
-            let mut ctx = PaintContext::new(&mut surface.root_node);
-            widget.paint(tree, id, &mut ctx);
-        });
+        tree.paint_widget(surface.widget_id, &mut surface.root_node);
     });
 
     // Flatten tree into reused buffers
@@ -2914,7 +2920,7 @@ mod dispatch_declares_the_moment {
             Size::new(constraints.max_width, constraints.max_height)
         }
 
-        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _ctx: &mut crate::renderer::PaintContext) {}
 
         fn event(&mut self, tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
             self.0.set(Some(tree.event_instant()));
@@ -3868,7 +3874,7 @@ mod a_layout_is_attributed_to_the_widget_that_ran_it {
             Size::new(extent, extent)
         }
 
-        fn paint(&self, _tree: &Tree, _id: WidgetId, _ctx: &mut crate::renderer::PaintContext) {}
+        fn paint(&self, _ctx: &mut crate::renderer::PaintContext) {}
     }
 
     /// The read belongs to the leaf, so the write re-lays out the leaf. Without
