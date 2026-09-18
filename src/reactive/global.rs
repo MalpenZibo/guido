@@ -30,21 +30,11 @@
 //! hand.
 
 use std::any::TypeId;
-use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 
-use rustc_hash::FxHashMap;
-
 use super::owner::with_root_owner;
-use super::runtime::SignalId;
 use super::signal::{RwSignal, create_signal};
-
-thread_local! {
-    /// Which signal each declared global resolved to, keyed by the address of
-    /// its `static` and tagged with the type it was declared as.
-    static GLOBALS: RefCell<FxHashMap<usize, (SignalId, TypeId)>> =
-        RefCell::new(FxHashMap::default());
-}
+use super::state::with_reactive;
 
 /// A signal that lives as long as the `App`.
 ///
@@ -68,12 +58,12 @@ impl<T: Clone + Send + 'static> GlobalSignal<T> {
     ///
     /// The recreation is what keeps this from being one more thing to remember:
     /// a global whose signal died with a previous `App` answers by making a new
-    /// one, so `reset_globals` is a tidying rather than a step the teardown has
-    /// to get in the right order. Reading a global while an `App` is being torn
+    /// one, so clearing the map is a tidying rather than a step the teardown
+    /// has to get in the right order. Reading a global while an `App` is being torn
     /// down — a widget's cleanup, a drop — therefore cannot panic.
     pub(crate) fn get(&'static self) -> RwSignal<T> {
         let key = self as *const Self as usize;
-        let cached = GLOBALS.with(|globals| globals.borrow().get(&key).copied());
+        let cached = with_reactive(|reactive| reactive.globals.borrow().get(&key).copied());
         if let Some((id, declared)) = cached {
             // The address of the `static` is the identity, and nothing enforces
             // that two of them cannot share one — a linker folding identical
@@ -93,8 +83,8 @@ impl<T: Clone + Send + 'static> GlobalSignal<T> {
         // arena and the storage, and any of them may create a global of its own
         // — including, re-entrantly, this one.
         let signal = with_root_owner(|| create_signal((self.init)()));
-        GLOBALS.with(|globals| {
-            match globals.borrow_mut().entry(key) {
+        with_reactive(|reactive| {
+            match reactive.globals.borrow_mut().entry(key) {
                 // A re-entrant call got there first: it wins, and the signal
                 // built here is dropped with the scope that owns it. Two live
                 // signals under one name would be worse than one wasted slot.
@@ -106,15 +96,6 @@ impl<T: Clone + Send + 'static> GlobalSignal<T> {
             }
         })
     }
-}
-
-/// Forget every global's signal.
-///
-/// Called from `reset_reactive` at `App::drop`. Not load-bearing: a global
-/// whose signal is gone builds another on the next read. This keeps the map
-/// from carrying one dead entry per global into the next `App`.
-pub(crate) fn reset_globals() {
-    GLOBALS.with(|globals| globals.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -158,8 +139,8 @@ mod tests {
         COUNT.get().set(3);
         assert_eq!(COUNT.get().get_untracked(), 3);
 
-        // What `App::drop` does before it gets to `reset_globals`.
-        crate::reactive::storage::reset_storage();
+        // The arena going out from under it, which is what `App::drop` does.
+        crate::reactive::storage::discard_all_signals();
 
         assert_eq!(
             COUNT.get().get_untracked(),

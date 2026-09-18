@@ -1,122 +1,79 @@
 //! Clipboard support for text copy/paste operations.
 //!
-//! This module provides a thread-local clipboard buffer for internal clipboard operations.
-//! It also coordinates with the Wayland clipboard for system-wide clipboard support.
+//! This module provides the application's own clipboard buffer for internal
+//! clipboard operations. It also coordinates with the Wayland clipboard for
+//! system-wide clipboard support. The buffers themselves are fields of the
+//! application's state, in `src/app_state.rs`.
 
-use std::cell::RefCell;
-
-thread_local! {
-    /// Internal clipboard buffer
-    static CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
-
-    /// A copy waiting to be handed to the compositor. Being empty *is* the
-    /// "nothing to sync" state — there is no separate dirty flag to keep in
-    /// step with the value.
-    static OUTGOING_CLIPBOARD: crate::deferred::DeferredSlot<String> =
-        const { crate::deferred::DeferredSlot::new() };
-
-    /// System clipboard contents (prefetched from the Wayland selection offer)
-    static SYSTEM_CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
-
-    /// Internal primary-selection buffer (our outgoing content)
-    static PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
-
-    /// A select-to-copy waiting to be handed to the compositor.
-    static OUTGOING_PRIMARY: crate::deferred::DeferredSlot<String> =
-        const { crate::deferred::DeferredSlot::new() };
-
-    /// System primary-selection contents (prefetched from other apps)
-    static SYSTEM_PRIMARY: RefCell<Option<String>> = const { RefCell::new(None) };
-}
+use crate::app_state::with_app_state;
 
 /// Copy text to the clipboard.
 pub fn clipboard_copy(text: &str) {
-    CLIPBOARD.with(|c| {
-        *c.borrow_mut() = Some(text.to_string());
+    with_app_state(|app| {
+        *app.clipboard.borrow_mut() = Some(text.to_string());
+        // Setting the slot is what wakes the loop that hands the copy over.
+        app.outgoing_clipboard.set(text.to_string());
     });
-    // Setting the slot is what wakes the loop that hands the copy over.
-    OUTGOING_CLIPBOARD.with(|out| out.set(text.to_string()));
 }
 
 /// Take the copy waiting to go out to the compositor, if any.
 pub fn take_clipboard_change() -> Option<String> {
-    OUTGOING_CLIPBOARD.with(|out| out.take())
+    with_app_state(|app| app.outgoing_clipboard.take())
 }
 
 /// Paste text from the clipboard
 /// Returns the clipboard contents if available
 pub fn clipboard_paste() -> Option<String> {
     // First try system clipboard, fall back to internal
-    SYSTEM_CLIPBOARD.with(|sc| {
-        if let Some(text) = sc.borrow().as_ref() {
-            return Some(text.clone());
-        }
-        CLIPBOARD.with(|c| c.borrow().clone())
+    with_app_state(|app| {
+        app.system_clipboard
+            .borrow()
+            .clone()
+            .or_else(|| app.clipboard.borrow().clone())
     })
 }
 
 /// Check if clipboard has content
 pub fn clipboard_has_content() -> bool {
-    SYSTEM_CLIPBOARD.with(|sc| {
-        if sc.borrow().is_some() {
-            return true;
-        }
-        CLIPBOARD.with(|c| c.borrow().is_some())
+    with_app_state(|app| {
+        app.system_clipboard.borrow().is_some() || app.clipboard.borrow().is_some()
     })
 }
 
 /// Set system clipboard contents (called from Wayland event handling)
 pub fn set_system_clipboard(text: String) {
-    SYSTEM_CLIPBOARD.with(|sc| {
-        *sc.borrow_mut() = Some(text);
-    });
+    with_app_state(|app| *app.system_clipboard.borrow_mut() = Some(text));
 }
 
 /// Clear system clipboard (called when selection is lost)
 pub fn clear_system_clipboard() {
-    SYSTEM_CLIPBOARD.with(|sc| {
-        *sc.borrow_mut() = None;
-    });
+    with_app_state(|app| *app.system_clipboard.borrow_mut() = None);
 }
 
 /// Copy text to the primary selection (select-to-copy).
 pub fn primary_copy(text: &str) {
-    PRIMARY.with(|c| {
-        *c.borrow_mut() = Some(text.to_string());
+    with_app_state(|app| {
+        *app.primary.borrow_mut() = Some(text.to_string());
+        app.outgoing_primary.set(text.to_string());
     });
-    OUTGOING_PRIMARY.with(|out| out.set(text.to_string()));
 }
 
 /// Take the select-to-copy waiting to go out to the compositor, if any.
 pub(crate) fn take_primary_change() -> Option<String> {
-    OUTGOING_PRIMARY.with(|out| out.take())
+    with_app_state(|app| app.outgoing_primary.take())
 }
 
 /// Paste text from the primary selection (middle-click paste).
 pub fn primary_paste() -> Option<String> {
-    SYSTEM_PRIMARY.with(|sc| {
-        if let Some(text) = sc.borrow().as_ref() {
-            return Some(text.clone());
-        }
-        PRIMARY.with(|c| c.borrow().clone())
+    with_app_state(|app| {
+        app.system_primary
+            .borrow()
+            .clone()
+            .or_else(|| app.primary.borrow().clone())
     })
 }
 
 /// Set/clear system primary-selection contents (from Wayland)
 pub(crate) fn set_system_primary(text: Option<String>) {
-    SYSTEM_PRIMARY.with(|sc| {
-        *sc.borrow_mut() = text;
-    });
-}
-
-/// Reset all clipboard state.
-///
-/// Called during `App::drop()` to wipe clipboard buffers.
-pub(crate) fn reset_clipboard() {
-    CLIPBOARD.with(|c| *c.borrow_mut() = None);
-    OUTGOING_CLIPBOARD.with(|o| o.clear());
-    SYSTEM_CLIPBOARD.with(|c| *c.borrow_mut() = None);
-    PRIMARY.with(|c| *c.borrow_mut() = None);
-    OUTGOING_PRIMARY.with(|o| o.clear());
-    SYSTEM_PRIMARY.with(|c| *c.borrow_mut() = None);
+    with_app_state(|app| *app.system_primary.borrow_mut() = text);
 }

@@ -20,7 +20,6 @@
 //! Most code should use the higher-level APIs in the `reactive` module rather than
 //! interacting with the runtime directly.
 
-use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,23 +28,11 @@ use smallvec::SmallVec;
 
 use super::invalidation::suspend_widget_tracking;
 use super::owner::{OwnerId, current_owner, under_scope};
+use super::state::with_reactive;
 
 /// Buffered signal reads for an effect. Most effects read 1–4 signals,
 /// so SmallVec avoids heap allocation in the common case.
-type EffectReads = SmallVec<[SignalId; 4]>;
-
-thread_local! {
-    static RUNTIME: RefCell<Runtime> = RefCell::new(Runtime::new());
-
-    /// Stack of (effect_id, buffered_signal_reads) for tracking during effect execution.
-    /// Needed because the Runtime RefCell is already borrowed when effects run.
-    /// We buffer reads here and apply them after the callback returns.
-    static EFFECT_TRACKING: RefCell<Vec<(EffectId, EffectReads)>> = const { RefCell::new(Vec::new()) };
-
-    /// Nesting depth for `batch()`. When > 0, `notify_write()` collects pending
-    /// effects but defers `flush_effects()` until the batch completes.
-    static BATCH_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
+pub(crate) type EffectReads = SmallVec<[SignalId; 4]>;
 
 /// Epoch counter for write filtering. Incremented on each runtime reset (App restart).
 /// Writes tagged with a stale epoch are silently discarded in `flush_bg_writes()`.
@@ -135,15 +122,21 @@ fn vec_remove<T: PartialEq>(vec: &mut Vec<T>, value: &T) {
 /// diagnostic; without that, release builds warn about it.
 #[cfg(debug_assertions)]
 pub(crate) fn effect_tracking_active() -> bool {
-    EFFECT_TRACKING.with(|stack| stack.try_borrow().map(|s| !s.is_empty()).unwrap_or(true))
+    with_reactive(|reactive| {
+        reactive
+            .effect_tracking
+            .try_borrow()
+            .map(|stack| !stack.is_empty())
+            .unwrap_or(true)
+    })
 }
 
 /// Buffer a signal read for the currently executing effect.
 /// Called from tracked_get/tracked_with. During effect execution, the Runtime
 /// RefCell is already borrowed, so reads are buffered here and applied after.
 pub fn record_effect_read(signal_id: SignalId) {
-    EFFECT_TRACKING.with(|stack| {
-        if let Ok(mut s) = stack.try_borrow_mut()
+    with_reactive(|reactive| {
+        if let Ok(mut s) = reactive.effect_tracking.try_borrow_mut()
             && let Some(entry) = s.last_mut()
             && !entry.1.contains(&signal_id)
         {
@@ -162,11 +155,12 @@ pub(crate) fn suspend_effect_tracking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    let saved: Vec<_> = EFFECT_TRACKING.with(|stack| stack.borrow_mut().drain(..).collect());
+    let saved: Vec<_> =
+        with_reactive(|reactive| reactive.effect_tracking.borrow_mut().drain(..).collect());
     // Restore on unwind too: losing the saved stack would silently drop the
     // dependencies of every effect currently on the stack.
     let _guard = super::guard::defer(move || {
-        EFFECT_TRACKING.with(|stack| *stack.borrow_mut() = saved);
+        with_reactive(|reactive| *reactive.effect_tracking.borrow_mut() = saved);
     });
     f()
 }
@@ -286,10 +280,6 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Get a generation-validated mutable reference to an effect slot.
     /// Returns `None` for stale ids (slot recycled since the id was issued).
     fn effect_slot_mut(&mut self, id: EffectId) -> Option<&mut EffectSlot> {
@@ -496,14 +486,6 @@ impl Runtime {
     }
 }
 
-thread_local! {
-    /// Reentrancy guard for [`flush_pending_effects`]: when a write happens
-    /// inside an effect, the nested flush is skipped and the outermost flush
-    /// loop picks up the newly queued effects. This bounds stack depth for
-    /// effect chains (they become loop iterations, not recursion).
-    static FLUSHING: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Run one effect: take its callback out of the runtime, execute it with NO
 /// runtime borrow held (so writes and signal creation inside the callback
 /// work), then restore it and register the tracked reads.
@@ -517,8 +499,11 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
     // A panicking callback must still reach phase 3: without it the slot
     // would be stuck in Running with its callback lost, and the tracking
     // frame would leak. Catch, restore state, then propagate the panic.
-    EFFECT_TRACKING.with(|stack| {
-        stack.borrow_mut().push((effect_id, EffectReads::new()));
+    with_reactive(|reactive| {
+        reactive
+            .effect_tracking
+            .borrow_mut()
+            .push((effect_id, EffectReads::new()));
     });
     // Under the scope the effect was created in, not the one the flush happens
     // to be under: a context read in the body answers the same on the first run
@@ -528,8 +513,7 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
         under_scope(scope, || suspend_widget_tracking(&mut *callback));
     }))
     .err();
-    let reads = EFFECT_TRACKING
-        .with(|stack| stack.borrow_mut().pop())
+    let reads = with_reactive(|reactive| reactive.effect_tracking.borrow_mut().pop())
         .map(|(_eid, reads)| reads)
         .unwrap_or_default();
 
@@ -545,7 +529,7 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
 /// Drain the pending-effect queue, running each effect. No-op when already
 /// flushing higher up the stack (the outer loop drains everything).
 pub(crate) fn flush_pending_effects() {
-    if FLUSHING.with(|f| f.replace(true)) {
+    if with_reactive(|reactive| reactive.flushing.replace(true)) {
         return;
     }
     // Reset the flag even if an effect callback panics; otherwise every
@@ -553,7 +537,7 @@ pub(crate) fn flush_pending_effects() {
     struct FlushGuard;
     impl Drop for FlushGuard {
         fn drop(&mut self) {
-            FLUSHING.with(|f| f.set(false));
+            with_reactive(|reactive| reactive.flushing.set(false));
         }
     }
     let _guard = FlushGuard;
@@ -571,7 +555,7 @@ pub(crate) fn flush_pending_effects() {
 /// effect callbacks — the runtime borrow is never held across user code.
 pub(crate) fn notify_write(signal_id: SignalId) {
     with_runtime(|rt| rt.enqueue_subscribers(signal_id));
-    let batching = BATCH_DEPTH.with(|d| d.get() > 0);
+    let batching = with_reactive(|reactive| reactive.batch_depth.get() > 0);
     if !batching {
         flush_pending_effects();
     }
@@ -581,19 +565,18 @@ pub fn with_runtime<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Runtime) -> R,
 {
-    RUNTIME.with(|rt| f(&mut rt.borrow_mut()))
+    with_reactive(|reactive| f(&mut reactive.runtime.borrow_mut()))
 }
 
-/// Reset all runtime state (effects, tracking, batch depth, write queue).
+/// Retire the background writes an `App` left behind.
 ///
-/// Called during `App::drop()` to ensure the next `App` run starts fresh.
+/// Not part of [`crate::reactive::state::reset`]: the queue and its epoch are
+/// `static`s rather than a thread's, because the thread that queues a write is
+/// not the one that owns the reactive state.
+///
 /// Increments the write epoch so that any in-flight background writes from
 /// old service tasks are automatically discarded by `flush_bg_writes()`.
-pub(crate) fn reset_runtime() {
-    RUNTIME.with(|rt| *rt.borrow_mut() = Runtime::new());
-    EFFECT_TRACKING.with(|et| et.borrow_mut().clear());
-    BATCH_DEPTH.with(|bd| bd.set(0));
-    FLUSHING.with(|f| f.set(false));
+pub(crate) fn reset_bg_writes() {
     // Increment epoch BEFORE clearing — writes queued between now and the next
     // flush_bg_writes() will carry the old epoch and be discarded.
     WRITE_EPOCH.fetch_add(1, Ordering::Release);
@@ -608,17 +591,17 @@ pub(crate) fn reset_runtime() {
 /// `flush_effects()` until the batch completes. Widget invalidation (paint/layout
 /// jobs) is NOT batched — widgets still get per-field jobs immediately.
 pub fn batch<R>(f: impl FnOnce() -> R) -> R {
-    BATCH_DEPTH.with(|d| d.set(d.get() + 1));
+    with_reactive(|reactive| reactive.batch_depth.set(reactive.batch_depth.get() + 1));
     // Restore the depth even if `f` panics: a caught panic must not leave
-    // BATCH_DEPTH stuck > 0 (which would stop every effect in the app from
+    // the batch depth stuck > 0 (which would stop every effect in the app from
     // ever flushing again). Effects queued by the failed batch stay pending
     // and run on the next notify — we deliberately don't flush during unwind.
     let guard = super::guard::defer(|| {
-        BATCH_DEPTH.with(|d| d.set(d.get() - 1));
+        with_reactive(|reactive| reactive.batch_depth.set(reactive.batch_depth.get() - 1));
     });
     let result = f();
     drop(guard);
-    if BATCH_DEPTH.with(|d| d.get()) == 0 {
+    if with_reactive(|reactive| reactive.batch_depth.get()) == 0 {
         flush_pending_effects();
     }
     result
@@ -631,7 +614,7 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    /// A panic caught inside batch() must not leave BATCH_DEPTH stuck > 0 —
+    /// A panic caught inside batch() must not leave the batch depth stuck > 0 —
     /// that would silently stop every effect in the app from ever flushing.
     #[test]
     fn test_caught_panic_in_batch_does_not_wedge_effects() {
@@ -647,7 +630,11 @@ mod tests {
             })
         }));
         assert!(result.is_err());
-        assert_eq!(BATCH_DEPTH.with(|d| d.get()), 0, "batch depth must unwind");
+        assert_eq!(
+            with_reactive(|reactive| reactive.batch_depth.get()),
+            0,
+            "batch depth must unwind"
+        );
 
         // Effects must still flush on the next write
         sig.set(2);
@@ -672,7 +659,10 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sig.set(1)));
         assert!(result.is_err(), "panic must propagate out of set()");
         assert_eq!(observed.get(), 1);
-        assert!(!FLUSHING.with(|f| f.get()), "flush guard must have reset");
+        assert!(
+            !with_reactive(|reactive| reactive.flushing.get()),
+            "flush guard must have reset"
+        );
 
         // The effect must still be alive, tracked, and re-runnable
         sig.set(2);

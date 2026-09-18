@@ -107,7 +107,7 @@ mod tests {
         });
         assert!(keyboard_modifiers().get_untracked().caps_lock);
 
-        crate::reactive::storage::reset_storage();
+        crate::reactive::storage::discard_all_signals();
 
         assert_eq!(keyboard_modifiers().get_untracked(), Modifiers::default());
     }

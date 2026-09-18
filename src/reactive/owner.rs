@@ -37,12 +37,12 @@
 //! ```
 
 use std::any::{Any, TypeId};
-use std::cell::{Cell, RefCell};
 use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use super::invalidation::clear_signal_subscribers;
 use super::runtime::{EffectId, SignalId, with_runtime};
+use super::state::with_reactive;
 use super::storage::dispose_signal;
 
 /// The values one scope declares, in declaration order.
@@ -107,20 +107,14 @@ struct OwnerSlot {
 }
 
 /// Arena-based storage for owners with slot recycling.
-struct OwnerArena {
+#[derive(Default)]
+pub(crate) struct OwnerArena {
     slots: Vec<OwnerSlot>,
     /// Vacant slot indices available for reuse.
     free_indices: Vec<u32>,
 }
 
 impl OwnerArena {
-    fn new() -> Self {
-        Self {
-            slots: Vec::new(),
-            free_indices: Vec::new(),
-        }
-    }
-
     fn allocate(&mut self, parent: Option<OwnerId>) -> OwnerId {
         let owner = Owner::new(parent);
         if let Some(index) = self.free_indices.pop() {
@@ -175,42 +169,18 @@ impl OwnerArena {
     }
 }
 
-thread_local! {
-    /// A `Cell` rather than a `RefCell`: an `OwnerId` is `Copy`, nothing ever
-    /// holds a borrow of this across a call, and every derived read swaps it —
-    /// so the borrow flag was bookkeeping on the hottest path in the library.
-    static CURRENT_OWNER: Cell<Option<OwnerId>> = const { Cell::new(None) };
-    static OWNERS: RefCell<OwnerArena> = RefCell::new(OwnerArena::new());
-    /// Remembered so [`with_root_owner`] can reach it from any depth.
-    static ROOT_OWNER: Cell<Option<OwnerId>> = const { Cell::new(None) };
-}
-
 /// Create a root owner and set it as the current owner.
 ///
 /// This is used by `App::run()` to establish a root scope for all reactive
 /// primitives created during setup. The root owner owns everything — when
 /// disposed, all signals, effects, and cleanup callbacks cascade.
 pub(crate) fn create_root_owner() -> OwnerId {
-    let id = OWNERS.with(|owners| owners.borrow_mut().allocate(None));
-    CURRENT_OWNER.with(|current| current.set(Some(id)));
-    ROOT_OWNER.with(|root| root.set(Some(id)));
-    id
-}
-
-/// Reset all owner state (current owner + arena).
-///
-/// Called during `App::drop()` after `dispose_owner()` has cleaned up the
-/// reactive graph. This wipes the arena so the next `App` run starts fresh.
-pub(crate) fn reset_owners() {
-    CURRENT_OWNER.with(|c| c.set(None));
-    ROOT_OWNER.with(|root| root.set(None));
-    OWNERS.with(|o| *o.borrow_mut() = OwnerArena::new());
-    // With them, anything queued against them. Owner ids restart from zero
-    // with the arena, so a disposal left over from the App that is going away
-    // names a live owner in the App that comes next — the same hazard
-    // `App::drop` already clears the tree for, where a late Unregister job
-    // would destroy a new widget that reused the id.
-    PENDING_DISPOSALS.with(|v| v.clear());
+    with_reactive(|reactive| {
+        let id = reactive.owners.borrow_mut().allocate(None);
+        reactive.current_owner.set(Some(id));
+        reactive.root_owner.set(Some(id));
+        id
+    })
 }
 
 /// Run `f` under the root owner instead of whatever scope is current.
@@ -227,7 +197,7 @@ pub(crate) fn reset_owners() {
 /// With no `App` — unit tests — there is no root, and the current scope is used
 /// as before.
 pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
-    match ROOT_OWNER.with(|root| root.get()) {
+    match with_reactive(|reactive| reactive.root_owner.get()) {
         Some(root) => under_owner(root, f),
         None => f(),
     }
@@ -235,7 +205,7 @@ pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
 
 /// Run `f` with `owner_id` as the current owner, whatever it was before.
 ///
-/// The one place `CURRENT_OWNER` is swapped: [`with_owner`] allocates a scope
+/// The one place the current owner is swapped: [`with_owner`] allocates a scope
 /// and hands it here, [`with_root_owner`] names the root, a widget names its
 /// own, and [`under_scope`] names the one a derived closure was written in —
 /// which is the frequent one, once per read of a reactive property. Restoring on unwind is why they all go through it — a leaked scope
@@ -246,9 +216,9 @@ pub(crate) fn with_root_owner<T>(f: impl FnOnce() -> T) -> T {
 /// the wrong one compiles: this one files resources under an owner somebody else
 /// disposes, that one under a fresh scope nothing does.
 pub(crate) fn under_owner<T>(owner_id: OwnerId, f: impl FnOnce() -> T) -> T {
-    let previous = CURRENT_OWNER.with(|current| current.replace(Some(owner_id)));
+    let previous = with_reactive(|reactive| reactive.current_owner.replace(Some(owner_id)));
     let _guard = crate::reactive::guard::defer(move || {
-        CURRENT_OWNER.with(|current| current.set(previous));
+        with_reactive(|reactive| reactive.current_owner.set(previous));
     });
     f()
 }
@@ -289,9 +259,9 @@ pub(crate) fn under_scope<T>(scope: Option<OwnerId>, f: impl FnOnce() -> T) -> T
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
     // Allocate new owner and register as child of current owner (if any)
-    let parent_id = CURRENT_OWNER.with(Cell::get);
-    let owner_id = OWNERS.with(|owners| {
-        let mut owners = owners.borrow_mut();
+    let owner_id = with_reactive(|reactive| {
+        let parent_id = reactive.current_owner.get();
+        let mut owners = reactive.owners.borrow_mut();
         let id = owners.allocate(parent_id);
 
         // Register as child of current owner
@@ -313,9 +283,9 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
 /// What may be declared, and what a second declaration of a type means, is the
 /// caller's to decide — see `context`. This is the storage and nothing else.
 pub(crate) fn with_scope_declarations<R>(f: impl FnOnce(&mut Declarations) -> R) -> Option<R> {
-    let id = current_owner()?;
-    OWNERS.with(|owners| {
-        let mut owners = owners.borrow_mut();
+    with_reactive(|reactive| {
+        let id = reactive.current_owner.get()?;
+        let mut owners = reactive.owners.borrow_mut();
         // A current scope that is no longer in the arena is a scope that is
         // gone, which is the same answer as none at all — and the caller has a
         // better sentence for it than an `expect` here would.
@@ -335,9 +305,9 @@ pub(crate) fn with_scope_declarations<R>(f: impl FnOnce(&mut Declarations) -> R)
 /// that reads a signal — the shape `try_call_derived` uses, for the same
 /// reason.
 pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
-    let mut scope = current_owner();
-    OWNERS.with(|owners| {
-        let owners = owners.borrow();
+    with_reactive(|reactive| {
+        let mut scope = reactive.current_owner.get();
+        let owners = reactive.owners.borrow();
         while let Some(id) = scope {
             let owner = owners.get(id)?;
             let declared = owner
@@ -357,7 +327,22 @@ pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
 ///
 /// Returns `None` if not currently inside an owner scope.
 pub fn current_owner() -> Option<OwnerId> {
-    CURRENT_OWNER.with(Cell::get)
+    with_reactive(|reactive| reactive.current_owner.get())
+}
+
+/// Hand the current scope to `f`, if there is one and it is still in the
+/// arena. One visit to the reactive state rather than two: the scope and the
+/// arena are fields of one struct now, and every registration below wants
+/// both.
+fn with_current_owner(f: impl FnOnce(&mut Owner)) {
+    with_reactive(|reactive| {
+        let Some(id) = reactive.current_owner.get() else {
+            return;
+        };
+        if let Some(owner) = reactive.owners.borrow_mut().get_mut(id) {
+            f(owner);
+        }
+    });
 }
 
 /// Dispose an owner and all its resources.
@@ -385,8 +370,8 @@ pub fn dispose_owner_now(id: OwnerId) {
     // the root owner) accumulate one dead child entry for every owner ever
     // created under them. During recursive disposal the parent has already
     // been taken from the arena, so `get_mut` fails and the prune is skipped.
-    let owner = OWNERS.with(|owners| {
-        let mut arena = owners.borrow_mut();
+    let owner = with_reactive(|reactive| {
+        let mut arena = reactive.owners.borrow_mut();
         let owner = arena.take(id)?;
         if let Some(parent_id) = owner.parent
             && let Some(parent) = arena.get_mut(parent_id)
@@ -456,13 +441,7 @@ pub fn dispose_owner_now(id: OwnerId) {
 /// });
 /// ```
 pub fn on_cleanup(f: impl FnOnce() + 'static) {
-    if let Some(owner_id) = current_owner() {
-        OWNERS.with(|owners| {
-            if let Some(owner) = owners.borrow_mut().get_mut(owner_id) {
-                owner.cleanups.push(Box::new(f));
-            }
-        });
-    }
+    with_current_owner(|owner| owner.cleanups.push(Box::new(f)));
 }
 
 /// Register a signal with the current owner.
@@ -470,13 +449,7 @@ pub fn on_cleanup(f: impl FnOnce() + 'static) {
 /// This is called internally by `create_signal` to register newly created
 /// signals for automatic cleanup.
 pub(crate) fn register_signal(id: SignalId) {
-    if let Some(owner_id) = current_owner() {
-        OWNERS.with(|owners| {
-            if let Some(owner) = owners.borrow_mut().get_mut(owner_id) {
-                owner.signals.push(id);
-            }
-        });
-    }
+    with_current_owner(|owner| owner.signals.push(id));
 }
 
 /// Register an effect with the current owner.
@@ -484,14 +457,7 @@ pub(crate) fn register_signal(id: SignalId) {
 /// This is called internally by `create_effect` to register newly created
 /// effects for automatic cleanup.
 pub(crate) fn register_effect(id: EffectId) {
-    if let Some(owner_id) = current_owner() {
-        OWNERS.with(|owners| {
-            let mut owners = owners.borrow_mut();
-            if let Some(owner) = owners.get_mut(owner_id) {
-                owner.effects.push(id);
-            }
-        });
-    }
+    with_current_owner(|owner| owner.effects.push(id));
 }
 
 /// Check if an effect is owned by any owner.
@@ -503,12 +469,6 @@ pub(crate) fn register_effect(id: EffectId) {
 #[cfg(test)]
 pub(crate) fn effect_has_owner(id: EffectId) -> bool {
     crate::reactive::runtime::with_runtime(|rt| rt.effect_scope(id)).is_some()
-}
-
-// Owners scheduled for deferred disposal (see `dispose_owner`).
-thread_local! {
-    static PENDING_DISPOSALS: crate::deferred::DeferredQueue<OwnerId> =
-        const { crate::deferred::DeferredQueue::new() };
 }
 
 /// Dispose an owner: all its signals, effects, and cleanup callbacks.
@@ -526,7 +486,7 @@ pub fn dispose_owner(id: OwnerId) {
     // Pushing is what wakes the loop, so a disposal requested in a quiet
     // moment — a compositor dismissal with nothing else going on — is not
     // postponed indefinitely.
-    PENDING_DISPOSALS.with(|v| v.push(id));
+    with_reactive(|reactive| reactive.pending_disposals.push(id));
 }
 
 /// Run every pending deferred disposal. Called by the main loop at a safe
@@ -535,7 +495,7 @@ pub(crate) fn flush_pending_disposals() {
     // split_off keeps draining safe even if a cleanup callback disposes
     // another owner while running (it lands in the next batch)
     loop {
-        let batch = PENDING_DISPOSALS.with(|v| v.drain());
+        let batch = with_reactive(|reactive| reactive.pending_disposals.drain());
         if batch.is_empty() {
             return;
         }
@@ -555,7 +515,7 @@ mod tests {
     ///
     /// It matters because the corruption is silent and permanent. The one
     /// caller of `with_root_owner` (`global.rs`) runs application code inside
-    /// it; if that panics and the owner is not put back, `CURRENT_OWNER` stays
+    /// it; if that panics and the owner is not put back, the current owner stays
     /// pinned at the root, and every `with_owner` after it captures root as its
     /// `previous` and restores *that*. Nothing ever notices.
     ///
@@ -590,7 +550,7 @@ mod tests {
         );
 
         std::panic::set_hook(hushed);
-        reset_owners();
+        crate::reactive::state::reset();
     }
 
     #[test]
@@ -685,8 +645,8 @@ mod tests {
             dispose_owner_now(*child);
         }
 
-        OWNERS.with(|owners| {
-            let mut arena = owners.borrow_mut();
+        with_reactive(|reactive| {
+            let mut arena = reactive.owners.borrow_mut();
             let parent = arena.get_mut(parent_id).expect("parent still live");
             assert!(
                 parent.children.is_empty(),
@@ -928,7 +888,7 @@ mod tests {
         assert!(panicked, "Accessing disposed signal should panic");
 
         // Reset owner arena
-        reset_owners();
+        crate::reactive::state::reset();
         assert!(current_owner().is_none());
 
         // After reset, creating a new root owner should work cleanly
@@ -939,6 +899,6 @@ mod tests {
 
         // Cleanup
         dispose_owner_now(new_root);
-        reset_owners();
+        crate::reactive::state::reset();
     }
 }

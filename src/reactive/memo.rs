@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(memo.get(), 0);
 
         // Discard anything queued while building
-        jobs::reset_jobs();
+        jobs::clear_pending_jobs();
 
         hot.set(21);
 

@@ -22,7 +22,6 @@
 //! When a job is pushed, the system automatically wakes the event loop via a ping
 //! mechanism, ensuring the frame is processed promptly.
 
-use std::cell::RefCell;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -32,6 +31,7 @@ use std::time::Instant;
 use smallvec::SmallVec;
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
+use crate::app_state::with_app_state;
 use crate::reactive::invalidation::clear_widget_subscribers;
 use crate::tree::{Tree, WidgetId};
 
@@ -40,19 +40,13 @@ use crate::tree::{Tree, WidgetId};
 /// Drained buffers come from (and should be returned to, via
 /// [`recycle_job_buffer`]) a small spare pool so per-frame drains don't
 /// re-allocate from zero.
+#[derive(Default)]
 struct JobQueue {
     set: rustc_hash::FxHashSet<Job>,
     vec: Vec<Job>,
 }
 
 impl JobQueue {
-    fn new() -> Self {
-        Self {
-            set: rustc_hash::FxHashSet::default(),
-            vec: Vec::new(),
-        }
-    }
-
     fn push(&mut self, job: Job) {
         if self.set.insert(job) {
             self.vec.push(job);
@@ -101,7 +95,8 @@ impl JobQueue {
 /// teardown, or their surface was destroyed) go to the `orphans` lane,
 /// processed once per loop iteration so deferred Unregister cleanup always
 /// runs.
-struct JobQueues {
+#[derive(Default)]
+pub(crate) struct JobQueues {
     /// Push-side inbox (no ownership resolved yet).
     inbox: JobQueue,
     /// Per-surface queues, keyed by surface root widget.
@@ -113,15 +108,6 @@ struct JobQueues {
 }
 
 impl JobQueues {
-    fn new() -> Self {
-        Self {
-            inbox: JobQueue::new(),
-            per_root: rustc_hash::FxHashMap::default(),
-            orphans: JobQueue::new(),
-            spare: Vec::new(),
-        }
-    }
-
     fn spare_buf(&mut self) -> Vec<Job> {
         self.spare.pop().unwrap_or_default()
     }
@@ -140,25 +126,13 @@ impl JobQueues {
     }
 }
 
-// Thread-local job queues for pending reactive updates.
-// All job producers (signal writes, animations) run on the main thread,
-// so no Mutex is needed.
-thread_local! {
-    static PENDING_JOBS: RefCell<JobQueues> = RefCell::new(JobQueues::new());
-    /// Jobs waiting on a clock rather than on the next frame — see
-    /// [`request_job_at`]. Kept out of the queues so `has_pending_jobs` stays
-    /// "there is work for this frame": a scheduled job is work for *later*, and
-    /// treating it as pending is exactly what turns a blink into a poll.
-    static SCHEDULED_JOBS: RefCell<Vec<ScheduledJob>> = const { RefCell::new(Vec::new()) };
-}
-
 /// A job to run at a point in time.
 ///
 /// Keyed by [`Job`] — widget and job type — while carrying the whole
 /// [`JobRequest`], so re-scheduling replaces rather than accumulates and the
 /// follow-up work an animation asks for survives the wait.
 #[derive(Clone, Copy)]
-struct ScheduledJob {
+pub(crate) struct ScheduledJob {
     at: Instant,
     job: Job,
     request: JobRequest,
@@ -224,8 +198,8 @@ pub struct Job {
 /// Request a job (handles animation follow-up jobs automatically).
 /// For animations, this inserts both the Animation job and any required follow-up job.
 pub fn request_job(widget_id: WidgetId, request: JobRequest) {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
+    with_app_state(|app| {
+        let mut jobs = app.pending_jobs.borrow_mut();
         let inbox = &mut jobs.inbox;
         match request {
             JobRequest::Animation(required) => {
@@ -285,8 +259,8 @@ pub fn request_job_at(widget_id: WidgetId, request: JobRequest, at: Instant) {
         widget_id,
         job_type: request.job_type(),
     };
-    SCHEDULED_JOBS.with(|scheduled| {
-        let mut scheduled = scheduled.borrow_mut();
+    with_app_state(|app| {
+        let mut scheduled = app.scheduled_jobs.borrow_mut();
         match scheduled.iter_mut().find(|entry| entry.job == job) {
             // Re-scheduling the same job moves it: a caret that just toggled
             // wants the *next* toggle, not the one it already served.
@@ -303,16 +277,22 @@ pub fn request_job_at(widget_id: WidgetId, request: JobRequest, at: Instant) {
 
 /// When the earliest scheduled job is due, if any.
 pub fn next_deadline() -> Option<Instant> {
-    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow().iter().map(|entry| entry.at).min())
+    with_app_state(|app| {
+        app.scheduled_jobs
+            .borrow()
+            .iter()
+            .map(|entry| entry.at)
+            .min()
+    })
 }
 
 /// Move every scheduled job whose deadline has passed into the pending queue.
 ///
 /// Called by the loop before it decides whether there is work to do.
 pub fn promote_due_jobs() {
-    let due: SmallVec<[ScheduledJob; 4]> = SCHEDULED_JOBS.with(|scheduled| {
+    let due: SmallVec<[ScheduledJob; 4]> = with_app_state(|app| {
         let now = Instant::now();
-        let mut scheduled = scheduled.borrow_mut();
+        let mut scheduled = app.scheduled_jobs.borrow_mut();
         let mut due = SmallVec::new();
         scheduled.retain(|entry| {
             if entry.at <= now {
@@ -334,8 +314,8 @@ pub fn promote_due_jobs() {
 /// Forget a widget's scheduled jobs. Called when it leaves the tree, so a caret
 /// that is gone does not keep waking the loop.
 pub(crate) fn cancel_scheduled_jobs(widget_id: WidgetId) {
-    SCHEDULED_JOBS.with(|scheduled| {
-        scheduled
+    with_app_state(|app| {
+        app.scheduled_jobs
             .borrow_mut()
             .retain(|entry| entry.job.widget_id != widget_id)
     });
@@ -375,8 +355,8 @@ pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: Widget
 }
 
 pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetId>) {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
+    with_app_state(|app| {
+        let mut jobs = app.pending_jobs.borrow_mut();
 
         // Retire queues for surfaces that no longer exist.
         let dead: SmallVec<[WidgetId; 2]> = jobs
@@ -402,10 +382,7 @@ pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetI
         for job in &pending {
             match tree.surface_root_of(job.widget_id) {
                 Some(root) if active_roots.contains(&root) => {
-                    jobs.per_root
-                        .entry(root)
-                        .or_insert_with(JobQueue::new)
-                        .push(*job);
+                    jobs.per_root.entry(root).or_default().push(*job);
                 }
                 _ => jobs.orphans.push(*job),
             }
@@ -416,8 +393,8 @@ pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetI
 
 /// Drain all jobs owned by the given surface root.
 pub fn drain_surface_jobs(root: WidgetId) -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
+    with_app_state(|app| {
+        let mut jobs = app.pending_jobs.borrow_mut();
         let buf = jobs.spare_buf();
         match jobs.per_root.get_mut(&root) {
             Some(queue) => queue.drain_all(buf),
@@ -430,8 +407,8 @@ pub fn drain_surface_jobs(root: WidgetId) -> Vec<Job> {
 /// Used to collect follow-up jobs (Paint/Layout) pushed by animation
 /// advances and reconciliation, without re-draining Animation jobs.
 pub fn drain_surface_non_animation_jobs(root: WidgetId) -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
+    with_app_state(|app| {
+        let mut jobs = app.pending_jobs.borrow_mut();
         let buf = jobs.spare_buf();
         match jobs.per_root.get_mut(&root) {
             Some(queue) => queue.drain_non_animation(buf),
@@ -443,8 +420,8 @@ pub fn drain_surface_non_animation_jobs(root: WidgetId) -> Vec<Job> {
 /// Drain the orphan lane (jobs with no live owning surface — deferred
 /// Unregister cleanup, mostly). Processed once per loop iteration.
 pub fn drain_orphan_jobs() -> Vec<Job> {
-    PENDING_JOBS.with(|jobs| {
-        let mut jobs = jobs.borrow_mut();
+    with_app_state(|app| {
+        let mut jobs = app.pending_jobs.borrow_mut();
         let buf = jobs.spare_buf();
         jobs.orphans.drain_all(buf)
     })
@@ -452,7 +429,7 @@ pub fn drain_orphan_jobs() -> Vec<Job> {
 
 /// Return a drained job buffer for capacity reuse on later frames.
 pub fn recycle_job_buffer(buf: Vec<Job>) {
-    PENDING_JOBS.with(|jobs| jobs.borrow_mut().recycle(buf));
+    with_app_state(|app| app.pending_jobs.borrow_mut().recycle(buf));
 }
 
 /// Process all jobs in a single pass, partitioned by type.
@@ -523,7 +500,7 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
 /// Check if there are pending jobs.
 /// This includes both regular jobs and animation jobs.
 pub fn has_pending_jobs() -> bool {
-    PENDING_JOBS.with(|jobs| !jobs.borrow().is_empty())
+    with_app_state(|app| !app.pending_jobs.borrow().is_empty())
 }
 
 /// The job types queued for one widget, for tests that assert *how* a widget
@@ -531,14 +508,13 @@ pub fn has_pending_jobs() -> bool {
 /// "pending work" from the outside, and the difference is the whole point.
 #[cfg(test)]
 pub(crate) fn queued_job_types(widget_id: WidgetId) -> Vec<JobType> {
-    PENDING_JOBS.with(|pending| {
-        let pending = pending.borrow();
-        pending
-            .inbox
+    with_app_state(|app| {
+        let jobs = app.pending_jobs.borrow();
+        jobs.inbox
             .vec
             .iter()
-            .chain(pending.orphans.vec.iter())
-            .chain(pending.per_root.values().flat_map(|queue| queue.vec.iter()))
+            .chain(jobs.orphans.vec.iter())
+            .chain(jobs.per_root.values().flat_map(|queue| queue.vec.iter()))
             .filter(|job| job.widget_id == widget_id)
             .map(|job| job.job_type)
             .collect()
@@ -594,15 +570,13 @@ fn pump(tree: &mut Tree, root: WidgetId) {
 /// Forget every scheduled job (for testing).
 #[cfg(test)]
 pub(crate) fn clear_scheduled_jobs() {
-    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
+    with_app_state(|app| app.scheduled_jobs.borrow_mut().clear());
 }
 
 /// Clear all pending jobs (for testing)
 #[cfg(test)]
 pub(crate) fn clear_pending_jobs() {
-    PENDING_JOBS.with(|jobs| {
-        *jobs.borrow_mut() = JobQueues::new();
-    });
+    with_app_state(|app| app.pending_jobs.take());
 }
 
 /// Reason code stored in the atomic exit flag.
@@ -638,7 +612,7 @@ pub(crate) fn set_exit_request(req: ExitRequest) {
     }
 }
 
-/// Read the current exit request (non-destructive — persists until `reset_jobs()`).
+/// Read the current exit request (non-destructive — persists until `reset_wakeup()`).
 pub(crate) fn get_exit_request() -> ExitRequest {
     match EXIT_REQUEST.load(Ordering::Acquire) {
         1 => ExitRequest::Quit,
@@ -719,7 +693,7 @@ pub(crate) fn ping_in_flight() -> bool {
 }
 
 /// Exclusive use of the process-wide wakeup state for one test, given back on
-/// the way out — including out of a panic, which a trailing `reset_jobs()`
+/// the way out — including out of a panic, which a trailing `reset_wakeup()`
 /// does not cover: a failing assertion would otherwise leave a ping handle and
 /// a raised flag behind and turn one real failure into a run of unrelated ones.
 ///
@@ -738,7 +712,7 @@ pub(crate) struct WakeupTestState(#[allow(dead_code)] std::sync::MutexGuard<'sta
 #[cfg(test)]
 impl Drop for WakeupTestState {
     fn drop(&mut self) {
-        reset_jobs();
+        reset_wakeup();
         crate::ingress::reset_ingress();
     }
 }
@@ -750,14 +724,13 @@ pub(crate) fn mark_loop_awake() {
     PING_SENT.store(false, Ordering::Relaxed);
 }
 
-/// Reset all job state (pending jobs, frame request flag, wakeup ping).
+/// Reset the wakeup machinery: the frame request flag, the exit flag and the
+/// ping the loop is woken through.
 ///
-/// Called during `App::drop()` to clear stale jobs and allow re-initialization.
-pub(crate) fn reset_jobs() {
-    PENDING_JOBS.with(|jobs| {
-        *jobs.borrow_mut() = JobQueues::new();
-    });
-    SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
+/// The queues themselves are not here. They belong to the `App` and go with
+/// it, in [`crate::app_state::reset`]; what is left is process-wide — atomics
+/// and a `Mutex`, because anything may ask for a frame from any thread.
+pub(crate) fn reset_wakeup() {
     WAKE_REQUESTED.store(false, Ordering::Relaxed);
     PING_SENT.store(false, Ordering::Relaxed);
     EXIT_REQUEST.store(ExitRequest::Running as u8, Ordering::Relaxed);
@@ -821,18 +794,14 @@ mod tests {
             widget_id,
             job_type,
         };
-        PENDING_JOBS.with(|pending| pending.borrow_mut().inbox.push(job));
+        with_app_state(|app| app.pending_jobs.borrow_mut().inbox.push(job));
         job
-    }
-
-    fn clear_scheduled() {
-        SCHEDULED_JOBS.with(|scheduled| scheduled.borrow_mut().clear());
     }
 
     #[test]
     fn a_scheduled_job_is_not_work_for_this_frame() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
 
@@ -855,7 +824,7 @@ mod tests {
     #[test]
     fn a_due_job_becomes_an_ordinary_one() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
 
@@ -872,7 +841,7 @@ mod tests {
     #[test]
     fn rescheduling_moves_the_deadline_instead_of_adding_one() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
         let far = Instant::now() + Duration::from_secs(60);
@@ -892,7 +861,7 @@ mod tests {
     #[test]
     fn an_animation_keeps_its_follow_up_across_the_wait() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
 
@@ -903,8 +872,8 @@ mod tests {
         );
         promote_due_jobs();
 
-        let queued: Vec<JobType> = PENDING_JOBS.with(|pending| {
-            pending
+        let queued: Vec<JobType> = with_app_state(|app| {
+            app.pending_jobs
                 .borrow()
                 .inbox
                 .vec
@@ -923,7 +892,7 @@ mod tests {
     #[test]
     fn a_widget_leaving_the_tree_stops_waking_the_loop() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
         request_job_at(
@@ -947,7 +916,7 @@ mod tests {
     #[test]
     fn a_deferred_unregister_takes_the_deadlines_with_it() {
         clear_pending_jobs();
-        clear_scheduled();
+        clear_scheduled_jobs();
         let (mut tree, ..) = two_surface_tree();
         let widget = tree.register(Box::new(TestWidget));
         request_job_at(
@@ -1104,10 +1073,9 @@ mod wakeup_contract {
     /// not depend on that flag.
     ///
     /// **Why the retry.** This asserts on process-wide state that other tests
-    /// in this binary also write: `reactive::memo` calls `reset_jobs()`, which
-    /// drops the wakeup handle outright, and anything requesting a job sets
-    /// `PING_SENT`. Either one costs an attempt, so each attempt rebuilds its
-    /// setup from scratch. The asymmetry is what makes this sound: a real
+    /// in this binary also write: anything requesting a job sets `PING_SENT`.
+    /// That costs an attempt, so each attempt rebuilds its setup from
+    /// scratch. The asymmetry is what makes this sound: a real
     /// regression pings on *no* attempt, so the failure needs no luck, while a
     /// pass needs only one clean window out of many.
     /// An exit request has to reach the eventfd, not just the flag: the loop
