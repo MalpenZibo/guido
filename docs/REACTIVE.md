@@ -469,10 +469,14 @@ the subscription exists notifies nobody, and the copy goes stale forever.
 `AnimationState` (animation targets) is exactly this shape, and any future
 cache of signal-derived state will be too. Such caches MUST do both of:
 
-1. **Register their subscriptions on the widget's first `layout()`** —
-   creation and first layout run in one synchronous block, so no write can
-   land in between (see the first-layout Animation tracking pass in
-   `Container::layout`).
+1. **Register their subscriptions on the widget's first `layout()`** — and
+   read the value there rather than at creation, because those two are not one
+   synchronous block. A surface is built when `add_surface` or `spawn_surface`
+   is answered and laid out by `init_pending_gpu` in an iteration of the loop,
+   with at least one compositor dispatch in between, so a write can land in
+   that gap. What makes it safe is that the first layout both subscribes and
+   reads: a write arriving before it is simply what the first read sees (see
+   the first-layout Animation tracking pass in `Container::layout`).
 2. **Reconcile pull-style at each use** — compare the stored copy against
    the current effective value and schedule a catch-up job on drift (see
    the target-drift pass in `Container::paint`). This also converges

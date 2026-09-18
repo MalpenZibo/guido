@@ -480,7 +480,13 @@ pub trait Widget {
 **Note:** So is what time it is, and there are two answers because they are two
 questions. A widget **advancing** something over time asks `tree.frame_instant()`
 — a frame declares its instant once, around the jobs, the layout and the paint,
-so everything moving in that frame is asked about the same moment. A widget
+so everything moving in that frame is asked about the same moment. A surface's
+*first* layout declares it too: that layout is where an enter animation is
+seeded and the frame that follows it in the same iteration is what advances it,
+so the two are handed one instant rather than two. Every surface gets that
+layout from `init_pending_gpu`, whether `add_surface` declared it before the
+loop started or `spawn_surface` asked for it while the loop ran — one birth
+path, so there is one answer to when a birth happens. A widget
 handling an **event** asks `tree.event_instant()`, which is when the compositor
 saw it happen, not when the handler ran: the two differ by however long the
 event sat in the queue, and that difference is what a velocity or a
