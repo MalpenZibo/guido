@@ -274,8 +274,13 @@ impl Renderer {
         layers: &[CommandLayer],
         clear_color: Color,
     ) -> bool {
+        // Two spellings of one dispatch, and both are the only one clippy
+        // accepts for the build they belong to: the offscreen target exists
+        // only where something reads pixels back, so with it compiled out this
+        // is a one-variant enum and a `match` on it is a `let`. Written out
+        // rather than silenced, because the lint is right in both builds.
+        #[cfg(any(test, feature = "testing"))]
         let surface = match target {
-            #[cfg(any(test, feature = "testing"))]
             RenderTarget::Offscreen(offscreen) => {
                 let view = offscreen
                     .texture
@@ -287,6 +292,8 @@ impl Renderer {
             }
             RenderTarget::Swapchain(surface) => surface,
         };
+        #[cfg(not(any(test, feature = "testing")))]
+        let RenderTarget::Swapchain(surface) = target;
         let output = match surface.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {

@@ -40,6 +40,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      # And again with the features a consumer actually gets. Every other job
+      # that denies warnings passes --all-features, so code kept alive only by
+      # an optional feature can go dead in a default build and nothing here
+      # objects — `RegionRect::contains` and the offscreen render target did,
+      # and the first to read about it was whoever depends on guido.
+      - name: Run clippy with the default features
+        run: cargo clippy --all-targets -- -D warnings
       # The guard that refuses a re-bless and a commit on main decides by the
       # position a word occupies, not by whether it appears. Getting that wrong
       # is how it came to refuse a sed expression and to read the branch of the
@@ -65,8 +72,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - name: Run tests
         run: cargo test --all-features
-      # Every other job builds with --all-features, so a test file that needs an
-      # optional feature and does not say so compiles there and nowhere else.
+      # A test file that needs an optional feature and does not say so compiles
+      # under --all-features and nowhere else. The check job's default-features
+      # clippy run covers this too and denies warnings on it; this stays because
+      # it runs in a job with its own cache, and finds it without one.
       - name: Build the tests with the default features
         run: cargo check --tests
       # The book teaches through samples — two fifths of its lines are inside a
