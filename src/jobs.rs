@@ -484,7 +484,7 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
         // which children to paint at the top of its own, so a widget that has
         // moved has to have said so by now. See `Widget::refresh_paint_bounds`.
         tree.with_widget_mut(id, |widget, wid, tree| {
-            widget.refresh_paint_bounds(tree, wid);
+            crate::tree::refresh_paint_reach(&*widget, tree, wid);
         });
         tree.mark_needs_paint(id);
     }

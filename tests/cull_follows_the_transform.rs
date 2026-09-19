@@ -290,7 +290,13 @@ fn the_window_widens_on_the_near_side_as_well() {
 /// The case #319 names, and the one the two tests above do not cover: they
 /// give the row its lift at build time, so the very first frame decides about
 /// a row that is already transformed. Here the lift arrives later, from a
-/// signal, and the row it applies to has never painted.
+/// signal, and nothing on the way to it has ever painted.
+///
+/// The lifted box is a *child* of the row rather than the row itself, which
+/// is the harder half and the one a list actually has: the row between it and
+/// the scroller has never painted either, so it too holds a mark nothing has
+/// cleared. A fix that only reaches one level up passes the simpler
+/// arrangement and fails this.
 ///
 /// Through a real loop rather than the harness, because what is being asked is
 /// whether the *write* reaches the row — and the answer travels as a job, which
@@ -322,11 +328,13 @@ mod through_a_real_loop {
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
             move || {
                 let mut rows = rows(20);
-                rows[15] = container()
-                    .width(MARKED_WIDTH)
-                    .height(ROW_HEIGHT)
-                    .background(Color::rgb(1.0, 0.0, 0.0))
-                    .translate(move || Translate::new(0.0, lift.get()));
+                rows[15] = container().width(ROW_WIDTH).height(ROW_HEIGHT).child(
+                    container()
+                        .width(MARKED_WIDTH)
+                        .height(ROW_HEIGHT)
+                        .background(Color::rgb(1.0, 0.0, 0.0))
+                        .translate(move || Translate::new(0.0, lift.get())),
+                );
                 scroller(rows)
             },
         );

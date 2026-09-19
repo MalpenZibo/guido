@@ -222,6 +222,24 @@ struct CachedLayout {
     pass_dependent: bool,
 }
 
+/// Publish how far `widget` paints outside its own box, inside *its* own
+/// Paint scope.
+///
+/// The scope is the point, and it is why this is one function rather than two
+/// call sites. What the answer is read from — a transform — is a paint
+/// property, so a write to it must repaint that widget and reflow nothing.
+/// Read under no scope at all, which is what this was before #319, those reads
+/// subscribed to nothing, and a widget culled before it ever painted could
+/// never be told to come back.
+///
+/// Both passes that can be the last to run call it: the Paint job in `jobs`,
+/// and [`Tree::layout_widget`] once its Layout scope has closed.
+pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: WidgetId) {
+    crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Paint, || {
+        widget.refresh_paint_bounds(tree, id)
+    });
+}
+
 pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Slot>,
@@ -611,7 +629,7 @@ impl Tree {
             // On either pass, because either may be the last one that ran: a
             // popup is measured before it is ever laid out, and the layout
             // after it reads that answer back where the subtree is settled.
-            widget.refresh_paint_bounds(tree, id);
+            refresh_paint_reach(&*widget, tree, id);
             size
         });
 
