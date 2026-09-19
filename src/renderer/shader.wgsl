@@ -31,7 +31,7 @@ struct InstanceInput {
     @location(3) fill_color: vec4<f32>,
     // border_color RGBA
     @location(4) border_color: vec4<f32>,
-    // border_width, shape_curvature, _pad, _pad
+    // border_width, shape_curvature, clip_curvature, _pad
     @location(5) border_params: vec4<f32>,
     // shadow_offset.xy, shadow_blur, shadow_spread
     @location(6) shadow_params: vec4<f32>,
@@ -39,12 +39,13 @@ struct InstanceInput {
     @location(7) shadow_color: vec4<f32>,
     // transform: a, b, tx, c
     @location(8) transform_0: vec4<f32>,
-    // transform: d, ty, _pad, _pad
+    // transform: d, ty, then the clip inverse's d, ty — six floats of clip
+    // matrix in two homes, because sixteen attributes is the whole allowance
     @location(9) transform_1: vec4<f32>,
-    // clip_rect: [x, y, width, height] in physical pixels (scaled from logical in render.rs)
+    // clip_rect: [x, y, width, height] in the clip's own space, logical pixels
     @location(10) clip_rect: vec4<f32>,
-    // clip_curvature, clip_is_local, _pad, _pad
-    @location(11) clip_params: vec4<f32>,
+    // clip inverse: a, b, tx, c
+    @location(11) clip_inverse_0: vec4<f32>,
     // gradient_start RGBA
     @location(12) gradient_start: vec4<f32>,
     // gradient_end RGBA
@@ -73,19 +74,26 @@ struct VertexOutput {
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
     @location(7) shadow_color: vec4<f32>,
-    // World position in physical pixels (for clip computation)
-    @location(8) world_pos: vec2<f32>,
-    // Clip rect in physical pixels
+    // This fragment in the clip's own space — the vertex shader has already
+    // undone the clip's placement. The map is affine, and interpolating an
+    // affine function of position across a triangle gives the same answer as
+    // applying it to the interpolated position, so the matrix need not reach
+    // the fragment stage at all: four varyings fewer, and the multiply happens
+    // three times per triangle instead of once per covered pixel. Exact, not
+    // an approximation — which is the same argument the image quad makes for
+    // mapping its four corners on the CPU.
+    @location(8) clip_pos: vec2<f32>,
+    // Clip rect in the clip's own space, logical pixels
     @location(9) clip_rect: vec4<f32>,
-    // clip curvature, is_local, _
-    @location(10) clip_params: vec3<f32>,
+    // clip curvature
+    @location(10) @interpolate(flat) clip_curvature: f32,
     // Gradient start color
     @location(11) gradient_start: vec4<f32>,
     // Gradient end color
     @location(12) gradient_end: vec4<f32>,
     // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse)
     @location(13) @interpolate(flat) gradient_type: u32,
-    // clip corner radii: [top_left, top_right, bottom_right, bottom_left]
+    // clip corner radii, in the clip's own space
     @location(14) clip_radii: vec4<f32>,
 }
 
@@ -168,8 +176,14 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     // We interpolate the LOCAL position, not world position
     out.frag_pos = local_pos;
 
-    // Pass world position (in logical pixels) for clip computation
-    out.world_pos = world_pos;
+    // Into the clip's own space, where the shape it was declared as is an
+    // ordinary rounded rect again — turned, scaled or neither. Identity for a
+    // clip already in world coordinates, which is most of them.
+    out.clip_pos = apply_transform(
+        world_pos,
+        instance.clip_inverse_0.x, instance.clip_inverse_0.y, instance.clip_inverse_0.z,
+        instance.clip_inverse_0.w, instance.transform_1.z, instance.transform_1.w
+    );
 
     // Pass instance data to fragment shader
     out.fill_color = instance.fill_color;
@@ -182,7 +196,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     // Pass clip data to fragment shader
     out.clip_rect = instance.clip_rect;
-    out.clip_params = instance.clip_params.xyz;  // curvature, is_local, _
+    out.clip_curvature = instance.border_params.z;
     out.clip_radii = instance.clip_radii;
 
     // Pass gradient data to fragment shader
@@ -373,15 +387,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // === Apply clipping ===
     // Check if clipping is enabled (negative width/height = no clip sentinel)
     if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
-        // Use frag_pos for local clips (overlay clips on transformed containers),
-        // world_pos for world clips (regular clipping)
-        let clip_pos = select(in.world_pos, in.frag_pos, in.clip_params.y > 0.5);
-
         let clip_dist = rounded_rect_sdf(
-            clip_pos,
+            in.clip_pos,
             in.clip_rect,
             in.clip_radii,
-            in.clip_params.x   // curvature
+            in.clip_curvature
         );
 
         // Smooth clip edge (anti-aliased)

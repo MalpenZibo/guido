@@ -4,10 +4,16 @@
 //! Instanced rendering pipeline data structures. Instead of duplicating vertex
 //! data for each shape, we use a single unit quad and per-instance data.
 
+use crate::transform::Transform;
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 /// Clip rect sentinel: negative width/height disables clipping in the shader.
 pub const NO_CLIP_RECT: [f32; 4] = [0.0, 0.0, -1.0, -1.0];
+
+/// Zero width and height: the clip lets nothing through, which is what a shape
+/// whose placement collapsed should do. Distinct from [`NO_CLIP_RECT`], whose
+/// negative extents mean there is no clip at all.
+pub const EMPTY_CLIP_RECT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
 /// Uniform buffer data passed to the shader.
 ///
@@ -108,8 +114,15 @@ pub struct ShapeInstance {
     pub border_width: f32,
     /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
     pub shape_curvature: f32,
+    /// The clip's curvature, lodging here rather than beside the clip.
+    ///
+    /// A vertex layout may declare sixteen attributes and this one declares
+    /// sixteen, so the clip's inverse could only be carried in padding that
+    /// already existed. Evicting this float freed a whole 16-byte attribute
+    /// for it — see [`clip_inverse_0`](Self::clip_inverse_0).
+    pub clip_curvature: f32,
     /// Padding for 16-byte alignment
-    pub _pad1: [f32; 2],
+    pub _pad1: f32,
 
     // === Shadow ===
     /// Shadow offset in logical pixels (x, y)
@@ -125,20 +138,42 @@ pub struct ShapeInstance {
     /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3)
     /// Note: Transform origin is baked into the matrix via center_at() on CPU
     pub transform: [f32; 6],
-    /// Padding for 16-byte alignment
-    pub _pad2: [f32; 2],
+    /// The clip inverse's last two coefficients, `[d, ty]`.
+    ///
+    /// Next to a different matrix because there was room next to a different
+    /// matrix — see [`clip_inverse_0`](Self::clip_inverse_0).
+    pub clip_inverse_1: [f32; 2],
 
     // === Clip Region ===
-    /// Clip rect in physical pixels [x, y, width, height]
+    /// Clip rect in the clip's own space, logical pixels [x, y, width, height].
     /// Negative width/height = no clipping. Zero width/height = clip everything.
+    ///
+    /// **Not scaled to physical pixels**, unlike every other length in this
+    /// struct. Scaling it here and folding the scale into the inverse as well
+    /// would apply the surface scale twice.
     pub clip_rect: [f32; 4],
-    /// Clip curvature (K-value)
-    pub clip_curvature: f32,
-    /// Whether to use local coordinates (frag_pos) for clipping instead of world_pos.
-    /// 1.0 = local clip, 0.0 = world clip
-    pub clip_is_local: f32,
-    /// Padding for 16-byte alignment
-    pub _pad3: [f32; 2],
+    /// World (physical pixels) to clip space: `[a, b, tx, c]`, the first four
+    /// coefficients of a row-major 2×3 affine map. The last two are in
+    /// [`clip_inverse_1`](Self::clip_inverse_1).
+    ///
+    /// **Six floats in two places, because there was no third attribute to
+    /// have.** `wgpu`'s `max_vertex_attributes` is 16 on every backend worth
+    /// the name and this layout declares 16, so a seventeenth is a pipeline
+    /// validation error rather than a cost. What it did have was padding: this
+    /// block, once its curvature moved next to the border's, and two floats
+    /// beside `transform`. The matrix is read back whole in the shader, which
+    /// is the only place it means anything.
+    ///
+    /// The layout is now full — every attribute used, every byte assigned — so
+    /// the next per-instance value has nowhere to go. #398 is the way out:
+    /// deliver the instance as a storage buffer indexed by `instance_index`,
+    /// where the count ceiling does not exist.
+    ///
+    /// Identity for a clip already in world coordinates, which is most of them.
+    /// The fragment is carried into the clip's own space and tested there, so a
+    /// clip that has been turned cuts the turned shape rather than the box
+    /// around it.
+    pub clip_inverse_0: [f32; 4],
 
     // === Gradient ===
     /// Gradient start color [r, g, b, a]
@@ -151,7 +186,10 @@ pub struct ShapeInstance {
     pub _pad4: [u32; 3],
 
     // === Clip corner radii ===
-    /// [top_left, top_right, bottom_right, bottom_left], physical pixels.
+    /// [top_left, top_right, bottom_right, bottom_left], in the clip's own
+    /// space and the logical units it was declared in — like `clip_rect`, and
+    /// unlike everything else here. The surface scale reaches them through
+    /// `clip_inverse_0`, which carries the fragment back to meet them.
     ///
     /// Its own 16-byte slot: a `Float32x4` attribute needs four contiguous
     /// floats, and the padding scattered through the struct — two floats here,
@@ -170,17 +208,16 @@ impl Default for ShapeInstance {
             border_color: [0.0, 0.0, 0.0, 0.0],
             border_width: 0.0,
             shape_curvature: 1.0,
-            _pad1: [0.0, 0.0],
+            clip_curvature: 1.0,
+            _pad1: 0.0,
             shadow_offset: [0.0, 0.0],
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_color: [0.0, 0.0, 0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
-            _pad2: [0.0, 0.0],
+            clip_inverse_1: [1.0, 0.0],                // identity's [d, ty]
             clip_rect: NO_CLIP_RECT,
-            clip_curvature: 1.0,
-            clip_is_local: 0.0,
-            _pad3: [0.0, 0.0],
+            clip_inverse_0: [1.0, 0.0, 0.0, 0.0], // identity's [a, b, tx, c]
             gradient_start: [0.0, 0.0, 0.0, 0.0],
             gradient_end: [0.0, 0.0, 0.0, 0.0],
             gradient_type: 0, // No gradient
@@ -219,24 +256,38 @@ impl ShapeInstance {
         self
     }
 
-    /// Set clip region from WorldClip, scaling by scale_factor.
-    pub fn with_clip(
-        mut self,
-        clip: &super::flatten::WorldClip,
-        scale: f32,
-        is_local: bool,
-    ) -> Self {
-        self.clip_rect = [
-            clip.rect.x * scale,
-            clip.rect.y * scale,
-            clip.rect.width * scale,
-            clip.rect.height * scale,
-        ];
-        let r = clip.corner_radius.scaled(scale);
-        self.clip_radii = [r.top_left, r.top_right, r.bottom_right, r.bottom_left];
+    /// Set the clip, as the shape it was declared to be.
+    ///
+    /// The rect and its radii go across untouched, in the logical units the
+    /// widget wrote them in, and `scale` is folded into
+    /// [`physical_to_clip`](super::flatten::PlacedClip::physical_to_clip) instead —
+    /// the fragment arrives in physical pixels and has to come back to a space
+    /// where the clip is that rect.
+    ///
+    /// A placement that collapses — `scale(0.0)` — has no inverse and no
+    /// inside; the sentinel clips everything, which is what a shape of zero
+    /// area should do.
+    pub fn with_clip(mut self, clip: &super::flatten::PlacedClip, scale: f32) -> Self {
+        let Some(to_clip) = clip.physical_to_clip(scale) else {
+            self.clip_rect = EMPTY_CLIP_RECT;
+            return self;
+        };
+        self.clip_rect = [clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height];
+        self.clip_radii = clip.corner_radius.to_array();
         self.clip_curvature = clip.curvature;
-        self.clip_is_local = if is_local { 1.0 } else { 0.0 };
+        self.set_clip_inverse(to_clip);
         self
+    }
+
+    /// The clip's matrix, into the two homes it has.
+    ///
+    /// One place that knows the split, because the reason for it is a hardware
+    /// limit nobody will re-derive at a second site — see
+    /// [`clip_inverse_0`](Self::clip_inverse_0).
+    fn set_clip_inverse(&mut self, to_clip: Transform) {
+        let [a, b, tx, c, d, ty] = to_clip.data;
+        self.clip_inverse_0 = [a, b, tx, c];
+        self.clip_inverse_1 = [d, ty];
     }
 
     /// Set border properties.
@@ -319,7 +370,7 @@ impl ShapeInstance {
                     shader_location: 4,
                     format: VertexFormat::Float32x4,
                 },
-                // border_width, shape_curvature, _pad1[0], _pad1[1]
+                // border_width, shape_curvature, clip_curvature, _pad1
                 VertexAttribute {
                     offset: 64,
                     shader_location: 5,
@@ -343,7 +394,7 @@ impl ShapeInstance {
                     shader_location: 8,
                     format: VertexFormat::Float32x4,
                 },
-                // transform[4..6], _pad2 (d, ty, _pad, _pad)
+                // transform[4..6], clip_inverse_1 (d, ty, clip d, clip ty)
                 VertexAttribute {
                     offset: 128,
                     shader_location: 9,
@@ -355,7 +406,7 @@ impl ShapeInstance {
                     shader_location: 10,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_curvature, clip_is_local, _pad3
+                // clip_inverse_0 (a, b, tx, c)
                 VertexAttribute {
                     offset: 160,
                     shader_location: 11,

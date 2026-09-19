@@ -275,7 +275,7 @@ impl Surface {
             .filter(|cmd| {
                 cmd.clip
                     .as_ref()
-                    .is_some_and(|clip| (clip.rect.x - column_x).abs() < 0.01)
+                    .is_some_and(|clip| (clip.world_aabb().x - column_x).abs() < 0.01)
             })
             .map(|cmd| cmd.world_transform.ty())
             .fold(f32::INFINITY, f32::min)
