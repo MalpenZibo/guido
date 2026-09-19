@@ -726,6 +726,169 @@ mod tests {
         assert!(covers(&rects, 60, 45));
     }
 
+    /// Adjacent bands that round to the same span are one rectangle.
+    ///
+    /// **This is what keeps a region small.** A band is computed per pixel, so
+    /// an upright 900-tall panel produces nine hundred of them and all but the
+    /// corner ones are identical; merged, it publishes about fifteen
+    /// rectangles. Without the merge it publishes nine hundred, every frame,
+    /// down a socket — and every test here would still pass, because each of
+    /// those rectangles is inside the shape and together they cover it.
+    ///
+    /// So the count is the assertion. It cannot be exact — it depends on how
+    /// the corner curve rounds — but "tens, not hundreds" is the whole property
+    /// and a broken merge misses it by two orders of magnitude.
+    #[test]
+    fn bands_that_round_alike_are_published_as_one_rectangle() {
+        let tall = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 200.0, 900.0),
+                round(24.0),
+                1.0,
+                Transform::IDENTITY,
+            ),
+            None,
+        );
+        assert!(
+            tall.len() < 80,
+            "a 900-tall panel is tens of rectangles, not one per band — got {}",
+            tall.len()
+        );
+        assert!(covers(&tall, 100, 450), "and it still covers its middle");
+        assert!(!covers(&tall, 1, 1), "with its corners cut");
+
+        // The straight middle is the part that merges: the same panel with no
+        // corners at all is a single rectangle by that route.
+        let square = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 200.0, 900.0),
+                round(24.0),
+                1.0,
+                // A turn keeps it off the single-rectangle shortcut, so the
+                // merge is what is being asked about rather than the fast path.
+                Transform::rotate_degrees(90.0).center_at(100.0, 450.0),
+            ),
+            None,
+        );
+        assert!(
+            square.len() < 80,
+            "a quarter turn is still an upright shape — got {}",
+            square.len()
+        );
+    }
+
+    /// Two boxes are cut to their overlap, and boxes that miss leave nothing.
+    ///
+    /// The single-rectangle shortcut does this intersection itself rather than
+    /// through the band loop, so it is the one path where an edge comparison
+    /// going the wrong way produces a rectangle nobody checked.
+    #[test]
+    fn two_boxes_are_cut_to_what_they_share() {
+        let boxed = |x: f32, y: f32, w: f32, h: f32| {
+            PlacedShape::placed(Rect::new(x, y, w, h), round(0.0), 1.0, Transform::IDENTITY)
+        };
+
+        assert_eq!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 100.0, 100.0),
+                Some(boxed(40.0, 30.0, 200.0, 200.0))
+            ),
+            vec![RegionRect {
+                x: 40,
+                y: 30,
+                width: 60,
+                height: 70
+            }],
+            "the overlap, on both axes at once"
+        );
+
+        assert!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 50.0, 50.0),
+                Some(boxed(50.0, 0.0, 50.0, 50.0))
+            )
+            .is_empty(),
+            "boxes that touch along an edge share no area"
+        );
+        assert!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 50.0, 50.0),
+                Some(boxed(500.0, 0.0, 50.0, 50.0))
+            )
+            .is_empty(),
+            "and ones that miss entirely leave nothing"
+        );
+    }
+
+    /// Two corners on one side cannot eat more than the side has, and the
+    /// shrink is one factor so the shape keeps its proportions.
+    ///
+    /// The CSS `border-radius` rule, and it is four sums: the two horizontal
+    /// pairs against the width, the two vertical pairs against the height.
+    /// Every other test here uses radii that fit, or uniform ones where all
+    /// four sums agree — so any one of them could be read off the wrong pair
+    /// and nothing would move.
+    ///
+    /// One pair over budget at a time, therefore, with the other three well
+    /// inside it. A pill is the everyday shape this protects: `corners(999)` on
+    /// a bar is exactly the case where the rule decides the whole silhouette.
+    #[test]
+    fn each_pair_of_corners_is_shrunk_by_its_own_side() {
+        let cut = |w: f32, h: f32, radii: CornerRadii| {
+            placed_shape_to_rects(
+                PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, Transform::IDENTITY),
+                None,
+            )
+        };
+        let pair = |a: f32, b: f32, c: f32, d: f32| CornerRadii {
+            top_left: a,
+            top_right: b,
+            bottom_right: c,
+            bottom_left: d,
+        };
+
+        // Each case puts 60 + 60 across a side of 60, so that pair must halve
+        // to 30. Which way the silhouette moves when it does not depends on
+        // which side the pair spans: two corners sharing the *short* side pull
+        // their curves inward and the shape narrows, two sharing the long one
+        // let them reach further along it and the shape swells. So each case
+        // names a pixel and whether the shape should hold it.
+        for (label, rects, (x, y), inside) in [
+            (
+                "top pair, across the width",
+                cut(60.0, 200.0, pair(60.0, 60.0, 0.0, 0.0)),
+                (15, 5),
+                true,
+            ),
+            (
+                "bottom pair, across the width",
+                cut(60.0, 200.0, pair(0.0, 0.0, 60.0, 60.0)),
+                (15, 195),
+                true,
+            ),
+            (
+                "left pair, down the height",
+                cut(200.0, 60.0, pair(60.0, 0.0, 0.0, 60.0)),
+                (2, 15),
+                false,
+            ),
+            (
+                "right pair, down the height",
+                cut(200.0, 60.0, pair(0.0, 60.0, 60.0, 0.0)),
+                (197, 15),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                covers(&rects, x, y),
+                inside,
+                "{label}: the pair halves to 30, and ({x}, {y}) is on the \
+                 {} of the curve that leaves",
+                if inside { "inside" } else { "outside" }
+            );
+        }
+    }
+
     // -- clipped shapes -------------------------------------------------
 
     /// A card filling a rounded scroller is cornered by the scroller.
