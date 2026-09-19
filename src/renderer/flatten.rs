@@ -9,7 +9,8 @@ use crate::transform::Transform;
 use crate::widgets::Rect;
 
 use super::commands::{CornerRadii, DrawCommand};
-use super::tree::{CachedFlatten, ClipRegion, RenderNode};
+use super::tree::{CachedFlatten, RenderNode};
+use crate::shape::PlacedShape;
 
 /// Render layer for draw command ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
@@ -31,110 +32,6 @@ pub enum RenderLayer {
     Overlay = 4,
 }
 
-/// A clip as the widget that declared it wrote it, and the transform that puts
-/// it on the screen.
-///
-/// **The shape is kept, not its bounding box.** This used to be a world-space
-/// rect, built by mapping the declared one through the world transform — which
-/// is an enclosing box, equal to the shape only for a transform that keeps the
-/// axes. Under a rotation it is larger, square-cornered, and past about 40° it
-/// is large enough that `Overflow::Hidden` stops hiding: an 80×80 box turned
-/// 45° bounds to 113×113, so a child overflowing by 20 is not touched.
-///
-/// Keeping the declaration and carrying [`placement`](Self::placement) beside
-/// it costs one matrix and answers every consumer. A shader inverts it and
-/// tests the fragment in the clip's own space, where the shape is an ordinary
-/// rounded rect again and the radii are circles rather than the ellipses a
-/// scaled box would need. Whatever still wants a box asks
-/// [`world_aabb`](Self::world_aabb) for one — and gets
-/// [`world_radii`](Self::world_radii) to cut it with, which are ellipses
-/// again.
-///
-/// **What it cannot express is two clips in two different rotated spaces.**
-/// One rect and one matrix describe one parallelogram, and the intersection of
-/// two that are turned differently is not one. `intersect_clips` says what
-/// happens there.
-#[derive(Debug, Clone)]
-pub struct PlacedClip {
-    /// The clip rect, in the space of the widget that declared it.
-    pub rect: Rect,
-    /// Corner radii for rounded clipping, in that same space.
-    pub corner_radius: CornerRadii,
-    /// Superellipse curvature (K-value).
-    pub curvature: f32,
-    /// Clip space to world: the world transform of the widget that declared it.
-    pub placement: Transform,
-}
-
-impl PlacedClip {
-    /// A declared clip, placed — which is to say, not changed at all.
-    ///
-    /// It used to be mapped into world space by its caller, and that mapping
-    /// is what this whole type exists to stop doing: the declaration is exact
-    /// and its image under a rotation is not a rect, so the only thing that
-    /// could be stored was the box around it. Carrying the transform keeps
-    /// both.
-    pub fn placed(clip: &ClipRegion, placement: Transform) -> Self {
-        Self {
-            rect: clip.rect,
-            corner_radius: clip.corner_radius,
-            curvature: clip.curvature,
-            placement,
-        }
-    }
-
-    /// The axis-aligned world box containing the clip.
-    ///
-    /// What this whole type used to be, for the consumer that can still only
-    /// take a box: glyphon clips text to an integer rect, which is
-    /// over-generous under rotation and is the remainder of #199. The
-    /// compositor regions used to want one too and no longer do — they
-    /// tessellate the placed shape, clip included.
-    #[inline]
-    pub fn world_aabb(&self) -> Rect {
-        self.placement.map_rect(self.rect)
-    }
-
-    /// The corner radii that box is cut with.
-    ///
-    /// Beside [`world_aabb`](Self::world_aabb) because they are one answer:
-    /// the box and the corners of the box.
-    ///
-    /// One radius per corner, so an unevenly scaled corner — an ellipse — is
-    /// approximated by the geometric mean of its two axes. The renderer does
-    /// not need the ellipse: the shader tests in the clip's own space where
-    /// the corner is a circle again, and the compositor regions tessellate the
-    /// placed shape rather than a box with radii bolted on. This is the
-    /// fallback's approximation and nothing else reads it.
-    #[inline]
-    pub fn world_radii(&self) -> CornerRadii {
-        self.corner_radius.scaled(self.placement.extract_scale())
-    }
-
-    /// This clip reduced to its world box — what it would have been before it
-    /// carried a transform.
-    ///
-    /// The shape is lost here, deliberately: this is the fallback for the one
-    /// case a rect and a matrix cannot describe, and [`intersect_clips`] is its
-    /// only caller.
-    fn flattened(&self) -> Self {
-        Self {
-            rect: self.world_aabb(),
-            corner_radius: self.world_radii(),
-            curvature: self.curvature,
-            placement: Transform::IDENTITY,
-        }
-    }
-
-    /// The same map, from the *physical* pixels a shader works in — see
-    /// [`Transform::physical_inverse`], which is where the arithmetic lives
-    /// because the backdrop pass needs the same thing for a command.
-    #[inline]
-    pub fn physical_to_clip(&self, scale: f32) -> Option<Transform> {
-        self.placement.physical_inverse(scale)
-    }
-}
-
 /// A draw command with computed world transform.
 ///
 /// This is the flattened representation ready for GPU submission.
@@ -152,7 +49,7 @@ pub struct FlattenedCommand {
     pub layer: RenderLayer,
     /// The clip this command is cut to, if any — in its own space, with the
     /// transform that places it.
-    pub clip: Option<PlacedClip>,
+    pub clip: Option<PlacedShape>,
 }
 
 /// Draw commands grouped so that batching never reorders drawing.
@@ -485,7 +382,7 @@ fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
-    parent_clip: Option<&PlacedClip>,
+    parent_clip: Option<&PlacedShape>,
     out: &mut LayeredCommands,
 ) {
     // Compute this node's world transform
@@ -554,16 +451,20 @@ fn flatten_node(
     };
 
     // Compute this node's world clip (if any)
-    let node_world_clip = node
-        .clip
-        .as_ref()
-        .map(|clip| PlacedClip::placed(clip, world_transform));
+    let node_world_clip = node.clip.as_ref().map(|clip| {
+        PlacedShape::placed(
+            clip.rect,
+            clip.corner_radius,
+            clip.curvature,
+            world_transform,
+        )
+    });
 
     // Effective clip = intersection of parent clip and node clip
-    let effective_clip: Option<PlacedClip> = match (parent_clip, &node_world_clip) {
+    let effective_clip: Option<PlacedShape> = match (parent_clip, &node_world_clip) {
         (Some(parent), Some(node_clip)) => Some(intersect_clips(parent, node_clip)),
-        (Some(parent), None) => Some(parent.clone()),
-        (None, Some(node_clip)) => Some(node_clip.clone()),
+        (Some(parent), None) => Some(*parent),
+        (None, Some(node_clip)) => Some(*node_clip),
         (None, None) => None,
     };
 
@@ -599,7 +500,7 @@ fn flatten_node(
             world_transform,
             world_transform_origin: world_origin,
             layer,
-            clip: effective_clip.clone(),
+            clip: effective_clip,
         });
     }
 
@@ -619,9 +520,14 @@ fn flatten_node(
     // transform like any other clip. It used to need a flag of its own saying
     // "test this one in local coordinates"; now every clip says where its
     // coordinates are and the flag has nothing left to distinguish.
-    let overlay_clip: Option<PlacedClip> = match node.overlay_clip {
-        Some(ref clip) => Some(PlacedClip::placed(clip, world_transform)),
-        None => effective_clip.clone(),
+    let overlay_clip: Option<PlacedShape> = match node.overlay_clip {
+        Some(ref clip) => Some(PlacedShape::placed(
+            clip.rect,
+            clip.corner_radius,
+            clip.curvature,
+            world_transform,
+        )),
+        None => effective_clip,
     };
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip
@@ -631,7 +537,7 @@ fn flatten_node(
             world_transform,
             world_transform_origin: world_origin,
             layer: RenderLayer::Overlay,
-            clip: overlay_clip.clone(),
+            clip: overlay_clip,
         });
     }
 
@@ -741,7 +647,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
 /// in those coordinates — exact, and still turned with whatever turned the
 /// first. Where it cannot, one rect and one matrix are not enough to say what
 /// the overlap of two differently-turned shapes is, and both fall back to
-/// [`flattened`](PlacedClip::flattened): the box around each, in world space.
+/// [`flattened`](PlacedShape::flattened): the box around each, in world space.
 /// Over-generous, and exactly what every case here produced before any of this
 /// carried a transform.
 ///
@@ -749,7 +655,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
 /// through a translation or an axis-aligned scale and refuses anything else,
 /// leaving its caller to rasterise a mask. There is no mask here; there is the
 /// box.
-fn intersect_clips(a: &PlacedClip, b: &PlacedClip) -> PlacedClip {
+fn intersect_clips(a: &PlacedShape, b: &PlacedShape) -> PlacedShape {
     match rebase(b, a) {
         Some(b) => tighten(a, &b),
         None => tighten(&a.flattened(), &b.flattened()),
@@ -770,28 +676,28 @@ fn intersect_clips(a: &PlacedClip, b: &PlacedClip) -> PlacedClip {
 /// the same, because each also moves the top-left corner somewhere else and
 /// nothing here permutes the radii to follow. See [`Transform::keeps_axes`]
 /// and #397.
-fn rebase(clip: &PlacedClip, onto: &PlacedClip) -> Option<PlacedClip> {
+fn rebase(clip: &PlacedShape, onto: &PlacedShape) -> Option<PlacedShape> {
     if clip.placement == onto.placement {
-        return Some(clip.clone());
+        return Some(*clip);
     }
     let between = onto.placement.inverse()?.then(&clip.placement);
     if !between.keeps_axes() {
         return None;
     }
-    Some(PlacedClip {
+    Some(PlacedShape {
         rect: between.map_rect(clip.rect),
         // One radius per corner, so an unevenly scaled corner — an ellipse —
         // is approximated by the geometric mean of its two axes. Exactly what
         // this did before a clip carried a transform, and the one place in
         // this type where "the radii stay circles" is not true.
-        corner_radius: clip.corner_radius.scaled(between.extract_scale()),
+        radii: clip.radii.scaled(between.extract_scale()),
         curvature: clip.curvature,
         placement: onto.placement,
     })
 }
 
 /// `base`, cut down by a second clip written in the same coordinates.
-fn tighten(base: &PlacedClip, other: &PlacedClip) -> PlacedClip {
+fn tighten(base: &PlacedShape, other: &PlacedShape) -> PlacedShape {
     let min_x = base.rect.x.max(other.rect.x);
     let min_y = base.rect.y.max(other.rect.y);
     let max_x = (base.rect.x + base.rect.width).min(other.rect.x + other.rect.width);
@@ -799,32 +705,20 @@ fn tighten(base: &PlacedClip, other: &PlacedClip) -> PlacedClip {
 
     // Corner by corner, the smaller radius: an intersection can only be
     // rounded where both clips are.
-    let corner_radius = CornerRadii {
-        top_left: base
-            .corner_radius
-            .top_left
-            .min(other.corner_radius.top_left),
-        top_right: base
-            .corner_radius
-            .top_right
-            .min(other.corner_radius.top_right),
-        bottom_right: base
-            .corner_radius
-            .bottom_right
-            .min(other.corner_radius.bottom_right),
-        bottom_left: base
-            .corner_radius
-            .bottom_left
-            .min(other.corner_radius.bottom_left),
+    let radii = CornerRadii {
+        top_left: base.radii.top_left.min(other.radii.top_left),
+        top_right: base.radii.top_right.min(other.radii.top_right),
+        bottom_right: base.radii.bottom_right.min(other.radii.bottom_right),
+        bottom_left: base.radii.bottom_left.min(other.radii.bottom_left),
     };
     // The curvature of whichever clip rounds the least, for the same reason.
-    let curvature = if base.corner_radius.max() <= other.corner_radius.max() {
+    let curvature = if base.radii.max() <= other.radii.max() {
         base.curvature
     } else {
         other.curvature
     };
 
-    PlacedClip {
+    PlacedShape {
         // Clamped to non-negative: two clips that miss each other leave nothing.
         rect: Rect::new(
             min_x,
@@ -832,7 +726,7 @@ fn tighten(base: &PlacedClip, other: &PlacedClip) -> PlacedClip {
             (max_x - min_x).max(0.0),
             (max_y - min_y).max(0.0),
         ),
-        corner_radius,
+        radii,
         curvature,
         placement: base.placement,
     }
@@ -1179,6 +1073,7 @@ mod tests {
 #[cfg(test)]
 mod world_geometry_tests {
     use super::*;
+    use crate::renderer::tree::ClipRegion;
     use crate::widgets::Color;
     // -- the clip as a shape, not as the box around it ------------------
 
@@ -1196,11 +1091,16 @@ mod world_geometry_tests {
             curvature: 1.0,
         };
         let placement = Transform::rotate_degrees(45.0).center_at(40.0, 40.0);
-        let clip = PlacedClip::placed(&declared, placement);
+        let clip = PlacedShape::placed(
+            declared.rect,
+            declared.corner_radius,
+            declared.curvature,
+            placement,
+        );
 
         assert_eq!(clip.rect, declared.rect, "the declaration, untouched");
         assert_eq!(
-            clip.corner_radius.top_left, 16.0,
+            clip.radii.top_left, 16.0,
             "and the radii with it — in the clip's own space a turned corner is \
              still a circle, so nothing has to be approximated"
         );
@@ -1224,15 +1124,13 @@ mod world_geometry_tests {
     #[test]
     fn a_fragment_comes_back_to_the_space_the_clip_was_written_in() {
         let placement = Transform::rotate_degrees(45.0).center_at(40.0, 40.0);
-        let clip = PlacedClip {
+        let clip = PlacedShape {
             rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement,
         };
-        let back = clip
-            .physical_to_clip(1.0)
-            .expect("a rotation is invertible");
+        let back = clip.to_local(1.0).expect("a rotation is invertible");
 
         let (wx, wy) = placement.transform_point(80.0, 80.0);
         let (cx, cy) = back.transform_point(wx, wy);
@@ -1259,15 +1157,13 @@ mod world_geometry_tests {
     /// quarter of its viewport.
     #[test]
     fn the_surface_scale_is_undone_once() {
-        let clip = PlacedClip {
+        let clip = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 50.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::translate(10.0, 20.0),
         };
-        let back = clip
-            .physical_to_clip(2.0)
-            .expect("a translation is invertible");
+        let back = clip.to_local(2.0).expect("a translation is invertible");
 
         // The bottom-right of the clip is at (110, 70) logical, (220, 140)
         // physical.
@@ -1282,7 +1178,7 @@ mod world_geometry_tests {
     /// The identity fast path carries a fragment the same distance the general
     /// one would.
     ///
-    /// `physical_to_clip` short-circuits a placement of identity — most clips
+    /// `to_local` short-circuits a placement of identity — most clips
     /// in most frames — instead of inverting it. It was added for speed after
     /// the test above was written, and that test uses a *translated* placement,
     /// so it exercises the other branch: the whole fast path shipped unwatched
@@ -1292,15 +1188,15 @@ mod world_geometry_tests {
     /// remainder all leave the point where it was, and every mutant lives.
     #[test]
     fn the_identity_fast_path_still_undoes_the_scale() {
-        let unplaced = PlacedClip {
+        let unplaced = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 50.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         };
 
         for scale in [2.0, 1.5, 0.5] {
-            let back = unplaced.physical_to_clip(scale).expect("invertible");
+            let back = unplaced.to_local(scale).expect("invertible");
             let (x, y) = back.transform_point(100.0 * scale, 50.0 * scale);
             assert!(
                 (x - 100.0).abs() < 0.01 && (y - 50.0).abs() < 0.01,
@@ -1311,11 +1207,11 @@ mod world_geometry_tests {
             // And it agrees with the route a placement that is *not* the
             // identity takes, which is the only reason the branch is allowed
             // to exist.
-            let placed = PlacedClip {
+            let placed = PlacedShape {
                 placement: Transform::translate(11.0, -3.0),
-                ..unplaced.clone()
+                ..unplaced
             };
-            let long = placed.physical_to_clip(scale).expect("invertible");
+            let long = placed.to_local(scale).expect("invertible");
             assert_eq!(
                 (back.a(), back.b(), back.c(), back.d()),
                 (long.a(), long.b(), long.c(), long.d()),
@@ -1333,16 +1229,16 @@ mod world_geometry_tests {
     /// corner, because that is the corner that is actually there.
     #[test]
     fn the_flatter_corner_supplies_the_curve() {
-        let circular = PlacedClip {
+        let circular = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: CornerRadii::uniform(8.0),
+            radii: CornerRadii::uniform(8.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         };
-        let squircular = PlacedClip {
-            corner_radius: CornerRadii::uniform(24.0),
+        let squircular = PlacedShape {
+            radii: CornerRadii::uniform(24.0),
             curvature: 2.0,
-            ..circular.clone()
+            ..circular
         };
 
         assert_eq!(
@@ -1361,13 +1257,13 @@ mod world_geometry_tests {
     /// not a clip that lets everything through.
     #[test]
     fn a_collapsed_clip_has_no_way_back() {
-        let clip = PlacedClip {
+        let clip = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::scale(0.0),
         };
-        assert!(clip.physical_to_clip(1.0).is_none());
+        assert!(clip.to_local(1.0).is_none());
     }
 
     /// A ripple is cut to the shape it belongs to, through a rotation.
@@ -1411,10 +1307,7 @@ mod world_geometry_tests {
             "the clip as declared, in the node's own coordinates — not a box \
              around it in world ones"
         );
-        assert_eq!(
-            clip.corner_radius.top_left, 16.0,
-            "and its corners, uncrushed"
-        );
+        assert_eq!(clip.radii.top_left, 16.0, "and its corners, uncrushed");
         assert_eq!(
             clip.placement, overlay.world_transform,
             "placed by the very transform the ripple is drawn through, which is \
@@ -1508,15 +1401,15 @@ mod world_geometry_tests {
     #[test]
     fn two_clips_in_one_space_stay_in_it() {
         let placement = Transform::rotate_degrees(30.0);
-        let outer = PlacedClip {
+        let outer = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: CornerRadii::uniform(8.0),
+            radii: CornerRadii::uniform(8.0),
             curvature: 1.0,
             placement,
         };
-        let inner = PlacedClip {
+        let inner = PlacedShape {
             rect: Rect::new(20.0, 0.0, 100.0, 60.0),
-            corner_radius: CornerRadii::uniform(16.0),
+            radii: CornerRadii::uniform(16.0),
             curvature: 1.0,
             placement,
         };
@@ -1529,7 +1422,7 @@ mod world_geometry_tests {
             "the overlap, exactly, in the space they were both written in"
         );
         assert_eq!(
-            both.corner_radius.top_left, 8.0,
+            both.radii.top_left, 8.0,
             "an intersection is only as round as its rounder edge allows"
         );
     }
@@ -1538,15 +1431,15 @@ mod world_geometry_tests {
     /// translation, which keeps the axes, so the overlap is still exact.
     #[test]
     fn a_clip_is_rebased_through_a_translation() {
-        let outer = PlacedClip {
+        let outer = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         };
-        let inner = PlacedClip {
+        let inner = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::translate(40.0, 0.0),
         };
@@ -1571,15 +1464,15 @@ mod world_geometry_tests {
     /// The wall [`intersect_clips`] documents at length.
     #[test]
     fn two_clips_turned_differently_fall_back_to_their_boxes() {
-        let a = PlacedClip {
+        let a = PlacedShape {
             rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::rotate_degrees(45.0),
         };
-        let b = PlacedClip {
+        let b = PlacedShape {
             rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::rotate_degrees(10.0),
         };
@@ -1602,15 +1495,15 @@ mod world_geometry_tests {
     /// negative width that would read as covering the plane.
     #[test]
     fn two_clips_that_miss_leave_nothing() {
-        let here = PlacedClip {
+        let here = PlacedShape {
             rect: Rect::new(0.0, 0.0, 50.0, 50.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         };
-        let far = PlacedClip {
+        let far = PlacedShape {
             rect: Rect::new(500.0, 500.0, 50.0, 50.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         };
@@ -1622,9 +1515,9 @@ mod world_geometry_tests {
     /// A translation moves the box it is cut from and changes nothing else.
     #[test]
     fn a_translation_only_moves_it() {
-        let clip = PlacedClip {
+        let clip = PlacedShape {
             rect: Rect::new(0.0, 0.0, 100.0, 60.0),
-            corner_radius: CornerRadii::uniform(8.0),
+            radii: CornerRadii::uniform(8.0),
             curvature: 1.0,
             placement: Transform::translate(20.0, 30.0),
         };

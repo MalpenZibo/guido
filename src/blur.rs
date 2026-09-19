@@ -35,6 +35,7 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<Region
             rect,
             sources,
             corner_radii,
+            curvature,
             ..
         } = &*cmd.command
         else {
@@ -49,7 +50,7 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<Region
         // describe different shapes. A card half out of a viewport is filtered
         // only where it is on show, and a region published for the whole card
         // blurs the desktop beside a panel that is not there.
-        out.extend(shape_of(cmd, *rect, *corner_radii));
+        out.extend(shape_of(cmd, *rect, *corner_radii, *curvature));
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
     out

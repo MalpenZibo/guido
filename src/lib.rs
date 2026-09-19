@@ -17,6 +17,7 @@ pub mod reactive;
 mod region;
 pub mod render_stats;
 pub mod session_lock;
+pub mod shape;
 pub mod surface;
 mod surface_manager;
 #[cfg(feature = "testing")]

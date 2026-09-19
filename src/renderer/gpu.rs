@@ -260,20 +260,20 @@ impl ShapeInstance {
     ///
     /// The rect and its radii go across untouched, in the logical units the
     /// widget wrote them in, and `scale` is folded into
-    /// [`physical_to_clip`](super::flatten::PlacedClip::physical_to_clip) instead —
+    /// [`to_local`](crate::shape::PlacedShape::to_local) instead —
     /// the fragment arrives in physical pixels and has to come back to a space
     /// where the clip is that rect.
     ///
     /// A placement that collapses — `scale(0.0)` — has no inverse and no
     /// inside; the sentinel clips everything, which is what a shape of zero
     /// area should do.
-    pub fn with_clip(mut self, clip: &super::flatten::PlacedClip, scale: f32) -> Self {
-        let Some(to_clip) = clip.physical_to_clip(scale) else {
+    pub fn with_clip(mut self, clip: &crate::shape::PlacedShape, scale: f32) -> Self {
+        let Some(to_clip) = clip.to_local(scale) else {
             self.clip_rect = EMPTY_CLIP_RECT;
             return self;
         };
         self.clip_rect = [clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height];
-        self.clip_radii = clip.corner_radius.to_array();
+        self.clip_radii = clip.radii.to_array();
         self.clip_curvature = clip.curvature;
         self.set_clip_inverse(to_clip);
         self

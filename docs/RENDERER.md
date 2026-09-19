@@ -319,25 +319,30 @@ pub struct FlattenedCommand {
     pub world_transform: Transform,
     pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
-    pub clip: Option<PlacedClip>,
+    pub clip: Option<PlacedShape>,
 }
 ```
 
-### PlacedClip
+### PlacedShape
 
-A clip as the widget that declared it wrote it, plus the transform that puts it
-on the screen. It was named for world space up to this change, and the one
-assertion that name made — `rect` is in world coordinates — is exactly what the
-change inverted:
+A rounded rect as its widget declared it, plus the transform that puts it on the
+screen — in `src/shape.rs`:
 
 ```rust
-pub struct PlacedClip {
-    pub rect: Rect,                 // in the clip owner's own space
-    pub corner_radius: CornerRadii, // in that same space
+pub struct PlacedShape {
+    pub rect: Rect,          // in the declaring widget's own space
+    pub radii: CornerRadii,  // in that same space
     pub curvature: f32,
-    pub placement: Transform,       // clip space -> world
+    pub placement: Transform, // that space -> world
 }
 ```
+
+**One type, because a clip and a region are the same object.** A clip is a
+rounded rect and a transform; so is the area a backdrop blur filters, and so is
+the region a surface takes input in. They were two structs with the same four
+fields under two names, and the seam showed at the one call site that held
+both: a region tessellated its own shape exactly and then asked the clip beside
+it for a bounding box, because only one of the two knew how to be a shape.
 
 It used to be a world-space rect, mapped through the transform — which is an
 enclosing *box*, equal to the shape only for a transform that keeps the axes.

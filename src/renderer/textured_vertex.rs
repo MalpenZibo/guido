@@ -89,14 +89,14 @@ impl QuadClip {
     };
 
     /// Cut to the clip's shape, in the coordinates the widget declared it in.
-    pub fn shape(clip: &crate::renderer::flatten::PlacedClip, scale: f32) -> Self {
-        let Some(to_clip_space) = clip.physical_to_clip(scale) else {
+    pub fn shape(clip: &crate::shape::PlacedShape, scale: f32) -> Self {
+        let Some(to_clip_space) = clip.to_local(scale) else {
             return Self::EMPTY;
         };
         let r = clip.rect;
         Self {
             rect: [r.x, r.y, r.width, r.height],
-            radii: clip.corner_radius.to_array(),
+            radii: clip.radii.to_array(),
             curvature: clip.curvature,
             to_clip_space,
         }
@@ -203,7 +203,7 @@ pub fn to_ndc(x: f32, y: f32, screen_width: f32, screen_height: f32) -> [f32; 2]
 mod tests {
     use super::*;
     use crate::renderer::CornerRadii;
-    use crate::renderer::flatten::PlacedClip;
+    use crate::shape::PlacedShape;
     use crate::widgets::Rect;
 
     /// The two constructors put their clip in two different spaces, and each
@@ -236,9 +236,9 @@ mod tests {
         );
 
         let shaped = QuadClip::shape(
-            &PlacedClip {
+            &PlacedShape {
                 rect,
-                corner_radius: CornerRadii::uniform(4.0),
+                radii: CornerRadii::uniform(4.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::IDENTITY,
             },
@@ -262,9 +262,9 @@ mod tests {
     #[test]
     fn a_collapsed_clip_cuts_it_all() {
         let collapsed = QuadClip::shape(
-            &PlacedClip {
+            &PlacedShape {
                 rect: Rect::new(0.0, 0.0, 100.0, 50.0),
-                corner_radius: CornerRadii::uniform(0.0),
+                radii: CornerRadii::uniform(0.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::scale(0.0),
             },

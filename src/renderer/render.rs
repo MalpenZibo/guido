@@ -12,7 +12,7 @@ use wgpu::{
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
 use super::commands::{CornerRadii, DrawCommand};
-use super::flatten::{CommandLayer, FlattenedCommand, PlacedClip};
+use super::flatten::{CommandLayer, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
@@ -20,6 +20,7 @@ use super::text::TextRenderState;
 use super::text_mask::{MaskSpec, TextMaskRenderer};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 use super::types::TextEntry;
+use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
@@ -856,7 +857,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
         } => {
             // glyphon clips to four integers, so text gets the world box of
             // the clip and not its shape. A turned clip over text is #199.
-            let clip_rect = cmd.clip.as_ref().map(PlacedClip::world_aabb);
+            let clip_rect = cmd.clip.as_ref().map(PlacedShape::world_aabb);
 
             Some(TextEntry {
                 text: text.clone(),
@@ -959,9 +960,9 @@ mod tests {
     #[test]
     fn the_clip_reaches_the_region() {
         let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
-        cmd.clip = Some(crate::renderer::flatten::PlacedClip {
+        cmd.clip = Some(crate::shape::PlacedShape {
             rect: Rect::new(0.0, 0.0, 200.0, 200.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             placement: Transform::IDENTITY,
         });

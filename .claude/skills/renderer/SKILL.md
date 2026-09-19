@@ -66,7 +66,8 @@ text has to be checked again there.
 
 ## Clipping
 
-`PlacedClip` holds the clip as its widget declared it plus the transform that
+`PlacedShape` (`src/shape.rs`) holds a rounded rect as its widget declared it
+plus the transform that
 places it, and every consumer asks it for what it can use: the shape shader and
 the image quad invert the placement and test in the clip's own space, so a
 turned clip cuts the turned shape; text and the compositor regions take
