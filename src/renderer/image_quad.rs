@@ -16,9 +16,8 @@ use wgpu::{
 use super::commands::DrawCommand;
 use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
 use super::flatten::FlattenedCommand;
-use super::gpu::NO_CLIP_RECT;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
-use super::textured_vertex::TexturedVertex;
+use super::textured_vertex::{QuadClip, TexturedVertex};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
@@ -555,34 +554,15 @@ impl ImageQuadRenderer {
             *content_fit,
         );
 
-        // Extract clip data (scale to physical pixels)
-        let (clip_rect, clip_params) = if let Some(ref clip) = cmd.clip {
-            (
-                [
-                    clip.rect.x * scale_factor,
-                    clip.rect.y * scale_factor,
-                    clip.rect.width * scale_factor,
-                    clip.rect.height * scale_factor,
-                ],
-                {
-                    let r = clip.corner_radius.scaled(scale_factor);
-                    [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
-                },
-            )
-        } else {
-            // No clipping
-            (NO_CLIP_RECT, [0.0; 4])
-        };
+        // An image is cut in the clip's own space, so a turned clip cuts the
+        // turned shape.
+        let clip = cmd
+            .clip
+            .as_ref()
+            .map_or(QuadClip::NONE, |clip| QuadClip::shape(clip, scale_factor));
 
-        // Transform corners from local to screen coordinates
-        let vertices = self.compute_vertices(
-            &display_rect,
-            &cmd.world_transform,
-            uv,
-            scale_factor,
-            clip_rect,
-            clip_params,
-        );
+        let vertices =
+            self.compute_vertices(&display_rect, &cmd.world_transform, uv, scale_factor, clip);
 
         // Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -666,8 +646,7 @@ impl ImageQuadRenderer {
         world_transform: &crate::transform::Transform,
         uv: (f32, f32, f32, f32),
         scale_factor: f32,
-        clip_rect: [f32; 4],
-        clip_params: [f32; 4],
+        clip: QuadClip,
     ) -> [TexturedVertex; 4] {
         // Get local rect corners
         let local_corners = [
@@ -703,38 +682,17 @@ impl ImageQuadRenderer {
         ];
 
         let (u_min, v_min, u_max, v_max) = uv;
+        let uvs = [
+            [u_min, v_min],
+            [u_max, v_min],
+            [u_min, v_max],
+            [u_max, v_max],
+        ];
 
-        // Convert to NDC and create vertices with clip data
-        [
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[0].0, screen_corners[0].1),
-                uv: [u_min, v_min],
-                screen_pos: [screen_corners[0].0, screen_corners[0].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[1].0, screen_corners[1].1),
-                uv: [u_max, v_min],
-                screen_pos: [screen_corners[1].0, screen_corners[1].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[2].0, screen_corners[2].1),
-                uv: [u_min, v_max],
-                screen_pos: [screen_corners[2].0, screen_corners[2].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[3].0, screen_corners[3].1),
-                uv: [u_max, v_max],
-                screen_pos: [screen_corners[3].0, screen_corners[3].1],
-                clip_rect,
-                clip_params,
-            },
-        ]
+        std::array::from_fn(|i| {
+            let (x, y) = screen_corners[i];
+            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip)
+        })
     }
 
     /// Render the prepared image quads.

@@ -20,9 +20,8 @@ use wgpu::{
 };
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
-use super::gpu::NO_CLIP_RECT;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
-use super::textured_vertex::TexturedVertex;
+use super::textured_vertex::{QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
@@ -404,55 +403,18 @@ impl TextQuadRenderer {
             })
             .collect();
 
-        // Extract clip data (scale to physical pixels)
-        // Note: entry.clip_rect is in logical pixels (world coordinates)
-        let (clip_rect, clip_params) = if let Some(ref clip) = entry.clip_rect {
-            (
-                [
-                    clip.x * scale_factor,
-                    clip.y * scale_factor,
-                    clip.width * scale_factor,
-                    clip.height * scale_factor,
-                ],
-                // Four corner radii: a text clip is a plain rect.
-                [0.0; 4],
-            )
-        } else {
-            // No clipping
-            (NO_CLIP_RECT, [0.0; 4])
-        };
+        // Physical world pixels, to match the corners above: glyphon clips
+        // text to an integer box and this path matches it, so a turned clip
+        // over text cuts the box and not the shape — #199.
+        let clip = entry.clip_rect.map_or(QuadClip::NONE, |rect| {
+            QuadClip::world_box(rect, scale_factor)
+        });
 
-        // Convert to NDC and create vertices with clip data
-        let vertices = [
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[0].0, screen_corners[0].1),
-                uv: [0.0, 0.0],
-                screen_pos: [screen_corners[0].0, screen_corners[0].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[1].0, screen_corners[1].1),
-                uv: [1.0, 0.0],
-                screen_pos: [screen_corners[1].0, screen_corners[1].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[2].0, screen_corners[2].1),
-                uv: [0.0, 1.0],
-                screen_pos: [screen_corners[2].0, screen_corners[2].1],
-                clip_rect,
-                clip_params,
-            },
-            TexturedVertex {
-                position: self.quad.to_ndc(screen_corners[3].0, screen_corners[3].1),
-                uv: [1.0, 1.0],
-                screen_pos: [screen_corners[3].0, screen_corners[3].1],
-                clip_rect,
-                clip_params,
-            },
-        ];
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+        let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {
+            let (x, y) = screen_corners[i];
+            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip)
+        });
 
         // Create vertex buffer with the vertices already initialized
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

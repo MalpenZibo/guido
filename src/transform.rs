@@ -412,6 +412,29 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// Whether this keeps a rect a rect the same way round — no turn, no skew,
+    /// no flip.
+    ///
+    /// The image of a rect under an affine map is a rect whenever neither axis
+    /// leans into the other, which is `b == 0 && c == 0` — *or* when the two
+    /// axes swap, which is `a == 0 && d == 0`, a quarter turn. This answers
+    /// `false` to the second, and to a negative factor on either axis, for a
+    /// reason that is about corners rather than about rects: a quarter turn
+    /// sends the top-left corner to the top-right and a flip sends it across,
+    /// and [`CornerRadii`](crate::renderer::CornerRadii) is four numbers in a
+    /// fixed order that nothing here permutes. A caller that grows that
+    /// permutation can widen this predicate with it — see #397.
+    ///
+    /// Exact rather than epsilon'd, unlike
+    /// [`is_translation_only`](Self::is_translation_only): the callers are
+    /// deciding whether an exact answer exists, and "nearly axis-aligned" is
+    /// the case where it does not.
+    #[inline]
+    pub fn keeps_axes(&self) -> bool {
+        let [a, b, _, c, d, _] = self.data;
+        b == 0.0 && c == 0.0 && a > 0.0 && d > 0.0
+    }
+
     /// Whether this moves without turning, scaling or skewing — so that
     /// undoing it is negating its two components and nothing more.
     #[inline]
@@ -506,6 +529,57 @@ impl Default for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Which transforms let a clip keep its shape when it is rewritten in
+    /// another clip's coordinates — and, just as load-bearing, which do not.
+    ///
+    /// A quarter turn and a flip both send a rect to a rect, so a predicate
+    /// about *rects* would accept them. This one is about corners: each moves
+    /// the top-left corner somewhere else, and `CornerRadii` is four numbers in
+    /// a fixed order that nothing permutes. Accepting them would rebase the
+    /// rect correctly and leave the radii on the wrong corners, which is worse
+    /// than the box the caller falls back to. See #397.
+    #[test]
+    fn keeping_the_axes_is_about_corners_and_not_only_rects() {
+        assert!(Transform::IDENTITY.keeps_axes());
+        assert!(Transform::translate(12.0, -4.0).keeps_axes());
+        assert!(Transform::scale(2.0).keeps_axes());
+        assert!(Transform::scale_xy(0.5, 3.0).keeps_axes());
+        assert!(
+            Transform::translate(3.0, 3.0)
+                .then(&Transform::scale(0.5))
+                .keeps_axes(),
+            "a move and a scale together still keep them"
+        );
+
+        assert!(
+            !Transform::rotate_degrees(30.0).keeps_axes(),
+            "the ordinary rotation, where the rect stops being a rect at all"
+        );
+        assert!(
+            !Transform::rotate_degrees(90.0).keeps_axes(),
+            "a quarter turn sends a rect to a rect and the top-left corner to \
+             the top-right, and the radii do not follow it"
+        );
+        assert!(
+            !Transform::scale_xy(-1.0, 1.0).keeps_axes(),
+            "a mirror likewise: the rect survives, the corner order does not"
+        );
+        assert!(!Transform::scale_xy(1.0, -1.0).keeps_axes());
+
+        // One wrong component at a time: every case above is wrong in more
+        // than one, so a predicate that had lost a condition would still
+        // answer them correctly on the strength of the others.
+        // `data` is `[a, b, tx, c, d, ty]`.
+        for (label, data) in [
+            ("x leans into y", [1.0, 0.5, 0.0, 0.0, 1.0, 0.0]),
+            ("y leans into x", [1.0, 0.0, 0.0, 0.5, 1.0, 0.0]),
+            ("x flipped", [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ("y flipped", [1.0, 0.0, 0.0, 0.0, -1.0, 0.0]),
+        ] {
+            assert!(!Transform { data }.keeps_axes(), "{label}");
+        }
+    }
 
     /// What the paint cache leans on: it undoes a child's old placement by
     /// negating the two translation components, which is only undoing when

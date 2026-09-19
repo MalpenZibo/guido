@@ -718,6 +718,120 @@ fn rounded_clipping() {
     golden("rounded_clipping", (484.0, 132.0), 1.0, BACKDROP, view);
 }
 
+/// A clip that has been turned clips to the turned shape, not to the box
+/// around it.
+///
+/// Each box holds a child far larger than itself, so what survives on screen
+/// *is* the clip — and the whole error is visible as silhouette. An 80×80
+/// square turned 45° has a 113×113 bounding box: a clip that degrades to that
+/// box stops clipping a 100×100 child at all, and what shows is the child,
+/// square-cornered and at its full size, instead of a rounded 80×80 diamond.
+///
+/// Three angles because the failure is not all-or-nothing. At 15° the box is
+/// ~98 wide and trims the child slightly, with corners that are square where
+/// the clip's are round; at 45° it does not trim at all; at 90° the box is
+/// exact again, so that column must not move and says the fix did not reach
+/// past rotation into the cases that already worked.
+///
+/// The fourth turns an *ancestor* instead, and the clip is declared by a child
+/// that does not turn at all. A clip is placed by the world transform it was
+/// flattened under, so this is the same computation — but "the same by
+/// construction" is what a fix says about itself right up until the one
+/// arrangement it forgot, and this one costs a column.
+#[test]
+fn rotated_clipping() {
+    let clipped = |degrees: f32| {
+        box_of(80.0, 80.0)
+            .background(Color::rgb(0.15, 0.20, 0.30))
+            .corners(16.0)
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .child(swatch(100.0, 100.0, Color::rgb(0.95, 0.45, 0.25)))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .child(clipped(15.0))
+        .child(clipped(45.0))
+        .child(clipped(90.0))
+        .child(
+            box_of(80.0, 80.0)
+                .rotate(35.0)
+                .child(clipped(0.0).background(Color::rgb(0.30, 0.20, 0.15))),
+        );
+
+    golden("rotated_clipping", (510.0, 140.0), 1.0, BACKDROP, view);
+}
+
+/// A checkerboard, so the clip's edge is unmistakable: every square that
+/// survives is one the clip let through.
+///
+/// Generated rather than loaded — `ImageSource::Rgba` takes pixels directly, so
+/// this depends on no file and decodes nothing.
+fn checkerboard(size: u32, square: u32) -> ImageSource {
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dark = ((x / square) + (y / square)).is_multiple_of(2);
+            pixels.extend_from_slice(if dark {
+                &[0x1f, 0x2b, 0x3a, 0xff]
+            } else {
+                &[0xf2, 0x73, 0x40, 0xff]
+            });
+        }
+    }
+    ImageSource::Rgba {
+        width: size,
+        height: size,
+        pixels: pixels.into(),
+    }
+}
+
+/// An image is clipped by the same shape a rectangle is, and follows it through
+/// a rotation.
+///
+/// Images take a pipeline of their own — a textured quad with the clip carried
+/// on its four vertices, not the shape shader's per-instance SDF — and until
+/// this scenario existed no golden drew an image at all, clipped or otherwise.
+/// So the two halves of clipping could disagree, and the only thing that would
+/// have noticed is somebody looking at a screen.
+///
+/// Left: upright, where the clip and its bounding box are the same thing.
+/// Middle: the same 90×90 image in the same 70×70 rounded clip, turned 30° —
+/// the checks turn with it and the silhouette stays a rounded square.
+///
+/// Right: a *squircle* clip, which this pipeline could not cut until now. Its
+/// SDF took a rect and four radii and no curvature, so a squircle clip cut an
+/// image with circular corners while the container beside it cut with
+/// squircular ones — one clip, two shapes, depending on which pipeline was
+/// asked. It is a few pixels at four corners, which is the size of thing a
+/// golden exists to hold.
+#[test]
+fn clipped_images() {
+    let clipped = |corners: Corners, degrees: f32| {
+        box_of(70.0, 70.0)
+            .corners(corners)
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .child(
+                box_of(90.0, 90.0)
+                    .child(image(checkerboard(90, 15)).content_fit(ContentFit::Cover)),
+            )
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .child(clipped(Corners::rounded(14.0), 0.0))
+        .child(clipped(Corners::rounded(14.0), 30.0))
+        .child(clipped(Corners::squircle(24.0), 0.0));
+
+    golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
+}
+
 /// The same composition at scale 2. Every radius, border width and shadow
 /// extent is scaled in the shader rather than in layout, so a HiDPI bug is
 /// invisible to every test that does not render at a scale factor.

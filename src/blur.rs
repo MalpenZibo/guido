@@ -79,7 +79,6 @@ mod tests {
             world_transform_origin: None,
             layer: Default::default(),
             clip: None,
-            clip_is_local: false,
         };
         assert_eq!(
             regions_from_commands(&[command]),

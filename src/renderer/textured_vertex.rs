@@ -3,6 +3,7 @@
 //! This module provides the common vertex format used by both text quad and image quad
 //! rendering pipelines.
 
+use crate::transform::Transform;
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 /// Vertex with pre-computed NDC position, UV coordinates, and clip data.
@@ -13,16 +14,136 @@ pub struct TexturedVertex {
     pub position: [f32; 2],
     /// Texture coordinates
     pub uv: [f32; 2],
-    /// Screen position in physical pixels (for clip calculation)
-    pub screen_pos: [f32; 2],
-    /// Clip rect in physical pixels [x, y, width, height]
+    /// This corner, in whatever space [`clip_rect`](Self::clip_rect) is
+    /// written in.
+    ///
+    /// The clip test is an SDF against a rect, and the only thing it needs is
+    /// for the point and the rect to be in one space. Which space that is, is
+    /// the caller's business: an image is clipped in the clip's *own* space, so
+    /// a turned clip cuts the turned shape; text is clipped in physical world
+    /// pixels against the box around that shape, because glyphon needs a box
+    /// anyway and #199 is where the rest of it lives.
+    ///
+    /// Mapping the four corners on the CPU is what keeps this free. The map is
+    /// affine, and interpolating an affine function of position across a
+    /// triangle gives the same answer as applying it to the interpolated
+    /// position — so the shader needs no matrix, and the vertex no room for
+    /// one.
+    pub clip_pos: [f32; 2],
+    /// Clip rect [x, y, width, height], in that same space.
     pub clip_rect: [f32; 4],
-    /// Clip corner radii [top_left, top_right, bottom_right, bottom_left],
-    /// physical pixels. The shader reads all four — a rect clip passes zeros.
+    /// Clip corner radii [top_left, top_right, bottom_right, bottom_left], in
+    /// that same space. The shader reads all four — a rect clip passes zeros.
     pub clip_params: [f32; 4],
+    /// `[curvature, _, _, _]`. Its own 16-byte slot because a `Float32x4` is
+    /// the narrowest attribute that keeps the rest of the struct aligned, and
+    /// there is no padding here to mine — unlike `ShapeInstance`, this is a
+    /// per-*vertex* buffer with four attributes in it, nowhere near a limit.
+    pub clip_curvature: [f32; 4],
+}
+
+/// The clip a textured quad is cut by, in whatever space the caller chose.
+///
+/// Four values that always travel together and always have to agree about
+/// which space they are in, which is exactly the thing that is easy to get
+/// wrong when they are four arguments in a row.
+///
+/// Which space it is, is the caller's business. [`shape`](Self::shape) cuts in
+/// the clip's *own* coordinates, so a turned clip cuts the turned shape;
+/// [`world_box`](Self::world_box) cuts in physical world pixels against the box
+/// around that shape, which is all glyphon can be given — #199 is the rest of
+/// that story.
+#[derive(Clone, Copy, Debug)]
+pub struct QuadClip {
+    /// `[x, y, width, height]`. Negative width/height is the no-clip sentinel.
+    pub rect: [f32; 4],
+    /// `[top_left, top_right, bottom_right, bottom_left]`.
+    pub radii: [f32; 4],
+    /// Superellipse curvature (K-value), so a squircle clip cuts an image the
+    /// way it cuts a rectangle. The shape shader has always taken this; this
+    /// pipeline did not, and a squircle clip over an image cut with circular
+    /// corners while the container beside it cut with squircular ones.
+    pub curvature: f32,
+    /// Physical world pixels into the space `rect` is written in. The identity
+    /// where that space *is* physical world pixels, rather than an `Option` —
+    /// "no map needed" and "no clip" are different facts, and `rect`'s sentinel
+    /// is the one that answers the second.
+    pub to_clip_space: Transform,
+}
+
+impl QuadClip {
+    /// Nothing is cut.
+    pub const NONE: Self = Self {
+        rect: crate::renderer::gpu::NO_CLIP_RECT,
+        radii: [0.0; 4],
+        curvature: 1.0,
+        to_clip_space: Transform::IDENTITY,
+    };
+
+    /// Everything is cut — a clip whose placement collapsed has no inside.
+    pub(crate) const EMPTY: Self = Self {
+        rect: crate::renderer::gpu::EMPTY_CLIP_RECT,
+        radii: [0.0; 4],
+        curvature: 1.0,
+        to_clip_space: Transform::IDENTITY,
+    };
+
+    /// Cut to the clip's shape, in the coordinates the widget declared it in.
+    pub fn shape(clip: &crate::renderer::flatten::PlacedClip, scale: f32) -> Self {
+        let Some(to_clip_space) = clip.physical_to_clip(scale) else {
+            return Self::EMPTY;
+        };
+        let r = clip.rect;
+        Self {
+            rect: [r.x, r.y, r.width, r.height],
+            radii: clip.corner_radius.to_array(),
+            curvature: clip.curvature,
+            to_clip_space,
+        }
+    }
+
+    /// Cut to a plain box in physical world pixels.
+    pub fn world_box(rect: crate::widgets::Rect, scale: f32) -> Self {
+        Self {
+            rect: [
+                rect.x * scale,
+                rect.y * scale,
+                rect.width * scale,
+                rect.height * scale,
+            ],
+            radii: [0.0; 4],
+            curvature: 1.0,
+            to_clip_space: Transform::IDENTITY,
+        }
+    }
+
+    /// This corner, in the clip's space.
+    #[inline]
+    pub(crate) fn place(&self, x: f32, y: f32) -> [f32; 2] {
+        let (x, y) = self.to_clip_space.transform_point(x, y);
+        [x, y]
+    }
 }
 
 impl TexturedVertex {
+    /// One corner of a quad: where it is on screen, where it is in the
+    /// texture, and where it falls in its clip.
+    ///
+    /// `screen` is in physical pixels and `ndc` is that same point in clip
+    /// space — both are wanted, so the caller passes both rather than having
+    /// this undo one to get the other.
+    #[inline]
+    pub fn corner(ndc: [f32; 2], uv: [f32; 2], screen: (f32, f32), clip: &QuadClip) -> Self {
+        Self {
+            position: ndc,
+            uv,
+            clip_pos: clip.place(screen.0, screen.1),
+            clip_rect: clip.rect,
+            clip_params: clip.radii,
+            clip_curvature: [clip.curvature, 0.0, 0.0, 0.0],
+        }
+    }
+
     pub fn desc() -> VertexBufferLayout<'static> {
         VertexBufferLayout {
             array_stride: std::mem::size_of::<TexturedVertex>() as u64,
@@ -40,7 +161,7 @@ impl TexturedVertex {
                     shader_location: 1,
                     format: VertexFormat::Float32x2,
                 },
-                // screen_pos
+                // clip_pos
                 VertexAttribute {
                     offset: 16,
                     shader_location: 2,
@@ -56,6 +177,12 @@ impl TexturedVertex {
                 VertexAttribute {
                     offset: 40,
                     shader_location: 4,
+                    format: VertexFormat::Float32x4,
+                },
+                // clip_curvature
+                VertexAttribute {
+                    offset: 56,
+                    shader_location: 5,
                     format: VertexFormat::Float32x4,
                 },
             ],

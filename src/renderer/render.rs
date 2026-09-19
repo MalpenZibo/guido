@@ -12,7 +12,7 @@ use wgpu::{
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
 use super::commands::{CornerRadii, DrawCommand};
-use super::flatten::{CommandLayer, FlattenedCommand};
+use super::flatten::{CommandLayer, FlattenedCommand, PlacedClip};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
@@ -627,11 +627,12 @@ fn begin_pass<'a>(
 
 /// The clip a command was flattened under, in physical pixels.
 ///
-/// The axis-aligned rect of it: a rounded or rotated clip is approximated by
-/// its box, which is one pixel of slack at the corners against a blurred
-/// rectangle where the content has been scrolled away.
+/// The axis-aligned world box of it: a rounded or rotated clip is approximated
+/// by that box, which is one pixel of slack at the corners against a blurred
+/// rectangle where the content has been scrolled away — and a good deal more
+/// than that against a turned one, which is #198.
 fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
-    let clip = cmd.clip.as_ref()?.rect;
+    let clip = cmd.clip.as_ref()?.world_aabb();
     Some(Rect::new(
         clip.x * scale,
         clip.y * scale,
@@ -791,7 +792,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
                 instance = instance.with_gradient(g);
             }
             if let Some(ref clip) = cmd.clip {
-                instance = instance.with_clip(clip, scale, cmd.clip_is_local);
+                instance = instance.with_clip(clip, scale);
             }
 
             Some(instance)
@@ -815,7 +816,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             .with_transform(&cmd.world_transform, scale);
 
             if let Some(ref clip) = cmd.clip {
-                instance = instance.with_clip(clip, scale, cmd.clip_is_local);
+                instance = instance.with_clip(clip, scale);
             }
 
             Some(instance)
@@ -843,8 +844,9 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_family,
             font_weight,
         } => {
-            // Convert WorldClip to Rect for text clipping
-            let clip_rect = cmd.clip.as_ref().map(|clip| clip.rect);
+            // glyphon clips to four integers, so text gets the world box of
+            // the clip and not its shape. A turned clip over text is #199.
+            let clip_rect = cmd.clip.as_ref().map(PlacedClip::world_aabb);
 
             Some(TextEntry {
                 text: text.clone(),
@@ -886,7 +888,6 @@ mod tests {
             world_transform_origin: None,
             layer: RenderLayer::Backdrop,
             clip: None,
-            clip_is_local: false,
         }
     }
 
@@ -948,10 +949,11 @@ mod tests {
     #[test]
     fn the_clip_reaches_the_region() {
         let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
-        cmd.clip = Some(crate::renderer::flatten::WorldClip {
+        cmd.clip = Some(crate::renderer::flatten::PlacedClip {
             rect: Rect::new(0.0, 0.0, 200.0, 200.0),
             corner_radius: CornerRadii::uniform(0.0),
             curvature: 1.0,
+            placement: Transform::IDENTITY,
         });
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
         assert_eq!(
