@@ -64,6 +64,16 @@ glyphon — it is rasterised to a texture and drawn as a quad
 (`text_quad.rs`, `textured_quad_shader.wgsl`). Anything true of axis-aligned
 text has to be checked again there.
 
+## Clipping
+
+`PlacedClip` holds the clip as its widget declared it plus the transform that
+places it, and every consumer asks it for what it can use: the shape shader and
+the image quad invert the placement and test in the clip's own space, so a
+turned clip cuts the turned shape; text and the compositor regions take
+`world_aabb()`, because glyphon wants four integers and a `wl_region` is a union
+of rectangles. Three pipelines, so a change to clipping has to be checked in all
+three — and until `clipped_images` there was no golden that drew an image at all.
+
 ## Backdrop
 
 A backdrop effect samples pixels already drawn, which a pass cannot do to its

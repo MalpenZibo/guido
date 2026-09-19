@@ -193,8 +193,18 @@ impl Transform {
     pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32);
     pub fn is_identity(&self) -> bool;
     pub fn is_translation_only(&self) -> bool;
+    pub fn is_pure_translation(&self) -> bool;
+    pub fn keeps_axes(&self) -> bool;
 }
 ```
+
+The three predicates answer different questions and are not interchangeable.
+`is_translation_only` is epsilon'd and guards the paint cache's translate-only
+replay; `is_pure_translation` is exact and guards undoing a placement by
+negating two components. `keeps_axes` asks whether a rect stays a rect *with its
+corners in the order the radii are written in* — so it refuses a quarter turn
+and a mirror, which do keep the rect but move the top-left corner elsewhere. It
+decides whether two clips can share one coordinate space; see #397.
 
 ### Container Transform Methods
 

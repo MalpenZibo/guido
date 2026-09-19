@@ -275,10 +275,51 @@ pub struct FlattenedCommand {
     pub world_transform: Transform,
     pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
-    pub clip: Option<WorldClip>,
-    pub clip_is_local: bool,
+    pub clip: Option<PlacedClip>,
 }
 ```
+
+### PlacedClip
+
+A clip as the widget that declared it wrote it, plus the transform that puts it
+on the screen. It was named for world space up to this change, and the one
+assertion that name made — `rect` is in world coordinates — is exactly what the
+change inverted:
+
+```rust
+pub struct PlacedClip {
+    pub rect: Rect,                 // in the clip owner's own space
+    pub corner_radius: CornerRadii, // in that same space
+    pub curvature: f32,
+    pub placement: Transform,       // clip space -> world
+}
+```
+
+It used to be a world-space rect, mapped through the transform — which is an
+enclosing *box*, equal to the shape only for a transform that keeps the axes.
+Under rotation it is larger and square-cornered, and past about 40° it is large
+enough that `Overflow::Hidden` stops hiding.
+
+Keeping the declaration answers every consumer:
+
+| consumer | how it reads the clip |
+| --- | --- |
+| the shape shader | `physical_to_clip(scale)` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
+| images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
+| text (`text_quad.rs`, glyphon) | `world_aabb()` — glyphon clips to four integers, so text still gets the box (#199) |
+| compositor blur and input regions | `world_aabb()`, tessellated — a `wl_region` is a union of rectangles (#198) |
+
+What one rect and one matrix cannot express is **two clips in two different
+rotated spaces**. `intersect_clips` rebases the second onto the first when
+`Transform::keeps_axes` holds between them — a shared placement, or a
+translation, or an axis-aligned scale, so nested scrollers stay exact — and
+falls back to the enclosing box in world space when it does not. A quarter turn
+and a mirror are refused along with rotation, even though each sends a rect to a
+rect: each also moves the top-left corner somewhere else, and `CornerRadii` is
+four numbers in a fixed order that nothing permutes (#397). That fallback is what *every* case produced before the clip
+carried a transform, so nothing is worse than it was. GTK's GSK meets the same
+wall with the same single-rounded-rect clip and answers it by rasterising a clip
+mask; that is the door out if the fallback is ever seen.
 
 ### Incremental Flatten
 
@@ -307,7 +348,7 @@ The renderer uses instanced rendering for efficiency: a single draw call per lay
 
 ### ShapeInstance
 
-Per-instance data for each shape (224 bytes):
+Per-instance data for each shape (240 bytes):
 
 ```rust
 pub struct ShapeInstance {
@@ -321,25 +362,41 @@ pub struct ShapeInstance {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_color: [f32; 4],
+    pub clip_curvature: f32,      // next to the border's, not next to the clip
     pub transform: [f32; 6],      // 2x3 affine matrix [a, b, tx, c, d, ty]
-    pub clip_rect: [f32; 4],      // Clip region
-    pub clip_corner_radius: f32,
-    pub clip_curvature: f32,
-    pub clip_is_local: f32,       // 1.0 for local, 0.0 for world
+    pub clip_inverse_1: [f32; 2], // the clip inverse's [d, ty]
+    pub clip_rect: [f32; 4],      // in the clip's own space, logical pixels
+    pub clip_inverse_0: [f32; 4], // the clip inverse's [a, b, tx, c]
     pub gradient_start: [f32; 4],
     pub gradient_end: [f32; 4],
     pub gradient_type: u32,       // 0=none, 1=horizontal, 2=vertical, 3/4=diagonal
+    pub clip_radii: [f32; 4],     // [top_left, top_right, bottom_right, bottom_left]
 }
 ```
 
+**The clip's inverse is six floats in two places, and the reason is a hardware
+limit.** `max_vertex_attributes` is 16 on every backend worth the name and this
+layout declares 16, so a seventeenth is a pipeline validation error rather than a
+cost — the matrix went into padding that already existed. Moving
+`clip_curvature` next to the border's freed a whole attribute for `[a, b, tx, c]`,
+and `[d, ty]` rides in the two spare floats beside `transform`. The shader reads
+it back whole, which is the only place it means anything.
+
 ### HiDPI Scaling
 
-All coordinates are scaled to physical pixels during instance creation:
+Coordinates are scaled to physical pixels during instance creation:
 
 ```rust
 instance.rect = [rect.x * scale, rect.y * scale, rect.width * scale, rect.height * scale];
 instance.corner_radius = radius * scale;
 ```
+
+**The clip is the exception.** `clip_rect` and `clip_radii` stay in the logical
+units the widget declared them in, because the fragment is carried back to meet
+them: `physical_to_clip(scale)` folds the surface scale into the inverse matrix.
+Scaling them here as well would apply the scale twice and clip a HiDPI surface
+to a quarter of its viewport. `the_surface_scale_is_undone_once` in
+`src/renderer/flatten.rs` is what says so.
 
 ### Render Order
 

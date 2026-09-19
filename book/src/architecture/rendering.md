@@ -231,7 +231,20 @@ ctx.set_overlay_clip(local_bounds, self.corner_radius, self.corner_curvature);
 # }
 ```
 
-Clipping respects corner radius and curvature for proper rounded container clipping. Clip regions are inherited through the render tree and transformed along with their parent nodes.
+Clipping respects corner radius and curvature for proper rounded container
+clipping. Clip regions are inherited through the render tree and transformed
+along with their parent nodes.
+
+**A clip is kept as the shape it was declared, not as the box around it.** The
+flattener carries the declared rect and radii along with the transform that
+places them, and the shader carries each fragment back into that space before
+testing it. So `Overflow::Hidden` on a container rotated 45° clips its children
+to a rounded square turned 45°, not to the 1.41× larger square around it.
+
+Two clips in two different rotated spaces are the one case a rect and a matrix
+cannot describe, and there the intersection falls back to the box around both.
+Text is the other: glyphon clips to an integer rectangle, so text under a
+rotated clip is still cut by the box.
 
 ## Animation Advancement
 
