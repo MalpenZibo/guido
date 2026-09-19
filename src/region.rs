@@ -668,6 +668,27 @@ mod tests {
             area(corner(0.0)) < area(corner(1.0)),
             "a bevel takes more off the corner than a circle does"
         );
+
+        // And the chord runs between the two points where the corner meets its
+        // sides — (0, 40) and (40, 0) for a radius of 40 — so `x + y = 40` is
+        // the cut. A chord that starts from the wrong end of either side still
+        // removes *a* triangle, and every assertion above is satisfied by the
+        // wrong one; only the line itself says which.
+        let bevel = corner(0.0);
+        assert!(
+            !covers(&bevel, 18, 18),
+            "18 + 18 is short of the cut at 40, so the bevel has taken it"
+        );
+        assert!(
+            covers(&bevel, 25, 25),
+            "25 + 25 clears it, so the shape holds this one — a chord hung off \
+             the wrong end of either side does not run through x + y = 40 and \
+             gets one of these two wrong"
+        );
+        assert!(
+            covers(&bevel, 2, 45) && covers(&bevel, 45, 2),
+            "and just past each end of the chord the straight sides take over"
+        );
     }
 
     /// A concave corner is cut outside the bite, not through it.
