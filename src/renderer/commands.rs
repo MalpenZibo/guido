@@ -243,6 +243,10 @@ pub enum DrawCommand {
         /// Corner radii of that area, so the region follows the shape drawn
         /// rather than its bounding box.
         corner_radii: CornerRadii,
+        /// Superellipse curvature of those corners. A bevel is smaller than
+        /// the circle of the same radius, so a region cut as a circle would
+        /// take clicks past the diagonal the container actually drew.
+        curvature: f32,
         /// Whether input reaches this area. `false` is a hole in a surface
         /// that otherwise takes input; `true` is an island in one that does
         /// not.

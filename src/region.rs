@@ -90,27 +90,30 @@ pub(crate) fn placed_shape_to_rects(
         return Vec::new();
     }
 
-    // A square upright shape under no clip is its own rectangle, and saying so
-    // keeps the commonest region in the tree a single rect rather than a stack
-    // that rounds back to one.
+    // A square upright shape is its own rectangle, and a square upright clip
+    // cuts it to another one.
     //
-    // Half a pixel *on the surface*, not in the widget's own space: a corner of
-    // 0.5 under a `scale(8.0)` is four pixels of curve, and the radii are
-    // written where the widget wrote them. `keeps_axes` has already said the
-    // off-diagonal terms are zero, so the larger of the two factors is the
-    // whole of what the transform does to a radius.
-    let on_surface = shape.placement.a().max(shape.placement.d());
-    if clip.is_none()
-        && shape.clamped_radii().max() * on_surface <= 0.5
-        && shape.placement.keeps_axes()
-    {
-        return Vec::from_iter(to_region_rect(shape.placement.map_rect(shape.rect)));
+    // The band loop below would arrive at the same answer — it merges bands
+    // that round alike, and for a square shape that is all of them — but it
+    // would take about six microseconds to do it, against twenty nanoseconds
+    // here. That is per region, per frame, and a bar of thirty pills declaring
+    // input regions pays it thirty times. Worth a branch.
+    if shape.is_a_box() && clip.is_none_or(|c| c.is_a_box()) {
+        let boxed = shape.world_aabb();
+        let boxed = match clip {
+            Some(clip) => intersection(boxed, clip.world_aabb()),
+            None => Some(boxed),
+        };
+        return boxed.and_then(to_region_rect).into_iter().collect();
     }
+
+    let outline = shape.outline();
+    let clip_outline = clip.map(|clip| clip.outline());
 
     // At a scanline: where the shape is, narrowed to where the clip is.
     let span = |y: f32| -> Option<(f32, f32)> {
-        let (mut left, mut right) = shape.span_at(y)?;
-        if let Some(clip) = clip {
+        let (mut left, mut right) = outline.span_at(y)?;
+        if let Some(ref clip) = clip_outline {
             let (clip_left, clip_right) = clip.span_at(y)?;
             left = left.max(clip_left);
             right = right.min(clip_right);
@@ -118,26 +121,32 @@ pub(crate) fn placed_shape_to_rects(
         (left < right).then_some((left, right))
     };
 
-    let bands = ((height * 2.0).ceil() as usize).clamp(4, 512);
+    // One band per pixel: `to_region_rect` rounds each band's edges to whole
+    // numbers, so a band finer than a pixel cannot produce a row the output can
+    // tell apart — it only tightens the inscribed span by a fraction. Half-pixel
+    // bands cost twice the spans for that fraction, which on a small shape is
+    // the whole of the work.
+    let bands = (height.ceil() as usize).clamp(4, 512);
     let band_h = height / bands as f32;
 
-    // One span per boundary rather than two per band: every interior boundary
-    // is shared by the band above it and the band below.
-    let edges: Vec<Option<(f32, f32)>> =
-        (0..=bands).map(|i| span(top + i as f32 * band_h)).collect();
-
     let mut out: Vec<RegionRect> = Vec::new();
+    // Every interior boundary is shared by the band above and the band below,
+    // so each span is computed once and carried forward.
+    let mut upper = span(top);
     for i in 0..bands {
-        // The tighter of the band's two edges keeps the slab inside the curve:
-        // both shapes are convex, so between them neither is narrower.
-        let (Some((a0, b0)), Some((a1, b1))) = (edges[i], edges[i + 1]) else {
+        let y0 = top + i as f32 * band_h;
+        let lower = span(y0 + band_h);
+        let (Some((a0, b0)), Some((a1, b1))) = (upper, lower) else {
+            upper = lower;
             continue;
         };
+        upper = lower;
+        // The tighter of the band's two edges keeps the slab inside the curve:
+        // both shapes are convex, so between them neither is narrower.
         let (left, right) = (a0.max(a1), b0.min(b1));
         if right <= left {
             continue;
         }
-        let y0 = top + i as f32 * band_h;
         let Some(rect) = to_region_rect(Rect::new(left, y0, right - left, band_h)) else {
             continue;
         };
@@ -156,6 +165,15 @@ pub(crate) fn placed_shape_to_rects(
         }
     }
     out
+}
+
+/// The overlap of two rects, or `None` where there is none.
+fn intersection(a: Rect, b: Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right > x && bottom > y).then(|| Rect::new(x, y, right - x, bottom - y))
 }
 
 /// Round-to-nearest on all four edges so adjacent slabs tile without gaps
@@ -212,13 +230,14 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
         let DrawCommand::InputRegion {
             rect,
             corner_radii,
+            curvature,
             takes,
         } = &*cmd.command
         else {
             continue;
         };
         out.extend(
-            shape_of(cmd, *rect, *corner_radii, 1.0)
+            shape_of(cmd, *rect, *corner_radii, *curvature)
                 .into_iter()
                 .map(|rect| InputRegionOp {
                     takes: *takes,
@@ -239,9 +258,12 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
 ///
 /// The clip is a shape here too, and intersected scanline by scanline rather
 /// than as a box — so a card inside a rounded scroller is cornered by the
-/// scroller, and a turned clip cuts what it actually covers. This is the one
-/// consumer that does not have to fall back where `intersect_clips` does,
-/// because it never has to write the answer down as one rect and one matrix.
+/// scroller, and a turned clip cuts what it actually covers.
+///
+/// One clip, though. `cmd.clip` is `effective_clip`, which `intersect_clips`
+/// has already collapsed: two clips in differently-turned spaces arrive as the
+/// box around both, and #397 is still #397. What is escaped here is the *shape
+/// against clip* box intersection, not the chain's own.
 pub(crate) fn shape_of(
     cmd: &FlattenedCommand,
     rect: Rect,
@@ -933,7 +955,7 @@ mod tests {
         }
     }
 
-    /// The clip still narrows the shape, and still arrives as a box.
+    /// A clip narrows the shape, and an axis-aligned one narrows it to a box.
     #[test]
     fn a_clip_narrows_a_turned_shape() {
         let diamond = shape(

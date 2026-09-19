@@ -25,7 +25,7 @@ mod text_measurer;
 mod text_quad;
 mod textured_quad;
 mod textured_vertex;
-mod tree;
+pub(crate) mod tree;
 mod types;
 
 pub use commands::{Border, CornerRadii, DrawCommand};

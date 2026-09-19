@@ -451,14 +451,10 @@ fn flatten_node(
     };
 
     // Compute this node's world clip (if any)
-    let node_world_clip = node.clip.as_ref().map(|clip| {
-        PlacedShape::placed(
-            clip.rect,
-            clip.corner_radius,
-            clip.curvature,
-            world_transform,
-        )
-    });
+    let node_world_clip = node
+        .clip
+        .as_ref()
+        .map(|clip| PlacedShape::from_clip(clip, world_transform));
 
     // Effective clip = intersection of parent clip and node clip
     let effective_clip: Option<PlacedShape> = match (parent_clip, &node_world_clip) {
@@ -521,12 +517,7 @@ fn flatten_node(
     // "test this one in local coordinates"; now every clip says where its
     // coordinates are and the flag has nothing left to distinguish.
     let overlay_clip: Option<PlacedShape> = match node.overlay_clip {
-        Some(ref clip) => Some(PlacedShape::placed(
-            clip.rect,
-            clip.corner_radius,
-            clip.curvature,
-            world_transform,
-        )),
+        Some(ref clip) => Some(PlacedShape::from_clip(clip, world_transform)),
         None => effective_clip,
     };
 
@@ -834,6 +825,7 @@ mod tests {
         node.commands.push(Rc::new(DrawCommand::InputRegion {
             rect,
             corner_radii: CornerRadii::from(0.0),
+            curvature: 1.0,
             takes: true,
         }));
 
@@ -1091,12 +1083,7 @@ mod world_geometry_tests {
             curvature: 1.0,
         };
         let placement = Transform::rotate_degrees(45.0).center_at(40.0, 40.0);
-        let clip = PlacedShape::placed(
-            declared.rect,
-            declared.corner_radius,
-            declared.curvature,
-            placement,
-        );
+        let clip = PlacedShape::from_clip(&declared, placement);
 
         assert_eq!(clip.rect, declared.rect, "the declaration, untouched");
         assert_eq!(

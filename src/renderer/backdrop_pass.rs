@@ -19,6 +19,7 @@
 //! rather than a box — see [`text_mask`](super::text_mask).
 
 use crate::transform::Transform;
+use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
 
 use crate::widgets::{Color, Rect};
@@ -47,17 +48,17 @@ struct Params {
     taps: f32,
     dst_size: [f32; 2],
     curvature: f32,
-    _pad: f32,
+    _pad1: f32,
     radii: [f32; 4],
     /// The shape the mask cuts, `[x, y, width, height]`, in its own space.
     shape_rect: [f32; 4],
     /// Where this viewport sits on the target, in physical pixels — the
     /// fragment's uv is relative to the viewport and the shape is not.
     viewport_origin: [f32; 2],
-    _pad4: [f32; 2],
+    _pad2: [f32; 2],
     /// Target physical pixels to shape space: `[a, b, tx, c, d, ty]`.
     to_shape: [f32; 6],
-    _pad5: [f32; 2],
+    _pad3: [f32; 2],
     /// Sub-rectangle of the coverage mask this viewport covers, in normalised
     /// UV. The whole mask unless the region runs off the target, where the
     /// viewport is clipped and the mask must be read clipped with it.
@@ -66,9 +67,7 @@ struct Params {
     /// from the glyph edge in physical pixels.
     stroke_color: [f32; 4],
     stroke_width: f32,
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
+    _pad4: [f32; 3],
 }
 
 /// Where a region lands on the target — viewport in physical pixels — and the
@@ -566,24 +565,12 @@ impl BackdropRenderer {
 
         let params = Params {
             src_rect: [0.0, 0.0, 1.0, 1.0],
-            direction: [0.0, 0.0],
-            sigma: 0.0,
-            taps: 0.0,
             dst_size: [dst_width as f32, dst_height as f32],
             curvature: 1.0,
-            _pad: 0.0,
-            radii: [0.0; 4],
-            shape_rect: [0.0; 4],
-            viewport_origin: [0.0; 2],
-            _pad4: [0.0; 2],
-            to_shape: Transform::IDENTITY.data,
-            _pad5: [0.0; 2],
             mask_rect,
             stroke_color: [color.r, color.g, color.b, color.a],
             stroke_width: width,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            ..Params::zeroed()
         };
         // Binding 0 goes unread by this pipeline; the working texture fills it
         // because the scene is the target and may not be bound as a resource
@@ -640,12 +627,10 @@ impl BackdropRenderer {
 
         let base = Params {
             src_rect: scene_rect,
-            direction: [0.0, 0.0],
             sigma,
             taps,
             dst_size: [width as f32, height as f32],
             curvature: region.curvature,
-            _pad: 0.0,
             radii: region.radii.to_array(),
             shape_rect: [
                 region.shape.x,
@@ -654,15 +639,9 @@ impl BackdropRenderer {
                 region.shape.height,
             ],
             viewport_origin: [x as f32, y as f32],
-            _pad4: [0.0; 2],
             to_shape: region.to_shape.data,
-            _pad5: [0.0; 2],
             mask_rect,
-            stroke_color: [0.0; 4],
-            stroke_width: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
+            ..Params::zeroed()
         };
 
         // 1. Scene region → working[0], shrunk.
@@ -746,24 +725,10 @@ impl BackdropRenderer {
             &targets.scene_view,
             Params {
                 src_rect: [0.0, 0.0, 1.0, 1.0],
-                direction: [0.0, 0.0],
-                sigma: 0.0,
-                taps: 0.0,
                 dst_size: [targets.width as f32, targets.height as f32],
                 curvature: 1.0,
-                _pad: 0.0,
-                radii: [0.0; 4],
-                shape_rect: [0.0; 4],
-                viewport_origin: [0.0; 2],
-                _pad4: [0.0; 2],
-                to_shape: Transform::IDENTITY.data,
-                _pad5: [0.0; 2],
                 mask_rect: [0.0, 0.0, 1.0, 1.0],
-                stroke_color: [0.0; 4],
-                stroke_width: 0.0,
-                _pad1: 0.0,
-                _pad2: 0.0,
-                _pad3: 0.0,
+                ..Params::zeroed()
             },
         );
         self.pass(

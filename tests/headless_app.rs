@@ -573,6 +573,44 @@ fn a_turned_island_takes_input_where_it_is_drawn() {
     );
 }
 
+/// A bevelled island takes input inside the cut, not out to the square corner.
+///
+/// `Corners::bevel` is a straight diagonal across the corner — K = 0, and
+/// strictly inside the circle of the same radius. The region was cut as a
+/// circle whatever the container drew, so a bevelled one took clicks in the
+/// sliver between the two, on ground it had not painted.
+///
+/// The curvature has been on the draw command all along and only the shader
+/// read it; the input region had nowhere to put it until a clip and a shape
+/// became one type.
+#[test]
+fn a_bevelled_island_takes_input_inside_its_cut() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .corners(Corners::bevel(40.0))
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 120, 1.0);
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 40.0, 40.0),
+        "the middle of the island is the island"
+    );
+    // The top-left corner's chord runs from (0, 40) to (40, 0). A point 12 in
+    // and 12 down is inside a circle of 40 and outside that line.
+    assert!(
+        !app.input_reaches(surface, 12.0, 12.0),
+        "and the bevel has already cut this pixel away, though a circle of the \
+         same radius would still reach it"
+    );
+}
+
 /// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
 /// widget was laid out in, which is why the region could never follow one.
 #[test]

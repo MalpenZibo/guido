@@ -722,6 +722,8 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
 | `src/transform.rs` | Transform matrix operations |
+| `src/shape.rs` | A rounded rect and the transform that places it — one type for clips, compositor regions and the backdrop mask |
+| `src/region.rs` | A placed shape tessellated into the rectangles a `wl_region` is made of |
 | `src/platform/wayland.rs` | Wayland connection, surfaces and layer shell |
 | `src/platform/input.rs` | Seat input: pointer, touch, keyboard |
 

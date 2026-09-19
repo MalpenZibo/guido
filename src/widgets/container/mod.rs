@@ -1721,7 +1721,7 @@ impl Widget for Container {
         // compositor is told about is read off the frame, so a container that
         // stopped painting cannot leave one behind.
         if let Some(takes) = takes_input {
-            ctx.declare_input_region(local_bounds, corner_radii, takes);
+            ctx.declare_input_region(local_bounds, corner_radii, corner_curvature, takes);
         }
 
         self.paint_decoration(
