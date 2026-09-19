@@ -198,3 +198,83 @@ pub fn to_ndc(x: f32, y: f32, screen_width: f32, screen_height: f32) -> [f32; 2]
         1.0 - (y / screen_height) * 2.0,
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::CornerRadii;
+    use crate::renderer::flatten::PlacedClip;
+    use crate::widgets::Rect;
+
+    /// The two constructors put their clip in two different spaces, and each
+    /// has to scale — or not scale — accordingly.
+    ///
+    /// `world_box` is the text path: glyphon clips to a box in physical
+    /// pixels, so the rect is scaled here and the map is the identity.
+    /// `shape` is the image path: the rect stays in the logical units the
+    /// widget declared, and the scale is folded into the map instead. Getting
+    /// that backwards in either one scales twice or not at all, and the
+    /// symptom is a HiDPI surface clipped to a quarter of its viewport.
+    ///
+    /// Written because the mutation job found every multiply in `world_box`
+    /// could be a plus or a divide with the suite still green: nothing called
+    /// it.
+    #[test]
+    fn a_clip_is_scaled_in_exactly_one_of_the_two_spaces() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
+
+        let boxed = QuadClip::world_box(rect, 2.0);
+        assert_eq!(
+            boxed.rect,
+            [20.0, 40.0, 200.0, 100.0],
+            "origin and extent both in physical pixels"
+        );
+        assert_eq!(
+            boxed.place(20.0, 40.0),
+            [20.0, 40.0],
+            "and the corner is left where it is, because it is already there"
+        );
+
+        let shaped = QuadClip::shape(
+            &PlacedClip {
+                rect,
+                corner_radius: CornerRadii::uniform(4.0),
+                curvature: 1.0,
+                placement: crate::transform::Transform::IDENTITY,
+            },
+            2.0,
+        );
+        assert_eq!(
+            shaped.rect,
+            [10.0, 20.0, 100.0, 50.0],
+            "the declaration, unscaled — the map is what carries the scale"
+        );
+        let [x, y] = shaped.place(20.0, 40.0);
+        assert!(
+            (x - 10.0).abs() < 0.01 && (y - 20.0).abs() < 0.01,
+            "so the same physical corner arrives at the logical one, got ({x}, {y})"
+        );
+        assert_eq!(shaped.radii, [4.0; 4], "radii travel with the rect");
+    }
+
+    /// A clip whose placement collapses lets nothing through, rather than
+    /// everything.
+    #[test]
+    fn a_collapsed_clip_cuts_it_all() {
+        let collapsed = QuadClip::shape(
+            &PlacedClip {
+                rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+                corner_radius: CornerRadii::uniform(0.0),
+                curvature: 1.0,
+                placement: crate::transform::Transform::scale(0.0),
+            },
+            1.0,
+        );
+        assert_eq!(collapsed.rect, crate::renderer::gpu::EMPTY_CLIP_RECT);
+        assert_ne!(
+            collapsed.rect,
+            crate::renderer::gpu::NO_CLIP_RECT,
+            "the sentinel for `clip everything`, not the one for `clip nothing`"
+        );
+    }
+}

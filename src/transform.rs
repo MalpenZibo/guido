@@ -576,6 +576,11 @@ mod tests {
             ("y leans into x", [1.0, 0.0, 0.0, 0.5, 1.0, 0.0]),
             ("x flipped", [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             ("y flipped", [1.0, 0.0, 0.0, 0.0, -1.0, 0.0]),
+            // Zero, not merely negative: `>= 0.0` would call a collapsed axis
+            // axis-keeping, and a space squashed onto a line has no rect in it
+            // to keep. Asked because the mutation job asked it.
+            ("x collapsed", [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            ("y collapsed", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
         ] {
             assert!(!Transform { data }.keeps_axes(), "{label}");
         }

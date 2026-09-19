@@ -1701,6 +1701,84 @@ mod world_geometry_tests {
         );
     }
 
+    /// The identity fast path carries a fragment the same distance the general
+    /// one would.
+    ///
+    /// `physical_to_clip` short-circuits a placement of identity — most clips
+    /// in most frames — instead of inverting it. It was added for speed after
+    /// the test above was written, and that test uses a *translated* placement,
+    /// so it exercises the other branch: the whole fast path shipped unwatched
+    /// until the mutation job said so.
+    ///
+    /// The scales are not 1.0 on purpose. At 1.0 a shrink, a stretch and a
+    /// remainder all leave the point where it was, and every mutant lives.
+    #[test]
+    fn the_identity_fast_path_still_undoes_the_scale() {
+        let unplaced = PlacedClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+            corner_radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+            placement: Transform::IDENTITY,
+        };
+
+        for scale in [2.0, 1.5, 0.5] {
+            let back = unplaced.physical_to_clip(scale).expect("invertible");
+            let (x, y) = back.transform_point(100.0 * scale, 50.0 * scale);
+            assert!(
+                (x - 100.0).abs() < 0.01 && (y - 50.0).abs() < 0.01,
+                "the far corner in physical pixels comes back to the far corner \
+                 of the logical rect at scale {scale}, got ({x}, {y})"
+            );
+
+            // And it agrees with the route a placement that is *not* the
+            // identity takes, which is the only reason the branch is allowed
+            // to exist.
+            let placed = PlacedClip {
+                placement: Transform::translate(11.0, -3.0),
+                ..unplaced.clone()
+            };
+            let long = placed.physical_to_clip(scale).expect("invertible");
+            assert_eq!(
+                (back.a(), back.b(), back.c(), back.d()),
+                (long.a(), long.b(), long.c(), long.d()),
+                "the two routes shrink by the same factor at scale {scale}; \
+                 only the offset differs, because one clip has moved"
+            );
+        }
+    }
+
+    /// The intersection is curved by whichever clip rounds the *least*.
+    ///
+    /// Every other test here uses a curvature of 1.0 on both sides, so the
+    /// comparison that picks between them could be reversed and none of them
+    /// would move. A squircle clip inside a circular one draws the circular
+    /// corner, because that is the corner that is actually there.
+    #[test]
+    fn the_flatter_corner_supplies_the_curve() {
+        let circular = PlacedClip {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            corner_radius: CornerRadii::uniform(8.0),
+            curvature: 1.0,
+            placement: Transform::IDENTITY,
+        };
+        let squircular = PlacedClip {
+            corner_radius: CornerRadii::uniform(24.0),
+            curvature: 2.0,
+            ..circular.clone()
+        };
+
+        assert_eq!(
+            intersect_clips(&circular, &squircular).curvature,
+            1.0,
+            "the rounder clip cuts less deeply, so its curve is the one on show"
+        );
+        assert_eq!(
+            intersect_clips(&squircular, &circular).curvature,
+            1.0,
+            "and the answer does not depend on which was asked first"
+        );
+    }
+
     /// A placement that collapses has no inverse, and a clip with no inside is
     /// not a clip that lets everything through.
     #[test]
@@ -1774,6 +1852,72 @@ mod world_geometry_tests {
             clip.world_aabb().width > 112.0,
             "80·√2 ≈ 113.1, got {}",
             clip.world_aabb().width
+        );
+    }
+
+    /// A cached subtree replayed at a new position carries its clip with it —
+    /// on both axes.
+    ///
+    /// The replay path skips re-flattening and shifts what it kept by the
+    /// distance the subtree moved. The clip's rect is in its owner's
+    /// coordinates and has not moved relative to the owner, so what is shifted
+    /// is the placement.
+    ///
+    /// Both axes, and both the clip and the command, because the existing
+    /// watch on this path is a vertical scroller whose own transform does not
+    /// move: `dx` is zero there and the replay's `dy` never fires, so every way
+    /// of getting either shift wrong produced the same answer as getting it
+    /// right. The mutation job found five of those, one of them in code older
+    /// than this change.
+    #[test]
+    fn a_replayed_clip_moves_on_both_axes() {
+        let mut child = RenderNode::new(2);
+        child.bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
+        child.clip = Some(ClipRegion {
+            rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+            corner_radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+        });
+        child.commands.push(Rc::new(DrawCommand::rounded_rect(
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+            Color::WHITE,
+            0.0,
+        )));
+
+        let mut root = RenderNode::new(1);
+        root.bounds = Rect::new(0.0, 0.0, 200.0, 200.0);
+        root.local_transform = Transform::translate(10.0, 20.0);
+        root.children.push(Rc::new(child));
+
+        // The clip and the command it cuts, which move together or the clip
+        // stops describing the thing it is cutting.
+        let replayed = |node: &RenderNode| {
+            let (mut commands, mut layers) = (Vec::new(), Vec::new());
+            flatten_root_into(node, &mut commands, &mut layers);
+            let cmd = commands.first().expect("the child draws");
+            let clip = cmd.clip.as_ref().expect("the child clips");
+            (
+                (clip.placement.tx(), clip.placement.ty()),
+                (cmd.world_transform.tx(), cmd.world_transform.ty()),
+            )
+        };
+
+        // First pass populates the subtree's cached flatten.
+        assert_eq!(replayed(&root), ((10.0, 20.0), (10.0, 20.0)));
+
+        // Now move it in *both* axes and replay from the cache rather than
+        // re-flattening: nothing is dirty, and the transform is a translation.
+        root.local_transform = Transform::translate(35.0, 65.0);
+        root.repainted.set(false);
+        for c in &root.children {
+            c.repainted.set(false);
+        }
+
+        assert_eq!(
+            replayed(&root),
+            ((35.0, 65.0), (35.0, 65.0)),
+            "the clip and the command are both where the subtree now is, on \
+             each axis independently"
         );
     }
 
