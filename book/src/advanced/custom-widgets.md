@@ -45,8 +45,15 @@ box it was given. A parent narrows its children to the visible region before
 painting them, and it does that by their laid-out bounds — so a widget that
 paints elsewhere, because it transforms itself or casts something past its
 edges, has to say how far. That is `refresh_paint_bounds`, which reports it with
-`Tree::set_own_paint_reach`. It runs from the paint job rather than from layout,
-so saying it never costs a reflow.
+`Tree::set_own_paint_reach`. The framework calls it the same way it calls the
+other two — inside your widget's own Paint scope — so read your signals
+plainly here too, and a write to one repaints your widget without reflowing
+anything. It runs after every layout *and* from the paint job, because either
+can be the last pass to have run.
+
+Read them untracked and you get the bug this closed: a widget culled before it
+ever painted has read nothing, so nothing can tell it to come back, and a
+transform that would carry it into view reaches no one.
 
 Which pass you publish from follows what your reach depends on. If it moves with
 something layout already tracks — a size, a font — publish it from `layout`,

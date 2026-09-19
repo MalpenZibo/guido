@@ -107,7 +107,14 @@ struct Slot {
     children: ChildrenVec,
     /// Whether this widget needs layout
     needs_layout: bool,
-    /// Whether this widget needs paint
+    /// Whether this widget, or something below it, has asked to be painted.
+    ///
+    /// An ask and not a guarantee, and the difference is what #319 was: a
+    /// widget the frame culled keeps it set, because nothing clears the flag
+    /// of a widget that never painted, while the parent that skipped it is
+    /// cleared by painting. So a widget's own flag says nothing about whether
+    /// its ancestors know, and [`mark_needs_paint`](Tree::mark_needs_paint)
+    /// must never stop on it — only on an ancestor's.
     needs_paint: bool,
     /// Whether this widget is a relayout boundary
     is_relayout_boundary: bool,
@@ -213,6 +220,24 @@ struct CachedLayout {
     /// below was in flight, or a measure placed a value without spending its
     /// appearance. A settled subtree is neither, and either pass may read it.
     pass_dependent: bool,
+}
+
+/// Publish how far `widget` paints outside its own box, inside *its* own
+/// Paint scope.
+///
+/// The scope is the point, and it is why this is one function rather than two
+/// call sites. What the answer is read from — a transform — is a paint
+/// property, so a write to it must repaint that widget and reflow nothing.
+/// Read under no scope at all, which is what this was before #319, those reads
+/// subscribed to nothing, and a widget culled before it ever painted could
+/// never be told to come back.
+///
+/// Both passes that can be the last to run call it: the Paint job in `jobs`,
+/// and [`Tree::layout_widget`] once its Layout scope has closed.
+pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: WidgetId) {
+    crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Paint, || {
+        widget.refresh_paint_bounds(tree, id)
+    });
 }
 
 pub struct Tree {
@@ -604,7 +629,7 @@ impl Tree {
             // On either pass, because either may be the last one that ran: a
             // popup is measured before it is ever laid out, and the layout
             // after it reads that answer back where the subtree is settled.
-            widget.refresh_paint_bounds(tree, id);
+            refresh_paint_reach(&*widget, tree, id);
             size
         });
 
@@ -1092,8 +1117,10 @@ impl Tree {
     /// Mark a widget as needing paint, propagating up to the root.
     ///
     /// Similar to `mark_needs_layout`, this bubbles the paint-dirty flag
-    /// upward so that ancestors know to repaint. Early-exits if a node
-    /// is already marked (its ancestors must already be marked too).
+    /// upward so that ancestors know to repaint. The walk up stops at the
+    /// first *ancestor* already marked, because that one was told by a walk
+    /// that went all the way — but never on the widget's own flag, which a
+    /// frame that culled it leaves set forever (#319).
     ///
     /// Also accumulates the widget's surface-relative bounds into the
     /// damage region for Wayland damage reporting.
@@ -1107,23 +1134,50 @@ impl Tree {
 
         // Accumulate damage for the actual dirty widget (before propagation),
         // attributed to the widget's surface root
-        if let Some((root, bounds)) = self.surface_relative_bounds_and_root(widget_id) {
+        let surface_root = self.surface_relative_bounds_and_root(widget_id);
+        if let Some((root, bounds)) = surface_root {
             self.expand_damage_rect(root, bounds);
         }
 
-        let mut current = widget_id;
-        loop {
-            let Some(dense_idx) = self.get_dense_index(current) else {
-                return;
+        let Some(idx) = self.get_dense_index(widget_id) else {
+            return;
+        };
+        self.dense[idx].needs_paint = true;
+
+        // From the *parent*, never from the widget itself. A widget the frame
+        // culled is left marked — nothing clears a flag for a widget that
+        // never painted — so its own flag says nothing about whether its
+        // ancestors know. Stopping on it is what kept a culled widget from
+        // ever causing a frame again (#319).
+        let mut current = self.dense[idx].parent;
+        while let Some(id) = current {
+            let Some(dense_idx) = self.get_dense_index(id) else {
+                break;
             };
+            // An ancestor that already says so needs no telling, and neither
+            // does anything above it — `break`, not `return`, because the
+            // root still does, below.
             if self.dense[dense_idx].needs_paint {
-                return; // Already marked — ancestors are too
+                break;
             }
             self.dense[dense_idx].needs_paint = true;
-            match self.dense[dense_idx].parent {
-                Some(parent) => current = parent,
-                None => return,
-            }
+            current = self.dense[dense_idx].parent;
+        }
+
+        // And the surface root, whatever the walk did. The walk stops at the
+        // first ancestor that already says so, and a widget the frame skipped
+        // says so for ever — so on a subtree the frame has been culling, the
+        // announcement can die below the root. The root is what
+        // `paint_and_present` gates the frame on, so it has to hear every
+        // time; the walk above is what makes the frame *descend* to the right
+        // place once it runs.
+        //
+        // Free: the root is the one the damage above already resolved, and
+        // marking a root that is already marked is a flag write.
+        if let Some((root, _)) = surface_root
+            && let Some(root_idx) = self.get_dense_index(root)
+        {
+            self.dense[root_idx].needs_paint = true;
         }
     }
 
@@ -1134,7 +1188,10 @@ impl Tree {
         }
     }
 
-    /// Check if a widget needs paint.
+    /// Whether this widget or anything below it needs painting.
+    ///
+    /// What decides whether a frame is worth drawing, and whether a subtree is
+    /// worth descending into.
     pub fn needs_paint(&self, id: WidgetId) -> bool {
         self.get_dense_index(id)
             .map(|idx| self.dense[idx].needs_paint)
@@ -1670,6 +1727,39 @@ mod tests {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(MockWidget::new()));
         assert!(tree.needs_paint(id));
+    }
+
+    /// A widget the frame skipped keeps its own request, and that must not
+    /// stop the next mark reaching the root.
+    ///
+    /// The shape culling leaves behind, and the reason the two flags are two:
+    /// a parent paints and clears itself while the child it never painted
+    /// keeps a request nothing will clear. With one flag for both meanings the
+    /// walk stopped at that child and no ancestor ever learned again — a
+    /// widget culled from its first frame could not bring itself back (#319).
+    #[test]
+    fn a_skipped_widget_does_not_swallow_the_next_mark() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let culled = tree.register(Box::new(MockWidget::new()));
+        tree.set_parent(culled, root_id);
+
+        // The frame paints the parent and skips the child, which is what a
+        // cull is: the parent is settled, the child still wants painting.
+        tree.clear_needs_paint(root_id);
+        assert!(
+            tree.needs_paint(culled),
+            "the skipped child still wants painting"
+        );
+        assert!(!tree.needs_paint(root_id), "and its parent is settled");
+
+        tree.mark_needs_paint(culled);
+
+        assert!(
+            tree.needs_paint(root_id),
+            "the mark stopped at the child, so no frame will ever be drawn for \
+             it: this is #319"
+        );
     }
 
     #[test]

@@ -798,8 +798,14 @@ pub trait Widget {
     /// Publish how far this widget's paint will land outside its own bounds,
     /// before anything decides whether to paint it.
     ///
-    /// Called when a Paint job is processed, which is the frame's one chance to
-    /// ask: a parent narrows its children to the visible rect at the top of its
+    /// Called by the framework through `tree::refresh_paint_reach`, which opens
+    /// this widget's own `JobType::Paint` scope around it — so a signal read
+    /// here belongs to this widget and a write to it repaints this widget,
+    /// without reflowing anything. There is nothing to remember: read plainly.
+    ///
+    /// Called from the Paint job, and again from `Tree::layout_widget` after
+    /// every layout — either can be the last pass to run. The Paint job is the
+    /// frame's one chance to ask: a parent narrows its children to the visible rect at the top of its
     /// own paint, so by the time a child paints, the decision about it has been
     /// taken. A transform is the reason this exists — where a widget draws is
     /// not where it was laid out, and a parent culling by laid-out bounds drops

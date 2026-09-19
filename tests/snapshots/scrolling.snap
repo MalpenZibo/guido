@@ -16,8 +16,6 @@ node 0,0 648x216
         draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
       node 0,0 120x24 at 8,206
         draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
-      node 0,0 120x24 at 8,239
-        draw rect 0,0 120x24 fill=#404059ff radius=4/4/4/4
     node 0,0 6x196 at 192,2
       draw rect 0,0 6x196 fill=#ffffff0d radius=100/100/100/100
     node 0,0 6x60.49 at 192,2
@@ -37,8 +35,6 @@ node 0,0 648x216
       node 0,0 80x40 at 96,8
         draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
       node 0,0 80x40 at 184,8
-        draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
-      node 0,0 80x40 at 272,8
         draw rect 0,0 80x40 fill=#0000ffff radius=0/0/0/0
     node 0,0 196x6 at 2,72
       draw rect 0,0 196x6 fill=#ffffff0d radius=100/100/100/100

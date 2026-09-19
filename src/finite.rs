@@ -51,10 +51,15 @@ pub(crate) trait FiniteOr<T> {
     /// recognise — the setter they wrote, not the accessor that resolves it.
     fn get_finite_or(&self, default: T, id: crate::tree::WidgetId, property: &'static str) -> T;
 
-    /// The same, for the paths that read a snapshot rather than subscribing —
-    /// the reach calculation, which runs beside a paint that is reading the
-    /// same signal and has already reported it.
-    fn get_finite_or_untracked(&self, default: T) -> T;
+    /// Tracked, and silent about a value that is not a number.
+    ///
+    /// For a second reader of a property somebody else already reports: the
+    /// reach calculation reads the same transform the paint beside it does,
+    /// and both would otherwise name it. It still has to *subscribe*, because
+    /// the reach is what brings a culled widget back into view and the paint
+    /// that would have reported it never ran (#319) — so being quiet and
+    /// being untracked, which used to be the same call, are now two.
+    fn get_finite_or_quietly(&self, default: T) -> T;
 }
 
 impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
@@ -68,8 +73,8 @@ impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
         }
     }
 
-    fn get_finite_or_untracked(&self, default: T) -> T {
-        let value = crate::reactive::OptionSignalExt::get_or_untracked(self, default.clone());
+    fn get_finite_or_quietly(&self, default: T) -> T {
+        let value = crate::reactive::OptionSignalExt::get_or(self, default.clone());
         if value.all_finite() { value } else { default }
     }
 }

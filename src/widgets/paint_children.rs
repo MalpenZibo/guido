@@ -162,13 +162,19 @@ impl PaintContext<'_> {
         let (child_x, child_y) = (child_bounds.x, child_bounds.y);
         let child_position = Transform::translate(child_x - offset_x, child_y - offset_y);
 
-        // Cull clean children that fall outside the visible rect. By the rect
-        // the child can paint into rather than the one it was laid out in: a
-        // shadow falls outside the box that cast it, and a transform moves the
-        // box. Its own reach is what the two have in common.
-        if let Some(ref cull) = opts.cull_rect
-            && !self.tree().needs_paint(child_id)
-        {
+        // Cull children that fall outside the visible rect — dirty ones too.
+        // By the rect the child can paint into rather than the one it was laid
+        // out in: a shadow falls outside the box that cast it, and a transform
+        // moves the box. Its own reach is what the two have in common.
+        //
+        // A dirty child used to be exempt, because culling one jammed the walk
+        // in `mark_needs_paint`: its flag stayed set and every later mark
+        // stopped there. That is fixed, so the exemption is pure cost — a
+        // write to an offscreen row repainted it in full, into a region its
+        // scroller clips away, on every write and on the first frame. It keeps
+        // its flag while it waits, and `reuse_cached` refuses a dirty child
+        // its cache, so coming back into view still paints it.
+        if let Some(ref cull) = opts.cull_rect {
             let drawn = child_bounds.outset(self.tree().paint_overflow(child_id));
             if !cull.intersects(&drawn) {
                 crate::render_stats::record_paint_child_culled();
@@ -292,5 +298,86 @@ impl PaintContext<'_> {
         }
         crate::render_stats::record_paint_child_cached();
         true
+    }
+}
+
+#[cfg(test)]
+mod culling_a_dirty_child {
+    use crate::layout::{Constraints, Flex};
+    use crate::renderer::RenderNode;
+    use crate::tree::{Tree, WidgetId};
+    use crate::widgets::{Color, Scroll, Widget, container};
+
+    const MARKED: f32 = 60.0;
+
+    /// Whether anything of the marked width reached the render tree.
+    fn drew_the_marked_row(node: &RenderNode) -> bool {
+        (node.children.is_empty() && (node.bounds.width - MARKED).abs() < 0.01)
+            || node.children.iter().any(|c| drew_the_marked_row(c))
+    }
+
+    fn settle(tree: &mut Tree, id: WidgetId) {
+        tree.clear_needs_paint(id);
+        for child in tree.get_children(id).to_vec() {
+            settle(tree, child);
+        }
+    }
+
+    /// A row nobody can see is not painted because somebody wrote to it.
+    ///
+    /// The gate used to refuse to cull a child that was dirty, because culling
+    /// one jammed the mark walk: its flag stayed set, and the walk stopped
+    /// there for ever. With that fixed the refusal is pure cost — a write to
+    /// an offscreen row repainted it in full, every time, into a region the
+    /// scroller clips away. Coming back into view still repaints it: it keeps
+    /// the flag, and `reuse_cached` refuses a dirty child its cache.
+    #[test]
+    fn a_write_does_not_paint_a_row_nobody_can_see() {
+        crate::reactive::owner::create_root_owner();
+        let mut rows: Vec<_> = (0..20)
+            .map(|_| {
+                container()
+                    .width(120.0)
+                    .height(24.0)
+                    .background(Color::BLUE)
+            })
+            .collect();
+        rows[4] = container()
+            .width(MARKED)
+            .height(24.0)
+            .background(Color::rgb(1.0, 0.0, 0.0));
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .width(200.0)
+                .height(120.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column().spacing(8.0))
+                .children(rows),
+        ) as Box<dyn Widget>);
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 120.0));
+
+        let mut first = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut first);
+        assert!(
+            !drew_the_marked_row(&first),
+            "row four starts just past the fold, which is what makes this the case"
+        );
+
+        // What a frame leaves behind: everything it painted is settled.
+        settle(&mut tree, root);
+
+        let row = tree.get_children(root)[4];
+        tree.mark_needs_paint(row);
+
+        let mut second = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut second);
+        assert!(
+            !drew_the_marked_row(&second),
+            "a write to a row outside the viewport painted it anyway, into a \
+             region the scroller clips away"
+        );
     }
 }

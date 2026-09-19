@@ -284,3 +284,78 @@ fn the_window_widens_on_the_near_side_as_well() {
          edge of the search, which was not widened by what its children reach"
     );
 }
+
+/// A row that has never been painted can still bring itself into view.
+///
+/// The case #319 names, and the one the two tests above do not cover: they
+/// give the row its lift at build time, so the very first frame decides about
+/// a row that is already transformed. Here the lift arrives later, from a
+/// signal, and nothing on the way to it has ever painted.
+///
+/// The lifted box is a *child* of the row rather than the row itself, which
+/// is the harder half and the one a list actually has: the row between it and
+/// the scroller has never painted either, so it too holds a mark nothing has
+/// cleared. A fix that only reaches one level up passes the simpler
+/// arrangement and fails this.
+///
+/// Through a real loop rather than the harness, because what is being asked is
+/// whether the *write* reaches the row — and the answer travels as a job, which
+/// only a loop drains. The harness above repaints on command and would report
+/// that nothing had changed however well the subscription worked.
+#[cfg(feature = "testing")]
+mod through_a_real_loop {
+    use super::*;
+    use guido::testing::Headless;
+
+    /// Whether anything red was drawn, anywhere down the middle of the surface.
+    fn shows_the_marked_row(app: &Headless, surface: guido::surface::SurfaceId) -> bool {
+        (0..VIEWPORT as u32).any(|y| {
+            let [r, g, b, _] = app.read_pixel(surface, 20, y);
+            r > 128 && g < 100 && b < 100
+        })
+    }
+
+    #[test]
+    fn a_row_that_never_painted_can_still_lift_itself_into_view() {
+        let Some(mut app) = common::headless() else {
+            return;
+        };
+
+        let lift = create_signal(0.0f32);
+        let surface = app.surface(
+            SurfaceConfig::new()
+                .height(VIEWPORT as u32)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+            move || {
+                let mut rows = rows(20);
+                rows[15] = container().width(ROW_WIDTH).height(ROW_HEIGHT).child(
+                    container()
+                        .width(MARKED_WIDTH)
+                        .height(ROW_HEIGHT)
+                        .background(Color::rgb(1.0, 0.0, 0.0))
+                        .translate(move || Translate::new(0.0, lift.get())),
+                );
+                scroller(rows)
+            },
+        );
+        app.configure(surface, 200, VIEWPORT as u32, 1.0);
+        let mut at = std::time::Instant::now();
+        app.step_at(at);
+
+        assert!(
+            !shows_the_marked_row(&app, surface),
+            "the row starts below the fold, which is what makes this the case"
+        );
+
+        lift.set(-ROW_LIFT);
+        at += std::time::Duration::from_millis(16);
+        app.step_at(at);
+
+        assert!(
+            shows_the_marked_row(&app, surface),
+            "the row asked to be somewhere it could be seen and was not \
+             painted: it had never painted, so on the old rule it had read \
+             nothing, and the write reached no one"
+        );
+    }
+}
