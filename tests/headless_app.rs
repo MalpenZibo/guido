@@ -530,6 +530,49 @@ fn a_hole_passes_clicks_through_a_surface_that_otherwise_takes_them() {
     assert!(app.input_reaches(surface, 150.0, 40.0), "the bar around it");
 }
 
+/// A turned island takes clicks where it is, not over the square it sits in.
+///
+/// An 80×80 island turned 45° has a 113×113 bounding box: read as that box it
+/// claims 56% more area than it drew, and every click in the four triangles
+/// lands on a panel that is not there while the desktop below never hears it.
+/// The region is tessellated from the placed shape now, so the corners of the
+/// box belong to whatever is underneath again.
+#[test]
+fn a_turned_island_takes_input_where_it_is_drawn() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .rotate(45.0)
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 120, 1.0);
+    app.step();
+
+    // The island is laid out at the top-left and turned about its own centre,
+    // so it is a diamond with its points at the edges of an 80×80 box.
+    assert!(
+        app.input_reaches(surface, 40.0, 40.0),
+        "the middle of the diamond is the island"
+    );
+    assert!(
+        app.input_reaches(surface, 40.0, 10.0),
+        "and so is the space under its top point"
+    );
+    assert!(
+        !app.input_reaches(surface, 5.0, 5.0),
+        "but the box's top-left corner is 28 pixels of nothing, and used to \
+         swallow the click"
+    );
+    assert!(
+        !app.input_reaches(surface, 75.0, 75.0),
+        "as was its bottom-right"
+    );
+}
+
 /// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
 /// widget was laid out in, which is why the region could never follow one.
 #[test]
