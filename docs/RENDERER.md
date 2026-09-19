@@ -292,8 +292,9 @@ where the shape starts and stops on that line. A rotation is not a case — it i
 whatever the matrix holds — so the upright answer falls out of the same
 arithmetic rather than beside it.
 
-Bands are half a pixel, and adjacent bands that round to the same span merge
-back into one rectangle. That is what keeps an upright panel at a handful of
+Bands are one pixel — finer than that cannot produce a row the output can tell
+apart — and adjacent bands that round to the same span merge back into one
+rectangle. That is what keeps an upright panel at a handful of
 rects instead of one per band.
 
 **The clip is a shape here too**, and the only consumer where it is. Both are

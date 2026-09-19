@@ -1449,6 +1449,27 @@ mod world_geometry_tests {
     /// produced before any of this carried a transform.
     ///
     /// The wall [`intersect_clips`] documents at length.
+    /// And the corners of those boxes cut at least as deep as the ellipses they
+    /// stand for, so the fallback stays inside the shape rather than reaching
+    /// past it. The larger axis, not the mean of the two — under a uniform
+    /// scale they agree, which is why every other test here cannot tell.
+    #[test]
+    fn a_flattened_clip_rounds_by_the_larger_axis() {
+        let clip = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            CornerRadii::uniform(10.0),
+            1.0,
+            Transform::scale_xy(3.0, 1.0),
+        );
+
+        assert_eq!(
+            clip.world_radii().top_left,
+            30.0,
+            "the corner is 30 wide and 10 tall; cutting 30 stays inside it, and \
+             cutting the mean of 17.3 would round less than the shape does"
+        );
+    }
+
     #[test]
     fn two_clips_turned_differently_fall_back_to_their_boxes() {
         let a = PlacedShape {

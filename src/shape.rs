@@ -102,14 +102,25 @@ impl PlacedShape {
     /// Beside [`world_aabb`](Self::world_aabb) because they are one answer:
     /// the box and the corners of the box.
     ///
-    /// One radius per corner, so an unevenly scaled corner — an ellipse — is
-    /// approximated by the geometric mean of its two axes. Nothing that has a
-    /// choice reads this: the shader tests in the shape's own space where the
-    /// corner is a circle again, and the tessellator cuts the placed shape
-    /// rather than a box with radii bolted on.
+    /// One radius per corner, so an unevenly scaled corner — an ellipse — has
+    /// to be approximated. **The larger axis, not the mean of the two**: a
+    /// corner that cuts at least as much as the ellipse leaves a region inside
+    /// the shape it stands for, and blurs slightly less than it should. The
+    /// other way round it blurs where nothing is drawn, which is the whole
+    /// class of bug this type exists to close.
+    ///
+    /// The mean is what the geometric `extract_scale` gives and what this
+    /// briefly returned when the elliptical radii were deleted — a direction
+    /// change nobody asked for, in the one place still allowed to approximate.
+    ///
+    /// Nothing that has a choice reads this: the shader tests in the shape's
+    /// own space where the corner is a circle again, and the tessellator cuts
+    /// the placed shape rather than a box with radii bolted on. It is the
+    /// fallback's approximation and nothing else.
     #[inline]
     pub(crate) fn world_radii(&self) -> CornerRadii {
-        self.radii.scaled(self.placement.extract_scale())
+        let (sx, sy) = self.placement.extract_scale_components();
+        self.radii.scaled(sx.max(sy))
     }
 
     /// This shape reduced to its world box — what a clip would have been
@@ -139,6 +150,31 @@ impl PlacedShape {
         clamp_radii(self.radii, self.rect.width, self.rect.height)
     }
 
+    /// How far each corner eats into its sides, for the purpose of cutting an
+    /// outline that stays *inside* the shape.
+    ///
+    /// The declared radius, except where the corner is concave. A negative
+    /// curvature is a **scoop**: the shader takes a disc of radius `r` out of
+    /// the square corner, so the shape reaches almost to the corner along each
+    /// edge and is bitten away around the diagonal. A chord between the two
+    /// points at distance `r` passes within `r/√2` of the corner — straight
+    /// through the bite — so it publishes a crescent nothing drew, which is
+    /// the same over-claim the chord exists to prevent for a bevel.
+    ///
+    /// A line tangent to that disc never enters it, and tangency is `r·√2`
+    /// along each axis. Clamped by the same proportional rule, so two chords
+    /// on one side still cannot cross.
+    fn outline_radii(&self) -> CornerRadii {
+        if self.curvature >= 0.0 {
+            return self.clamped_radii();
+        }
+        clamp_radii(
+            self.radii.scaled(std::f32::consts::SQRT_2),
+            self.rect.width,
+            self.rect.height,
+        )
+    }
+
     /// Where the shape starts and stops, vertically, on the surface.
     #[inline]
     pub(crate) fn y_bounds(&self) -> (f32, f32) {
@@ -152,7 +188,7 @@ impl PlacedShape {
     /// widget's own space, so the two only mean the same thing at a scale of
     /// one: a corner of 0.4 under a `scale(8.0)` is three pixels of curve.
     pub(crate) fn is_a_box(&self) -> bool {
-        self.placement.keeps_axes() && self.smallest_corner_on_surface() <= 0.5
+        self.placement.keeps_axes() && self.largest_corner_on_surface() <= 0.5
     }
 
     /// The largest corner this shape has, measured where it will be drawn.
@@ -160,9 +196,9 @@ impl PlacedShape {
     /// Only meaningful once [`keeps_axes`](Transform::keeps_axes) holds, which
     /// is what makes the larger of the two factors the whole of what the
     /// transform does to a radius.
-    fn smallest_corner_on_surface(&self) -> f32 {
+    fn largest_corner_on_surface(&self) -> f32 {
         let (sx, sy) = self.placement.extract_scale_components();
-        self.clamped_radii().max() * sx.max(sy)
+        self.outline_radii().max() * sx.max(sy)
     }
 
     /// The outline, transformed once and ready to be asked about scanlines.
@@ -182,7 +218,7 @@ impl PlacedShape {
     /// clicks there. The chord between the arc's two ends is inside every
     /// superellipse with `k >= 0`, and is exactly the bevel itself.
     pub(crate) fn outline(&self) -> Outline {
-        let r = self.clamped_radii();
+        let r = self.outline_radii();
         let (x0, y0) = (self.rect.x, self.rect.y);
         let (x1, y1) = (x0 + self.rect.width, y0 + self.rect.height);
 

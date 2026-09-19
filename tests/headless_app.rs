@@ -931,6 +931,64 @@ fn blurring(on: RwSignal<bool>, tint: RwSignal<Color>) -> Container {
         }))
 }
 
+/// A turned card publishes the shape it drew, not the box around it.
+///
+/// This is the half of #198 the issue's own title is about, and it is the half
+/// that had no end-to-end test: the tessellator is covered in `region.rs` and
+/// the *input* region got a headless twin, but nothing asked what the
+/// compositor is actually handed for a rotated `backdrop_blur`. Wiring the
+/// wrong transform into `blur.rs` would have left every test green.
+///
+/// A 100×100 card turned 45° is a diamond with a 141×141 box. The rectangles
+/// published must cover its middle and leave the box's corners to the desktop.
+#[test]
+fn a_turned_compositor_blur_publishes_its_shape() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(100.0)
+                .height(100.0)
+                .rotate(45.0)
+                .backdrop_blur(BackdropBlur::new(8.0).sources(BackdropSources::COMPOSITOR)),
+        )
+    });
+    app.configure(surface, 220, 220, 1.0);
+    app.step();
+
+    let published = app
+        .blur_regions_asked(surface)
+        .last()
+        .expect("the frame that blurs publishes a region")
+        .clone();
+    assert!(!published.is_empty());
+
+    let covers = |x: f32, y: f32| {
+        published
+            .iter()
+            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
+    };
+
+    assert!(covers(50.0, 50.0), "the middle of the diamond is blurred");
+    assert!(
+        covers(50.0, 12.0),
+        "and the space under its top point is too"
+    );
+    // The box runs from about -20 to 120 on each axis; its corners are ~28
+    // pixels of desktop the card never covered.
+    for (x, y) in [
+        (-12.0, -12.0),
+        (112.0, -12.0),
+        (-12.0, 112.0),
+        (112.0, 112.0),
+    ] {
+        assert!(
+            !covers(x, y),
+            "({x}, {y}) is a corner of the bounding box, not of the card"
+        );
+    }
+}
+
 /// The region is handed to the compositor, not only computed — every test of
 /// what a region contains stops at the command list. And a blur that goes away
 /// is withdrawn on the frame it went, with an empty region, and then nothing

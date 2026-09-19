@@ -56,10 +56,11 @@ impl RegionRect {
 /// Approximate a placed rounded rectangle as a union of axis-aligned rects that
 /// **inscribe** the shape, narrowed to `clip`.
 ///
-/// Half-pixel bands, because that is fine enough that the straight parts round
-/// to the same integers and merge back into one rectangle, while a curve moves
-/// by about a pixel a band and does not. The merging is what keeps an upright
-/// panel at a handful of rectangles instead of one per band.
+/// A band per pixel, because that is what the output can tell apart: adjacent
+/// bands that round to the same span merge back into one rectangle, so the
+/// straight parts collapse and a curve — moving about a pixel a band — does
+/// not. The merging is what keeps an upright panel at a handful of rectangles
+/// instead of one per band.
 ///
 /// **The clip is a shape too.** Both are convex, so at any scanline the
 /// overlap is the overlap of the two spans — which is exact, turned clip or
@@ -667,6 +668,62 @@ mod tests {
             area(corner(0.0)) < area(corner(1.0)),
             "a bevel takes more off the corner than a circle does"
         );
+    }
+
+    /// A concave corner is cut outside the bite, not through it.
+    ///
+    /// `Corners::scoop` is K = -1, and the shader draws it as the square corner
+    /// **minus a disc** of the same radius centred on that corner — so the
+    /// shape reaches nearly to the corner along each edge and is bitten away
+    /// around the diagonal. It is the one corner that is *not* a subset of the
+    /// square, and the chord that makes a bevel safe runs straight through the
+    /// bite: at `r/√2` from the corner, well inside a disc of `r`.
+    ///
+    /// So the chord retreats to where it is tangent, `r·√2` along each axis,
+    /// and the straight edges retreat with it — an edge that stopped at `r`
+    /// would cover the bite on its own.
+    ///
+    /// Checked against what the shader actually draws rather than against a
+    /// radius: in the box, and no nearer any corner than its own radius.
+    #[test]
+    fn a_scooped_corner_is_cut_outside_the_bite() {
+        let (w, h, r) = (120.0f32, 90.0f32, 28.0f32);
+        let rects = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, w, h),
+                round(r),
+                -1.0,
+                Transform::IDENTITY,
+            ),
+            None,
+        );
+        assert!(!rects.is_empty(), "a scooped box is not empty");
+
+        for rect in &rects {
+            for (px, py) in [
+                (rect.x, rect.y),
+                (rect.x + rect.width, rect.y),
+                (rect.x, rect.y + rect.height),
+                (rect.x + rect.width, rect.y + rect.height),
+            ] {
+                let (px, py) = (px as f32, py as f32);
+                assert!(
+                    (-0.5..=w + 0.5).contains(&px) && (-0.5..=h + 0.5).contains(&py),
+                    "({px}, {py}) is outside the box"
+                );
+                for (cx, cy) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)] {
+                    let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                    assert!(
+                        d >= r - 0.75,
+                        "({px}, {py}) is {d} from the scooped corner ({cx}, {cy}), \
+                         inside a bite of {r}"
+                    );
+                }
+            }
+        }
+
+        // And it still publishes the middle, rather than retreating to nothing.
+        assert!(covers(&rects, 60, 45));
     }
 
     // -- clipped shapes -------------------------------------------------

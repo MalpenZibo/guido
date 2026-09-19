@@ -70,7 +70,7 @@ mod tests {
                 sources: BackdropSources::COMPOSITOR,
                 radius: 0.0,
                 corner_radii: CornerRadii::uniform(0.0),
-                curvature: Default::default(),
+                curvature: 1.0,
             }),
             world_transform: Default::default(),
             world_transform_origin: None,
