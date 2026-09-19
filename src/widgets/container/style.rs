@@ -253,19 +253,32 @@ impl Container {
     /// over the shadow-inflated box is also what makes `scale` scale the
     /// shadow.
     ///
-    /// Every read here is `_untracked`, and it has to be. Layout runs a child
-    /// inside its *parent's* scope, so a tracked read registers against
-    /// whichever ancestor is innermost and reflows that one — which is why
-    /// `a_transform_does_not_reflow_the_parent_either` asks the parent rather
-    /// than the container that declared the transform, and why being outside a
-    /// scope of one's own is not enough. `snapshot_zone` is not enough either:
-    /// it silences the non-reactive-read diagnostic and leaves the read
-    /// tracked.
+    /// The declared transform and the pivot are read *tracked*, and both
+    /// callers of
+    /// `Container::refresh_paint_bounds` open this container's own *Paint*
+    /// scope around it — the Paint job in `jobs.rs`, and `Tree::layout_widget`
+    /// after the Layout scope has closed. So a write to a transform marks the
+    /// container that declared it for repaint, and marks nothing for layout.
     ///
-    /// What keeps the value current is not a subscription but the schedule:
-    /// `Container::refresh_paint_bounds` runs from the Paint job that the
-    /// declaring write already queues, in the pass before this frame paints.
-    /// Blink resolves its transforms in the same gap, for the same reason.
+    /// They were `_untracked` until #319, and the reason given was that layout
+    /// ran a child inside its *parent's* scope, so a tracked read would
+    /// register against an ancestor and reflow it. #387 ended that: a child is
+    /// laid out through one call that opens the child's own scope. What was
+    /// left was a widget culled before it ever painted, which had read nothing
+    /// and so could never be told to come back —
+    /// `a_row_that_never_painted_can_still_lift_itself_into_view`.
+    ///
+    /// The schedule still carries the ordinary case: the publish runs in the
+    /// pass before this frame paints, as Blink resolves its transforms in the
+    /// same gap. The subscription is what covers the case the schedule cannot
+    /// reach. `a_transform_does_not_reflow_the_parent_either` is still what
+    /// says the marking lands on the right widget and the right pass.
+    ///
+    /// The state-layer transforms below stay snapshots. A hover or a press
+    /// cannot arrive at a widget nobody can see, so subscribing to them would
+    /// buy nothing the schedule does not already cover — and would put every
+    /// container that declares `when_hovered` on its own hover signal from
+    /// the reach path, which is a wider fan-out than the case needs.
     pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: f32) -> f32 {
         let moves = self.moving_components();
         if !moves.any() {
@@ -278,14 +291,14 @@ impl Container {
         // taken against `painted` would report the excursion beyond the shadow
         // and lose its width.
         let painted = bounds.outset(shadow_extent);
-        let pivot = self.resolved_pivot_untracked();
+        let pivot = self.resolved_pivot_quietly();
         let anims = self.anims.as_ref();
 
         let base_translate = self
             .translate_signal()
-            .get_finite_or_untracked(Translate::NONE);
-        let base_rotate = self.rotate_signal().get_finite_or_untracked(0.0);
-        let base_scale = self.scale_signal().get_finite_or_untracked(Scale::NONE);
+            .get_finite_or_quietly(Translate::NONE);
+        let base_rotate = self.rotate_signal().get_finite_or_quietly(0.0);
+        let base_scale = self.scale_signal().get_finite_or_quietly(Scale::NONE);
         let base = Transform::compose(base_translate, base_rotate, base_scale);
         let mut reach = outset_of(base, painted, bounds, pivot);
 
@@ -380,11 +393,12 @@ impl Container {
             .get_finite_or(Pivot::CENTER, id, "pivot")
     }
 
-    /// The same, for the reach calculation, which reads a snapshot rather than
-    /// subscribing — and says nothing, because the paint that reports it is
-    /// reading the same signal in the same frame and one warning is the point.
-    pub(super) fn resolved_pivot_untracked(&self) -> Pivot {
-        self.pivot_signal().get_finite_or_untracked(Pivot::CENTER)
+    /// The same, for the reach calculation: it subscribes like the paint
+    /// beside it, and says nothing about a value that is not a number, because
+    /// that paint is reading the same signal in the same frame and one warning
+    /// is the point.
+    pub(super) fn resolved_pivot_quietly(&self) -> Pivot {
+        self.pivot_signal().get_finite_or_quietly(Pivot::CENTER)
     }
 
     /// The declared padding, coerced like every other property.

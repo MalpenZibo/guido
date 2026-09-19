@@ -519,11 +519,17 @@ impl Container {
     /// Where a transform can carry what this container draws, published for
     /// whoever is about to decide whether to paint it.
     ///
-    /// Read outside any tracking scope on purpose. The transform components
-    /// belong to paint, and subscribing layout to them would make
-    /// `.translate(move || ..)` reflow on every write. What keeps the answer
-    /// current instead is that the same write schedules a Paint job, and
-    /// `refresh_paint_bounds` runs from that job before this frame paints.
+    /// Read inside this widget's own *Paint* scope, which both callers of
+    /// `refresh_paint_bounds` open around it. The transform components belong
+    /// to paint, and subscribing *layout* to them would make
+    /// `.translate(move || ..)` reflow on every write — which is why the scope
+    /// is the Paint one and not whichever happens to be open.
+    ///
+    /// The schedule still carries the ordinary case: the same write queues a
+    /// Paint job, and `refresh_paint_bounds` runs from it before this frame
+    /// paints. The subscription is for the case the schedule cannot reach — a
+    /// widget culled before it ever painted, whose paint never ran to read
+    /// anything (#319).
     fn publish_paint_reach(&self, tree: &mut Tree, id: WidgetId, bounds: Rect) {
         let shadow_extent = self.shadow_reach.get();
         // Only this container's own half. What its children add is
