@@ -256,6 +256,13 @@ gaussian passes ping-ponging between two working textures, then a composite
 back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
+The viewport is the shape's world box, because a viewport is four integers and
+has no other shape to be. The **mask** is the shape: `BackdropRegion` carries it
+in the container's own space along with the map back there, and the composite
+carries each fragment into that space before testing it — so a turned container
+frosts what it drew instead of an upright rounded rect the size of its box.
+That map is `Transform::physical_inverse`, the same one a clip uses.
+
 The mask is the one part a caller replaces. `Text::backdrop_blur` emits
 `DrawCommand::TextBackdropBlur`, which resolves to the same blur with a
 coverage texture in place of the SDF: the glyphs are rasterized into it by
@@ -264,6 +271,49 @@ text drawn afterwards, one texel per pixel of a region snapped to the pixel
 grid. Sub-pixel position is handed to the mask as its glyph origin rather than
 rounded away, and a text under a rotation or scale is skipped — the mask is
 axis-aligned.
+
+### Regions
+
+Two things travel from a frame to the compositor as a `wl_region`: the backdrop
+blur's area and the surface's input region. Both are read off the flattened
+commands, and both go through one tessellation in `src/region.rs`.
+
+`wl_region` is a union of axis-aligned rectangles, so a rounded or turned shape
+has to become one — but *which* rectangles is the question, and the answer used
+to be the single box containing it. A 150×90 card turned 20° has a 172×136 box,
+73% more area: the compositor blurred the desktop in four triangles where the
+card is not, and a container that declared an input region took clicks over the
+same ground.
+
+`placed_shape_to_rects` takes the shape as declared plus the transform that
+places it, and cuts bands out of the outline. The outline is four straight edges
+and four corner arcs, each transformed; where a horizontal line meets it is
+where the shape starts and stops on that line. A rotation is not a case — it is
+whatever the matrix holds — so the upright answer falls out of the same
+arithmetic rather than beside it.
+
+Bands are one pixel — finer than that cannot produce a row the output can tell
+apart — and adjacent bands that round to the same span merge back into one
+rectangle. That is what keeps an upright panel at a handful of
+rects instead of one per band.
+
+**The clip is a shape here too**, and the only consumer where it is. Both are
+convex, so at any scanline the overlap is the overlap of the two spans — exact,
+turned clip or not, and it gets the corners right for free: a card filling a
+rounded scroller is cornered by the scroller, where a box intersection would
+publish the scroller's square corners.
+
+**One clip, though.** What arrives is `effective_clip`, which `intersect_clips`
+has already collapsed — two clips in differently-turned spaces were reduced to
+the box around both before the tessellator saw them, and #397 still costs what
+it costs. What this consumer escapes is the *shape against clip* box
+intersection, not the clip chain's own.
+
+**`clamp_radii` and the shader disagree** for per-corner radii: this uses the
+proportional CSS `border-radius` rule and the shader clamps each corner
+independently. They agree for a uniform radius and diverge only where two
+corners on one side would overlap — a shape already at its limit — where the
+region can reach slightly outside the drawn shape.
 
 ### FlattenedCommand
 
@@ -275,25 +325,30 @@ pub struct FlattenedCommand {
     pub world_transform: Transform,
     pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
-    pub clip: Option<PlacedClip>,
+    pub clip: Option<PlacedShape>,
 }
 ```
 
-### PlacedClip
+### PlacedShape
 
-A clip as the widget that declared it wrote it, plus the transform that puts it
-on the screen. It was named for world space up to this change, and the one
-assertion that name made — `rect` is in world coordinates — is exactly what the
-change inverted:
+A rounded rect as its widget declared it, plus the transform that puts it on the
+screen — in `src/shape.rs`:
 
 ```rust
-pub struct PlacedClip {
-    pub rect: Rect,                 // in the clip owner's own space
-    pub corner_radius: CornerRadii, // in that same space
+pub struct PlacedShape {
+    pub rect: Rect,          // in the declaring widget's own space
+    pub radii: CornerRadii,  // in that same space
     pub curvature: f32,
-    pub placement: Transform,       // clip space -> world
+    pub placement: Transform, // that space -> world
 }
 ```
+
+**One type, because a clip and a region are the same object.** A clip is a
+rounded rect and a transform; so is the area a backdrop blur filters, and so is
+the region a surface takes input in. They were two structs with the same four
+fields under two names, and the seam showed at the one call site that held
+both: a region tessellated its own shape exactly and then asked the clip beside
+it for a bounding box, because only one of the two knew how to be a shape.
 
 It used to be a world-space rect, mapped through the transform — which is an
 enclosing *box*, equal to the shape only for a transform that keeps the axes.
@@ -304,10 +359,10 @@ Keeping the declaration answers every consumer:
 
 | consumer | how it reads the clip |
 | --- | --- |
-| the shape shader | `physical_to_clip(scale)` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
+| the shape shader | `PlacedShape::to_local` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
 | text (`text_quad.rs`, glyphon) | `world_aabb()` — glyphon clips to four integers, so text still gets the box (#199) |
-| compositor blur and input regions | `world_aabb()`, tessellated — a `wl_region` is a union of rectangles (#198) |
+| compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline rather than as a box. The clip *chain* is still collapsed before it arrives (#397) |
 
 What one rect and one matrix cannot express is **two clips in two different
 rotated spaces**. `intersect_clips` rebases the second onto the first when
@@ -393,7 +448,7 @@ instance.corner_radius = radius * scale;
 
 **The clip is the exception.** `clip_rect` and `clip_radii` stay in the logical
 units the widget declared them in, because the fragment is carried back to meet
-them: `physical_to_clip(scale)` folds the surface scale into the inverse matrix.
+them: `PlacedShape::to_local` folds the surface scale into the inverse matrix.
 Scaling them here as well would apply the scale twice and clip a HiDPI surface
 to a quarter of its viewport. `the_surface_scale_is_undone_once` in
 `src/renderer/flatten.rs` is what says so.

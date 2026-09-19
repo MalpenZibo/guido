@@ -25,10 +25,10 @@ mod text_measurer;
 mod text_quad;
 mod textured_quad;
 mod textured_vertex;
-mod tree;
+pub(crate) mod tree;
 mod types;
 
-pub use commands::{Border, CornerRadii, DrawCommand, EllipticalRadii};
+pub use commands::{Border, CornerRadii, DrawCommand};
 pub use flatten::{CommandLayer, FlattenedCommand, RegionsCarried, flatten_root_into};
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;

@@ -412,6 +412,28 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// This placement undone, for a consumer working in physical pixels while
+    /// the space it places is written in logical ones.
+    ///
+    /// The surface scale multiplies the world *after* the placement has been
+    /// applied, so undoing it is this transform's inverse composed with a
+    /// shrink — which reaches the matrix and not the offset. Whatever is
+    /// written in the placed space keeps the logical units it was written in,
+    /// and scaling that as well would apply the surface scale twice.
+    ///
+    /// `None` where there is no inverse: a collapsed placement maps every point
+    /// onto a line, and nothing can be carried back through it.
+    ///
+    /// The identity is most placements in most frames, and taking it the long
+    /// way is a reciprocal and twelve multiplies to arrive back at a shrink.
+    #[inline]
+    pub fn physical_inverse(&self, scale: f32) -> Option<Self> {
+        if self.is_identity() {
+            return Some(Self::scale(1.0 / scale));
+        }
+        Some(self.inverse()?.then_scale(1.0 / scale))
+    }
+
     /// Whether this keeps a rect a rect the same way round — no turn, no skew,
     /// no flip.
     ///
@@ -472,12 +494,10 @@ impl Transform {
     /// two **rows**.
     ///
     /// This is not "the scale the transform was built from", and reading it
-    /// that way is how it has been got wrong twice. Its caller pairs the result
-    /// with a world-space axis-aligned box: `EllipticalRadii::x` is a
-    /// *horizontal* semi-axis and `::y` a *vertical* one, so the question is how
-    /// wide and how tall a corner becomes, not how much each of the transform's
-    /// own axes was stretched. Under a rotation those are different numbers,
-    /// and only the first one has a caller.
+    /// that way is how it has been got wrong twice. A caller pairs the result
+    /// with a world-space axis-aligned box, where the question is how wide and
+    /// how tall a corner becomes rather than how much each of the transform's
+    /// own axes was stretched. Under a rotation those are different numbers.
     ///
     /// Rows answer it exactly, for any affine and any composition order,
     /// because the image of the unit circle is

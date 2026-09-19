@@ -7,7 +7,9 @@
 //! the axis-aligned rectangles that stand in for a shape the protocol has no
 //! way to describe. That translation lives here so there is one of it.
 
-use crate::renderer::{CornerRadii, DrawCommand, EllipticalRadii, FlattenedCommand};
+use crate::renderer::{CornerRadii, DrawCommand, FlattenedCommand};
+use crate::shape::PlacedShape;
+
 use crate::widgets::Rect;
 
 /// An axis-aligned rectangle of a region, in logical surface pixels.
@@ -51,120 +53,128 @@ impl RegionRect {
     }
 }
 
-/// Approximate a rounded rectangle as a union of axis-aligned rects that
-/// **inscribe** the shape. Zero radii or a degenerate rectangle yield the
-/// bounding box.
+/// Approximate a placed rounded rectangle as a union of axis-aligned rects that
+/// **inscribe** the shape, narrowed to `clip`.
 ///
-/// Every corner separately, and every corner an ellipse: a shape cut square on
-/// one side by a clip must not be tessellated as though that side were round,
-/// which loses a wedge the size of the radius along the cut.
+/// A band per pixel, because that is what the output can tell apart: adjacent
+/// bands that round to the same span merge back into one rectangle, so the
+/// straight parts collapse and a curve — moving about a pixel a band — does
+/// not. The merging is what keeps an upright panel at a handful of rectangles
+/// instead of one per band.
 ///
-/// `bounds` is in logical surface pixels, matching what `wl_region` expects.
-pub(crate) fn rounded_rect_to_rects(bounds: Rect, radii: EllipticalRadii) -> Vec<RegionRect> {
-    if bounds.width <= 0.0 || bounds.height <= 0.0 {
+/// **The clip is a shape too.** Both are convex, so at any scanline the
+/// overlap is the overlap of the two spans — which is exact, turned clip or
+/// not, and gets the corners right for free. A card filling a rounded scroller
+/// is cornered by the scroller: publishing the scroller's square box instead
+/// blurs the desktop in the four corners where the panel is not drawn, and
+/// squaring off the card's own corners along a cut edge is the same mistake
+/// the other way.
+///
+/// The coordinates are logical surface pixels, which is what `wl_region`
+/// expects.
+pub(crate) fn placed_shape_to_rects(
+    shape: PlacedShape,
+    clip: Option<PlacedShape>,
+) -> Vec<RegionRect> {
+    if shape.rect.width <= 0.0 || shape.rect.height <= 0.0 {
         return Vec::new();
     }
 
-    let (w, h) = (bounds.width, bounds.height);
-    let (rx, ry) = clamp_radii(radii, w, h);
-
-    // How far each side is eaten into at height `y`, by whichever corner on that
-    // side reaches it. Zero between the bands, and correct where a shape short
-    // enough for its corners to meet has both reaching the same height.
-    let left = |y: f32| {
-        corner_inset(y, rx.top_left, ry.top_left).max(corner_inset(
-            h - y,
-            rx.bottom_left,
-            ry.bottom_left,
-        ))
-    };
-    let right = |y: f32| {
-        corner_inset(y, rx.top_right, ry.top_right).max(corner_inset(
-            h - y,
-            rx.bottom_right,
-            ry.bottom_right,
-        ))
-    };
-
-    let band_top = ry.top_left.max(ry.top_right);
-    let band_bottom = ry.bottom_left.max(ry.bottom_right);
-    if band_top <= 0.5 && band_bottom <= 0.5 {
-        return Vec::from_iter(to_region_rect(bounds));
+    let (mut top, mut bottom) = shape.y_bounds();
+    if let Some(clip) = clip {
+        let (clip_top, clip_bottom) = clip.y_bounds();
+        top = top.max(clip_top);
+        bottom = bottom.min(clip_bottom);
+    }
+    let height = bottom - top;
+    if height <= 0.0 {
+        return Vec::new();
     }
 
-    let mut out = Vec::new();
-
-    // The straight middle is one rect rather than a stack of slabs.
-    if h - band_bottom > band_top {
-        out.extend(to_region_rect(Rect::new(
-            bounds.x,
-            bounds.y + band_top,
-            w,
-            h - band_top - band_bottom,
-        )));
+    // A square upright shape is its own rectangle, and a square upright clip
+    // cuts it to another one.
+    //
+    // The band loop below would arrive at the same answer — it merges bands
+    // that round alike, and for a square shape that is all of them — but it
+    // would take about six microseconds to do it, against twenty nanoseconds
+    // here. That is per region, per frame, and a bar of thirty pills declaring
+    // input regions pays it thirty times. Worth a branch.
+    if shape.is_a_box() && clip.is_none_or(|c| c.is_a_box()) {
+        let boxed = shape.world_aabb();
+        let boxed = match clip {
+            Some(clip) => intersection(boxed, clip.world_aabb()),
+            None => Some(boxed),
+        };
+        return boxed.and_then(to_region_rect).into_iter().collect();
     }
 
-    let emit_band = |y_start: f32, y_end: f32, out: &mut Vec<RegionRect>| {
-        let band_h = y_end - y_start;
-        if band_h <= 0.0 {
-            return;
+    let outline = shape.outline();
+    let clip_outline = clip.map(|clip| clip.outline());
+
+    // At a scanline: where the shape is, narrowed to where the clip is.
+    let span = |y: f32| -> Option<(f32, f32)> {
+        let (mut left, mut right) = outline.span_at(y)?;
+        if let Some(ref clip) = clip_outline {
+            let (clip_left, clip_right) = clip.span_at(y)?;
+            left = left.max(clip_left);
+            right = right.min(clip_right);
         }
-        let steps = (band_h.ceil() as u32).clamp(4, 32);
-        let slab_h = band_h / steps as f32;
-        for i in 0..steps {
-            let y0 = y_start + i as f32 * slab_h;
-            let y1 = y0 + slab_h;
-            // Widest inset within the slab keeps it inside the curve.
-            let (l, r) = (left(y0).max(left(y1)), right(y0).max(right(y1)));
-            let slab_w = w - l - r;
-            if slab_w <= 0.0 {
-                continue;
+        (left < right).then_some((left, right))
+    };
+
+    // One band per pixel: `to_region_rect` rounds each band's edges to whole
+    // numbers, so a band finer than a pixel cannot produce a row the output can
+    // tell apart — it only tightens the inscribed span by a fraction. Half-pixel
+    // bands cost twice the spans for that fraction, which on a small shape is
+    // the whole of the work.
+    let bands = (height.ceil() as usize).clamp(4, 512);
+    let band_h = height / bands as f32;
+
+    let mut out: Vec<RegionRect> = Vec::new();
+    // Every interior boundary is shared by the band above and the band below,
+    // so each span is computed once and carried forward.
+    let mut upper = span(top);
+    for i in 0..bands {
+        let y0 = top + i as f32 * band_h;
+        let lower = span(y0 + band_h);
+        let (Some((a0, b0)), Some((a1, b1))) = (upper, lower) else {
+            upper = lower;
+            continue;
+        };
+        upper = lower;
+        // The tighter of the band's two edges keeps the slab inside the curve:
+        // both shapes are convex, so between them neither is narrower.
+        let (left, right) = (a0.max(a1), b0.min(b1));
+        if right <= left {
+            continue;
+        }
+        let Some(rect) = to_region_rect(Rect::new(left, y0, right - left, band_h)) else {
+            continue;
+        };
+        // Bands that rounded to the same span are one rectangle — which is the
+        // whole straight middle of an upright shape, and nothing at all of a
+        // turned one.
+        match out.last_mut() {
+            Some(prev)
+                if prev.x == rect.x
+                    && prev.width == rect.width
+                    && prev.y + prev.height == rect.y =>
+            {
+                prev.height += rect.height;
             }
-            out.extend(to_region_rect(Rect::new(
-                bounds.x + l,
-                bounds.y + y0,
-                slab_w,
-                slab_h,
-            )));
+            _ => out.push(rect),
         }
-    };
-
-    emit_band(0.0, band_top, &mut out);
-    // Starting where the top band ended, so corners tall enough to meet in a
-    // short shape are tessellated once rather than twice.
-    emit_band((h - band_bottom).max(band_top), h, &mut out);
-
+    }
     out
 }
 
-/// Shrink radii until no two sharing an edge can overlap, all by one factor so
-/// the shape keeps its proportions — the rule CSS `border-radius` uses.
-fn clamp_radii(radii: EllipticalRadii, w: f32, h: f32) -> (CornerRadii, CornerRadii) {
-    let non_negative = |r: CornerRadii| CornerRadii {
-        top_left: r.top_left.max(0.0),
-        top_right: r.top_right.max(0.0),
-        bottom_right: r.bottom_right.max(0.0),
-        bottom_left: r.bottom_left.max(0.0),
-    };
-    let (rx, ry) = (non_negative(radii.x), non_negative(radii.y));
-
-    let ratio = |extent: f32, sum: f32| if sum > extent { extent / sum } else { 1.0 };
-    let f = ratio(w, rx.top_left + rx.top_right)
-        .min(ratio(w, rx.bottom_left + rx.bottom_right))
-        .min(ratio(h, ry.top_left + ry.bottom_left))
-        .min(ratio(h, ry.top_right + ry.bottom_right));
-
-    (rx.scaled(f), ry.scaled(f))
-}
-
-/// How far a corner eats into its side at distance `d` from the edge it sits
-/// on, for an ellipse `rx` wide and `ry` tall. Zero once past the corner.
-fn corner_inset(d: f32, rx: f32, ry: f32) -> f32 {
-    if rx <= 0.0 || ry <= 0.0 || d >= ry {
-        return 0.0;
-    }
-    let dy = (ry - d) / ry;
-    rx - rx * (1.0 - dy * dy).max(0.0).sqrt()
+/// The overlap of two rects, or `None` where there is none.
+fn intersection(a: Rect, b: Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right > x && bottom > y).then(|| Rect::new(x, y, right - x, bottom - y))
 }
 
 /// Round-to-nearest on all four edges so adjacent slabs tile without gaps
@@ -221,17 +231,14 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
         let DrawCommand::InputRegion {
             rect,
             corner_radii,
+            curvature,
             takes,
         } = &*cmd.command
         else {
             continue;
         };
-        let Some((world, world_radii)) = cmd.clipped_world_rounded_rect(*rect, *corner_radii)
-        else {
-            continue;
-        };
         out.extend(
-            rounded_rect_to_rects(world, world_radii)
+            shape_of(cmd, *rect, *corner_radii, *curvature)
                 .into_iter()
                 .map(|rect| InputRegionOp {
                     takes: *takes,
@@ -240,6 +247,34 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
         );
     }
     out
+}
+
+/// The rectangles one command's rounded rect becomes, cut to what the command
+/// is allowed to show.
+///
+/// **The shape, turned.** A command carries the transform it is drawn through,
+/// so the region is tessellated from the placed shape rather than from the box
+/// around it — a rotated container takes clicks where it is, and blurs the
+/// desktop where it is, rather than over the square it happens to sit inside.
+///
+/// The clip is a shape here too, and intersected scanline by scanline rather
+/// than as a box — so a card inside a rounded scroller is cornered by the
+/// scroller, and a turned clip cuts what it actually covers.
+///
+/// One clip, though. `cmd.clip` is `effective_clip`, which `intersect_clips`
+/// has already collapsed: two clips in differently-turned spaces arrive as the
+/// box around both, and #397 is still #397. What is escaped here is the *shape
+/// against clip* box intersection, not the chain's own.
+pub(crate) fn shape_of(
+    cmd: &FlattenedCommand,
+    rect: Rect,
+    corner_radii: CornerRadii,
+    curvature: f32,
+) -> Vec<RegionRect> {
+    placed_shape_to_rects(
+        PlacedShape::placed(rect, corner_radii, curvature, cmd.world_transform),
+        cmd.clip,
+    )
 }
 
 /// The area a surface takes input in before any container has spoken: the
@@ -263,18 +298,28 @@ pub(crate) fn base_rects(declared: Option<&[Rect]>, width: f32, height: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transform::Transform;
 
     fn covers(rects: &[RegionRect], x: i32, y: i32) -> bool {
         rects.iter().any(|r| r.contains(x, y))
     }
 
-    fn round(radius: f32) -> EllipticalRadii {
-        EllipticalRadii::circular(CornerRadii::uniform(radius))
+    /// The commonest shape there is: no transform at all.
+    fn upright(rect: Rect, radii: CornerRadii) -> Vec<RegionRect> {
+        placed_shape_to_rects(shape(rect, radii, Transform::IDENTITY), None)
+    }
+
+    fn shape(rect: Rect, radii: CornerRadii, placement: Transform) -> PlacedShape {
+        PlacedShape::placed(rect, radii, 1.0, placement)
+    }
+
+    fn round(radius: f32) -> CornerRadii {
+        CornerRadii::uniform(radius)
     }
 
     #[test]
     fn zero_radius_is_bounding_box() {
-        let rects = rounded_rect_to_rects(Rect::new(10.0, 20.0, 100.0, 50.0), round(0.0));
+        let rects = upright(Rect::new(10.0, 20.0, 100.0, 50.0), round(0.0));
         assert_eq!(
             rects,
             vec![RegionRect {
@@ -288,13 +333,13 @@ mod tests {
 
     #[test]
     fn degenerate_rect_is_empty() {
-        assert!(rounded_rect_to_rects(Rect::new(0.0, 0.0, 0.0, 40.0), round(8.0)).is_empty());
-        assert!(rounded_rect_to_rects(Rect::new(0.0, 0.0, 40.0, -1.0), round(8.0)).is_empty());
+        assert!(upright(Rect::new(0.0, 0.0, 0.0, 40.0), round(8.0)).is_empty());
+        assert!(upright(Rect::new(0.0, 0.0, 40.0, -1.0), round(8.0)).is_empty());
     }
 
     #[test]
     fn rounded_corners_are_cut() {
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, 100.0, 60.0), round(20.0));
+        let rects = upright(Rect::new(0.0, 0.0, 100.0, 60.0), round(20.0));
         // Corner pixels outside the curve are not covered…
         assert!(!covers(&rects, 0, 0));
         assert!(!covers(&rects, 99, 0));
@@ -311,7 +356,7 @@ mod tests {
     #[test]
     fn slabs_stay_inside_the_curve() {
         let r = 16.0f32;
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, 80.0, 80.0), round(r));
+        let rects = upright(Rect::new(0.0, 0.0, 80.0, 80.0), round(r));
         for rect in &rects {
             // Every rect corner must be inside (or on) the rounded shape,
             // with half-pixel tolerance for edge rounding.
@@ -336,10 +381,10 @@ mod tests {
     #[test]
     fn radius_clamped_to_half_size() {
         // Radius larger than half the shape: a circle-ish region, still non-empty
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, 40.0, 40.0), round(100.0));
+        let rects = upright(Rect::new(0.0, 0.0, 40.0, 40.0), round(100.0));
         assert!(!rects.is_empty());
-        assert!(covers(&rects, 20, 20));
-        assert!(!covers(&rects, 0, 0));
+        assert!(covers(&rects, 20, 20), "the middle is covered");
+        assert!(!covers(&rects, 0, 0), "the corner is not");
     }
 
     /// A square corner is square. This is the seam the region used to be lost
@@ -349,13 +394,15 @@ mod tests {
     /// which is the artefact the clipping exists to prevent.
     #[test]
     fn a_square_corner_is_not_rounded_because_another_one_is() {
-        let square_right = EllipticalRadii::circular(CornerRadii {
-            top_left: 16.0,
-            top_right: 0.0,
-            bottom_right: 0.0,
-            bottom_left: 16.0,
-        });
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, 40.0, 100.0), square_right);
+        let rects = upright(
+            Rect::new(0.0, 0.0, 40.0, 100.0),
+            CornerRadii {
+                top_left: 16.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 16.0,
+            },
+        );
 
         assert!(
             covers(&rects, 39, 0) && covers(&rects, 39, 99),
@@ -371,10 +418,7 @@ mod tests {
     /// corners and butting against the next one keeps its full bottom edge.
     #[test]
     fn corners_are_cut_one_by_one() {
-        let rects = rounded_rect_to_rects(
-            Rect::new(0.0, 0.0, 100.0, 60.0),
-            EllipticalRadii::circular(CornerRadii::top(20.0)),
-        );
+        let rects = upright(Rect::new(0.0, 0.0, 100.0, 60.0), CornerRadii::top(20.0));
 
         assert!(!covers(&rects, 0, 0) && !covers(&rects, 99, 0), "top cut");
         assert!(
@@ -383,15 +427,24 @@ mod tests {
         );
     }
 
-    /// An unevenly scaled corner is an ellipse: 32 wide and 16 tall reaches the
-    /// left edge 16 down, where a circle of either radius would not.
+    /// An unevenly scaled corner is an ellipse: a circle of 16 under a 2×1
+    /// scale is 32 wide and 16 tall, and reaches the left edge 16 down where a
+    /// circle of either radius would not.
+    ///
+    /// The ellipse now comes from the transform rather than from a radius pair
+    /// carried alongside it, which is the only place it ever came from: the
+    /// renderer scaled all four corners by one `(sx, sy)`, so four corners with
+    /// four different axis ratios was a shape nothing could draw.
     #[test]
     fn an_elliptical_corner_is_cut_on_both_of_its_axes() {
-        let radii = EllipticalRadii {
-            x: CornerRadii::uniform(32.0),
-            y: CornerRadii::uniform(16.0),
-        };
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, 200.0, 100.0), radii);
+        let rects = placed_shape_to_rects(
+            shape(
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                round(16.0),
+                Transform::scale_xy(2.0, 1.0),
+            ),
+            None,
+        );
 
         assert!(!covers(&rects, 0, 0), "the corner itself is outside");
         assert!(
@@ -405,33 +458,57 @@ mod tests {
     }
 
     /// Every emitted rect stays inside the ellipse it approximates, for radii
-    /// that differ per corner and per axis — the property the whole tessellation
-    /// exists to have, checked where the shape is least uniform.
+    /// that differ per corner under a scale that differs per axis — the
+    /// property the whole tessellation exists to have, checked where the shape
+    /// is least uniform.
     #[test]
     fn slabs_stay_inside_a_shape_with_four_different_corners() {
-        let radii = EllipticalRadii {
-            x: CornerRadii {
-                top_left: 30.0,
-                top_right: 10.0,
-                bottom_right: 0.0,
-                bottom_left: 20.0,
-            },
-            y: CornerRadii {
-                top_left: 15.0,
-                top_right: 10.0,
-                bottom_right: 0.0,
-                bottom_left: 40.0,
-            },
+        let radii = CornerRadii {
+            top_left: 30.0,
+            top_right: 10.0,
+            bottom_right: 0.0,
+            bottom_left: 20.0,
         };
-        let (w, h) = (120.0f32, 100.0f32);
-        let rects = rounded_rect_to_rects(Rect::new(0.0, 0.0, w, h), radii);
+        let (sx, sy) = (1.2f32, 2.0f32);
+        let (w, h) = (100.0f32, 50.0f32);
+        let rects = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, w, h),
+                radii,
+                1.0,
+                Transform::scale_xy(sx, sy),
+            ),
+            None,
+        );
         assert!(!rects.is_empty());
 
-        // The centre of each corner's ellipse, and its two semi-axes.
+        // Each corner's ellipse centre and semi-axes, in surface pixels.
+        let (ww, hh) = (w * sx, h * sy);
         let corners = [
-            (30.0f32, 15.0f32, 30.0f32, 15.0f32, true, true),
-            (w - 10.0, 10.0, 10.0, 10.0, false, true),
-            (20.0, h - 40.0, 20.0, 40.0, true, false),
+            (
+                radii.top_left * sx,
+                radii.top_left * sy,
+                radii.top_left * sx,
+                radii.top_left * sy,
+                true,
+                true,
+            ),
+            (
+                ww - radii.top_right * sx,
+                radii.top_right * sy,
+                radii.top_right * sx,
+                radii.top_right * sy,
+                false,
+                true,
+            ),
+            (
+                radii.bottom_left * sx,
+                hh - radii.bottom_left * sy,
+                radii.bottom_left * sx,
+                radii.bottom_left * sy,
+                true,
+                false,
+            ),
         ];
         for rect in &rects {
             for (px, py) in [
@@ -442,7 +519,6 @@ mod tests {
             ] {
                 let (px, py) = (px as f32, py as f32);
                 for (cx, cy, rx, ry, left, top) in corners {
-                    // Only points in this corner's quadrant are governed by it.
                     let in_x = if left { px < cx } else { px > cx };
                     let in_y = if top { py < cy } else { py > cy };
                     if !in_x || !in_y {
@@ -456,5 +532,693 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Each side runs between the two corners that are actually on it.
+    ///
+    /// Asked of `span_at` directly, at the exact scanline of the bottom edge,
+    /// because the tessellation cannot see this: a band is evaluated at both of
+    /// its ends and takes the narrower, so the bottom edge's own scanline is
+    /// always paired with one above it and the narrower one wins. The bottom
+    /// edge ran from `x1 - bottom_left` — the wrong corner, and `bottom_right`
+    /// appeared nowhere in it — which is invisible while all four radii agree
+    /// and produces a side that overshoots its corner when they do not.
+    #[test]
+    fn a_side_ends_where_its_own_corners_begin() {
+        let shape = PlacedShape {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            radii: CornerRadii {
+                top_left: 0.0,
+                top_right: 0.0,
+                bottom_right: 30.0,
+                bottom_left: 0.0,
+            },
+            curvature: 1.0,
+            placement: Transform::IDENTITY,
+        };
+
+        // Within a thousandth: the corner's own end of the side comes back
+        // through the arc solve, which is trigonometry and not arithmetic.
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+
+        let (left, right) = shape.span_at(100.0).expect("the bottom edge is there");
+        assert!(
+            close(left, 0.0),
+            "square at the bottom left, so the side reaches — got {left}"
+        );
+        assert!(
+            close(right, 70.0),
+            "and stops where the 30-radius bottom-right corner starts — got {right}"
+        );
+
+        // The opposite corner, so a fix that swaps the two is not a fix.
+        let mirrored = PlacedShape {
+            radii: CornerRadii {
+                bottom_right: 0.0,
+                bottom_left: 30.0,
+                ..shape.radii
+            },
+            ..shape
+        };
+        let (left, right) = mirrored.span_at(100.0).expect("the bottom edge is there");
+        assert!(
+            close(left, 30.0) && close(right, 100.0),
+            "got ({left}, {right})"
+        );
+    }
+
+    /// The single-rectangle shortcut asks whether a corner is small *on the
+    /// surface*, not in the space the widget wrote it in.
+    ///
+    /// A radius of 0.4 under a `scale(8.0)` is three pixels of curve. Measured
+    /// where it was declared it looks like nothing and the whole box is
+    /// published, corners and all.
+    #[test]
+    fn a_corner_is_small_enough_to_ignore_only_once_it_is_on_screen() {
+        let scaled = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 20.0, 20.0),
+                round(0.4),
+                1.0,
+                Transform::scale(8.0),
+            ),
+            None,
+        );
+        assert!(
+            !covers(&scaled, 0, 0),
+            "3 pixels of curve is a cut corner, not a rounding error"
+        );
+
+        // And the shortcut still fires where it should, or every upright panel
+        // pays for a stack of bands.
+        let tiny = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 100.0, 50.0),
+                round(0.4),
+                1.0,
+                Transform::IDENTITY,
+            ),
+            None,
+        );
+        assert_eq!(tiny.len(), 1, "one rectangle, as it has always been");
+    }
+
+    /// A corner flatter than a circle is cut as a chord, because the circle
+    /// would claim ground the shape does not cover.
+    ///
+    /// `Corners::bevel` is K = 0 — a straight diagonal across the corner,
+    /// strictly inside the circle of the same radius. Tessellated as a circle,
+    /// a bevelled container blurs the desktop past its own cut and takes
+    /// clicks there. The curvature rode along on the draw command all this
+    /// time and only the shader read it; the region had no field to put it in
+    /// until the clip and the shape became one type.
+    #[test]
+    fn a_corner_flatter_than_a_circle_is_cut_as_a_chord() {
+        let corner = |curvature: f32| {
+            placed_shape_to_rects(
+                PlacedShape::placed(
+                    Rect::new(0.0, 0.0, 100.0, 100.0),
+                    round(40.0),
+                    curvature,
+                    Transform::IDENTITY,
+                ),
+                None,
+            )
+        };
+
+        // 12 in from the left, 12 down: inside a 40 circle (√2·12 = 17 < 40 of
+        // inset), outside the bevel, whose chord runs from (0,40) to (40,0).
+        assert!(
+            covers(&corner(1.0), 12, 12),
+            "the circle reaches this pixel"
+        );
+        assert!(
+            !covers(&corner(0.0), 12, 12),
+            "and the bevel does not, because the chord has already cut it"
+        );
+
+        // A squircle is larger than the circle, so the circle still inscribes
+        // it and nothing has to change.
+        assert!(covers(&corner(2.0), 12, 12));
+
+        let area = |rects: Vec<RegionRect>| -> i64 {
+            rects.iter().map(|r| r.width as i64 * r.height as i64).sum()
+        };
+        assert!(
+            area(corner(0.0)) < area(corner(1.0)),
+            "a bevel takes more off the corner than a circle does"
+        );
+
+        // And the chord runs between the two points where the corner meets its
+        // sides — (0, 40) and (40, 0) for a radius of 40 — so `x + y = 40` is
+        // the cut. A chord that starts from the wrong end of either side still
+        // removes *a* triangle, and every assertion above is satisfied by the
+        // wrong one; only the line itself says which.
+        let bevel = corner(0.0);
+        assert!(
+            !covers(&bevel, 18, 18),
+            "18 + 18 is short of the cut at 40, so the bevel has taken it"
+        );
+        assert!(
+            covers(&bevel, 25, 25),
+            "25 + 25 clears it, so the shape holds this one — a chord hung off \
+             the wrong end of either side does not run through x + y = 40 and \
+             gets one of these two wrong"
+        );
+        assert!(
+            covers(&bevel, 2, 45) && covers(&bevel, 45, 2),
+            "and just past each end of the chord the straight sides take over"
+        );
+    }
+
+    /// A concave corner is cut outside the bite, not through it.
+    ///
+    /// `Corners::scoop` is K = -1, and the shader draws it as the square corner
+    /// **minus a disc** of the same radius centred on that corner — so the
+    /// shape reaches nearly to the corner along each edge and is bitten away
+    /// around the diagonal. It is the one corner that is *not* a subset of the
+    /// square, and the chord that makes a bevel safe runs straight through the
+    /// bite: at `r/√2` from the corner, well inside a disc of `r`.
+    ///
+    /// So the chord retreats to where it is tangent, `r·√2` along each axis,
+    /// and the straight edges retreat with it — an edge that stopped at `r`
+    /// would cover the bite on its own.
+    ///
+    /// Checked against what the shader actually draws rather than against a
+    /// radius: in the box, and no nearer any corner than its own radius.
+    #[test]
+    fn a_scooped_corner_is_cut_outside_the_bite() {
+        let (w, h, r) = (120.0f32, 90.0f32, 28.0f32);
+        let rects = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, w, h),
+                round(r),
+                -1.0,
+                Transform::IDENTITY,
+            ),
+            None,
+        );
+        assert!(!rects.is_empty(), "a scooped box is not empty");
+
+        for rect in &rects {
+            for (px, py) in [
+                (rect.x, rect.y),
+                (rect.x + rect.width, rect.y),
+                (rect.x, rect.y + rect.height),
+                (rect.x + rect.width, rect.y + rect.height),
+            ] {
+                let (px, py) = (px as f32, py as f32);
+                assert!(
+                    (-0.5..=w + 0.5).contains(&px) && (-0.5..=h + 0.5).contains(&py),
+                    "({px}, {py}) is outside the box"
+                );
+                for (cx, cy) in [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)] {
+                    let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+                    assert!(
+                        d >= r - 0.75,
+                        "({px}, {py}) is {d} from the scooped corner ({cx}, {cy}), \
+                         inside a bite of {r}"
+                    );
+                }
+            }
+        }
+
+        // And it still publishes the middle, rather than retreating to nothing.
+        assert!(covers(&rects, 60, 45));
+    }
+
+    /// Adjacent bands that round to the same span are one rectangle.
+    ///
+    /// **This is what keeps a region small.** A band is computed per pixel, so
+    /// an upright 900-tall panel produces nine hundred of them and all but the
+    /// corner ones are identical; merged, it publishes about fifteen
+    /// rectangles. Without the merge it publishes nine hundred, every frame,
+    /// down a socket — and every test here would still pass, because each of
+    /// those rectangles is inside the shape and together they cover it.
+    ///
+    /// So the count is the assertion. It cannot be exact — it depends on how
+    /// the corner curve rounds — but "tens, not hundreds" is the whole property
+    /// and a broken merge misses it by two orders of magnitude.
+    #[test]
+    fn bands_that_round_alike_are_published_as_one_rectangle() {
+        let tall = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 200.0, 900.0),
+                round(24.0),
+                1.0,
+                Transform::IDENTITY,
+            ),
+            None,
+        );
+        assert!(
+            tall.len() < 80,
+            "a 900-tall panel is tens of rectangles, not one per band — got {}",
+            tall.len()
+        );
+        assert!(covers(&tall, 100, 450), "and it still covers its middle");
+        assert!(!covers(&tall, 1, 1), "with its corners cut");
+
+        // The straight middle is the part that merges: the same panel with no
+        // corners at all is a single rectangle by that route.
+        let square = placed_shape_to_rects(
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 200.0, 900.0),
+                round(24.0),
+                1.0,
+                // A turn keeps it off the single-rectangle shortcut, so the
+                // merge is what is being asked about rather than the fast path.
+                Transform::rotate_degrees(90.0).center_at(100.0, 450.0),
+            ),
+            None,
+        );
+        assert!(
+            square.len() < 80,
+            "a quarter turn is still an upright shape — got {}",
+            square.len()
+        );
+    }
+
+    /// Two boxes are cut to their overlap, and boxes that miss leave nothing.
+    ///
+    /// The single-rectangle shortcut does this intersection itself rather than
+    /// through the band loop, so it is the one path where an edge comparison
+    /// going the wrong way produces a rectangle nobody checked.
+    #[test]
+    fn two_boxes_are_cut_to_what_they_share() {
+        let boxed = |x: f32, y: f32, w: f32, h: f32| {
+            PlacedShape::placed(Rect::new(x, y, w, h), round(0.0), 1.0, Transform::IDENTITY)
+        };
+
+        assert_eq!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 100.0, 100.0),
+                Some(boxed(40.0, 30.0, 200.0, 200.0))
+            ),
+            vec![RegionRect {
+                x: 40,
+                y: 30,
+                width: 60,
+                height: 70
+            }],
+            "the overlap, on both axes at once"
+        );
+
+        assert!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 50.0, 50.0),
+                Some(boxed(50.0, 0.0, 50.0, 50.0))
+            )
+            .is_empty(),
+            "boxes that touch along an edge share no area"
+        );
+        assert!(
+            placed_shape_to_rects(
+                boxed(0.0, 0.0, 50.0, 50.0),
+                Some(boxed(500.0, 0.0, 50.0, 50.0))
+            )
+            .is_empty(),
+            "and ones that miss entirely leave nothing"
+        );
+    }
+
+    /// Two corners on one side cannot eat more than the side has, and the
+    /// shrink is one factor so the shape keeps its proportions.
+    ///
+    /// The CSS `border-radius` rule, and it is four sums: the two horizontal
+    /// pairs against the width, the two vertical pairs against the height.
+    /// Every other test here uses radii that fit, or uniform ones where all
+    /// four sums agree — so any one of them could be read off the wrong pair
+    /// and nothing would move.
+    ///
+    /// One pair over budget at a time, therefore, with the other three well
+    /// inside it. A pill is the everyday shape this protects: `corners(999)` on
+    /// a bar is exactly the case where the rule decides the whole silhouette.
+    #[test]
+    fn each_pair_of_corners_is_shrunk_by_its_own_side() {
+        let cut = |w: f32, h: f32, radii: CornerRadii| {
+            placed_shape_to_rects(
+                PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, Transform::IDENTITY),
+                None,
+            )
+        };
+        let pair = |a: f32, b: f32, c: f32, d: f32| CornerRadii {
+            top_left: a,
+            top_right: b,
+            bottom_right: c,
+            bottom_left: d,
+        };
+
+        // Each case puts 60 + 60 across a side of 60, so that pair must halve
+        // to 30. Which way the silhouette moves when it does not depends on
+        // which side the pair spans: two corners sharing the *short* side pull
+        // their curves inward and the shape narrows, two sharing the long one
+        // let them reach further along it and the shape swells. So each case
+        // names a pixel and whether the shape should hold it.
+        for (label, rects, (x, y), inside) in [
+            (
+                "top pair, across the width",
+                cut(60.0, 200.0, pair(60.0, 60.0, 0.0, 0.0)),
+                (15, 5),
+                true,
+            ),
+            (
+                "bottom pair, across the width",
+                cut(60.0, 200.0, pair(0.0, 0.0, 60.0, 60.0)),
+                (15, 195),
+                true,
+            ),
+            (
+                "left pair, down the height",
+                cut(200.0, 60.0, pair(60.0, 0.0, 0.0, 60.0)),
+                (2, 15),
+                false,
+            ),
+            (
+                "right pair, down the height",
+                cut(200.0, 60.0, pair(0.0, 60.0, 60.0, 0.0)),
+                (197, 15),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                covers(&rects, x, y),
+                inside,
+                "{label}: the pair halves to 30, and ({x}, {y}) is on the \
+                 {} of the curve that leaves",
+                if inside { "inside" } else { "outside" }
+            );
+        }
+    }
+
+    // -- clipped shapes -------------------------------------------------
+
+    /// A card filling a rounded scroller is cornered by the scroller.
+    ///
+    /// The clip is intersected scanline by scanline rather than as a box, so
+    /// its curve shows. Published as the scroller's square bounding box — which
+    /// is what a box intersection gives — the compositor blurs the desktop in
+    /// the four corners where the panel is not drawn, and on a click-through
+    /// surface those corners swallow clicks.
+    #[test]
+    fn a_corner_the_clip_supplies_belongs_to_the_clip() {
+        let square_card = PlacedShape::placed(
+            Rect::new(-10.0, -10.0, 120.0, 120.0),
+            round(0.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+        let rounded_scroller = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(24.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+
+        let rects = placed_shape_to_rects(square_card, Some(rounded_scroller));
+        assert!(
+            !covers(&rects, 0, 0) && !covers(&rects, 99, 99),
+            "the card declares square corners and the scroller cuts them anyway"
+        );
+        assert!(covers(&rects, 50, 50), "and the middle is still published");
+    }
+
+    /// A cut edge is straight, and only the corners along it are squared.
+    ///
+    /// A card scrolled half out of a viewport has a straight edge where the cut
+    /// is. Published as though that side were still round, the region loses a
+    /// wedge the size of the radius at each of its two corners.
+    #[test]
+    fn a_clip_squares_off_only_the_corners_it_cuts() {
+        let card = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(20.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+        let cuts_the_right = PlacedShape::placed(
+            Rect::new(-50.0, -50.0, 90.0, 200.0),
+            round(0.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+
+        let rects = placed_shape_to_rects(card, Some(cuts_the_right));
+        assert!(
+            covers(&rects, 39, 0) && covers(&rects, 39, 99),
+            "the cut edge is straight, so its corners reach it"
+        );
+        assert!(
+            !covers(&rects, 0, 0) && !covers(&rects, 0, 99),
+            "and the card's own corners are still round"
+        );
+    }
+
+    /// The tighter of the two curves is the one that shows, whichever shape it
+    /// belongs to.
+    #[test]
+    fn two_curves_over_one_another_leave_the_tighter() {
+        let same = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let rounded = |r: f32| PlacedShape::placed(same, round(r), 1.0, Transform::IDENTITY);
+
+        let sharp_clip = placed_shape_to_rects(rounded(4.0), Some(rounded(24.0)));
+        assert!(
+            !covers(&sharp_clip, 2, 2),
+            "the clip rounds harder, so the clip's corner is what is left"
+        );
+        let sharp_shape = placed_shape_to_rects(rounded(24.0), Some(rounded(4.0)));
+        assert!(
+            !covers(&sharp_shape, 2, 2),
+            "and the other way round gives the same answer"
+        );
+    }
+
+    /// A clip is placed by its own transform, so one inside a translated
+    /// subtree cuts where it is rather than where it was declared.
+    #[test]
+    fn a_clip_is_placed_before_it_cuts() {
+        let card = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(0.0),
+            1.0,
+            Transform::translate(500.0, 300.0),
+        );
+        let clip = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(0.0),
+            1.0,
+            Transform::translate(500.0, 300.0),
+        );
+
+        let rects = placed_shape_to_rects(card, Some(clip));
+        assert!(
+            covers(&rects, 550, 350),
+            "the clip covers the whole card, so nothing is cut"
+        );
+
+        // Compared without being placed, the clip would sit at the origin and
+        // take the whole card with it.
+        let unplaced = PlacedShape {
+            curvature: 1.0,
+            placement: Transform::IDENTITY,
+            ..clip
+        };
+        assert!(placed_shape_to_rects(card, Some(unplaced)).is_empty());
+    }
+
+    // -- turned shapes --------------------------------------------------
+
+    /// A turned rectangle is tessellated as the turned rectangle, and not as
+    /// the box around it.
+    ///
+    /// A 100×100 square turned 45° has a 141×141 bounding box whose corners are
+    /// nowhere near the shape — 29 pixels of empty diagonal at each one. The
+    /// compositor blurred the desktop in all four, which is what #198 is about.
+    #[test]
+    fn a_turned_square_does_not_claim_its_corners() {
+        let rects = placed_shape_to_rects(
+            shape(
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                round(0.0),
+                Transform::rotate_degrees(45.0).center_at(50.0, 50.0),
+            ),
+            None,
+        );
+        assert!(!rects.is_empty());
+
+        // The diamond's own points, which the bounding box shares.
+        assert!(covers(&rects, 50, 20), "the top point is in the shape");
+        assert!(covers(&rects, 50, 50), "and so is the middle");
+
+        // The bounding box's corners, which are 29 pixels of nothing.
+        for (x, y) in [(-15, -15), (115, -15), (-15, 115), (115, 115)] {
+            assert!(
+                !covers(&rects, x, y),
+                "({x}, {y}) is a corner of the box, not of the shape"
+            );
+        }
+    }
+
+    /// Every rectangle of a turned shape is inside it — the same promise the
+    /// upright tessellation makes, asked of the case that used to have no
+    /// answer at all.
+    #[test]
+    fn slabs_stay_inside_a_turned_shape() {
+        let (w, h) = (120.0f32, 60.0f32);
+        let transform = Transform::rotate_degrees(25.0).center_at(w / 2.0, h / 2.0);
+        let rects = placed_shape_to_rects(
+            PlacedShape {
+                rect: Rect::new(0.0, 0.0, w, h),
+                radii: round(0.0),
+                curvature: 1.0,
+                placement: transform,
+            },
+            None,
+        );
+        assert!(!rects.is_empty());
+
+        let back = transform.inverse().expect("a rotation is invertible");
+        for rect in &rects {
+            for (px, py) in [
+                (rect.x, rect.y),
+                (rect.x + rect.width, rect.y),
+                (rect.x, rect.y + rect.height),
+                (rect.x + rect.width, rect.y + rect.height),
+            ] {
+                let (lx, ly) = back.transform_point(px as f32, py as f32);
+                assert!(
+                    lx >= -1.0 && ly >= -1.0 && lx <= w + 1.0 && ly <= h + 1.0,
+                    "({px}, {py}) maps back to ({lx}, {ly}), outside the shape"
+                );
+            }
+        }
+    }
+
+    /// A turned shape covers far less than its box, and the number is the
+    /// point: this is the area the compositor was blurring where nothing was
+    /// drawn.
+    #[test]
+    fn a_turned_shape_claims_about_its_own_area() {
+        let (w, h) = (150.0f32, 90.0f32);
+        let rects = placed_shape_to_rects(
+            shape(
+                Rect::new(0.0, 0.0, w, h),
+                round(0.0),
+                Transform::rotate_degrees(20.0).center_at(w / 2.0, h / 2.0),
+            ),
+            None,
+        );
+        let covered: i64 = rects.iter().map(|r| r.width as i64 * r.height as i64).sum();
+        let shape = (w * h) as i64;
+
+        assert!(
+            covered <= shape,
+            "the rectangles inscribe the shape, so they cannot exceed its \
+             {shape} px — got {covered}"
+        );
+        assert!(
+            covered > shape * 9 / 10,
+            "and they should not give away much of it either — got {covered} \
+             of {shape}"
+        );
+        // The issue's own arithmetic: the box is 73% larger than the shape.
+        let boxed = {
+            let b = Transform::rotate_degrees(20.0)
+                .center_at(w / 2.0, h / 2.0)
+                .map_rect(Rect::new(0.0, 0.0, w, h));
+            (b.width * b.height) as i64
+        };
+        assert!(
+            boxed > shape * 17 / 10,
+            "the box this replaces is {boxed} px against the shape's {shape}"
+        );
+    }
+
+    /// A turned shape keeps its rounded corners: the arcs are transformed with
+    /// everything else, and the rectangles still inscribe the result.
+    ///
+    /// **Every other turned test here uses a radius of zero**, which skips the
+    /// arc solve entirely — so the corner arithmetic had no rotated case at all
+    /// and shipped reading the wrong row of the matrix. The symptom was a
+    /// region in stripes covering about half the shape while reaching several
+    /// pixels past its outline, and the test that stood here asked only that
+    /// rounding *removes* area, which a broken solve does more enthusiastically
+    /// than a working one.
+    ///
+    /// So: inside, by an oracle that maps each rectangle back, and not much
+    /// smaller than the shape.
+    #[test]
+    fn a_turned_rounded_shape_is_inside_itself_and_most_of_itself() {
+        let (w, h, r) = (110.0f32, 70.0f32, 16.0f32);
+        for degrees in [25.0f32, 45.0, 115.0, -30.0] {
+            let transform = Transform::rotate_degrees(degrees).center_at(w / 2.0, h / 2.0);
+            let rects = placed_shape_to_rects(
+                PlacedShape {
+                    rect: Rect::new(0.0, 0.0, w, h),
+                    radii: round(r),
+                    curvature: 1.0,
+                    placement: transform,
+                },
+                None,
+            );
+            assert!(!rects.is_empty(), "at {degrees}°");
+
+            let back = transform.inverse().expect("a rotation is invertible");
+            let inside = |px: f32, py: f32| {
+                let (x, y) = back.transform_point(px, py);
+                let cx = x.clamp(r, w - r);
+                let cy = y.clamp(r, h - r);
+                ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() <= r + 1.0
+                    && (-1.0..=w + 1.0).contains(&x)
+                    && (-1.0..=h + 1.0).contains(&y)
+            };
+            for rect in &rects {
+                for (px, py) in [
+                    (rect.x, rect.y),
+                    (rect.x + rect.width, rect.y),
+                    (rect.x, rect.y + rect.height),
+                    (rect.x + rect.width, rect.y + rect.height),
+                ] {
+                    assert!(
+                        inside(px as f32, py as f32),
+                        "at {degrees}°, ({px}, {py}) is outside the shape"
+                    );
+                }
+            }
+
+            // And most of it: rectangles that are merely *inside* can still be
+            // stripes, which is what the wrong row produced.
+            let covered: i64 = rects.iter().map(|r| r.width as i64 * r.height as i64).sum();
+            let shape_area = (w * h - (4.0 - std::f32::consts::PI) * r * r) as i64;
+            assert!(
+                covered > shape_area * 9 / 10,
+                "at {degrees}°, {covered} px of a {shape_area} px shape"
+            );
+        }
+    }
+
+    /// A clip narrows the shape, and an axis-aligned one narrows it to a box.
+    #[test]
+    fn a_clip_narrows_a_turned_shape() {
+        let diamond = shape(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(0.0),
+            Transform::rotate_degrees(45.0).center_at(50.0, 50.0),
+        );
+        let box_clip = |r: Rect| Some(shape(r, round(0.0), Transform::IDENTITY));
+        let clipped =
+            placed_shape_to_rects(diamond, box_clip(Rect::new(50.0, -50.0, 100.0, 200.0)));
+
+        assert!(
+            clipped.iter().all(|r| r.x >= 50),
+            "nothing reaches left of the clip"
+        );
+        assert!(
+            covers(&clipped, 60, 50),
+            "and what is on show is still there"
+        );
+        assert!(
+            placed_shape_to_rects(diamond, box_clip(Rect::new(500.0, 0.0, 10.0, 10.0))).is_empty(),
+            "a clip that misses leaves nothing to publish"
+        );
     }
 }

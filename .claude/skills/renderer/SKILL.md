@@ -66,13 +66,29 @@ text has to be checked again there.
 
 ## Clipping
 
-`PlacedClip` holds the clip as its widget declared it plus the transform that
+`PlacedShape` (`src/shape.rs`) holds a rounded rect as its widget declared it
+plus the transform that
 places it, and every consumer asks it for what it can use: the shape shader and
 the image quad invert the placement and test in the clip's own space, so a
 turned clip cuts the turned shape; text and the compositor regions take
-`world_aabb()`, because glyphon wants four integers and a `wl_region` is a union
-of rectangles. Three pipelines, so a change to clipping has to be checked in all
-three — and until `clipped_images` there was no golden that drew an image at all.
+`world_aabb()`, because glyphon wants four integers. Three pipelines, so a
+change to clipping has to be checked in all three — and until `clipped_images`
+there was no golden that drew an image at all.
+
+## Regions
+
+A `wl_region` is a union of rectangles, and `src/region.rs` is where a shape
+becomes one — for the compositor's blur and for the input region, from the same
+function. It takes the shape and its transform and cuts bands out of the
+transformed outline, so a turned container claims what it drew rather than the
+box around it. The clip is a shape too and is intersected scanline by scanline
+rather than as a box — but what arrives is `effective_clip`, already collapsed
+by `intersect_clips`, so #397's fallback is still upstream of it.
+
+The backdrop blur's *mask* is the same story inside the renderer: the viewport
+is the box, the mask is the shape, tested in the container's own space.
+`backdrop_blur_follows_its_shape` is the only golden that draws a backdrop blur
+at all — before it, the entire pass had no pixel watching it.
 
 ## Backdrop
 

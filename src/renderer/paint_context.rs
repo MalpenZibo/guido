@@ -355,11 +355,13 @@ impl<'a> PaintContext<'a> {
         &mut self,
         rect: Rect,
         corner_radii: impl Into<CornerRadii>,
+        curvature: f32,
         takes: bool,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::InputRegion {
             rect,
             corner_radii: corner_radii.into(),
+            curvature,
             takes,
         }));
     }

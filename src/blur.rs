@@ -12,7 +12,7 @@
 //! protocol or its blur capability.
 
 use crate::backdrop::BackdropSources;
-use crate::region::{RegionRect, rounded_rect_to_rects};
+use crate::region::{RegionRect, shape_of};
 use crate::renderer::{DrawCommand, FlattenedCommand};
 
 /// The region to hand `ext-background-effect-v1`, read off the frame that was
@@ -35,6 +35,7 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<Region
             rect,
             sources,
             corner_radii,
+            curvature,
             ..
         } = &*cmd.command
         else {
@@ -44,16 +45,12 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<Region
             continue;
         }
 
-        // World coordinates *and* the clip, by the same computation the renderer
-        // uses for the surface half of this very command — so the two cannot
+        // The shape *and* the clip, by the same computation the renderer uses
+        // for the surface half of this very command — so the two cannot
         // describe different shapes. A card half out of a viewport is filtered
         // only where it is on show, and a region published for the whole card
         // blurs the desktop beside a panel that is not there.
-        let Some((world, world_radii)) = cmd.clipped_world_rounded_rect(*rect, *corner_radii)
-        else {
-            continue;
-        };
-        out.extend(rounded_rect_to_rects(world, world_radii));
+        out.extend(shape_of(cmd, *rect, *corner_radii, *curvature));
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
     out
@@ -73,7 +70,7 @@ mod tests {
                 sources: BackdropSources::COMPOSITOR,
                 radius: 0.0,
                 corner_radii: CornerRadii::uniform(0.0),
-                curvature: Default::default(),
+                curvature: 1.0,
             }),
             world_transform: Default::default(),
             world_transform_origin: None,

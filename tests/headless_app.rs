@@ -530,6 +530,87 @@ fn a_hole_passes_clicks_through_a_surface_that_otherwise_takes_them() {
     assert!(app.input_reaches(surface, 150.0, 40.0), "the bar around it");
 }
 
+/// A turned island takes clicks where it is, not over the square it sits in.
+///
+/// An 80×80 island turned 45° has a 113×113 bounding box: read as that box it
+/// claims 56% more area than it drew, and every click in the four triangles
+/// lands on a panel that is not there while the desktop below never hears it.
+/// The region is tessellated from the placed shape now, so the corners of the
+/// box belong to whatever is underneath again.
+#[test]
+fn a_turned_island_takes_input_where_it_is_drawn() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .rotate(45.0)
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 120, 1.0);
+    app.step();
+
+    // The island is laid out at the top-left and turned about its own centre,
+    // so it is a diamond with its points at the edges of an 80×80 box.
+    assert!(
+        app.input_reaches(surface, 40.0, 40.0),
+        "the middle of the diamond is the island"
+    );
+    assert!(
+        app.input_reaches(surface, 40.0, 10.0),
+        "and so is the space under its top point"
+    );
+    assert!(
+        !app.input_reaches(surface, 5.0, 5.0),
+        "but the box's top-left corner is 28 pixels of nothing, and used to \
+         swallow the click"
+    );
+    assert!(
+        !app.input_reaches(surface, 75.0, 75.0),
+        "as was its bottom-right"
+    );
+}
+
+/// A bevelled island takes input inside the cut, not out to the square corner.
+///
+/// `Corners::bevel` is a straight diagonal across the corner — K = 0, and
+/// strictly inside the circle of the same radius. The region was cut as a
+/// circle whatever the container drew, so a bevelled one took clicks in the
+/// sliver between the two, on ground it had not painted.
+///
+/// The curvature has been on the draw command all along and only the shader
+/// read it; the input region had nowhere to put it until a clip and a shape
+/// became one type.
+#[test]
+fn a_bevelled_island_takes_input_inside_its_cut() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .corners(Corners::bevel(40.0))
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 120, 1.0);
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 40.0, 40.0),
+        "the middle of the island is the island"
+    );
+    // The top-left corner's chord runs from (0, 40) to (40, 0). A point 12 in
+    // and 12 down is inside a circle of 40 and outside that line.
+    assert!(
+        !app.input_reaches(surface, 12.0, 12.0),
+        "and the bevel has already cut this pixel away, though a circle of the \
+         same radius would still reach it"
+    );
+}
+
 /// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
 /// widget was laid out in, which is why the region could never follow one.
 #[test]
@@ -848,6 +929,64 @@ fn blurring(on: RwSignal<bool>, tint: RwSignal<Color>) -> Container {
             };
             BackdropBlur::new(0.0).sources(sources)
         }))
+}
+
+/// A turned card publishes the shape it drew, not the box around it.
+///
+/// This is the half of #198 the issue's own title is about, and it is the half
+/// that had no end-to-end test: the tessellator is covered in `region.rs` and
+/// the *input* region got a headless twin, but nothing asked what the
+/// compositor is actually handed for a rotated `backdrop_blur`. Wiring the
+/// wrong transform into `blur.rs` would have left every test green.
+///
+/// A 100×100 card turned 45° is a diamond with a 141×141 box. The rectangles
+/// published must cover its middle and leave the box's corners to the desktop.
+#[test]
+fn a_turned_compositor_blur_publishes_its_shape() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(100.0)
+                .height(100.0)
+                .rotate(45.0)
+                .backdrop_blur(BackdropBlur::new(8.0).sources(BackdropSources::COMPOSITOR)),
+        )
+    });
+    app.configure(surface, 220, 220, 1.0);
+    app.step();
+
+    let published = app
+        .blur_regions_asked(surface)
+        .last()
+        .expect("the frame that blurs publishes a region")
+        .clone();
+    assert!(!published.is_empty());
+
+    let covers = |x: f32, y: f32| {
+        published
+            .iter()
+            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
+    };
+
+    assert!(covers(50.0, 50.0), "the middle of the diamond is blurred");
+    assert!(
+        covers(50.0, 12.0),
+        "and the space under its top point is too"
+    );
+    // The box runs from about -20 to 120 on each axis; its corners are ~28
+    // pixels of desktop the card never covered.
+    for (x, y) in [
+        (-12.0, -12.0),
+        (112.0, -12.0),
+        (-12.0, 112.0),
+        (112.0, 112.0),
+    ] {
+        assert!(
+            !covers(x, y),
+            "({x}, {y}) is a corner of the bounding box, not of the card"
+        );
+    }
 }
 
 /// The region is handed to the compositor, not only computed — every test of
