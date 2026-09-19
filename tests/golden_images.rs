@@ -832,6 +832,89 @@ fn clipped_images() {
     golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
 }
 
+/// A backdrop blur is filtered to the shape the container drew, and follows it
+/// through a rotation.
+///
+/// **No golden drew a backdrop blur at all before this.** The whole pass — the
+/// offscreen target, the downsample, the two gaussian passes, the masked
+/// composite — was watched by nobody, which is how `BackdropRegion` came to
+/// carry a rect, four radii and no transform without anything objecting.
+///
+/// The stripes are drawn by this scene so the surface half of the blur has
+/// something to filter: `SURFACE` blurs what is already on the target, and over
+/// an empty background there is nothing to see. Each card's border marks the
+/// shape; the blurred area is the mask. Where the two come apart, they have
+/// come apart — and for the turned card they used to, by the 73% of extra area
+/// its bounding box claims.
+#[test]
+fn backdrop_blur_follows_its_shape() {
+    let stripes = |width: f32| {
+        let bars: Vec<AnyWidget> = (0..14)
+            .map(|i| {
+                swatch(
+                    width,
+                    14.0,
+                    if i % 2 == 0 {
+                        Color::rgb(0.85, 0.35, 0.30)
+                    } else {
+                        Color::rgb(0.15, 0.45, 0.85)
+                    },
+                )
+                .into_any()
+            })
+            .collect();
+        container()
+            .width(width)
+            .height(fill())
+            .layout(Flex::column())
+            .children(bars)
+    };
+
+    let card = |degrees: f32| {
+        box_of(110.0, 70.0)
+            .corners(16.0)
+            .background(Color::rgba(0.10, 0.10, 0.16, 0.35))
+            .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.55))
+            .rotate(degrees)
+            .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE))
+    };
+
+    let case = |degrees: f32| {
+        container()
+            .width(180.0)
+            .height(180.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(card(degrees))
+            .into_any()
+    };
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(360.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([case(0.0), case(25.0)])
+                .into_any(),
+        ]);
+
+    golden(
+        "backdrop_blur_follows_its_shape",
+        (360.0, 180.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// The same composition at scale 2. Every radius, border width and shadow
 /// extent is scaled in the shader rather than in layout, so a HiDPI bug is
 /// invisible to every test that does not render at a scale factor.

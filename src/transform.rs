@@ -412,6 +412,28 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// This placement undone, for a consumer working in physical pixels while
+    /// the space it places is written in logical ones.
+    ///
+    /// The surface scale multiplies the world *after* the placement has been
+    /// applied, so undoing it is this transform's inverse composed with a
+    /// shrink — which reaches the matrix and not the offset. Whatever is
+    /// written in the placed space keeps the logical units it was written in,
+    /// and scaling that as well would apply the surface scale twice.
+    ///
+    /// `None` where there is no inverse: a collapsed placement maps every point
+    /// onto a line, and nothing can be carried back through it.
+    ///
+    /// The identity is most placements in most frames, and taking it the long
+    /// way is a reciprocal and twelve multiplies to arrive back at a shrink.
+    #[inline]
+    pub fn physical_inverse(&self, scale: f32) -> Option<Self> {
+        if self.is_identity() {
+            return Some(Self::scale(1.0 / scale));
+        }
+        Some(self.inverse()?.then_scale(1.0 / scale))
+    }
+
     /// Whether this keeps a rect a rect the same way round — no turn, no skew,
     /// no flip.
     ///

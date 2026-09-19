@@ -19,6 +19,15 @@ struct Params {
     // Corner radii in physical pixels: top-left, top-right, bottom-right,
     // bottom-left.
     radii: vec4<f32>,
+    // The shape the mask cuts, [x, y, width, height], in its own space.
+    shape_rect: vec4<f32>,
+    // Where this viewport sits on the target, in physical pixels.
+    viewport_origin: vec2<f32>,
+    _pad4: vec2<f32>,
+    // Target physical pixels to shape space: [a, b, tx, c] and [d, ty].
+    to_shape_0: vec4<f32>,
+    to_shape_1: vec2<f32>,
+    _pad5: vec2<f32>,
     // Sub-rectangle of the coverage mask this viewport covers, normalised.
     mask_rect: vec4<f32>,
     // Colour of the outline drawn by `fs_outline`, and how far it reaches out
@@ -116,11 +125,32 @@ fn rounded_box_sdf(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>, k: f32)
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
 
-    let half_size = params.dst_size * 0.5;
-    let p = in.uv * params.dst_size - half_size;
-    let distance = rounded_box_sdf(p, half_size, params.radii, params.curvature);
-    // One pixel of feathering: the mask is the only anti-aliasing the edge gets.
-    let mask = 1.0 - smoothstep(-0.5, 0.5, distance);
+    // The fragment on the target, then back in the container's own space —
+    // where the shape is an ordinary rounded rect whatever the container has
+    // been turned by. The viewport is the box around that shape, so this is
+    // also what cuts the box back down to it.
+    let on_target = params.viewport_origin + in.uv * params.dst_size;
+    let p = vec2<f32>(
+        params.to_shape_0.x * on_target.x + params.to_shape_0.y * on_target.y + params.to_shape_0.z,
+        params.to_shape_0.w * on_target.x + params.to_shape_1.x * on_target.y + params.to_shape_1.y
+    );
+
+    let half_size = params.shape_rect.zw * 0.5;
+    let centre = params.shape_rect.xy + half_size;
+    let distance = rounded_box_sdf(p - centre, half_size, params.radii, params.curvature);
+    // One pixel of feathering, however the shape is placed. The distance is in
+    // shape space now, so the fixed half-pixel threshold this used to carry
+    // would widen under a scale and shear under a rotation; the derivative is
+    // that pixel measured on the *target*, whatever sits between.
+    //
+    // Halved so an untransformed shape lands on the old threshold. It lands
+    // there exactly along the straight edges, where `fwidth` is 1 — and about
+    // 1.41 across a corner, because `fwidth` sums the two partials rather than
+    // taking their length. So an upright card's corners feather a third of a
+    // pixel softer than they did: measured at 104 pixels of a 110x70 card's
+    // perimeter, none of them off by more than 8 of 255.
+    let aa = max(fwidth(distance) * 0.5, 0.0001);
+    let mask = 1.0 - smoothstep(-aa, aa, distance);
 
     return vec4<f32>(blurred.rgb, blurred.a * mask);
 }

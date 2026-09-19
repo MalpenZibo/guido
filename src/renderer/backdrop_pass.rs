@@ -18,6 +18,7 @@
 //! takes a coverage texture instead, which is what lets glyphs be the window
 //! rather than a box — see [`text_mask`](super::text_mask).
 
+use crate::transform::Transform;
 use wgpu::util::DeviceExt;
 
 use crate::widgets::{Color, Rect};
@@ -48,6 +49,15 @@ struct Params {
     curvature: f32,
     _pad: f32,
     radii: [f32; 4],
+    /// The shape the mask cuts, `[x, y, width, height]`, in its own space.
+    shape_rect: [f32; 4],
+    /// Where this viewport sits on the target, in physical pixels — the
+    /// fragment's uv is relative to the viewport and the shape is not.
+    viewport_origin: [f32; 2],
+    _pad4: [f32; 2],
+    /// Target physical pixels to shape space: `[a, b, tx, c, d, ty]`.
+    to_shape: [f32; 6],
+    _pad5: [f32; 2],
     /// Sub-rectangle of the coverage mask this viewport covers, in normalised
     /// UV. The whole mask unless the region runs off the target, where the
     /// viewport is clipped and the mask must be read clipped with it.
@@ -68,10 +78,26 @@ type Placement = ((u32, u32, u32, u32), [f32; 4]);
 /// A blur to apply, resolved to physical pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct BackdropRegion {
-    /// Region on the target, in physical pixels.
+    /// Region on the target, in physical pixels: the axis-aligned box the
+    /// effect is filtered inside.
+    ///
+    /// A viewport, and a viewport has no choice but to be a box — under a
+    /// rotation it is larger than the shape, and the mask is what cuts the
+    /// difference back off.
     pub rect: Rect,
     /// Blur radius in physical pixels.
     pub radius: f32,
+    /// The shape the mask cuts, in the container's own space, physical pixels.
+    ///
+    /// **Not the viewport.** This used to be implicit — the mask was a rounded
+    /// rect filling `rect`, which is the shape only while the container keeps
+    /// the axes. A container turned 20° filtered its 73%-larger box and masked
+    /// it with an upright rounded rect of the wrong size, so the frost sat in a
+    /// square patch that did not match the card drawn on top of it (#198).
+    pub shape: Rect,
+    /// Target physical pixels to the space `shape` is written in.
+    pub to_shape: Transform,
+    /// Corner radii of `shape`, in that same space.
     pub radii: CornerRadii,
     pub curvature: f32,
     /// What the effect is allowed to write, in physical pixels: the clip it
@@ -545,6 +571,11 @@ impl BackdropRenderer {
             curvature: 1.0,
             _pad: 0.0,
             radii: [0.0; 4],
+            shape_rect: [0.0; 4],
+            viewport_origin: [0.0; 2],
+            _pad4: [0.0; 2],
+            to_shape: Transform::IDENTITY.data,
+            _pad5: [0.0; 2],
             mask_rect,
             stroke_color: [color.r, color.g, color.b, color.a],
             stroke_width: width,
@@ -614,6 +645,16 @@ impl BackdropRenderer {
             curvature: region.curvature,
             _pad: 0.0,
             radii: region.radii.to_array(),
+            shape_rect: [
+                region.shape.x,
+                region.shape.y,
+                region.shape.width,
+                region.shape.height,
+            ],
+            viewport_origin: [x as f32, y as f32],
+            _pad4: [0.0; 2],
+            to_shape: region.to_shape.data,
+            _pad5: [0.0; 2],
             mask_rect,
             stroke_color: [0.0; 4],
             stroke_width: 0.0,
@@ -710,6 +751,11 @@ impl BackdropRenderer {
                 curvature: 1.0,
                 _pad: 0.0,
                 radii: [0.0; 4],
+                shape_rect: [0.0; 4],
+                viewport_origin: [0.0; 2],
+                _pad4: [0.0; 2],
+                to_shape: Transform::IDENTITY.data,
+                _pad5: [0.0; 2],
                 mask_rect: [0.0, 0.0, 1.0, 1.0],
                 stroke_color: [0.0; 4],
                 stroke_width: 0.0,

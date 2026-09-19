@@ -122,34 +122,12 @@ impl PlacedClip {
         }
     }
 
-    /// World space to clip space, for a shader that tests a fragment against
-    /// the shape rather than against its box.
-    ///
-    /// `None` for a collapsed placement — a `scale(0.0)` draws nothing, and a
-    /// clip that maps every point onto a line has no inside to be in.
-    #[inline]
-    fn to_clip_space(&self) -> Option<Transform> {
-        self.placement.inverse()
-    }
-
-    /// The same map, from the *physical* pixels a shader works in.
-    ///
-    /// The surface scale multiplies the world after the placement has been
-    /// applied, so undoing it is the placement's inverse composed with a
-    /// shrink. The clip's own rect and radii stay in the logical units the
-    /// widget wrote them in, and scaling them as well would apply the surface
-    /// scale twice.
-    ///
-    /// The identity case is most frames: a placement is only not the identity
-    /// when a `rotate` or `scale` sits above the clip, and `inverse` on the
-    /// identity is a reciprocal and twelve multiplies to arrive back at a
-    /// shrink.
+    /// The same map, from the *physical* pixels a shader works in — see
+    /// [`Transform::physical_inverse`], which is where the arithmetic lives
+    /// because the backdrop pass needs the same thing for a command.
     #[inline]
     pub fn physical_to_clip(&self, scale: f32) -> Option<Transform> {
-        if self.placement.is_identity() {
-            return Some(Transform::scale(1.0 / scale));
-        }
-        Some(self.to_clip_space()?.then_scale(1.0 / scale))
+        self.placement.physical_inverse(scale)
     }
 }
 
@@ -1789,7 +1767,6 @@ mod world_geometry_tests {
             curvature: 1.0,
             placement: Transform::scale(0.0),
         };
-        assert!(clip.to_clip_space().is_none());
         assert!(clip.physical_to_clip(1.0).is_none());
     }
 
