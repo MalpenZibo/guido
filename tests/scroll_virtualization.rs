@@ -117,10 +117,17 @@ fn a_wrapped_list_paints_the_rows_an_unwrapped_one_paints() {
 /// whichever index it happened to land on.
 ///
 /// So the container has to be able to say *no*: children ordered along neither
-/// axis are all painted, because there is no window to be had and a wrong one
-/// drops something visible.
+/// axis get no window at all, because a wrong one drops something visible.
+///
+/// What that leaves is the per-child cull, which answers about one child's own
+/// rect and cannot be fooled by an unordered slice — so the two rows inside the
+/// viewport are painted and the six at `y = 400` are not. This counted all
+/// eight until the cull stopped exempting a child for being dirty: on a first
+/// frame every child is, so the six invisible ones were painted once each for
+/// nothing. A wrong window is still caught, and by the same number — searching
+/// `y < 100` over this slice lands on index 1, which paints *one* row.
 #[test]
-fn a_scroller_whose_children_are_ordered_along_neither_axis_paints_all_of_them() {
+fn a_scroller_whose_children_are_ordered_along_neither_axis_keeps_the_visible_ones() {
     // Eight rows whose `y` runs 0, 400, 400 … 40 and whose `x` runs
     // 0, 300, 300 … 0 — ordered along neither axis, and unordered in the same
     // shape on both. Two are visible in a 100 px viewport: the first and the
@@ -142,11 +149,13 @@ fn a_scroller_whose_children_are_ordered_along_neither_axis_paints_all_of_them()
         100.0,
     );
 
+    let in_the_viewport = SCATTERED.iter().filter(|(_, y)| *y < 100.0).count();
     assert_eq!(
         painted,
-        SCATTERED.len(),
+        in_the_viewport,
         "a scroller binary-searched bounds that are not partitioned along its axis and dropped a \
-         child sitting in the viewport: {painted} of {} painted",
+         child sitting in the viewport: {painted} of {in_the_viewport} visible rows painted, out \
+         of {} scattered",
         SCATTERED.len()
     );
 }
