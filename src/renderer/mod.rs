@@ -28,7 +28,7 @@ mod textured_vertex;
 mod tree;
 mod types;
 
-pub use commands::{Border, CornerRadii, DrawCommand, EllipticalRadii};
+pub use commands::{Border, CornerRadii, DrawCommand};
 pub use flatten::{CommandLayer, FlattenedCommand, PlacedClip, RegionsCarried, flatten_root_into};
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;

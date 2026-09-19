@@ -80,7 +80,9 @@ A `wl_region` is a union of rectangles, and `src/region.rs` is where a shape
 becomes one — for the compositor's blur and for the input region, from the same
 function. It takes the shape and its transform and cuts bands out of the
 transformed outline, so a turned container claims what it drew rather than the
-box around it. The clip it is narrowed by is still a box (#397).
+box around it. The clip is a shape too and is intersected scanline by scanline,
+which makes this the one reader of a clip that does not fall back where
+`intersect_clips` does.
 
 The backdrop blur's *mask* is the same story inside the renderer: the viewport
 is the box, the mask is the shape, tested in the container's own space.

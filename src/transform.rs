@@ -494,12 +494,10 @@ impl Transform {
     /// two **rows**.
     ///
     /// This is not "the scale the transform was built from", and reading it
-    /// that way is how it has been got wrong twice. Its caller pairs the result
-    /// with a world-space axis-aligned box: `EllipticalRadii::x` is a
-    /// *horizontal* semi-axis and `::y` a *vertical* one, so the question is how
-    /// wide and how tall a corner becomes, not how much each of the transform's
-    /// own axes was stretched. Under a rotation those are different numbers,
-    /// and only the first one has a caller.
+    /// that way is how it has been got wrong twice. A caller pairs the result
+    /// with a world-space axis-aligned box, where the question is how wide and
+    /// how tall a corner becomes rather than how much each of the transform's
+    /// own axes was stretched. Under a rotation those are different numbers.
     ///
     /// Rows answer it exactly, for any affine and any composition order,
     /// because the image of the unit circle is

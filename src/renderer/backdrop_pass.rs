@@ -87,7 +87,8 @@ pub struct BackdropRegion {
     pub rect: Rect,
     /// Blur radius in physical pixels.
     pub radius: f32,
-    /// The shape the mask cuts, in the container's own space, physical pixels.
+    /// The shape the mask cuts, in the container's own space and the logical
+    /// units it was declared in.
     ///
     /// **Not the viewport.** This used to be implicit — the mask was a rounded
     /// rect filling `rect`, which is the shape only while the container keeps
@@ -95,7 +96,8 @@ pub struct BackdropRegion {
     /// it with an upright rounded rect of the wrong size, so the frost sat in a
     /// square patch that did not match the card drawn on top of it (#198).
     pub shape: Rect,
-    /// Target physical pixels to the space `shape` is written in.
+    /// Target physical pixels to the space `shape` is written in — which
+    /// carries the surface scale, so `shape` must not.
     pub to_shape: Transform,
     /// Corner radii of `shape`, in that same space.
     pub radii: CornerRadii,

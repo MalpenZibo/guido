@@ -296,10 +296,12 @@ Bands are half a pixel, and adjacent bands that round to the same span merge
 back into one rectangle. That is what keeps an upright panel at a handful of
 rects instead of one per band.
 
-**The clip is still a box.** Narrowing a turned shape by a turned clip is the
-case one rect and one matrix cannot describe — the wall `intersect_clips` meets,
-recorded in #397 — so the clip arrives as its world bounds and is over-generous
-exactly where it is itself turned.
+**The clip is a shape here too**, and the only consumer where it is. Both are
+convex, so at any scanline the overlap is the overlap of the two spans — exact,
+turned clip or not, and it gets the corners right for free: a card filling a
+rounded scroller is cornered by the scroller. This is the one reader of a clip
+that never has to fall back the way `intersect_clips` does, because it never has
+to write its answer down as one rect and one matrix.
 
 **`clamp_radii` and the shader disagree** for per-corner radii: this uses the
 proportional CSS `border-radius` rule and the shader clamps each corner
@@ -349,7 +351,7 @@ Keeping the declaration answers every consumer:
 | the shape shader | `physical_to_clip(scale)` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
 | text (`text_quad.rs`, glyphon) | `world_aabb()` — glyphon clips to four integers, so text still gets the box (#199) |
-| compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — a `wl_region` is a union of rectangles, and which rectangles is the whole question. The clip is still `world_aabb()` |
+| compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline. The one consumer that never falls back |
 
 What one rect and one matrix cannot express is **two clips in two different
 rotated spaces**. `intersect_clips` rebases the second onto the first when

@@ -598,9 +598,9 @@ The transform half of that is newer than the sentence. A turned container's
 region was the axis-aligned box around it, which claims more than it drew: at
 45° an 80×80 container takes clicks over 56% more area than it covers, and every
 one of those clicks lands on a panel that is not there rather than reaching the
-window below. The region is cut from the placed shape now. Its *clip* is still a
-box, so a turned container inside a turned clip is over-generous by whatever the
-clip's own box adds.
+window below. The region is cut from the placed shape now, and so is whatever
+clips it — so a card filling a rounded scroller takes clicks in the scroller's
+rounded shape rather than in the square around it.
 
 **What a container declares is its own shape.** Children are covered because
 they are drawn inside it, not because the declaration reaches them. A child

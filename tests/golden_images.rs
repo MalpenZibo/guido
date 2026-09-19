@@ -915,6 +915,83 @@ fn backdrop_blur_follows_its_shape() {
     );
 }
 
+/// The same two cards at scale 2.
+///
+/// The mask's shape and the map that reaches it have to agree about their
+/// units, and at scale 1 every wrong pairing agrees by accident. Here they do
+/// not: a shape given in physical pixels against a map landing in logical ones
+/// is out by a factor of two, the SDF reads inside everywhere it is asked, and
+/// the frost fills the whole viewport — which is the bounding box, which is the
+/// thing all of this exists to stop, back again on every HiDPI screen.
+#[test]
+fn backdrop_blur_follows_its_shape_at_scale_2x() {
+    let stripes = |width: f32| {
+        let bars: Vec<AnyWidget> = (0..14)
+            .map(|i| {
+                swatch(
+                    width,
+                    14.0,
+                    if i % 2 == 0 {
+                        Color::rgb(0.85, 0.35, 0.30)
+                    } else {
+                        Color::rgb(0.15, 0.45, 0.85)
+                    },
+                )
+                .into_any()
+            })
+            .collect();
+        container()
+            .width(width)
+            .height(fill())
+            .layout(Flex::column())
+            .children(bars)
+    };
+
+    let card = |degrees: f32| {
+        box_of(110.0, 70.0)
+            .corners(16.0)
+            .background(Color::rgba(0.10, 0.10, 0.16, 0.35))
+            .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.55))
+            .rotate(degrees)
+            .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE))
+    };
+
+    let case = |degrees: f32| {
+        container()
+            .width(180.0)
+            .height(180.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(card(degrees))
+            .into_any()
+    };
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(360.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([case(0.0), case(25.0)])
+                .into_any(),
+        ]);
+
+    golden(
+        "backdrop_blur_follows_its_shape_at_scale_2x",
+        (360.0, 180.0),
+        2.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// The same composition at scale 2. Every radius, border width and shadow
 /// extent is scaled in the shader rather than in layout, so a HiDPI bug is
 /// invisible to every test that does not render at a scale factor.

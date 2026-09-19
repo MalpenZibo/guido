@@ -662,7 +662,7 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
 
     // The *viewport* is the box, because a viewport has no other shape to be:
     // it says which pixels the pass may touch, and wgpu takes four integers.
-    let (world, _) = cmd.world_rounded_rect(*rect, *corner_radii);
+    let world = cmd.world_transform.map_rect(*rect);
     // The *mask* is the shape. It is cut in the container's own space, which is
     // where its corners are circles and its sides are its sides, and the
     // fragment is carried back there — so a turned container frosts the shape
@@ -677,14 +677,14 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
             world.height * scale,
         ),
         radius: radius * scale,
-        shape: Rect::new(
-            rect.x * scale,
-            rect.y * scale,
-            rect.width * scale,
-            rect.height * scale,
-        ),
+        // Logical, like the clip's rect and for the same reason: `to_shape`
+        // lands a physical fragment in the container's own *logical* space,
+        // because the surface scale is folded into the map. Scaling these as
+        // well applies it twice — and at scale 1 the two conventions agree, so
+        // the pairing has to be got right somewhere a golden can see it.
+        shape: *rect,
         to_shape,
-        radii: corner_radii.scaled(scale),
+        radii: *corner_radii,
         curvature: *curvature,
         clip: clip_rect(cmd, scale),
     })
@@ -746,10 +746,9 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             radius: radius * scale,
             // The shape is entirely the mask's: a frost cut to glyphs takes
             // `fs_composite_mask`, which samples coverage and never asks the
-            // rounded-rect SDF. These are what the rectangular composite would
-            // have used, and nothing reads them.
+            // rounded-rect SDF. Nothing reads the four fields below.
             shape: Rect::new(x, y, width, height),
-            to_shape: Transform::IDENTITY,
+            to_shape: Transform::scale(1.0 / scale),
             radii: CornerRadii::uniform(0.0),
             curvature: 1.0,
             clip: clip_rect(cmd, scale),
