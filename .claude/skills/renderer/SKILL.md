@@ -101,6 +101,14 @@ rather than as a box — but what arrives is `effective_clip`, already collapsed
 by `intersect_clips` — exactly when the two spaces are a scale, a quarter turn
 or a mirror apart, and to the box around both at any other angle.
 
+A scanline's answer is a *list* of spans, not one. Every curvature but the
+scoop bounds a convex region, which a horizontal line meets once; a scoop is
+the box minus a disc at each corner, so a turned one can be entered, left
+through a bite and entered again on the same line. `Outline::bounds_at` gives
+the convex part and `Outline::take_bites_from` removes what each disc covers —
+the *union* of it across the whole band, because a sheared disc is an ellipse
+whose chord slides sideways as it grows.
+
 The backdrop blur's *mask* is the same story inside the renderer: the viewport
 is the box, the mask is the shape, tested in the container's own space.
 `backdrop_blur_follows_its_shape` is the only golden that draws a backdrop blur

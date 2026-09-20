@@ -652,6 +652,59 @@ fn a_squircled_island_takes_input_out_to_its_curve() {
     );
 }
 
+/// A scoop keeps the corner the round gives away, and the region has to keep
+/// it too.
+///
+/// The scoop is the one curvature that bends *inward*: the shape is the box
+/// minus a disc at each corner, so it reaches all the way along both edges to
+/// within a radius of the corner and is bitten away only around the diagonal.
+/// The tessellator could not sample it — chords of a concave curve fall
+/// outside the shape — so it published the chord tangent to the bite instead.
+/// That chord runs from `r·√2` on one edge to `r·√2` on the other and cuts off
+/// everything nearer the corner than itself, which is 17% of the whole shape.
+/// On the input region 17% of a widget that does not take clicks looks, from
+/// inside the application, like nothing happening (#410).
+///
+/// The gap is widest where the chord meets an edge: the shape reaches to 40
+/// from the corner there and the chord stopped at 56.6. (42, 6) is 42.4 from
+/// the corner, so the scoop is drawn on it, and `42 + 6` is 48 against the
+/// chord's 56.6, so the old region did not claim it — eight pixels of margin
+/// either way.
+#[test]
+fn a_scooped_island_keeps_the_horns_the_bite_leaves_it() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(120.0)
+                .height(120.0)
+                .corners(Corners::scoop(40.0))
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 160, 1.0);
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 60.0, 60.0),
+        "the middle of the island is the island"
+    );
+    for (x, y) in [(42.0, 6.0), (6.0, 42.0)] {
+        assert!(
+            app.input_reaches(surface, x, y),
+            "({x}, {y}) is {:.1} from the bite's centre against its radius of \
+             40, so the scoop is drawn there and the surface has to claim it",
+            (x * x + y * y).sqrt()
+        );
+    }
+    // And the bite itself stays nobody's: the corner the disc took out.
+    assert!(
+        !app.input_reaches(surface, 10.0, 10.0),
+        "(10, 10) is 14 from the corner against a radius of 40, so it is \
+         inside the disc the scoop removes and nothing was drawn there"
+    );
+}
+
 /// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
 /// widget was laid out in, which is why the region could never follow one.
 #[test]
