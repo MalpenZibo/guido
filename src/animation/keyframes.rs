@@ -97,6 +97,37 @@ impl<T: Animatable> Keyframes<T> {
         }
     }
 
+    /// How far a value declared here can travel, measured however the caller
+    /// measures one, and inflated by the worst overshoot any segment's easing
+    /// still has to come.
+    ///
+    /// What a *reach* is made of. A property whose damage rect is sized from
+    /// its declarations has to count a sequence's stops as declarations too:
+    /// they are values the property will hold, and nothing else mentions
+    /// them. `Container::max_shadow_extent` is the caller, and #384 is what it
+    /// looked like without this — a shadow's timeline played and paint clamped
+    /// every frame of it back to the declared value, because the reach knew
+    /// only what the signals said.
+    ///
+    /// The overshoot is applied as a fraction of the measured value rather
+    /// than of each segment's distance, which is the same crude bound the
+    /// declared side takes: it over-reserves for a sequence that travels less
+    /// than its deepest stop, and a reserved pixel nobody draws on costs
+    /// nothing but the damage rect.
+    pub(crate) fn reach(&self, measure: impl Fn(&T) -> f32) -> f32 {
+        let deepest = self
+            .stops
+            .iter()
+            .map(|stop| measure(&stop.value))
+            .fold(0.0_f32, f32::max);
+        let overshoot = self
+            .stops
+            .iter()
+            .map(|stop| stop.easing.peak_overshoot())
+            .fold(0.0_f32, f32::max);
+        deepest * (1.0 + overshoot)
+    }
+
     /// A stop, at a fraction of the run. The segment leaving it is linear.
     pub fn at(self, offset: f32, value: T) -> Self {
         self.at_with(offset, value, TimingFunction::Linear)
