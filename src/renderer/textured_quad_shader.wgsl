@@ -49,13 +49,31 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 // === SDF Functions ===
 
-// Curvature (K) to superellipse exponent. The same two lines as
-// `shader.wgsl`, because the clip is one shape and must not cut one way for a
-// rectangle and another for an image.
+// === SHARED SDF — three copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// WGSL has no include, so the corner geometry lives once per pipeline that
+// cuts a shape: the shape shader, the textured quad (images and transformed
+// text), and the backdrop composite. A clip is one shape and a corner is one
+// curve; three spellings of them is three answers to the same question, which
+// is what #403 was — the backdrop read `k` as `max(k, 0.05) * 2` where these
+// read `pow(2, k)`, so a bevel blurred a concave notch inside its own
+// octagonal border.
+//
+// A fourth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
+// which is what hit-testing runs. Changing the curve here means changing it
+// there, or a click stops landing where the pixel is. The test pins that one
+// to the geometry rather than to this text.
+//
+// Edit one and the test tells you to edit the others. Do not reword the
+// comments inside this block; the test compares it character for character.
+
+// Convert CSS-style K value to superellipse exponent n
 fn k_to_n(k: f32) -> f32 {
     return pow(2.0, k);
 }
 
+// Superellipse "length" function - generalizes L2 norm
 fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
     if (abs(n - 1.0) < 0.01) {
         return abs(p.x) + abs(p.y);  // L1 (diamond)
@@ -67,25 +85,33 @@ fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
     }
 }
 
-// SDF for rounded rectangle clipping.
-// radii: [top_left, top_right, bottom_right, bottom_left] — the corner the
-// point falls in decides which one applies. k: curvature.
+// Unified SDF for rounded rectangle with superellipse corners
+// rect: [x, y, width, height], k: curvature
+// radii: [top_left, top_right, bottom_right, bottom_left] — the quadrant
+// the fragment falls in selects its radius, then the math is identical to
+// the uniform case (the abs() below folds everything into one quadrant).
 fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -> f32 {
     let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
     let half_size = vec2<f32>(rect.z * 0.5, rect.w * 0.5);
+
+    // Select this quadrant's radius
     let rel = pos - center;
-    let pair = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
-    let radius = select(pair.y, pair.x, rel.y < 0.0);
+    let top = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
+    let radius = select(top.y, top.x, rel.y < 0.0);
+
+    // Clamp radius to half the smaller dimension
     let r = min(radius, min(half_size.x, half_size.y));
 
+    // For rectangles with no corners
     if (r <= 0.0) {
         let d = abs(pos - center) - half_size;
         return max(d.x, d.y);
     }
 
+    // Position relative to center (work in first quadrant)
     let p = abs(pos - center);
 
-    // Scoop (concave corners), K < 0
+    // Handle scoop (concave corners) - K < 0
     if (k < 0.0) {
         let d_box = p - half_size;
         let box_sdf = max(d_box.x, d_box.y);
@@ -93,12 +119,16 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
         return max(box_sdf, -circle_sdf);
     }
 
+    // Convex corners (bevel, round, squircle)
     let n = k_to_n(k);
     let q = p - half_size + r;
     let qm = max(q, vec2<f32>(0.0, 0.0));
     let inside = min(max(q.x, q.y), 0.0);
-    return inside + superellipse_length(qm, n) - r;
+    let corner_dist = superellipse_length(qm, n);
+
+    return inside + corner_dist - r;
 }
+// === END SHARED SDF ===
 
 // === Fragment Shader ===
 

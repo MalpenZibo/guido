@@ -295,6 +295,22 @@ cent, which is half a pixel of frost beside its letters at the edges.
 A `text_stroke` over frost is dilated from the same mask, so its width is in
 mask texels too.
 
+One corner, four copies. WGSL has no include, so the signed distance function
+for a superellipse corner is written out in `shader.wgsl`, in
+`textured_quad_shader.wgsl` and in `backdrop_shader.wgsl`; the fourth is
+`Rect::shape_distance` in `src/widgets/widget.rs`, in Rust, and it is what
+hit-testing runs — so it decides where a *click* lands the way the other three
+decide where a pixel lands.
+
+The three shaders are kept character-for-character identical between the
+`=== SHARED SDF` markers, and `tests/shader_sdf_is_one_definition.rs` fails if
+any two drift — which they had: the backdrop read the curvature as
+`max(k, 0.05) * 2` against the others' `pow(2, k)`, and those agree at exactly
+k = 1 and k = 2, which is every curvature any golden drew *with a backdrop
+blur* (#403). The Rust copy cannot be compared with WGSL as text, so the same
+test pins it to the geometry: a point sitting exactly on the superellipse must
+measure zero.
+
 ### Regions
 
 Two things travel from a frame to the compositor as a `wl_region`: the backdrop

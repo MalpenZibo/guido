@@ -209,6 +209,25 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
 // === SDF Functions ===
 
+// === SHARED SDF — three copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// WGSL has no include, so the corner geometry lives once per pipeline that
+// cuts a shape: the shape shader, the textured quad (images and transformed
+// text), and the backdrop composite. A clip is one shape and a corner is one
+// curve; three spellings of them is three answers to the same question, which
+// is what #403 was — the backdrop read `k` as `max(k, 0.05) * 2` where these
+// read `pow(2, k)`, so a bevel blurred a concave notch inside its own
+// octagonal border.
+//
+// A fourth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
+// which is what hit-testing runs. Changing the curve here means changing it
+// there, or a click stops landing where the pixel is. The test pins that one
+// to the geometry rather than to this text.
+//
+// Edit one and the test tells you to edit the others. Do not reword the
+// comments inside this block; the test compares it character for character.
+
 // Convert CSS-style K value to superellipse exponent n
 fn k_to_n(k: f32) -> f32 {
     return pow(2.0, k);
@@ -269,6 +288,7 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
 
     return inside + corner_dist - r;
 }
+// === END SHARED SDF ===
 
 // Compute gradient color based on local UV coordinates
 fn compute_gradient_color(
