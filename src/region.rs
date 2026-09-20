@@ -625,17 +625,127 @@ mod tests {
         assert_eq!(tiny.len(), 1, "one rectangle, as it has always been");
     }
 
-    /// A corner flatter than a circle is cut as a chord, because the circle
-    /// would claim ground the shape does not cover.
+    /// What sampling a corner costs the compositor, in rectangles.
     ///
-    /// `Corners::bevel` is K = 0 — a straight diagonal across the corner,
-    /// strictly inside the circle of the same radius. Tessellated as a circle,
-    /// a bevelled container blurs the desktop past its own cut and takes
-    /// clicks there. The curvature rode along on the draw command all this
-    /// time and only the shader read it; the region had no field to put it in
-    /// until the clip and the shape became one type.
+    /// A region is a list `wl_region` receives and the compositor diffs, so the
+    /// count is the price of the accuracy above. A circle keeps its closed form
+    /// and is unchanged; the sampled curvatures pay for the bands their extra
+    /// vertices introduce.
     #[test]
-    fn a_corner_flatter_than_a_circle_is_cut_as_a_chord() {
+    fn sampling_a_corner_does_not_multiply_the_rectangles() {
+        let count = |k: f32| {
+            placed_shape_to_rects(
+                PlacedShape::placed(
+                    Rect::new(0.0, 0.0, 300.0, 120.0),
+                    round(40.0),
+                    k,
+                    Transform::IDENTITY,
+                ),
+                None,
+            )
+            .len()
+        };
+        let circle = count(1.0);
+        for k in [0.5_f32, 2.0] {
+            assert!(
+                count(k) <= circle * 2,
+                "k={k} publishes {} rectangles against the circle's {circle}",
+                count(k)
+            );
+        }
+    }
+
+    /// The region is inside the shape, and nearly all of it.
+    ///
+    /// Two promises, and they pull opposite ways. A region that claims a pixel
+    /// the shape does not cover sends a click to a surface that did not draw
+    /// there — so every published rectangle has to be inside. A region that
+    /// gives up pixels the shape does cover drops clicks on painted pixels, and
+    /// they fall through to whatever is behind — so it has to give up almost
+    /// none.
+    ///
+    /// Checked against the same signed distance the shader draws with, over
+    /// every curvature the public API names and one between them, upright and
+    /// turned. #400 was the second promise broken at k > 1: the corner was
+    /// published as the circle inscribed in the squircle, 14% of each corner
+    /// box short. A scoop still breaks it, by more — that is #410, and this
+    /// test holds it to the first promise in the meantime.
+    #[test]
+    fn a_region_is_inside_its_shape_and_almost_all_of_it() {
+        use crate::widgets::Corners;
+
+        let size = 120.0;
+        for k in [0.0_f32, 0.5, 1.0, 2.0, -1.0] {
+            for degrees in [0.0_f32, 20.0] {
+                let placement = Transform::rotate_degrees(degrees);
+                let shape =
+                    PlacedShape::placed(Rect::new(0.0, 0.0, size, size), round(40.0), k, placement);
+                let rects = placed_shape_to_rects(shape, None);
+                let local = Rect::new(0.0, 0.0, size, size);
+                let corners = Corners::superellipse(40.0, k);
+                let to_local = placement.inverse().expect("invertible");
+
+                let inside = |x: i32, y: i32| {
+                    let (lx, ly) = to_local.transform_point(x as f32 + 0.5, y as f32 + 0.5);
+                    local.contains_shape(lx, ly, corners)
+                };
+
+                let mut claimed_outside = 0;
+                let mut covered = 0;
+                for rect in &rects {
+                    for y in rect.y..rect.y + rect.height {
+                        for x in rect.x..rect.x + rect.width {
+                            covered += 1;
+                            if !inside(x, y) {
+                                claimed_outside += 1;
+                            }
+                        }
+                    }
+                }
+
+                let mut drawn = 0;
+                for y in -200..260 {
+                    for x in -200..260 {
+                        if inside(x, y) {
+                            drawn += 1;
+                        }
+                    }
+                }
+
+                // A pixel's centre can sit a hair outside a band the region
+                // rounded outward, so this is a handful rather than zero.
+                assert!(
+                    claimed_outside * 400 < drawn,
+                    "k={k} at {degrees}°: {claimed_outside} of {covered} published \
+                     pixels are outside the shape, which has {drawn}"
+                );
+                // A scoop is the exception, and #410 is why: its corner is
+                // cut by a chord tangent to the bite rather than by the bite,
+                // which never over-claims and gives up about a sixth of the
+                // shape. Held to the first promise only until that is fixed.
+                if k >= 0.0 {
+                    assert!(
+                        covered * 100 >= drawn * 97,
+                        "k={k} at {degrees}°: the region covers {covered} of \
+                         the shape's {drawn} pixels, and has given up too many"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Each curvature is cut as itself, and the two that are not sampled are
+    /// the two that need no sampling.
+    ///
+    /// `Corners::bevel` is K = 0 — a straight diagonal across the corner. The
+    /// chord between the arc's ends is not an approximation of it, it *is* it,
+    /// and cutting a circle there would have a bevelled container blur the
+    /// desktop past its own cut and take clicks there. A circle is K = 1 and
+    /// keeps the closed-form solve. Everything between and above them is
+    /// sampled, which is where #400 lived: a squircle was cut as the circle
+    /// inscribed in it.
+    #[test]
+    fn each_curvature_is_cut_as_the_curve_it_is() {
         let corner = |curvature: f32| {
             placed_shape_to_rects(
                 PlacedShape::placed(
@@ -659,9 +769,23 @@ mod tests {
             "and the bevel does not, because the chord has already cut it"
         );
 
-        // A squircle is larger than the circle, so the circle still inscribes
-        // it and nothing has to change.
+        // A squircle is larger than the circle drawn inside it, so a point the
+        // circle reaches is one the squircle reaches too.
         assert!(covers(&corner(2.0), 12, 12));
+
+        // The other way round is what #400 was. 9 in and 9 down sits inside the
+        // squircle — 2·31^4 is 1,847,042 against 40^4 of 2,560,000 — and
+        // outside the circle, since 31·√2 is 43.8 and the radius is 40. The
+        // region published the circle, so the compositor was told the surface
+        // stops 7.6 pixels short of where it is drawn, along each corner
+        // diagonal. For the blur that is a corner slightly under-blurred; for
+        // the input region it is a wedge where a click falls through to
+        // whatever is behind.
+        assert!(
+            covers(&corner(2.0), 9, 9),
+            "a squircle reaches past the circle inscribed in it, and the \
+             region has to reach with it"
+        );
 
         let area = |rects: Vec<RegionRect>| -> i64 {
             rects.iter().map(|r| r.width as i64 * r.height as i64).sum()
