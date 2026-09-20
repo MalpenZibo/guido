@@ -22,7 +22,7 @@ pub struct TexturedVertex {
     /// the caller's business: an image is clipped in the clip's *own* space, so
     /// a turned clip cuts the turned shape; text is clipped in physical world
     /// pixels against the box around that shape, because glyphon needs a box
-    /// anyway and #199 is where the rest of it lives.
+    /// anyway and #405 is where the rest of it lives.
     ///
     /// Mapping the four corners on the CPU is what keeps this free. The map is
     /// affine, and interpolating an affine function of position across a
@@ -51,7 +51,7 @@ pub struct TexturedVertex {
 /// Which space it is, is the caller's business. [`shape`](Self::shape) cuts in
 /// the clip's *own* coordinates, so a turned clip cuts the turned shape;
 /// [`world_box`](Self::world_box) cuts in physical world pixels against the box
-/// around that shape, which is all glyphon can be given — #199 is the rest of
+/// around that shape, which is all glyphon can be given — #405 is the rest of
 /// that story.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadClip {

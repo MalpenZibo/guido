@@ -417,7 +417,7 @@ impl TextQuadRenderer {
 
         // Physical world pixels, to match the corners above: glyphon clips
         // text to an integer box and this path matches it, so a turned clip
-        // over text cuts the box and not the shape — #199.
+        // over text cuts the box and not the shape — #405.
         let clip = entry.clip_rect.map_or(QuadClip::NONE, |rect| {
             QuadClip::world_box(rect, scale_factor)
         });

@@ -919,7 +919,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_weight,
         } => {
             // glyphon clips to four integers, so text gets the world box of
-            // the clip and not its shape. A turned clip over text is #199.
+            // the clip and not its shape. A turned clip over text is #405.
             let clip_rect = cmd.clip.as_ref().map(PlacedShape::world_aabb);
 
             Some(TextEntry {
