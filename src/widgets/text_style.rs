@@ -363,6 +363,23 @@ impl TextAnims {
     /// value is whatever `get_untracked` saw when the builder ran, and a write
     /// landing between construction and the first layout would otherwise make
     /// the first frame ease from a value that was already stale.
+    ///
+    /// **A sequence is asked for, not eased into.** A timeline waits on a
+    /// trigger, so every motion is offered its play here before it is pointed
+    /// anywhere — the same order `Container`'s `retarget!` uses, and for the
+    /// same reason: the play has to start before the frame that shows its
+    /// first value. Without it a declared timeline was installed and never
+    /// played (#385).
+    ///
+    /// **`take_play` is asked on every pass, the first one included.** It
+    /// reads the trigger, and this runs inside layout's tracking scope, so
+    /// that read is the subscription that brings the next frame when the
+    /// trigger moves. `Container` reads it in a pass of its own —
+    /// `drift_from_target!` asks `wants_play` whatever state the animation is
+    /// in — and text has no such pass, so this is where it has to happen.
+    /// Asked only where a motion is already running it would never run on the
+    /// first layout, nothing would be watching the trigger, and the sequence
+    /// could never be asked for at all.
     pub(crate) fn retarget(
         &mut self,
         ctx: &mut crate::tree::LayoutCtx,
@@ -372,11 +389,21 @@ impl TextAnims {
     ) -> (Option<RequiredJob>, f32) {
         let mut wants = None;
         if let Some(a) = self.color.as_mut() {
+            let play = a.take_play();
             if a.is_initial() {
                 if !a.begin_enter(ctx, color, || now) {
                     a.set_immediate(ctx, color);
                 }
+                // After the seed, so a sequence that plays because the widget
+                // exists is not immediately overwritten by the value it was
+                // seeded with.
+                if play {
+                    a.play(now);
+                }
             } else {
+                if play {
+                    a.play(now);
+                }
                 a.animate_to(color, now);
             }
             if a.is_animating() {
@@ -385,11 +412,18 @@ impl TextAnims {
         }
         let mut measured = size;
         if let Some(a) = self.font_size.as_mut() {
+            let play = a.take_play();
             if a.is_initial() {
                 if !a.begin_enter(ctx, size, || now) {
                     a.set_immediate(ctx, size);
                 }
+                if play {
+                    a.play(now);
+                }
             } else {
+                if play {
+                    a.play(now);
+                }
                 a.animate_to(size, now);
             }
             measured = a.displayed_in(ctx);

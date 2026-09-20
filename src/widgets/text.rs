@@ -746,6 +746,104 @@ mod tests {
         );
     }
 
+    /// A timeline declared on a text property plays when its trigger moves.
+    ///
+    /// `Text` accepted a `timeline` and did nothing with it. `declares_text_style!`
+    /// routes both animated properties through `container::declare`, which
+    /// installs whatever motion arrived — `Motion::Play` included, as an
+    /// `AnimationState` carrying the keyframes — and nothing then played it:
+    /// `TextAnims::retarget` only seeded, entered, or eased toward the declared
+    /// value. So the declaration compiled, the trigger fired, and the glyphs
+    /// never moved (#385).
+    ///
+    /// A two-stop linear timeline from red to blue, asked for at half its
+    /// duration, so the midpoint is the whole claim: at rest it is red, and
+    /// once the trigger moves it is halfway. Both halves matter — a sequence
+    /// that played *without* being asked would pass the second assertion and
+    /// fail the first.
+    #[test]
+    fn a_declared_timeline_plays_the_colour() {
+        use crate::animation::Keyframes;
+
+        const FROM: Color = Color::rgb(1.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(0.0, 0.0, 1.0);
+
+        let plays = create_signal(0u32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").color(
+                FROM.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, FROM)
+                        .at(1.0, TO)
+                        .played_by(plays),
+                ),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        let at_rest = frame_at(&mut tree, root, t0).0;
+        assert!(
+            at_rest.r > 0.99 && at_rest.b < 0.01,
+            "a sequence waits to be asked, so before the trigger moves the \
+             declared colour is what is drawn: {at_rest:?}"
+        );
+
+        plays.set(1);
+        // The frame the trigger is taken on starts the sequence; the one after
+        // it, halfway through, is where the midpoint is.
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let halfway = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(101)).0;
+        assert!(
+            (halfway.r - 0.5).abs() < 0.1 && (halfway.b - 0.5).abs() < 0.1,
+            "halfway through a linear two-stop timeline the colour is the \
+             midpoint of its stops: {halfway:?}"
+        );
+    }
+
+    /// And the other animated property, which is the one that moves layout.
+    ///
+    /// Both rows of `declares_text_style!` route through the same `declare`
+    /// and the same `retarget`, so the colour passing is most of the claim —
+    /// but a size is measured rather than painted, and `retarget` returns it
+    /// for the measurement rather than reading it back. A row that played its
+    /// sequence and did not hand the moving value to the measure would draw
+    /// the right colour and the wrong size.
+    #[test]
+    fn a_declared_timeline_plays_the_font_size() {
+        use crate::animation::Keyframes;
+
+        let plays = create_signal(0u32);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x").font_size(
+                20.0f32.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, 20.0)
+                        .at(1.0, 60.0)
+                        .played_by(plays),
+                ),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        let at_rest = frame_at(&mut tree, root, t0).1;
+        assert!(
+            (at_rest - 20.0).abs() < 0.5,
+            "before the trigger moves the declared size is what is measured: {at_rest}"
+        );
+
+        plays.set(1);
+        frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let halfway = frame_at(&mut tree, root, t0 + std::time::Duration::from_millis(101)).1;
+        assert!(
+            (halfway - 40.0).abs() < 4.0,
+            "halfway through a linear 20-to-60 timeline the size is about 40: {halfway}"
+        );
+    }
+
     /// A transition inside its delay keeps asking to be woken, and stops asking
     /// once it has arrived.
     ///
