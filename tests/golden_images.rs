@@ -1083,9 +1083,26 @@ fn backdrop_blur_follows_its_shape_at_scale_2x() {
 /// the whole outline is.
 #[test]
 fn backdrop_blur_is_cut_by_its_scroller() {
+    golden(
+        "backdrop_blur_is_cut_by_its_scroller",
+        (360.0, 180.0),
+        1.0,
+        BACKDROP,
+        scrollers(),
+    );
+}
+
+/// One scene for both scales, so "the same two scrollers" stays true when
+/// either is edited.
+fn scrollers() -> Container {
+    // Shifted up and to the left so it juts out of the scroller on those sides
+    // as well as the others. A card the layout has already fitted inside its
+    // clip leaves the clip nothing to narrow, and the narrowing is what a
+    // viewport is.
     let card = || {
         box_of(150.0, 150.0)
             .background(Color::rgba(0.10, 0.10, 0.16, 0.30))
+            .translate((-34.0, -30.0))
             .backdrop_blur(BackdropBlur::new(14.0).sources(BackdropSources::SURFACE))
     };
 
@@ -1110,7 +1127,7 @@ fn backdrop_blur_is_cut_by_its_scroller() {
             .into_any()
     };
 
-    let view = container()
+    container()
         .width(fill())
         .height(fill())
         .layout(ZStack::new())
@@ -1122,14 +1139,26 @@ fn backdrop_blur_is_cut_by_its_scroller() {
                 .layout(Flex::row())
                 .children([scroller(0.0), scroller(20.0)])
                 .into_any(),
-        ]);
+        ])
+}
 
+/// The same two scrollers at scale 2.
+///
+/// The clip arrives logical, like the shape beside it, and the pass carries the
+/// surface scale itself — so the viewport is narrowed by `clip * scale` and the
+/// fragment is carried back by a map with the scale already folded in. Two
+/// conventions, and at scale 1 every wrong pairing of them agrees.
+///
+/// Neither scroller sits at the origin, which is the other half: a clip whose
+/// corner is at zero scales the same whether the factor is applied or divided.
+#[test]
+fn backdrop_blur_is_cut_by_its_scroller_at_scale_2x() {
     golden(
-        "backdrop_blur_is_cut_by_its_scroller",
+        "backdrop_blur_is_cut_by_its_scroller_at_scale_2x",
         (360.0, 180.0),
-        1.0,
+        2.0,
         BACKDROP,
-        view,
+        scrollers(),
     );
 }
 
