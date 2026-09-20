@@ -781,6 +781,67 @@ mod tests {
         Transform::rotate_degrees(25.0).then(&Transform::scale_xy(3.0, 1.0))
     }
 
+    /// `subtract` keeps its promise: what it returns is what was in the span
+    /// and not in the cut, and every span it returns is a real interval.
+    ///
+    /// The second half is the one nothing else can see. A degenerate span
+    /// rounds to no rectangle, so letting one out changes no published pixel
+    /// — and the band loop was rewritten on the claim that `subtract` cannot
+    /// make an empty span out of a real one, which is exactly the kind of
+    /// claim that stops being true without a word. Trimming at `a <= lo`
+    /// instead of `a < lo` breaks it and nothing downstream objects.
+    ///
+    /// Membership is checked against the definition rather than against
+    /// expected output, so the cases are free: a cut that misses, that
+    /// touches at either end, that trims one side, that splits, and that
+    /// swallows the span whole.
+    #[test]
+    fn subtract_removes_exactly_the_cut_and_leaves_real_intervals() {
+        let spans: Spans = [(0.0_f32, 10.0), (20.0, 30.0)].into_iter().collect();
+
+        for cut in [
+            (-5.0_f32, -1.0), // entirely before
+            (40.0, 50.0),     // entirely after
+            (-5.0, 0.0),      // touching the first span's left edge
+            (10.0, 15.0),     // touching the first span's right edge
+            (-5.0, 4.0),      // trimming the left
+            (6.0, 15.0),      // trimming the right
+            (3.0, 7.0),       // splitting it
+            (-5.0, 35.0),     // swallowing both
+            (0.0, 10.0),      // exactly one span
+            (5.0, 5.0),       // degenerate cut
+        ] {
+            let out = subtract(&spans, cut);
+
+            for &(left, right) in &out {
+                assert!(
+                    left < right,
+                    "cut {cut:?} left a span {left}..{right} that is not an interval"
+                );
+            }
+            for pair in out.windows(2) {
+                assert!(
+                    pair[0].1 <= pair[1].0,
+                    "cut {cut:?} returned {out:?}, which is not ascending and disjoint"
+                );
+            }
+
+            // Every point, against the definition.
+            let mut x = -10.0_f32;
+            while x < 40.0 {
+                let was_in = spans.iter().any(|&(a, b)| x >= a && x < b);
+                let cut_out = x >= cut.0 && x < cut.1;
+                let is_in = out.iter().any(|&(a, b)| x >= a && x < b);
+                assert_eq!(
+                    is_in,
+                    was_in && !cut_out,
+                    "cut {cut:?} on {spans:?} gave {out:?}, which disagrees at x={x}"
+                );
+                x += 0.25;
+            }
+        }
+    }
+
     /// A band claims only what the shape covers at *every* height inside it.
     ///
     /// This is the promise the whole band loop rests on, and for the convex
