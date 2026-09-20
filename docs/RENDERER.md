@@ -257,11 +257,13 @@ back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
 The viewport is the shape's world box, because a viewport is four integers and
-has no other shape to be. The **mask** is the shape: `BackdropRegion` carries it
-in the container's own space along with the map back there, and the composite
-carries each fragment into that space before testing it — so a turned container
-frosts what it drew instead of an upright rounded rect the size of its box.
-That map is `Transform::physical_inverse`, the same one a clip uses.
+has no other shape to be. The **mask** is the shape: `BackdropRegion` carries a
+`PlacedShape` — the same type a clip is — plus the surface scale, and derives
+the rest. The composite carries each fragment into the shape's own space before
+testing it, so a turned container frosts what it drew instead of an upright
+rounded rect the size of its box. That map is `Transform::physical_inverse`, the
+same one a clip uses, and the viewport is the shape's own `world_aabb` rather
+than a second field that has to agree with it.
 
 The mask is the one part a caller replaces. `Text::backdrop_blur` emits
 `DrawCommand::TextBackdropBlur`, which resolves to the same blur with a

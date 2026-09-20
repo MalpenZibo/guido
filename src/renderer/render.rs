@@ -657,36 +657,23 @@ fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
 
 /// Where a placed shape lands for the backdrop pass.
 ///
-/// The *viewport* is the box around the shape, because a viewport has no other
-/// shape to be: it says which pixels the pass may touch, and wgpu takes four
-/// integers. The *shape* travels in its own space, alongside the map back into
-/// it, and the pass carries each fragment there before deciding what to cut —
-/// which is how a turned container frosts what it drew rather than an upright
-/// rounded rect the size of its box, and how a turned text's coverage stays on
-/// its letters.
-///
-/// Both callers construct it the same way, and that is the point: the viewport
-/// is derived from the very shape it accompanies, so the two cannot drift.
+/// Four values that all follow from the shape and the scale, so the pass is
+/// given those and works the rest out: the viewport it may touch, the map back
+/// into the shape's own space, and the radius in pixels. They used to be
+/// fields, and the viewport was the world box of the very shape beside it —
+/// one fact written twice, free to drift, with nothing that would have said so.
 fn backdrop_region(
     shape: PlacedShape,
     radius: f32,
     cmd: &FlattenedCommand,
     scale: f32,
-) -> Option<BackdropRegion> {
-    Some(BackdropRegion {
-        rect: to_physical(shape.world_aabb(), scale),
-        radius: radius * scale,
-        // Logical, like the clip's rect and for the same reason: `to_shape`
-        // lands a physical fragment in the shape's own *logical* space, because
-        // the surface scale is folded into the map. Scaling it here as well
-        // applies it twice — and at scale 1 the two conventions agree, so the
-        // pairing has to be got right somewhere a golden can see it.
-        shape: shape.rect,
-        to_shape: shape.to_local(scale)?,
-        radii: shape.radii,
-        curvature: shape.curvature,
+) -> BackdropRegion {
+    BackdropRegion {
+        shape,
+        scale,
+        radius,
         clip: clip_rect(cmd, scale),
-    })
+    }
 }
 
 /// Resolve a backdrop command to the physical-pixel region it filters.
@@ -709,12 +696,12 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
 
     // The corners are the container's own, so the mask is cut where they are
     // circles and its sides are its sides.
-    backdrop_region(
+    Some(backdrop_region(
         PlacedShape::placed(*rect, *corner_radii, *curvature, cmd.world_transform),
         *radius,
         cmd,
         scale,
-    )
+    ))
 }
 
 /// A frosted text resolved to the region it filters and the mask that cuts it.
@@ -806,7 +793,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         *radius,
         cmd,
         scale,
-    )?;
+    );
 
     Some(TextBackdrop {
         region,
@@ -974,7 +961,7 @@ mod tests {
         ] {
             let cmd = frosted(Rect::new(10.3, 20.6, 100.0, 30.0), transform);
             let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
-            let frame = frost.region.shape;
+            let frame = frost.region.shape.rect;
             let origin = (
                 frame.x + frost.spec.offset.0 / frost.spec.density,
                 frame.y + frost.spec.offset.1 / frost.spec.density,
@@ -1003,17 +990,70 @@ mod tests {
     fn the_region_covers_more_than_the_layout_box() {
         let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
         let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
-        assert!(frost.region.rect.width >= 110.0, "{:?}", frost.region.rect);
-        assert!(frost.region.rect.height >= 40.0, "{:?}", frost.region.rect);
+        assert!(
+            frost.region.viewport().width >= 110.0,
+            "{:?}",
+            frost.region.viewport()
+        );
+        assert!(
+            frost.region.viewport().height >= 40.0,
+            "{:?}",
+            frost.region.viewport()
+        );
     }
 
+    /// The viewport is the box around the shape it travels with, at every
+    /// placement — which is a fact about one value now rather than an agreement
+    /// between two.
+    ///
+    /// It used to be a field the caller filled in with the world box of the
+    /// very shape beside it. Nothing checked they matched, and a turned shape
+    /// is exactly where they would have stopped matching quietly.
     #[test]
-    fn the_scale_factor_reaches_the_region_the_radius_and_the_density() {
+    fn the_viewport_is_the_box_around_the_shape() {
+        for transform in [
+            Transform::IDENTITY,
+            Transform::translate(40.0, 5.0),
+            Transform::scale(2.5),
+            Transform::rotate_degrees(30.0),
+        ] {
+            let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), transform);
+            for scale in [1.0_f32, 2.0] {
+                let frost = command_to_text_backdrop(&cmd, scale).expect("a frost");
+                let world = frost.region.shape.world_aabb();
+                let viewport = frost.region.viewport();
+                assert!(
+                    (viewport.x - world.x * scale).abs() < 1e-3
+                        && (viewport.y - world.y * scale).abs() < 1e-3
+                        && (viewport.width - world.width * scale).abs() < 1e-3
+                        && (viewport.height - world.height * scale).abs() < 1e-3,
+                    "{transform:?} at scale {scale}: {viewport:?} is not \
+                     {world:?} in physical pixels"
+                );
+            }
+        }
+    }
+
+    /// The surface scale reaches the viewport and the mask's density. It does
+    /// *not* reach the radius or the shape: those stay logical, and the scale
+    /// travels beside them so the pass can apply it once, where it also places
+    /// the shape. Scaling them here as well would apply it twice.
+    #[test]
+    fn the_scale_factor_reaches_the_viewport_and_the_density_and_nothing_twice() {
         let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
         let one = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
         let two = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
-        assert_eq!(two.region.radius, one.region.radius * 2.0);
-        assert!(two.region.rect.width >= one.region.rect.width * 2.0 - 1.0);
+
+        assert_eq!(two.region.scale, 2.0);
+        assert_eq!(
+            two.region.radius, one.region.radius,
+            "the radius is logical, and the scale is carried rather than baked in"
+        );
+        assert_eq!(
+            two.region.shape.rect, one.region.shape.rect,
+            "and so is the shape"
+        );
+        assert!(two.region.viewport().width >= one.region.viewport().width * 2.0 - 1.0);
         assert_eq!(two.spec.density, one.spec.density * 2.0);
     }
 
@@ -1029,8 +1069,8 @@ mod tests {
 
         assert_eq!(moved.spec.size, at_rest.spec.size);
         assert_eq!(moved.spec.offset, at_rest.spec.offset);
-        assert!((moved.region.rect.x - at_rest.region.rect.x - 40.0).abs() < 1e-3);
-        assert!((moved.region.rect.y - at_rest.region.rect.y - 5.0).abs() < 1e-3);
+        assert!((moved.region.viewport().x - at_rest.region.viewport().x - 40.0).abs() < 1e-3);
+        assert!((moved.region.viewport().y - at_rest.region.viewport().y - 5.0).abs() < 1e-3);
     }
 
     /// A frost inside a scroll view must not paint where the text has been
@@ -1061,13 +1101,13 @@ mod tests {
         let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::rotate(0.4));
         let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
 
-        let frame = frost.region.shape;
+        let frame = frost.region.shape.rect;
         let turned = cmd.world_transform.map_rect(frame);
         assert!(
-            (frost.region.rect.x - turned.x).abs() < 1e-3
-                && (frost.region.rect.width - turned.width).abs() < 1e-3,
+            (frost.region.viewport().x - turned.x).abs() < 1e-3
+                && (frost.region.viewport().width - turned.width).abs() < 1e-3,
             "the viewport is the box around the turned frame: {:?} vs {turned:?}",
-            frost.region.rect
+            frost.region.viewport()
         );
         assert!(
             turned.width > frame.width,
@@ -1077,7 +1117,11 @@ mod tests {
         // The frame's own corner, carried from the target back into the text's
         // space, lands on the frame — which is what the composite does to find
         // its mask texel.
-        let to_shape = frost.region.to_shape;
+        let to_shape = frost
+            .region
+            .shape
+            .to_local(frost.region.scale)
+            .expect("invertible");
         let (x, y) = cmd.world_transform.transform_point(frame.x, frame.y);
         let (back_x, back_y) = to_shape.transform_point(x, y);
         assert!((back_x - frame.x).abs() < 1e-2 && (back_y - frame.y).abs() < 1e-2);
@@ -1098,12 +1142,13 @@ mod tests {
 
         assert_eq!(large.spec.size, small.spec.size);
         assert_eq!(large.spec.density, small.spec.density);
-        assert_eq!(large.region.shape, small.region.shape);
+        assert_eq!(large.region.shape.rect, small.region.shape.rect);
         assert!(
-            (large.region.rect.width - small.region.rect.width / 1.6 * 3.0).abs() < 1e-2,
+            (large.region.viewport().width - small.region.viewport().width / 1.6 * 3.0).abs()
+                < 1e-2,
             "{:?} did not grow with the scale against {:?}",
-            large.region.rect,
-            small.region.rect
+            large.region.viewport(),
+            small.region.viewport()
         );
     }
 
