@@ -631,30 +631,6 @@ fn begin_pass<'a>(
     })
 }
 
-/// A logical rect in physical pixels.
-///
-/// Every rect the backdrop pass is handed has made this trip, and it is the one
-/// place the convention is written down: the pass works in physical pixels, and
-/// the shapes it cuts against do not.
-fn to_physical(rect: Rect, scale: f32) -> Rect {
-    Rect::new(
-        rect.x * scale,
-        rect.y * scale,
-        rect.width * scale,
-        rect.height * scale,
-    )
-}
-
-/// The clip a command was flattened under, in physical pixels.
-///
-/// The axis-aligned world box of it: a rounded or rotated clip is approximated
-/// by that box, which is one pixel of slack at the corners against a blurred
-/// rectangle where the content has been scrolled away — and a good deal more
-/// than that against a turned one, which is #401.
-fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
-    Some(to_physical(cmd.clip.as_ref()?.world_aabb(), scale))
-}
-
 /// Where a placed shape lands for the backdrop pass.
 ///
 /// Four values that all follow from the shape and the scale, so the pass is
@@ -672,7 +648,10 @@ fn backdrop_region(
         shape,
         scale,
         radius,
-        clip: clip_rect(cmd, scale),
+        // The clip itself, not the box around it: the pass narrows its viewport
+        // by the box and then cuts the difference back off per fragment, the
+        // same two steps it already takes for the shape.
+        clip: cmd.clip,
     }
 }
 
@@ -1075,20 +1054,31 @@ mod tests {
 
     /// A frost inside a scroll view must not paint where the text has been
     /// scrolled away to: the clip is what the effect is allowed to write.
+    ///
+    /// It arrives as the shape it is, corners and placement and all, rather
+    /// than as the box around it — the pass narrows its viewport by the box and
+    /// cuts the rest per fragment.
     #[test]
-    fn the_clip_reaches_the_region() {
-        let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
-        cmd.clip = Some(crate::shape::PlacedShape {
+    fn the_clip_reaches_the_region_as_a_shape() {
+        let clip = crate::shape::PlacedShape {
             rect: Rect::new(0.0, 0.0, 200.0, 200.0),
-            radii: CornerRadii::uniform(0.0),
+            radii: CornerRadii::uniform(16.0),
             curvature: 1.0,
-            placement: Transform::IDENTITY,
-        });
+            placement: Transform::rotate_degrees(20.0),
+        };
+        let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
+        cmd.clip = Some(clip);
+
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
+        let arrived = frost.region.clip.expect("a clip");
+        assert_eq!(arrived.rect, clip.rect, "logical, like the shape beside it");
         assert_eq!(
-            frost.region.clip,
-            Some(Rect::new(0.0, 0.0, 400.0, 400.0)),
-            "in physical pixels, like the region it bounds"
+            arrived.radii.top_left, 16.0,
+            "with its corners, which a box would have squared off"
+        );
+        assert_eq!(
+            arrived.placement, clip.placement,
+            "and its placement, which a box would have flattened"
         );
     }
 

@@ -407,6 +407,7 @@ Keeping the declaration answers every consumer:
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
 | transformed text (`text_quad.rs`) | the same map again, on the same quad — it is the image pipeline with a glyph texture in it, and it takes the same `QuadClip::shape` |
 | upright text (glyphon) | `world_aabb()` — `TextBounds` is four integers and glyphon has nowhere to put a shape, so this half still gets the box (#405) |
+| the backdrop pass | both: `world_aabb()` narrows the viewport, because a viewport is four integers, and then each fragment is carried into the clip's own space and tested there, so a rounded scroller keeps its corners |
 | compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline rather than as a box. The clip *chain* is still collapsed before it arrives (#397) |
 
 What one rect and one matrix cannot express is **two clips in two different
