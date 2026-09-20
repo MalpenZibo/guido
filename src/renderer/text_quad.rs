@@ -446,3 +446,29 @@ impl TextQuadRenderer {
         self.quad.draw(render_pass, quads);
     }
 }
+
+#[cfg(test)]
+mod shaping_buffer_tests {
+    use super::{TEXT_MARGIN, shaping_buffer};
+    use crate::widgets::Rect;
+
+    /// No floor on this path — a transformed text is rasterized into a texture
+    /// of its own size — and the margin is a factor on the box, not a border
+    /// added to it, so it grows with the text rather than mattering only to
+    /// small ones.
+    #[test]
+    fn the_margin_is_a_factor_on_the_box_and_the_scale_multiplies_both() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+        assert_eq!(
+            shaping_buffer(rect, 1.0),
+            (100.0 * TEXT_MARGIN, 40.0 * TEXT_MARGIN)
+        );
+        assert_eq!(
+            shaping_buffer(rect, 4.0),
+            (400.0 * TEXT_MARGIN, 160.0 * TEXT_MARGIN)
+        );
+        // A tiny box stays tiny: nothing floors it up to 200 the way the
+        // untransformed path does.
+        assert!(shaping_buffer(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0).0 < 20.0);
+    }
+}

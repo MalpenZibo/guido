@@ -719,10 +719,13 @@ impl BackdropRenderer {
         let bind = self.bind(
             device,
             &targets.scene_view,
+            // The blit runs `fs_downsample`, which reads `src_rect` and
+            // nothing else. A `curvature` and a `dst_size` were set here too
+            // and went unread — copied from the passes that do read them, and
+            // kept by nobody noticing, until a mutant deleted one and no test
+            // objected.
             Params {
                 src_rect: [0.0, 0.0, 1.0, 1.0],
-                dst_size: [targets.width as f32, targets.height as f32],
-                curvature: 1.0,
                 ..Params::zeroed()
             },
         );

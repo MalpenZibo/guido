@@ -1093,6 +1093,47 @@ fn frosted_text_follows_its_letters_at_scale_2x() {
     );
 }
 
+/// A text that wraps, at scale 2, over a box narrow enough to force the break.
+///
+/// Nothing in this file wrapped before — every label is one line, and one line
+/// agrees with any shaping buffer, which is how the buffer rule came to be
+/// unwatched. It is the rule `TextRenderState` shapes every ordinary text with,
+/// its floors are in logical pixels and its scale is applied after them, and a
+/// mutation of either arithmetic passed the whole suite.
+///
+/// At scale 2 rather than 1 because that is where the scale in it is legible:
+/// at scale 1 the multiply and the floor are indistinguishable from half a
+/// dozen wrong rules.
+///
+/// Both boxes are wider than 200 logical pixels because that is the floor, and
+/// under it a text does not wrap at its own box at all — it wraps at 200. That
+/// is the rule's own doing and worth seeing here rather than discovering it.
+#[test]
+fn text_wraps_where_the_box_ends_at_scale_2x() {
+    let view = container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(
+            container()
+                .width(260.0)
+                .child(label("wrap this line where the box ends", 20.0).wrap(true)),
+        )
+        .child(
+            container()
+                .width(210.0)
+                .child(label("and this one sooner, being narrower", 16.0).wrap(true)),
+        );
+
+    golden(
+        "text_wraps_where_the_box_ends_at_scale_2x",
+        (290.0, 220.0),
+        2.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// The same composition at scale 2. Every radius, border width and shadow
 /// extent is scaled in the shader rather than in layout, so a HiDPI bug is
 /// invisible to every test that does not render at a scale factor.
