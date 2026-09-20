@@ -284,6 +284,47 @@ mod tests {
             .at(1.0, 0.0)
     }
 
+    /// A reach covers the stops, and the overshoot the easing between them
+    /// still has to come.
+    ///
+    /// `Container::max_shadow_extent` sizes a damage rect from this, and a
+    /// bound that stops at the deepest stop is not one: a segment eased with a
+    /// curve whose control points leave `[0, 1]` travels past the stop it is
+    /// heading for, and a shadow drawn outside its damage rect is composited
+    /// nowhere and left on screen.
+    ///
+    /// Both halves are asserted separately, because with a linear timeline the
+    /// overshoot term is zero and *every* way of writing it agrees — which is
+    /// how three surviving mutants on that one line were found.
+    #[test]
+    fn a_reach_covers_the_stops_and_the_overshoot_between_them() {
+        let flat = Keyframes::new(100.0).at(0.0, 2.0).at(1.0, 20.0);
+        assert_eq!(
+            flat.reach(|v| *v),
+            20.0,
+            "nothing overshoots a linear segment, so the deepest stop is the reach"
+        );
+
+        // `cubic_bezier(0.5, -0.6, 0.5, 1.2)` is the shape every "wind up
+        // first" easing has: it dips below its start and sails past its end.
+        let overshooting = TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2);
+        let expected = 20.0 * (1.0 + overshooting.peak_overshoot());
+        assert!(
+            expected > 20.5,
+            "the curve has to actually overshoot for this to test anything"
+        );
+
+        let wound = Keyframes::new(100.0)
+            .at_with(0.0, 2.0, overshooting)
+            .at(1.0, 20.0);
+        assert!(
+            (wound.reach(|v| *v) - expected).abs() < 1e-3,
+            "the reach has to cover where the easing travels past the stop: \
+             expected {expected}, got {}",
+            wound.reach(|v| *v)
+        );
+    }
+
     #[test]
     fn a_timeline_passes_through_its_stops() {
         let kf = shake();
