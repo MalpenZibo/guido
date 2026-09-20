@@ -203,6 +203,25 @@ text("saving…").color(
 installed face, and a stroke and a shadow are records with nothing to
 interpolate, so those four take values only.
 
+Both take a `timeline` as readily as a `transition` — a label that flashes on an
+alert, a size that bounces once when a value changes:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let alerts = create_signal(0u32);
+text("disk full").color(Color::WHITE.timeline(
+    Keyframes::new(600.0)
+        .at(0.0, Color::WHITE)
+        .at(0.5, Color::rgb(0.9, 0.2, 0.2))
+        .at(1.0, Color::WHITE)
+        .played_by(alerts),
+))
+# ;
+# }
+```
+
 An easing `font_size` re-measures the text on every frame it moves, which
 reflows whatever contains it — worth a shorter duration than a colour, and worth
 avoiding in a long list.
