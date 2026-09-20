@@ -19,14 +19,11 @@ use wgpu::{
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
 
-use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
+use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEXTURE_PADDING};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
-
-/// Quality multiplier for supersampling text textures.
-const QUALITY_MULTIPLIER: f32 = 2.0;
 
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
@@ -164,10 +161,10 @@ impl TextQuadRenderer {
         entry: &TextEntry,
         scale_factor: f32,
     ) -> PreparedTextQuad {
-        // Rasterize at fixed resolution: scale_factor * QUALITY_MULTIPLIER.
+        // Rasterize at fixed resolution: scale_factor * TEXT_SUPERSAMPLE.
         // The transform's scale/rotation is applied via GPU quad vertices, not baked into the texture.
         // This prevents atlas churn during scale animations (each frame would otherwise create new entries).
-        let effective_scale = scale_factor * QUALITY_MULTIPLIER;
+        let effective_scale = scale_factor * TEXT_SUPERSAMPLE;
 
         // Scale font size for crisp rendering
         let scaled_font_size = entry.font_size * effective_scale;
@@ -364,14 +361,14 @@ impl TextQuadRenderer {
         // to get screen coordinates. The world_transform already includes everything:
         // parent translations, rotations, scales, and center_at adjustments.
         //
-        // The texture was rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
-        // We divide by QUALITY_MULTIPLIER to get logical-pixel dimensions, then the
+        // The texture was rendered at (scale_factor * TEXT_SUPERSAMPLE) resolution.
+        // We divide by TEXT_SUPERSAMPLE to get logical-pixel dimensions, then the
         // world_transform applies scaling/rotation via transform_point() on quad corners.
 
-        // Calculate display size: divide by QUALITY_MULTIPLIER only.
-        // The texture is rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
+        // Calculate display size: divide by TEXT_SUPERSAMPLE only.
+        // The texture is rendered at (scale_factor * TEXT_SUPERSAMPLE) resolution.
         // The transform's scale is applied by transform_point() on quad corners, not here.
-        let total_scale = QUALITY_MULTIPLIER;
+        let total_scale = TEXT_SUPERSAMPLE;
         let display_width = tex_width as f32 / total_scale;
         let display_height = tex_height as f32 / total_scale;
 
