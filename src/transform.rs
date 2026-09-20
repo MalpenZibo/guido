@@ -434,23 +434,97 @@ impl Transform {
         Some(self.inverse()?.then_scale(1.0 / scale))
     }
 
-    /// Whether this keeps a rect a rect the same way round — no turn, no skew,
-    /// no flip.
+    /// Whether this sends a rect to a rect, however that rect is turned about.
     ///
-    /// The image of a rect under an affine map is a rect whenever neither axis
-    /// leans into the other, which is `b == 0 && c == 0` — *or* when the two
-    /// axes swap, which is `a == 0 && d == 0`, a quarter turn. This answers
-    /// `false` to the second, and to a negative factor on either axis, for a
-    /// reason that is about corners rather than about rects: a quarter turn
-    /// sends the top-left corner to the top-right and a flip sends it across,
-    /// and [`CornerRadii`](crate::renderer::CornerRadii) is four numbers in a
-    /// fixed order that nothing here permutes. A caller that grows that
-    /// permutation can widen this predicate with it — see #397.
+    /// Wider than [`keeps_axes`](Self::keeps_axes) by the two cases that swap
+    /// or flip the axes rather than leaning one into the other: a quarter turn,
+    /// where `a == 0 && d == 0`, and a mirror, where a factor is negative. The
+    /// image is still a rect in both — it is the *corners* that move, and a
+    /// caller that can follow them can use this where `keeps_axes` would have
+    /// given up.
+    ///
+    /// Skia draws the same line and calls it `rectStaysRect`: identity, scale,
+    /// mirror and multiples of 90°, with `SkRRect::transform` cycling the
+    /// corner radii for a quarter turn and swapping them for a flip. WebRender
+    /// allows the mirror and still sends a quarter turn to a clip mask; GTK4's
+    /// GSK stops at translate plus axis-aligned scale and rasterises a mask for
+    /// everything else. Guido has no mask, so the wider predicate is the one
+    /// that buys something.
+    ///
+    /// A degenerate map — either axis collapsed — is not one of these: the
+    /// image is a segment or a point, and `false` sends the caller to whatever
+    /// it does when there is no answer.
+    ///
+    /// Unlike [`keeps_axes`](Self::keeps_axes) this is not exact, and it cannot
+    /// be: `cos(90°)` in floating point is 6e-17 and never 0, so an exact test
+    /// would answer `false` to every quarter turn anybody can actually build
+    /// and the wider half of this predicate would be unreachable. The tolerance
+    /// is relative — each row against its own magnitude, so an uneven scale is
+    /// judged on its shape rather than on its size — and it bounds the error
+    /// rather than hiding it: a map this accepts is within `1e-6` of the
+    /// rect-preserving one it is treated as, so a clip is out by at most a
+    /// millionth of its own coordinates. `rotate_degrees(89.0)` and `91.0` are
+    /// refused.
+    #[inline]
+    pub fn rect_stays_rect(&self) -> bool {
+        let [a, b, _, c, d, _] = self.data;
+        // Each row against its own magnitude, not the matrix's. Against the
+        // matrix's, a wildly uneven scale — `scale_xy(2000.0, 0.001)` — would
+        // find its own smaller axis inside the tolerance and be refused, which
+        // would make this narrower than `keeps_axes` at the extremes while
+        // claiming to be wider.
+        let dominates = |big: f32, small: f32| {
+            let magnitude = big.abs().max(small.abs());
+            magnitude.is_finite() && magnitude > 0.0 && small.abs() <= magnitude * 1e-6
+        };
+        let upright = dominates(a, b) && dominates(d, c);
+        let quarter_turn = dominates(b, a) && dominates(c, d);
+        upright || quarter_turn
+    }
+
+    /// Where this map sends each corner of a rect, as indices into
+    /// [`CornerRadii`](crate::renderer::CornerRadii)'s fixed order — top-left,
+    /// top-right, bottom-right, bottom-left.
+    ///
+    /// `permutation()[i]` is where corner `i` lands. Only meaningful when
+    /// [`rect_stays_rect`](Self::rect_stays_rect) holds; otherwise the corners
+    /// are not corners of an axis-aligned rect any more and there is nothing to
+    /// permute them into.
+    ///
+    /// Read off the map rather than enumerated: each corner is a sign pair, the
+    /// linear part sends it to another sign pair, and that names the
+    /// destination. Enumerating the eight cases by hand is where a table gets
+    /// one entry wrong and a rounded corner appears on the wrong side of a
+    /// mirrored scroller.
+    pub fn corner_permutation(&self) -> [usize; 4] {
+        // Top-left, top-right, bottom-right, bottom-left as signs of (x, y)
+        // measured from the rect's centre.
+        const CORNERS: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+        let [a, b, _, c, d, _] = self.data;
+        CORNERS.map(|(sx, sy)| {
+            let x = a * sx + b * sy;
+            let y = c * sx + d * sy;
+            CORNERS
+                .iter()
+                .position(|&(tx, ty)| (tx > 0.0) == (x > 0.0) && (ty > 0.0) == (y > 0.0))
+                .expect("a sign pair is one of the four corners")
+        })
+    }
+
+    /// Whether this keeps a rect a rect *the same way round* — no turn, no
+    /// skew, no flip.
+    ///
+    /// Narrower than [`rect_stays_rect`](Self::rect_stays_rect) on purpose, and
+    /// the two are not interchangeable. This is the question a fast path asks
+    /// before assuming a shape is still upright: `PlacedShape::is_a_box` and
+    /// the arc solve both read a corner's radius straight out of the slot it
+    /// was written in, which a quarter turn or a mirror would invalidate even
+    /// though the rect survives them. Widening this would break those quietly.
     ///
     /// Exact rather than epsilon'd, unlike
-    /// [`is_translation_only`](Self::is_translation_only): the callers are
-    /// deciding whether an exact answer exists, and "nearly axis-aligned" is
-    /// the case where it does not.
+    /// [`is_translation_only`](Self::is_translation_only) and unlike
+    /// `rect_stays_rect`, which cannot be: the maps this accepts have `b` and
+    /// `c` exactly zero, so there is no rounding to absorb.
     #[inline]
     pub fn keeps_axes(&self) -> bool {
         let [a, b, _, c, d, _] = self.data;
@@ -549,6 +623,150 @@ impl Default for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wider than `keeps_axes` by exactly the two cases that move corners
+    /// without leaning one axis into the other.
+    #[test]
+    fn a_quarter_turn_and_a_mirror_still_send_a_rect_to_a_rect() {
+        assert!(Transform::IDENTITY.rect_stays_rect());
+        assert!(Transform::translate(3.0, -9.0).rect_stays_rect());
+        assert!(Transform::scale_xy(0.5, 3.0).rect_stays_rect());
+
+        for degrees in [90.0, 180.0, 270.0, -90.0] {
+            assert!(
+                Transform::rotate_degrees(degrees).rect_stays_rect(),
+                "{degrees}° is a quarter turn or a half one"
+            );
+        }
+        assert!(Transform::scale_xy(-1.0, 1.0).rect_stays_rect());
+        assert!(Transform::scale_xy(1.0, -1.0).rect_stays_rect());
+        assert!(Transform::scale_xy(-2.0, -3.0).rect_stays_rect());
+        assert!(
+            Transform::rotate_degrees(90.0)
+                .then(&Transform::scale_xy(-1.0, 1.0))
+                .rect_stays_rect(),
+            "a quarter turn and a mirror together is a transpose, still a rect"
+        );
+
+        // Genuinely wider than `keeps_axes`, including at the extremes: an
+        // uneven scale is judged on its shape, not on its size.
+        let lopsided = Transform::scale_xy(2000.0, 0.001);
+        assert!(lopsided.keeps_axes());
+        assert!(
+            lopsided.rect_stays_rect(),
+            "a row compared against the whole matrix would find 0.001 inside \
+             the tolerance and refuse what `keeps_axes` accepts"
+        );
+
+        // What it still refuses, and has to: no reordering of four corners
+        // makes these an axis-aligned rect again.
+        for degrees in [30.0, 45.0, 89.0, 91.0] {
+            assert!(
+                !Transform::rotate_degrees(degrees).rect_stays_rect(),
+                "{degrees}° is not a quarter turn"
+            );
+        }
+        // Collapsed: the image is a segment, not a rect.
+        assert!(!Transform::scale_xy(0.0, 1.0).rect_stays_rect());
+        assert!(!Transform::scale_xy(1.0, 0.0).rect_stays_rect());
+        assert!(!Transform { data: [0.0; 6] }.rect_stays_rect());
+
+        // Half of a quarter turn and half of a skew. Each row has to answer the
+        // same way: one row looking like a turn while the other leans is a
+        // shear, and a shear sends a rect to a parallelogram. Written because
+        // nothing else here has a matrix where the two rows disagree — every
+        // named constructor makes them agree, so the conjunction went untested
+        // and `||` would have passed the whole suite.
+        for data in [
+            [0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        ] {
+            assert!(
+                !Transform { data }.rect_stays_rect(),
+                "one row turned and the other leaning is a shear: {data:?}"
+            );
+        }
+    }
+
+    /// The permutation says where each corner lands, in `CornerRadii`'s order:
+    /// top-left, top-right, bottom-right, bottom-left.
+    #[test]
+    fn the_corner_permutation_follows_the_turn() {
+        assert_eq!(
+            Transform::IDENTITY.corner_permutation(),
+            [0, 1, 2, 3],
+            "nothing moves"
+        );
+        assert_eq!(
+            Transform::scale(4.0).corner_permutation(),
+            [0, 1, 2, 3],
+            "a scale grows the corners and does not move them"
+        );
+        assert_eq!(
+            Transform::rotate_degrees(90.0).corner_permutation(),
+            [1, 2, 3, 0],
+            "a quarter turn clockwise: top-left becomes top-right"
+        );
+        assert_eq!(
+            Transform::rotate_degrees(-90.0).corner_permutation(),
+            [3, 0, 1, 2],
+            "and the other way round"
+        );
+        assert_eq!(
+            Transform::rotate_degrees(180.0).corner_permutation(),
+            [2, 3, 0, 1],
+            "a half turn sends every corner to its opposite"
+        );
+        assert_eq!(
+            Transform::scale_xy(-1.0, 1.0).corner_permutation(),
+            [1, 0, 3, 2],
+            "mirrored across x: the left corners swap with the right ones"
+        );
+        assert_eq!(
+            Transform::scale_xy(1.0, -1.0).corner_permutation(),
+            [3, 2, 1, 0],
+            "and across y, the top with the bottom"
+        );
+        assert_eq!(
+            Transform::rotate_degrees(90.0)
+                .then(&Transform::scale_xy(-1.0, 1.0))
+                .corner_permutation(),
+            [2, 1, 0, 3],
+            "a turn and a mirror together: the reflection across y = -x, which \
+             holds two corners still and swaps the other two"
+        );
+    }
+
+    /// Applying the permutation twice for a quarter turn is a half turn, four
+    /// times is the identity. A table with one entry wrong fails this and a
+    /// spot check of one angle does not.
+    #[test]
+    fn four_quarter_turns_bring_every_corner_home() {
+        use crate::renderer::CornerRadii;
+
+        let start = CornerRadii {
+            top_left: 1.0,
+            top_right: 2.0,
+            bottom_right: 3.0,
+            bottom_left: 4.0,
+        };
+        let quarter = Transform::rotate_degrees(90.0).corner_permutation();
+
+        let mut radii = start;
+        for _ in 0..4 {
+            radii = radii.permuted(quarter);
+        }
+        assert_eq!(radii, start, "four quarter turns is where you started");
+
+        let half = start.permuted(quarter).permuted(quarter);
+        assert_eq!(
+            half,
+            start.permuted(Transform::rotate_degrees(180.0).corner_permutation()),
+            "two quarters is a half"
+        );
+    }
 
     /// Which transforms let a clip keep its shape when it is rewritten in
     /// another clip's coordinates — and, just as load-bearing, which do not.

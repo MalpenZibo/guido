@@ -36,6 +36,30 @@ pub struct CornerRadii {
 }
 
 impl CornerRadii {
+    /// These radii after `permutation` has moved each corner.
+    ///
+    /// `permutation[i]` says where corner `i` lands, so the radius that was at
+    /// `i` is the radius at `permutation[i]` afterwards — see
+    /// [`Transform::corner_permutation`](crate::transform::Transform::corner_permutation),
+    /// which is the only thing that produces one.
+    ///
+    /// Four numbers in a fixed order is what made a quarter turn between two
+    /// clips unanswerable until #397: the rect survived the turn and the
+    /// corners had nowhere to go.
+    pub fn permuted(&self, permutation: [usize; 4]) -> Self {
+        let from = self.to_array();
+        let mut to = [0.0; 4];
+        for (i, &dest) in permutation.iter().enumerate() {
+            to[dest] = from[i];
+        }
+        Self {
+            top_left: to[0],
+            top_right: to[1],
+            bottom_right: to[2],
+            bottom_left: to[3],
+        }
+    }
+
     /// The same radius on all four corners.
     pub fn uniform(radius: f32) -> Self {
         Self {

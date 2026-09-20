@@ -855,6 +855,81 @@ fn clipped_images() {
     golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
 }
 
+/// Two clips a quarter turn apart still cut exactly.
+///
+/// `intersect_clips` rewrites the inner clip in the outer's coordinates when
+/// the map between them sends a rect to a rect. A quarter turn does — the axes
+/// swap rather than lean — but it also sends the top-left corner to the
+/// top-right, and `CornerRadii` is four numbers in a fixed order. So the pair
+/// used to fall back to the axis-aligned box around each, which for a turned
+/// outer clip is 157% larger than the shape and lets the content out on every
+/// side (#397).
+///
+/// Left: the outer clip alone, turned, for the silhouette the others should
+/// keep. Middle: a child clip a quarter turn further round. Right: a child
+/// mirrored instead, which `Container::scale` reaches with a negative factor
+/// and which moves the corners the same way.
+///
+/// Both children are rounded at one corner only, and at the one corner a
+/// quarter turn and a mirror disagree about — so the three cells have to differ
+/// from each other as well as from the fallback, which squares all four.
+#[test]
+fn clips_a_quarter_turn_apart() {
+    let content = || {
+        container()
+            .width(fill())
+            .height(fill())
+            .background(Color::rgb(0.95, 0.75, 0.25))
+    };
+
+    let outer = |child: AnyWidget| {
+        box_of(96.0, 96.0)
+            .corners(Corners::rounded(22.0))
+            .overflow(Overflow::Hidden)
+            .rotate(25.0)
+            .background(Color::rgb(0.20, 0.22, 0.30))
+            .layout(ZStack::new())
+            .child(child)
+    };
+
+    // The top-*right* corner, and one corner only. A whole rounded edge maps to
+    // itself under a mirror and would prove nothing about where corners go; the
+    // top-left is no better, since a quarter turn and a mirror-x both send it
+    // to the top-right. They part company at this one: the turn sends it to the
+    // bottom-right and the mirror to the top-left.
+    let inner = |degrees: f32, scale: Scale| {
+        box_of(96.0, 96.0)
+            .corners(Corners::rounded(CornerRadii {
+                top_left: 0.0,
+                top_right: 40.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            }))
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .scale(scale)
+            .layout(ZStack::new())
+            .child(content())
+            .into_any()
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(26.0)
+        .layout(Flex::row().spacing(26.0))
+        .child(outer(content().into_any()))
+        .child(outer(inner(90.0, Scale::NONE)))
+        .child(outer(inner(0.0, Scale::new(-1.0, 1.0))));
+
+    golden(
+        "clips_a_quarter_turn_apart",
+        (370.0, 148.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// A text is clipped by the same shape a rectangle is, and follows it through
 /// a rotation.
 ///

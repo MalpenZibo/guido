@@ -343,10 +343,10 @@ rounded scroller is cornered by the scroller, where a box intersection would
 publish the scroller's square corners.
 
 **One clip, though.** What arrives is `effective_clip`, which `intersect_clips`
-has already collapsed — two clips in differently-turned spaces were reduced to
-the box around both before the tessellator saw them, and #397 still costs what
-it costs. What this consumer escapes is the *shape against clip* box
-intersection, not the clip chain's own.
+has already collapsed. That collapse is exact when the two spaces differ by a
+scale, a quarter turn or a mirror, and is the box around both for any other
+angle. What this consumer escapes is the *shape against clip* box intersection,
+not the clip chain's own.
 
 **`clamp_radii` and the shader disagree** for per-corner radii: this uses the
 proportional CSS `border-radius` rule and the shader clamps each corner
@@ -406,15 +406,20 @@ Keeping the declaration answers every consumer:
 
 What one rect and one matrix cannot express is **two clips in two different
 rotated spaces**. `intersect_clips` rebases the second onto the first when
-`Transform::keeps_axes` holds between them — a shared placement, or a
-translation, or an axis-aligned scale, so nested scrollers stay exact — and
-falls back to the enclosing box in world space when it does not. A quarter turn
-and a mirror are refused along with rotation, even though each sends a rect to a
-rect: each also moves the top-left corner somewhere else, and `CornerRadii` is
-four numbers in a fixed order that nothing permutes (#397). That fallback is what *every* case produced before the clip
-carried a transform, so nothing is worse than it was. GTK's GSK meets the same
-wall with the same single-rounded-rect clip and answers it by rasterising a clip
-mask; that is the door out if the fallback is ever seen.
+`Transform::rect_stays_rect` holds between them — a shared placement, or a
+translation, an axis-aligned scale, a quarter turn or a mirror — so nested
+scrollers stay exact, and so does a child turned square-on to its parent — and
+falls back to the enclosing box in world space for any other angle.
+
+A quarter turn and a mirror send a rect to a rect, and used to be refused with
+the rest because each also moves the top-left corner somewhere else and
+`CornerRadii` is four numbers in a fixed order. `Transform::corner_permutation`
+reads off where each corner lands and `CornerRadii::permuted` follows it, which
+is what Skia's `SkRRect::transform` does under `rectStaysRect` (#397). The
+remaining fallback is what *every* case produced before the clip carried a
+transform, so nothing is worse than it was. GTK's GSK meets the same wall with
+the same single-rounded-rect clip and answers it by rasterising a clip mask;
+that is the door out if the fallback is ever seen.
 
 ### Incremental Flatten
 
