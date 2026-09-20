@@ -656,23 +656,24 @@ fn intersect_clips(a: &PlacedShape, b: &PlacedShape) -> PlacedShape {
 /// `clip` rewritten in `onto`'s coordinates, when that can be done without
 /// losing the shape.
 ///
-/// It can when the transform between the two spaces keeps the axes, because
-/// only then is the image of a rect a rect *with its corners still in the
-/// order the radii are written in*. A shared placement — two clips under the
-/// one transformed node, or the ordinary case of two untransformed ones — is
-/// the identity and passes trivially; a scroller inside a scroller differs by
-/// a translation and passes too.
+/// It can when the transform between the two spaces sends a rect to a rect,
+/// which is [`Transform::rect_stays_rect`]. A shared placement — two clips
+/// under the one transformed node, or the ordinary case of two untransformed
+/// ones — is the identity and passes trivially; a scroller inside a scroller
+/// differs by a translation and passes too.
 ///
-/// A quarter turn and a flip each send a rect to a rect and are refused all
-/// the same, because each also moves the top-left corner somewhere else and
-/// nothing here permutes the radii to follow. See [`Transform::keeps_axes`]
-/// and #397.
+/// A quarter turn and a mirror also send a rect to a rect. They used to be
+/// refused because each moves the top-left corner somewhere else and nothing
+/// permuted the radii to follow; the corners are permuted now, so the answer is
+/// exact there as well rather than the box around both (#397). What is still
+/// refused is a turn that is not a quarter of one, and a skew: the image is not
+/// an axis-aligned rect at all, and no reordering makes it one.
 fn rebase(clip: &PlacedShape, onto: &PlacedShape) -> Option<PlacedShape> {
     if clip.placement == onto.placement {
         return Some(*clip);
     }
     let between = onto.placement.inverse()?.then(&clip.placement);
-    if !between.keeps_axes() {
+    if !between.rect_stays_rect() {
         return None;
     }
     Some(PlacedShape {
@@ -681,7 +682,13 @@ fn rebase(clip: &PlacedShape, onto: &PlacedShape) -> Option<PlacedShape> {
         // is approximated by the geometric mean of its two axes. Exactly what
         // this did before a clip carried a transform, and the one place in
         // this type where "the radii stay circles" is not true.
-        radii: clip.radii.scaled(between.extract_scale()),
+        //
+        // The permutation is the other half: a quarter turn leaves the corner
+        // sizes alone and moves which corner each belongs to.
+        radii: clip
+            .radii
+            .scaled(between.extract_scale())
+            .permuted(between.corner_permutation()),
         curvature: clip.curvature,
         placement: onto.placement,
     })
@@ -1442,6 +1449,154 @@ mod world_geometry_tests {
             (40.0, 60.0),
             "the inner one, moved into the outer's coordinates, and cut there"
         );
+    }
+
+    /// A pixel is covered by the published region.
+    fn covers(rects: &[crate::region::RegionRect], x: i32, y: i32) -> bool {
+        rects
+            .iter()
+            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
+    }
+
+    /// What the compositor is told a surface covers follows the clip chain, and
+    /// the chain is collapsed before it gets here. So widening that collapse
+    /// changes the published region, not only the pixels — and for a quarter
+    /// turn it changes *only* the corners, since the rect survives the turn
+    /// either way. A rounded corner on the wrong side is a wedge of the surface
+    /// that stops being ours: the compositor sends the click to whatever is
+    /// behind, which from inside the application looks like nothing happening.
+    #[test]
+    fn a_region_under_two_clips_a_quarter_turn_apart_rounds_the_right_corner() {
+        let outer = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            CornerRadii::uniform(40.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+        // The same square, a quarter turn round and moved back over the outer,
+        // rounded at one corner only.
+        let inner = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            CornerRadii {
+                top_left: 40.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            1.0,
+            Transform::translate(100.0, 0.0).then(&Transform::rotate_degrees(90.0)),
+        );
+
+        let both = intersect_clips(&outer, &inner);
+        assert!(
+            (both.rect.width - 100.0).abs() < 0.01 && (both.rect.height - 100.0).abs() < 0.01,
+            "the square survives the turn whichever way this is answered: {:?}",
+            both.rect
+        );
+
+        let rects = crate::region::placed_shape_to_rects(both, None);
+        // A rounded corner is the one cut *away*, so the square corner is the
+        // covered one. Without the permutation these two swap: the rounding
+        // stays on the top-left and the region gives up the wrong wedge.
+        assert!(
+            covers(&rects, 3, 3),
+            "the inner's rounding turned a quarter clockwise off the top-left, \
+             so this corner is square and the surface still claims it"
+        );
+        assert!(
+            !covers(&rects, 96, 3),
+            "and the top-right is where the rounding landed, so the region \
+             gives that wedge up — claim it instead and a click there is sent \
+             to a surface that does not draw it"
+        );
+    }
+
+    /// A quarter turn sends a rect to a rect — the axes swap rather than lean —
+    /// so the overlap is still exact, and the corners follow the turn.
+    #[test]
+    fn a_clip_a_quarter_turn_away_is_rebased_not_boxed() {
+        // Rounded generously, because `tighten` takes the smaller radius per
+        // corner: against a square outer clip the intersection is square
+        // whatever the inner one does, and the permutation would be invisible.
+        let outer = PlacedShape {
+            rect: Rect::new(0.0, 0.0, 100.0, 60.0),
+            radii: CornerRadii::uniform(20.0),
+            curvature: 1.0,
+            placement: Transform::rotate_degrees(30.0),
+        };
+        let inner = PlacedShape {
+            rect: Rect::new(0.0, 0.0, 60.0, 100.0),
+            radii: CornerRadii {
+                top_left: 12.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            curvature: 1.0,
+            // A further quarter turn, so `between` swaps the axes.
+            placement: Transform::rotate_degrees(30.0).then(&Transform::rotate_degrees(90.0)),
+        };
+
+        let both = intersect_clips(&outer, &inner);
+        assert_eq!(
+            both.placement, outer.placement,
+            "rebased onto the first, not flattened to the box around both"
+        );
+        assert!(
+            (both.radii.top_right - 12.0).abs() < 1e-3,
+            "the inner's top-left corner turned a quarter clockwise, so it is \
+             the top-right one now: {:?}",
+            both.radii
+        );
+        assert_eq!(
+            (
+                both.radii.top_left,
+                both.radii.bottom_right,
+                both.radii.bottom_left
+            ),
+            (0.0, 0.0, 0.0),
+            "and nothing else picked up a radius"
+        );
+    }
+
+    /// A mirror sends a rect to a rect too, and `Container::scale` takes a
+    /// negative factor, so this is reachable rather than hypothetical.
+    #[test]
+    fn a_mirrored_clip_is_rebased_not_boxed() {
+        // Turned, so that "rebased onto the first" is a claim the flattening
+        // fallback cannot also satisfy — it would answer the identity.
+        let outer = PlacedShape {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            radii: CornerRadii::uniform(20.0),
+            curvature: 1.0,
+            placement: Transform::rotate_degrees(20.0),
+        };
+        let inner = PlacedShape {
+            rect: Rect::new(0.0, 0.0, 80.0, 80.0),
+            radii: CornerRadii {
+                top_left: 9.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 5.0,
+            },
+            curvature: 1.0,
+            placement: outer
+                .placement
+                .then(&Transform::scale_xy(-1.0, 1.0).then_translate(100.0, 0.0)),
+        };
+
+        let both = intersect_clips(&outer, &inner);
+        assert_eq!(
+            both.placement, outer.placement,
+            "rebased onto the first, not flattened to the box around both"
+        );
+        assert!(
+            (both.radii.top_right - 9.0).abs() < 1e-3
+                && (both.radii.bottom_right - 5.0).abs() < 1e-3,
+            "mirrored across x: the left corners are the right ones now, {:?}",
+            both.radii
+        );
+        assert_eq!((both.radii.top_left, both.radii.bottom_left), (0.0, 0.0));
     }
 
     /// Two clips turned differently cannot both be a rect in one space, so the
