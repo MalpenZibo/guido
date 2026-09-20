@@ -326,8 +326,11 @@ same ground.
 
 `placed_shape_to_rects` takes the shape as declared plus the transform that
 places it, and cuts bands out of the outline. The outline is four straight edges
-and four corner arcs, each transformed; where a horizontal line meets it is
-where the shape starts and stops on that line. A rotation is not a case — it is
+and four corners, each transformed; where a horizontal line meets it is where
+the shape starts and stops on that line. A corner is an arc only when it is a
+circle, which is the one curvature the scanline solve has a closed form for — a
+bevel and a scoop are a chord, and every other curvature is a polyline sampled
+along the superellipse, whose chords lie inside it. A rotation is not a case — it is
 whatever the matrix holds — so the upright answer falls out of the same
 arithmetic rather than beside it.
 

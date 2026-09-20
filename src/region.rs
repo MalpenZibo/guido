@@ -625,6 +625,71 @@ mod tests {
         assert_eq!(tiny.len(), 1, "one rectangle, as it has always been");
     }
 
+    /// A bigger corner is sampled at more points, so the accuracy holds as the
+    /// shape grows.
+    ///
+    /// `samples_per_corner` is the one number the whole argument rests on — the
+    /// sag of a chord across an angle is `r·θ²/8`, so the count has to rise
+    /// with the square root of the radius *as it lands on the surface*, not as
+    /// it was declared. Nothing watched it: replacing the body with a constant
+    /// 2 passed the entire suite, including the coverage test above, because a
+    /// small corner needs about two points anyway.
+    ///
+    /// This is the same shape twice, once scaled eight times, and the second
+    /// one is where a fixed count runs out.
+    #[test]
+    fn a_corner_is_sampled_finely_enough_at_the_size_it_is_drawn() {
+        use crate::widgets::Corners;
+
+        let coverage = |scale: f32| {
+            let placement = Transform::scale(scale);
+            let shape = PlacedShape::placed(
+                Rect::new(0.0, 0.0, 120.0, 120.0),
+                round(40.0),
+                2.0,
+                placement,
+            );
+            let rects = placed_shape_to_rects(shape, None);
+            let local = Rect::new(0.0, 0.0, 120.0, 120.0);
+            let corners = Corners::superellipse(40.0, 2.0);
+            let to_local = placement.inverse().expect("invertible");
+            let inside = |x: i32, y: i32| {
+                let (lx, ly) = to_local.transform_point(x as f32 + 0.5, y as f32 + 0.5);
+                local.contains_shape(lx, ly, corners)
+            };
+
+            let covered: i64 = rects.iter().map(|r| r.width as i64 * r.height as i64).sum();
+            let side = (120.0 * scale) as i32 + 4;
+            let mut drawn = 0i64;
+            for y in -2..side {
+                for x in -2..side {
+                    if inside(x, y) {
+                        drawn += 1;
+                    }
+                }
+            }
+            (covered, drawn)
+        };
+
+        // A corner eight times the size gets more points, so it is cut *more*
+        // accurately, not less. A fixed count goes the other way and flattens
+        // out: measured, 98.85% then 99.75% with the count as written, against
+        // 97.71% and 98.16% with it replaced by a constant 2. The bar at scale
+        // 8 is what tells the two apart.
+        let (covered, drawn) = coverage(1.0);
+        assert!(
+            covered * 1000 >= drawn * 985,
+            "at scale 1 the region covers {covered} of {drawn}"
+        );
+        let (covered, drawn) = coverage(8.0);
+        assert!(
+            covered * 1000 >= drawn * 995,
+            "at scale 8 the region covers {covered} of {drawn} — a corner eight \
+             times the size needs more points, not the same number spread \
+             further apart"
+        );
+    }
+
     /// What sampling a corner costs the compositor, in rectangles.
     ///
     /// A region is a list `wl_region` receives and the compositor diffs, so the
@@ -712,10 +777,12 @@ mod tests {
                     }
                 }
 
-                // A pixel's centre can sit a hair outside a band the region
-                // rounded outward, so this is a handful rather than zero.
-                assert!(
-                    claimed_outside * 400 < drawn,
+                // Zero, not a tolerance. This is the promise that sends a
+                // click to a surface which did not draw there, and it is zero
+                // in every configuration here — a bound set near the observed
+                // value is the one that notices it breaking.
+                assert_eq!(
+                    claimed_outside, 0,
                     "k={k} at {degrees}°: {claimed_outside} of {covered} published \
                      pixels are outside the shape, which has {drawn}"
                 );
