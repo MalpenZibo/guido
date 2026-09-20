@@ -55,24 +55,25 @@ struct Params {
     /// Where this viewport sits on the target, in physical pixels — the
     /// fragment's uv is relative to the viewport and the shape is not.
     viewport_origin: [f32; 2],
-    _pad2: [f32; 2],
+    /// Size of the coverage mask in texels, for the passes that read one.
+    mask_size: [f32; 2],
     /// Target physical pixels to shape space: `[a, b, tx, c, d, ty]`.
     to_shape: [f32; 6],
     _pad3: [f32; 2],
-    /// Sub-rectangle of the coverage mask this viewport covers, in normalised
-    /// UV. The whole mask unless the region runs off the target, where the
-    /// viewport is clipped and the mask must be read clipped with it.
-    mask_rect: [f32; 4],
     /// Colour of the contour `fs_outline` draws, and how far out it reaches
-    /// from the glyph edge in physical pixels.
+    /// from the glyph edge in mask texels.
     stroke_color: [f32; 4],
     stroke_width: f32,
     _pad4: [f32; 3],
 }
 
-/// Where a region lands on the target — viewport in physical pixels — and the
-/// sub-rectangle of a coverage mask that covers it, in normalised uv.
-type Placement = ((u32, u32, u32, u32), [f32; 4]);
+/// A rasterized coverage mask and how big it is, which the view alone does not
+/// say — the passes that read one need its texel size to step by a texel.
+#[derive(Clone, Copy)]
+pub struct CoverageMask<'a> {
+    pub view: &'a wgpu::TextureView,
+    pub size: (u32, u32),
+}
 
 /// A blur to apply, resolved to physical pixels.
 #[derive(Debug, Clone, Copy)]
@@ -135,6 +136,29 @@ impl BackdropRegion {
             return None;
         }
         Some((x, y, right - x, bottom - y))
+    }
+
+    /// The half of the uniform that says where the shape is.
+    ///
+    /// Every pass that cuts something — the corners, a coverage mask, the
+    /// contour around one — works by carrying its fragment from the target
+    /// back into the shape's own space, so they all need the same fields and
+    /// none of them should spell them out again.
+    fn shape_params(&self, origin: (u32, u32), mask: Option<CoverageMask<'_>>) -> Params {
+        Params {
+            curvature: self.curvature,
+            radii: self.radii.to_array(),
+            shape_rect: [
+                self.shape.x,
+                self.shape.y,
+                self.shape.width,
+                self.shape.height,
+            ],
+            viewport_origin: [origin.0 as f32, origin.1 as f32],
+            to_shape: self.to_shape.data,
+            mask_size: mask.map_or([1.0, 1.0], |m| [m.size.0 as f32, m.size.1 as f32]),
+            ..Params::zeroed()
+        }
     }
 }
 
@@ -507,34 +531,19 @@ impl BackdropRenderer {
 
     /// The same, cut out by `mask`'s alpha instead of the corners.
     ///
-    /// The mask covers the region one texel per destination pixel, so what it
-    /// leaves opaque is what shows the blur — glyph coverage, in the only
-    /// caller. The region's radii are ignored: the shape is entirely the mask's.
+    /// The mask covers `region.shape` in the space `region.to_shape` lands in,
+    /// and each fragment is carried back there to find its texel — so what the
+    /// mask leaves opaque is what shows the blur, wherever the shape has been
+    /// turned or stretched to. The region's radii are ignored: the shape is
+    /// entirely the mask's.
     pub fn apply_masked(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
-        mask: &wgpu::TextureView,
+        mask: CoverageMask<'_>,
     ) {
         self.filter(device, encoder, region, Some(mask));
-    }
-
-    /// Where a region lands on the target, and which part of a mask covers it.
-    ///
-    /// The two go together: the viewport is the region clipped to what is on
-    /// show, and the mask covers the region whole, so anything the clip took
-    /// off has to come off the mask's uv as well.
-    fn placement(&self, region: &BackdropRegion) -> Option<Placement> {
-        let targets = self.targets.as_ref()?;
-        let (x, y, width, height) = region.clamped(targets.width, targets.height)?;
-        let mask_rect = [
-            (x as f32 - region.rect.x) / region.rect.width.max(1.0),
-            (y as f32 - region.rect.y) / region.rect.height.max(1.0),
-            width as f32 / region.rect.width.max(1.0),
-            height as f32 / region.rect.height.max(1.0),
-        ];
-        Some(((x, y, width, height), mask_rect))
     }
 
     /// Draw a contour just outside `mask`'s coverage.
@@ -551,31 +560,29 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
-        mask: &wgpu::TextureView,
+        mask: CoverageMask<'_>,
         color: Color,
         width: f32,
     ) {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some((viewport, mask_rect)) = self.placement(region) else {
+        let Some(viewport) = region.clamped(targets.width, targets.height) else {
             return;
         };
-        let (_, _, dst_width, dst_height) = viewport;
+        let (x, y, dst_width, dst_height) = viewport;
 
         let params = Params {
             src_rect: [0.0, 0.0, 1.0, 1.0],
             dst_size: [dst_width as f32, dst_height as f32],
-            curvature: 1.0,
-            mask_rect,
             stroke_color: [color.r, color.g, color.b, color.a],
             stroke_width: width,
-            ..Params::zeroed()
+            ..region.shape_params((x, y), Some(mask))
         };
         // Binding 0 goes unread by this pipeline; the working texture fills it
         // because the scene is the target and may not be bound as a resource
         // at the same time.
-        let bind = self.bind_masked(device, &targets.working_views[0], mask, params);
+        let bind = self.bind_masked(device, &targets.working_views[0], mask.view, params);
         self.pass(
             encoder,
             &self.outline,
@@ -592,12 +599,12 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
-        mask: Option<&wgpu::TextureView>,
+        mask: Option<CoverageMask<'_>>,
     ) {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some(((x, y, width, height), mask_rect)) = self.placement(region) else {
+        let Some((x, y, width, height)) = region.clamped(targets.width, targets.height) else {
             return;
         };
 
@@ -630,18 +637,7 @@ impl BackdropRenderer {
             sigma,
             taps,
             dst_size: [width as f32, height as f32],
-            curvature: region.curvature,
-            radii: region.radii.to_array(),
-            shape_rect: [
-                region.shape.x,
-                region.shape.y,
-                region.shape.width,
-                region.shape.height,
-            ],
-            viewport_origin: [x as f32, y as f32],
-            to_shape: region.to_shape.data,
-            mask_rect,
-            ..Params::zeroed()
+            ..region.shape_params((x, y), mask)
         };
 
         // 1. Scene region → working[0], shrunk.
@@ -690,7 +686,7 @@ impl BackdropRenderer {
         let (pipeline, bind, label) = match mask {
             Some(mask) => (
                 &self.composite_mask,
-                self.bind_masked(device, &targets.working_views[0], mask, params),
+                self.bind_masked(device, &targets.working_views[0], mask.view, params),
                 "Backdrop Composite Mask",
             ),
             None => (
@@ -723,11 +719,13 @@ impl BackdropRenderer {
         let bind = self.bind(
             device,
             &targets.scene_view,
+            // The blit runs `fs_downsample`, which reads `src_rect` and
+            // nothing else. A `curvature` and a `dst_size` were set here too
+            // and went unread — copied from the passes that do read them, and
+            // kept by nobody noticing, until a mutant deleted one and no test
+            // objected.
             Params {
                 src_rect: [0.0, 0.0, 1.0, 1.0],
-                dst_size: [targets.width as f32, targets.height as f32],
-                curvature: 1.0,
-                mask_rect: [0.0, 0.0, 1.0, 1.0],
                 ..Params::zeroed()
             },
         );

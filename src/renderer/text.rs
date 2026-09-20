@@ -28,6 +28,21 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     hasher.finish()
 }
 
+/// The buffer glyphon is given to shape a text of this layout box in, in
+/// physical pixels.
+///
+/// The floors are glyphon's: a buffer narrower than the text it holds wraps it,
+/// and a measured box can come back a hair narrower than the thing it measured.
+///
+/// It is a function and not four inline multiplications because a text's frost
+/// is shaped separately from the text — see [`text_mask`](super::text_mask) —
+/// and two shapings that disagree break their lines in different places, which
+/// puts frost beside a letter that wrapped somewhere else. The sibling for the
+/// transformed path is [`text_quad::shaping_buffer`](super::text_quad::shaping_buffer).
+pub(super) fn shaping_buffer(rect: crate::widgets::Rect, scale: f32) -> (f32, f32) {
+    (rect.width.max(200.0) * scale, rect.height.max(50.0) * scale)
+}
+
 pub struct TextRenderState {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -210,10 +225,11 @@ impl TextRenderState {
                     crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
+                let (buffer_width, buffer_height) = shaping_buffer(entry.rect, scale_factor);
                 buffer.set_size(
                     &mut self.font_system,
-                    Some((entry.rect.width.max(200.0)) * scale_factor),
-                    Some((entry.rect.height.max(50.0)) * scale_factor),
+                    Some(buffer_width),
+                    Some(buffer_height),
                 );
                 let weight = if entry.font_weight == FontWeight::default() {
                     FontWeight::NORMAL
@@ -332,5 +348,60 @@ impl TextRenderState {
                 .render(&self.atlas, &self.viewport, pass)
                 .expect("Failed to render text");
         }
+    }
+}
+
+#[cfg(test)]
+mod shaping_buffer_tests {
+    use super::shaping_buffer;
+    use crate::widgets::Rect;
+
+    /// The floors are in logical pixels and the scale is applied after them, so
+    /// a small box on a HiDPI screen gets the floor at that screen's density
+    /// rather than a floor that shrinks as the screen gets finer.
+    #[test]
+    fn the_floor_is_logical_and_the_scale_comes_after_it() {
+        assert_eq!(
+            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0),
+            (200.0, 50.0)
+        );
+        assert_eq!(
+            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0),
+            (400.0, 100.0)
+        );
+    }
+
+    /// Above the floors the buffer is the box, scaled — and scaled, not offset,
+    /// which is the whole of what makes it agree with a glyph drawn at that
+    /// scale.
+    #[test]
+    fn a_box_above_the_floor_is_carried_by_the_scale_alone() {
+        assert_eq!(
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 1.0),
+            (300.0, 80.0)
+        );
+        assert_eq!(
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 2.0),
+            (600.0, 160.0)
+        );
+        // The floor is logical, so a scale below 1 can carry the buffer under
+        // it: 80 clears the floor of 50 and then halves to 40.
+        assert_eq!(
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 0.5),
+            (150.0, 40.0)
+        );
+    }
+
+    /// The two rules are not the same rule, which is why a coverage mask has to
+    /// pick one rather than assume. If this ever passes, `text_mask` no longer
+    /// has a choice to get wrong — and the comment saying it does is stale.
+    #[test]
+    fn the_transformed_shaper_asks_for_something_else() {
+        let rect = Rect::new(0.0, 0.0, 72.0, 80.0);
+        assert_ne!(
+            shaping_buffer(rect, 4.0),
+            super::super::text_quad::shaping_buffer(rect, 4.0),
+            "a 72-point box: 400 texels through this one and 317 through the other"
+        );
     }
 }

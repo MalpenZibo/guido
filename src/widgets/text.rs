@@ -135,8 +135,11 @@ impl Text {
     /// expressed in it.
     ///
     /// Asked for one text at a time, on purpose: each frosted text ends the
-    /// render pass to filter the target.
-    /// A rotated or scaled text ignores it — the mask is axis-aligned.
+    /// render pass to filter the target. A transform keeps it: the coverage is
+    /// cut in the text's own space, so the frost turns and stretches with the
+    /// letters rather than switching off. It is rasterized finer under one, so
+    /// a transformed text runs into the size ceiling sooner — past it the frost
+    /// is dropped with a warning in the log, as it always was.
     ///
     /// Legibility is not what it buys on its own, and of the two decorations
     /// that give it, one composes and one does not.

@@ -1,20 +1,23 @@
 //! Does a transform move the blur with the shape, or only the shape?
 //!
-//! A backdrop blur is resolved to a region twice from the same draw command:
-//! the renderer filters the surface's own content inside it, and the compositor
-//! is handed a `wl_region` for the desktop behind it. Both are computed as the
-//! **axis-aligned bounding box** of the container's world shape.
+//! A backdrop blur is resolved twice from the same draw command: the renderer
+//! filters the surface's own content behind the card, and the compositor is
+//! handed a `wl_region` for the desktop behind the surface. Both are cut to the
+//! shape the container drew — the renderer masks its fragments in the
+//! container's own space, and the region is tessellated from the same placed
+//! shape — so a transform carries the blur along with the card.
 //!
-//! A bounding box equals the shape for any transform that keeps the axes, and
-//! is larger than it for one that does not. This lays the four cases side by
-//! side over a striped backdrop this surface draws itself, so the blur is
-//! visible without a compositor implementing `ext-background-effect-v1`:
+//! This lays the four cases side by side over a striped backdrop this surface
+//! draws itself, so the blur is visible without a compositor implementing
+//! `ext-background-effect-v1`:
 //!
 //! - each card's **border marks the shape** — it is transformed with the card;
-//! - the **blurred area is the region**.
+//! - the **blurred area is what the effect reached**.
 //!
-//! Wherever the two come apart, they have come apart. Expect them to agree for
-//! the first three and not for the fourth.
+//! Expect them to agree in all four. Until #198 the fourth was the one that
+//! came apart: both halves took the axis-aligned bounding box, which is the
+//! shape only while the transform keeps the axes, so a turned card blurred the
+//! box around itself — 73% more area, corner triangles and all.
 
 use guido::prelude::*;
 
@@ -117,19 +120,22 @@ fn main() {
                             )
                             .children([
                                 // A translated box is the same box somewhere
-                                // else, so its bounding box is itself.
+                                // else: the easy case, and the one that was
+                                // never wrong.
                                 case("translated 30, 12", card().translate((30.0, 12.0))),
                                 // A uniformly scaled one likewise — and its
                                 // corners grow with it, or the region cuts a
                                 // curve the card does not have.
                                 case("scaled 1.4x", card().scale(1.4)),
-                                // Unevenly scaled: still axis-aligned, so still
-                                // exact, but the corner is now an ellipse.
+                                // Unevenly scaled: the corner is now an
+                                // ellipse, which the region rounds to the
+                                // circle inscribed in it (#400).
                                 case("scaled 1.6x / 0.8x", card().scale((1.6, 0.8))),
                                 // A rotation is the one that does not keep the
-                                // axes: the bounding box gains the four corner
-                                // triangles, and the mask has no transform to
-                                // cut them back out with.
+                                // axes. The viewport is still the bounding box
+                                // — a viewport is four integers — but the mask
+                                // is tested in the card's own space, so the
+                                // corner triangles are cut back off.
                                 case("rotated 20°", card().rotate(20.0)),
                             ])
                             .into_any(),

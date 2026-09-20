@@ -91,7 +91,7 @@ impl PlacedShape {
     ///
     /// What a clip used to be, for the consumer that can still only take a
     /// box: glyphon clips text to an integer rect, which is over-generous
-    /// under rotation and is the remainder of #199.
+    /// under rotation — #405.
     #[inline]
     pub fn world_aabb(&self) -> Rect {
         self.placement.map_rect(self.rect)

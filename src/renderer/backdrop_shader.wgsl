@@ -23,15 +23,14 @@ struct Params {
     shape_rect: vec4<f32>,
     // Where this viewport sits on the target, in physical pixels.
     viewport_origin: vec2<f32>,
-    _pad4: vec2<f32>,
+    // Size of the coverage mask in texels.
+    mask_size: vec2<f32>,
     // Target physical pixels to shape space: [a, b, tx, c] and [d, ty].
     to_shape_0: vec4<f32>,
     to_shape_1: vec2<f32>,
     _pad5: vec2<f32>,
-    // Sub-rectangle of the coverage mask this viewport covers, normalised.
-    mask_rect: vec4<f32>,
     // Colour of the outline drawn by `fs_outline`, and how far it reaches out
-    // from the glyph edge in physical pixels.
+    // from the glyph edge in mask texels.
     stroke_color: vec4<f32>,
     stroke_width: f32,
     _pad1: f32,
@@ -42,8 +41,9 @@ struct Params {
 @group(0) @binding(0) var t_source: texture_2d<f32>;
 @group(0) @binding(1) var s_source: sampler;
 @group(0) @binding(2) var<uniform> params: Params;
-// Coverage mask for `fs_composite_mask`, one texel per destination pixel.
-// Declared for every entry point, bound only by the pipeline that reads it.
+// Coverage mask for `fs_composite_mask`, covering `shape_rect` in the shape's
+// own space. Declared for every entry point, bound only by the pipeline that
+// reads it.
 @group(0) @binding(3) var t_mask: texture_2d<f32>;
 
 struct VertexOutput {
@@ -67,6 +67,24 @@ fn vs_main(@builtin(vertex_index) index: u32) -> VertexOutput {
 
 fn source_uv(uv: vec2<f32>) -> vec2<f32> {
     return params.src_rect.xy + uv * params.src_rect.zw;
+}
+
+// The fragment on the target, then back in the shape's own space — where the
+// shape is an ordinary rect whatever it has been turned or stretched by. The
+// viewport is the box around that shape, so this is also what cuts the box
+// back down to it, and where a coverage mask is read.
+fn in_shape_space(uv: vec2<f32>) -> vec2<f32> {
+    let on_target = params.viewport_origin + uv * params.dst_size;
+    return vec2<f32>(
+        params.to_shape_0.x * on_target.x + params.to_shape_0.y * on_target.y + params.to_shape_0.z,
+        params.to_shape_0.w * on_target.x + params.to_shape_1.x * on_target.y + params.to_shape_1.y
+    );
+}
+
+// Where in a coverage mask this fragment falls: the mask covers `shape_rect`,
+// so its uv is the fragment's place within that rect.
+fn mask_uv(uv: vec2<f32>) -> vec2<f32> {
+    return (in_shape_space(uv) - params.shape_rect.xy) / params.shape_rect.zw;
 }
 
 // Copy the region into the working texture. Rendering into a smaller target
@@ -125,15 +143,7 @@ fn rounded_box_sdf(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>, k: f32)
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
 
-    // The fragment on the target, then back in the container's own space —
-    // where the shape is an ordinary rounded rect whatever the container has
-    // been turned by. The viewport is the box around that shape, so this is
-    // also what cuts the box back down to it.
-    let on_target = params.viewport_origin + in.uv * params.dst_size;
-    let p = vec2<f32>(
-        params.to_shape_0.x * on_target.x + params.to_shape_0.y * on_target.y + params.to_shape_0.z,
-        params.to_shape_0.w * on_target.x + params.to_shape_1.x * on_target.y + params.to_shape_1.y
-    );
+    let p = in_shape_space(in.uv);
 
     let half_size = params.shape_rect.zw * 0.5;
     let centre = params.shape_rect.xy + half_size;
@@ -165,11 +175,13 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
 // exactly what must stay clear.
 @fragment
 fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
-    let mask_uv = params.mask_rect.xy + in.uv * params.mask_rect.zw;
-    let own = textureSample(t_mask, s_source, mask_uv).a;
+    let centre = mask_uv(in.uv);
+    let own = textureSample(t_mask, s_source, centre).a;
 
-    // One physical pixel, in mask uv.
-    let px = params.mask_rect.zw / max(params.dst_size, vec2<f32>(1.0));
+    // One mask texel, in mask uv — which is what the stroke width is measured
+    // in, so the contour is dilated in the letters' own space and arrives on
+    // the target stretched exactly as they are.
+    let px = 1.0 / max(params.mask_size, vec2<f32>(1.0));
     let taps = 16;
     let tau = 6.2831855;
 
@@ -181,7 +193,7 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
         for (var i = 0; i < taps; i = i + 1) {
             let angle = tau * f32(i) / f32(taps);
             let offset = vec2<f32>(cos(angle), sin(angle)) * radius * px;
-            dilated = max(dilated, textureSample(t_mask, s_source, mask_uv + offset).a);
+            dilated = max(dilated, textureSample(t_mask, s_source, centre + offset).a);
         }
     }
 
@@ -191,13 +203,15 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
 
 // The same composite, shaped by a coverage mask instead of a rectangle: what
 // the glyphs cover shows the blurred backdrop, everything else is left alone.
-// The mask lines up one texel per destination pixel, so it is read with the
-// destination uv rather than the source rect.
+//
+// The mask is rasterized in the text's own space, not laid over the target, so
+// the fragment is carried back there to find its texel — the same journey the
+// corners take in `fs_composite`. That is what lets a turned or stretched text
+// keep its frost: the coverage goes where the letters go.
 @fragment
 fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
-    let mask_uv = params.mask_rect.xy + in.uv * params.mask_rect.zw;
-    let coverage = textureSample(t_mask, s_source, mask_uv).a;
+    let coverage = textureSample(t_mask, s_source, mask_uv(in.uv)).a;
 
     return vec4<f32>(blurred.rgb, blurred.a * coverage);
 }

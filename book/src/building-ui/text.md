@@ -195,8 +195,13 @@ Three things to know before reaching for it:
   anyway. A shadow does not: it is still copies of the glyphs *under* the fill,
   so it covers the letter's own area as well as its edge, which is invisible
   under an opaque fill and an opaque letter over frost.
-- **Rotation and scale skip it**, since the mask is rasterized square. A frost
-  sitting beside its own letters would be worse than none.
+- **A transform carries it along.** The coverage is cut in the text's own
+  space and read back through the transform, so a rotated or scaled text keeps
+  a frost registered with its letters — which is what an `animate_transform` on
+  a frosted label needs, and what it used to lose for the length of the
+  animation. A transformed text is rasterized finer for it, so a very large one
+  can reach the coverage size ceiling and lose the frost with a warning in the
+  log; it is an effect for a label.
 
 ```rust
 # extern crate guido;

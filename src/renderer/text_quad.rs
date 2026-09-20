@@ -19,17 +19,30 @@ use wgpu::{
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
 
-use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_TEXTURE_PADDING};
+use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEXTURE_PADDING};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 
-/// Quality multiplier for supersampling text textures.
-const QUALITY_MULTIPLIER: f32 = 2.0;
-
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
+
+/// The buffer glyphon is given to shape a transformed text in, in texture
+/// pixels — `scale_factor * TEXT_SUPERSAMPLE` of them per logical pixel.
+///
+/// Wider than the layout box by [`TEXT_MARGIN`], which is the slack the
+/// rasterizer wants and the reason this path cannot simply borrow
+/// [`text::shaping_buffer`](super::text::shaping_buffer): the two shape the
+/// same text in different buffers and break their lines in different places.
+/// A frosted text's coverage mask has to be shaped in whichever of the two will
+/// draw the glyphs over it — see [`text_mask`](super::text_mask).
+pub(super) fn shaping_buffer(rect: crate::widgets::Rect, effective_scale: f32) -> (f32, f32) {
+    (
+        rect.width * effective_scale * TEXT_MARGIN,
+        rect.height * effective_scale * TEXT_MARGIN,
+    )
+}
 
 /// A prepared text quad ready for rendering.
 pub struct PreparedTextQuad {
@@ -164,18 +177,17 @@ impl TextQuadRenderer {
         entry: &TextEntry,
         scale_factor: f32,
     ) -> PreparedTextQuad {
-        // Rasterize at fixed resolution: scale_factor * QUALITY_MULTIPLIER.
+        // Rasterize at fixed resolution: scale_factor * TEXT_SUPERSAMPLE.
         // The transform's scale/rotation is applied via GPU quad vertices, not baked into the texture.
         // This prevents atlas churn during scale animations (each frame would otherwise create new entries).
-        let effective_scale = scale_factor * QUALITY_MULTIPLIER;
+        let effective_scale = scale_factor * TEXT_SUPERSAMPLE;
 
         // Scale font size for crisp rendering
         let scaled_font_size = entry.font_size * effective_scale;
 
         // Texture dimensions are deterministic from the entry, so they can
         // key the cache before any shaping happens
-        let buffer_width = entry.rect.width * effective_scale * TEXT_MARGIN;
-        let buffer_height = entry.rect.height * effective_scale * TEXT_MARGIN;
+        let (buffer_width, buffer_height) = shaping_buffer(entry.rect, effective_scale);
         let padding = TEXT_TEXTURE_PADDING * effective_scale;
         let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
         let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
@@ -364,14 +376,14 @@ impl TextQuadRenderer {
         // to get screen coordinates. The world_transform already includes everything:
         // parent translations, rotations, scales, and center_at adjustments.
         //
-        // The texture was rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
-        // We divide by QUALITY_MULTIPLIER to get logical-pixel dimensions, then the
+        // The texture was rendered at (scale_factor * TEXT_SUPERSAMPLE) resolution.
+        // We divide by TEXT_SUPERSAMPLE to get logical-pixel dimensions, then the
         // world_transform applies scaling/rotation via transform_point() on quad corners.
 
-        // Calculate display size: divide by QUALITY_MULTIPLIER only.
-        // The texture is rendered at (scale_factor * QUALITY_MULTIPLIER) resolution.
+        // Calculate display size: divide by TEXT_SUPERSAMPLE only.
+        // The texture is rendered at (scale_factor * TEXT_SUPERSAMPLE) resolution.
         // The transform's scale is applied by transform_point() on quad corners, not here.
-        let total_scale = QUALITY_MULTIPLIER;
+        let total_scale = TEXT_SUPERSAMPLE;
         let display_width = tex_width as f32 / total_scale;
         let display_height = tex_height as f32 / total_scale;
 
@@ -405,7 +417,7 @@ impl TextQuadRenderer {
 
         // Physical world pixels, to match the corners above: glyphon clips
         // text to an integer box and this path matches it, so a turned clip
-        // over text cuts the box and not the shape — #199.
+        // over text cuts the box and not the shape — #405.
         let clip = entry.clip_rect.map_or(QuadClip::NONE, |rect| {
             QuadClip::world_box(rect, scale_factor)
         });
@@ -432,5 +444,31 @@ impl TextQuadRenderer {
     /// Render the prepared text quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedTextQuad]) {
         self.quad.draw(render_pass, quads);
+    }
+}
+
+#[cfg(test)]
+mod shaping_buffer_tests {
+    use super::{TEXT_MARGIN, shaping_buffer};
+    use crate::widgets::Rect;
+
+    /// No floor on this path — a transformed text is rasterized into a texture
+    /// of its own size — and the margin is a factor on the box, not a border
+    /// added to it, so it grows with the text rather than mattering only to
+    /// small ones.
+    #[test]
+    fn the_margin_is_a_factor_on_the_box_and_the_scale_multiplies_both() {
+        let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
+        assert_eq!(
+            shaping_buffer(rect, 1.0),
+            (100.0 * TEXT_MARGIN, 40.0 * TEXT_MARGIN)
+        );
+        assert_eq!(
+            shaping_buffer(rect, 4.0),
+            (400.0 * TEXT_MARGIN, 160.0 * TEXT_MARGIN)
+        );
+        // A tiny box stays tiny: nothing floors it up to 200 the way the
+        // untransformed path does.
+        assert!(shaping_buffer(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0).0 < 20.0);
     }
 }

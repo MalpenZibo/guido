@@ -504,6 +504,29 @@ fn swatch(w: f32, h: f32, c: Color) -> Container {
     box_of(w, h).background(c)
 }
 
+/// A backdrop with nowhere to hide: two colours far enough apart that a blur
+/// of them is neither, so what the effect reached is legible at a glance.
+///
+/// Shared by every backdrop scenario, so the frost a container cuts and the
+/// frost a text cuts are judged against the same picture.
+fn stripes(width: f32, count: usize, bar: f32) -> Container {
+    let bars: Vec<AnyWidget> = (0..count)
+        .map(|i| {
+            let colour = if i % 2 == 0 {
+                Color::rgb(0.85, 0.35, 0.30)
+            } else {
+                Color::rgb(0.15, 0.45, 0.85)
+            };
+            swatch(width, bar, colour).into_any()
+        })
+        .collect();
+    container()
+        .width(width)
+        .height(fill())
+        .layout(Flex::column())
+        .children(bars)
+}
+
 /// Always the vendored family, never whatever the machine happens to have.
 fn label(content: &str, size: f32) -> Text {
     text(content)
@@ -840,27 +863,7 @@ fn clipped_images() {
 /// card's border marks the shape; the blurred area is the mask. Where the two
 /// come apart, they have come apart.
 fn frosted_cards() -> Container {
-    let stripes = {
-        let bars: Vec<AnyWidget> = (0..14)
-            .map(|i| {
-                swatch(
-                    360.0,
-                    14.0,
-                    if i % 2 == 0 {
-                        Color::rgb(0.85, 0.35, 0.30)
-                    } else {
-                        Color::rgb(0.15, 0.45, 0.85)
-                    },
-                )
-                .into_any()
-            })
-            .collect();
-        container()
-            .width(360.0)
-            .height(fill())
-            .layout(Flex::column())
-            .children(bars)
-    };
+    let stripes = stripes(360.0, 14, 14.0);
 
     let case = |degrees: f32| {
         container()
@@ -934,6 +937,200 @@ fn backdrop_blur_follows_its_shape_at_scale_2x() {
         2.0,
         BACKDROP,
         frosted_cards(),
+    );
+}
+
+/// A frosted text over the same stripes, at rest and under three transforms.
+///
+/// The glyphs are the window: what they cover shows the backdrop blurred, and
+/// their own colour is the tint over it. The coverage mask is rasterized in the
+/// text's own space, so whether it follows the letters through a transform is
+/// exactly what these four cells put side by side.
+///
+/// The turned one carries a stroke as well. Over frost a stroke is a true
+/// contour, dilated from the same mask — so it is the one part of the effect
+/// measured in mask texels rather than read from them, and it would sit at the
+/// wrong width or in the wrong place if that space were got wrong.
+///
+/// The sixth wraps, which is the only way to catch the mask and the glyphs
+/// being shaped in different buffers — see the comment on the cell.
+///
+/// The fifth is a text too wide for the box it is in, so the frost's viewport
+/// is cut on every side. That case used to be carried by a `mask_rect` uniform
+/// re-mapping the clipped viewport onto the mask's uv, and the uniform is gone
+/// — a fragment's place in the text's own space already accounts for the cut.
+/// Nothing watched it before, which is how four deleted floats could have been
+/// four deleted floats and a defect.
+fn frosted_labels() -> Container {
+    let stripes = stripes(576.0, 12, 15.0);
+
+    let cell = |label: Text, place: fn(Container) -> Container| {
+        place(
+            container()
+                .width(96.0)
+                .height(180.0)
+                .layout(
+                    Flex::row()
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(label.nowrap()),
+        )
+        .into_any()
+    };
+
+    // The one cell that wraps, and the only kind that can tell two shapings
+    // apart: a single line breaks nowhere, so it agrees with anything. The mask
+    // is shaped separately from the glyphs over it, and a transformed text is
+    // drawn by a different shaper than an untransformed one — with the mask
+    // following the wrong one, the frost here wrapped a glyph later than the
+    // letters did and left a frosted `g` floating where no letter was.
+    let wrapping = |label: Text, place: fn(Container) -> Container| {
+        place(
+            container()
+                .width(96.0)
+                .height(180.0)
+                .layout(
+                    Flex::row()
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(container().width(72.0).child(label.wrap(true))),
+        )
+        .into_any()
+    };
+
+    let frosted = || {
+        label("Ag", 34.0)
+            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+            .backdrop_blur(14.0)
+    };
+
+    // The frost's viewport runs past this box on every side, and the clip is
+    // what stops it. Nothing else here cuts a viewport.
+    let scrolled = container()
+        .width(96.0)
+        .height(180.0)
+        .layout(
+            Flex::row()
+                .main_alignment(MainAlignment::Center)
+                .cross_alignment(CrossAlignment::Center),
+        )
+        .child(
+            container()
+                .width(58.0)
+                .height(30.0)
+                .overflow(Overflow::Hidden)
+                .layout(
+                    Flex::row()
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(frosted().nowrap()),
+        );
+
+    container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes.into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([
+                    cell(frosted(), |c| c),
+                    cell(frosted(), |c| c.scale(1.6)),
+                    cell(frosted(), |c| c.scale((0.7, 1.8))),
+                    cell(
+                        frosted().text_stroke(TextStroke::new(2.0, Color::BLACK)),
+                        |c| c.rotate(30.0),
+                    ),
+                    scrolled.into_any(),
+                    wrapping(
+                        label("Ag gj", 30.0)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(14.0),
+                        |c| c.scale(1.3),
+                    ),
+                ])
+                .into_any(),
+        ])
+}
+
+/// A frosted text keeps its frost under a scale and a rotation.
+///
+/// Before this the renderer refused the job outright for anything but a
+/// translation, so three of these four cells showed sharp letters over a sharp
+/// backdrop — the effect absent rather than wrong, and absent in exactly the
+/// transforms a hover or an `animate_transform` reaches for (#199).
+#[test]
+fn frosted_text_follows_its_letters() {
+    golden(
+        "frosted_text_follows_its_letters",
+        (576.0, 180.0),
+        1.0,
+        BACKDROP,
+        frosted_labels(),
+    );
+}
+
+/// The same four at scale 2.
+///
+/// The mask's frame is logical and the map that reaches it folds the surface
+/// scale in, the way a container's shape does; the glyph origin inside the mask
+/// is in texels, which is a third unit again. At scale 1 two of the three agree
+/// by accident.
+#[test]
+fn frosted_text_follows_its_letters_at_scale_2x() {
+    golden(
+        "frosted_text_follows_its_letters_at_scale_2x",
+        (576.0, 180.0),
+        2.0,
+        BACKDROP,
+        frosted_labels(),
+    );
+}
+
+/// A text that wraps, at scale 2, over a box narrow enough to force the break.
+///
+/// Nothing in this file wrapped before — every label is one line, and one line
+/// agrees with any shaping buffer, which is how the buffer rule came to be
+/// unwatched. It is the rule `TextRenderState` shapes every ordinary text with,
+/// its floors are in logical pixels and its scale is applied after them, and a
+/// mutation of either arithmetic passed the whole suite.
+///
+/// At scale 2 rather than 1 because that is where the scale in it is legible:
+/// at scale 1 the multiply and the floor are indistinguishable from half a
+/// dozen wrong rules.
+///
+/// Both boxes are wider than 200 logical pixels because that is the floor, and
+/// under it a text does not wrap at its own box at all — it wraps at 200. That
+/// is the rule's own doing and worth seeing here rather than discovering it.
+#[test]
+fn text_wraps_where_the_box_ends_at_scale_2x() {
+    let view = container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(
+            container()
+                .width(260.0)
+                .child(label("wrap this line where the box ends", 20.0).wrap(true)),
+        )
+        .child(
+            container()
+                .width(210.0)
+                .child(label("and this one sooner, being narrower", 16.0).wrap(true)),
+        );
+
+    golden(
+        "text_wraps_where_the_box_ends_at_scale_2x",
+        (290.0, 220.0),
+        2.0,
+        BACKDROP,
+        view,
     );
 }
 
