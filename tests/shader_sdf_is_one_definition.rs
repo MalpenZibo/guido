@@ -22,8 +22,12 @@
 //! `src/widgets/widget.rs` is the same function in Rust, and it is what
 //! hit-testing runs — so it decides where a click lands the way the shaders
 //! decide where a pixel lands. It cannot be compared character for character
-//! against WGSL, so the last test here pins it to the definition instead: a
-//! point that sits exactly on the superellipse must measure zero. Change the
+//! against WGSL, so the last test here pins it to the definition instead: the
+//! point that sits exactly on the superellipse is bracketed a twentieth of a
+//! pixel either side, and the boundary must fall between. Measuring at the
+//! point itself is what it used to do, and cannot be: the computed distance
+//! there lands within four millionths of a pixel of zero, so which side it
+//! falls on is the last bit of two `powf` calls. Change the
 //! curve and that fails too.
 //!
 //! **Why three copies rather than one.** All three shaders are loaded with
@@ -114,8 +118,24 @@ fn every_shader_calls_the_shared_function_it_carries() {
 /// diagonal sits at `r · 2^(-1/n)` from the arc's centre on each axis, and its
 /// distance to the edge is zero.
 ///
-/// Every curvature the public API names, and one between them, because
-/// `Corners` interpolates.
+/// That point is bracketed rather than asserted on directly. Its computed
+/// distance lands within four millionths of a pixel of zero at every `k`
+/// here, and which side of zero is the last bit of two `powf` calls — a
+/// coin flip, not a statement about the curve. A twentieth of a pixel either
+/// way is not: at every `k` the measured distance there is at least 0.05, so
+/// the bracket says where the boundary is to twenty times the precision the
+/// half-pixel one did. The `<=` that puts the boundary itself inside is
+/// checked on the straight edge instead, where the distance is exactly zero
+/// by construction and no rounding is involved.
+///
+/// Every curvature the public API names, one between them because `Corners`
+/// interpolates, and on up to `k = 8`. The ceiling is not decoration:
+/// `Corners::superellipse` takes any `f32`, and raising a 40-pixel offset to
+/// `n = 2^8` is `40^256`, far outside `f32`. A norm that computes that
+/// directly returns `inf` whatever the other offset holds, `inf - r` is
+/// `inf`, and every point the corner box reaches reads as outside — which is
+/// this copy's own answer and what stops the shape taking clicks over all but
+/// its inner square.
 #[test]
 fn hit_testing_measures_the_same_corner_the_shaders_draw() {
     use guido::widgets::{Corners, Rect};
@@ -123,7 +143,7 @@ fn hit_testing_measures_the_same_corner_the_shaders_draw() {
     let rect = Rect::new(0.0, 0.0, 200.0, 200.0);
     let r = 40.0_f32;
 
-    for k in [0.0_f32, 0.5, 1.0, 1.5, 2.0] {
+    for k in [0.0_f32, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0] {
         let n = 2f32.powf(k);
         // On the corner diagonal, |x| = |y| = q and 2·q^n = r^n.
         let q = r * 2f32.powf(-1.0 / n);
@@ -131,20 +151,25 @@ fn hit_testing_measures_the_same_corner_the_shaders_draw() {
         let (x, y) = (r - q, r - q);
 
         let corners = Corners::superellipse(r, k);
-        let on_edge = rect.contains_shape(x, y, corners);
-        let just_inside = rect.contains_shape(x + 0.5, y + 0.5, corners);
-        let just_outside = rect.contains_shape(x - 0.5, y - 0.5, corners);
+        let just_inside = rect.contains_shape(x + 0.05, y + 0.05, corners);
+        let just_outside = rect.contains_shape(x - 0.05, y - 0.05, corners);
 
         assert!(
             just_inside,
-            "k={k}: a point half a pixel inside the corner reads as outside it"
+            "k={k}: a point a twentieth of a pixel inside the corner reads as outside it — \
+             at k above about 4 this is the norm overflowing to inf, which puts every \
+             fragment in the corner outside the shape"
         );
         assert!(
             !just_outside,
-            "k={k}: a point half a pixel outside the corner reads as inside it — \
+            "k={k}: a point a twentieth of a pixel outside the corner reads as inside it — \
              hit-testing is measuring a different curve from the one the shaders draw"
         );
         // The boundary itself is inside, since the test is `distance <= 0`.
-        assert!(on_edge, "k={k}: the edge itself should count as inside");
+        // Taken on the straight edge, where the distance is exactly zero.
+        assert!(
+            rect.contains_shape(100.0, 0.0, corners),
+            "k={k}: the edge itself should count as inside"
+        );
     }
 }

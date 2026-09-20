@@ -566,6 +566,52 @@ fn corner_curvature_family() {
     );
 }
 
+/// The curvatures above the ledge where the norm used to overflow.
+///
+/// `superellipse_length` raises each offset to `n = 2^k` before taking the
+/// root. A 28-pixel offset at `k = 5` is `28^32`, about `10^46`, and `f32`
+/// stops at `3.4 × 10^38` — so the sum was `inf` whatever the other offset
+/// held, and the distance was `inf` for every fragment the corner box
+/// reaches, the straight sides included.
+///
+/// What that drew is not a missing corner. `inf` reaches `fwidth`, and on
+/// lavapipe the antialiasing collapses: the three high-k swatches came out as
+/// hard-edged squares a pixel wider all round, which is why this golden's
+/// difference against the unfixed shader is a one-pixel outline about each of
+/// them rather than four bites. Undefined is undefined and another adapter
+/// may do something else — what this golden pins is that on the one the
+/// project blesses against, the picture is the curve and not an artefact.
+///
+/// `Corners::superellipse` is public and takes any `f32`, so this range is
+/// reachable by anybody who asks for it, and by any transition whose endpoint
+/// is in it. The curve here is barely distinguishable from a square corner —
+/// that is what a superellipse *is* as `n` grows — and drawing very nearly a
+/// square, antialiased, is the correct answer.
+#[test]
+fn corners_above_the_overflow_ledge() {
+    let base = |k: f32| {
+        swatch(90.0, 90.0, Color::rgb(0.30, 0.55, 0.95)).corners(Corners::superellipse(28.0, k))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(16.0))
+        .child(base(3.0))
+        .child(base(4.0))
+        .child(base(5.0))
+        .child(base(6.0))
+        .child(base(8.0));
+
+    golden(
+        "corners_above_the_overflow_ledge",
+        (570.0, 122.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// Borders at the widths where the SDF is easiest to get wrong — one pixel,
 /// and wide enough to meet itself around a tight corner — over gradients, so
 /// the fill and the stroke are on the same pixels.

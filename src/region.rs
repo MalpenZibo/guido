@@ -730,8 +730,10 @@ mod tests {
     /// none.
     ///
     /// Checked against the same signed distance the shader draws with, over
-    /// every curvature the public API names and one between them, upright and
-    /// turned. #400 was the second promise broken at k > 1: the corner was
+    /// every curvature the public API names, one between them, and two above
+    /// the ledge where the norm used to overflow — the region and the shape
+    /// disagreeing is exactly what #411 would have looked like from here, and
+    /// nothing was asking. Upright and turned. #400 was the second promise broken at k > 1: the corner was
     /// published as the circle inscribed in the squircle, 14% of each corner
     /// box short. A scoop still breaks it, by more — that is #410, and this
     /// test holds it to the first promise in the meantime.
@@ -740,7 +742,7 @@ mod tests {
         use crate::widgets::Corners;
 
         let size = 120.0;
-        for k in [0.0_f32, 0.5, 1.0, 2.0, -1.0] {
+        for k in [0.0_f32, 0.5, 1.0, 2.0, 5.0, 8.0, -1.0] {
             for degrees in [0.0_f32, 20.0] {
                 let placement = Transform::rotate_degrees(degrees);
                 let shape =

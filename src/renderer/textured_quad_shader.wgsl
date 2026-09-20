@@ -74,6 +74,21 @@ fn k_to_n(k: f32) -> f32 {
 }
 
 // Superellipse "length" function - generalizes L2 norm
+//
+// Divide through by the larger component before raising it. Taken straight,
+// |x|^n leaves f32 a little above k = 4 at an ordinary corner radius: 28^32
+// is about 1e46. The sum is then inf whatever the other component holds, so
+// the distance is inf for every fragment the corner box reaches - along the
+// sides as much as around the corners - and what a pipeline makes of inf is
+// undefined. On lavapipe the antialiasing collapses and the shape is drawn
+// as a hard-edged box a pixel wider all round. Rect::shape_distance, the
+// fourth copy of this in Rust, reads inf as outside instead, and the shape
+// stops taking clicks over all of it but the inner square.
+//
+// Scaled, the larger term is exactly 1 and the smaller at most 1, so nothing
+// overflows at any n, and the root is multiplied back at the end. As n grows
+// the smaller term underflows to 0 and this tends to max(|x|, |y|), which is
+// the square corner a superellipse approaches.
 fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
     if (abs(n - 1.0) < 0.01) {
         return abs(p.x) + abs(p.y);  // L1 (diamond)
@@ -81,7 +96,12 @@ fn superellipse_length(p: vec2<f32>, n: f32) -> f32 {
         return length(p);  // L2 (circle)
     } else {
         let ap = abs(p);
-        return pow(pow(ap.x, n) + pow(ap.y, n), 1.0 / n);
+        let m = max(ap.x, ap.y);
+        if (m <= 0.0) {
+            return 0.0;
+        }
+        let t = min(ap.x, ap.y) / m;
+        return m * pow(1.0 + pow(t, n), 1.0 / n);
     }
 }
 
