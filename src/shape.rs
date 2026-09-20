@@ -761,3 +761,140 @@ fn clamp_radii(radii: CornerRadii, w: f32, h: f32) -> CornerRadii {
         .min(ratio(h, r.top_right + r.bottom_right));
     r.scaled(f)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::CornerRadii;
+    use crate::widgets::Rect;
+
+    fn scooped(placement: Transform) -> PlacedShape {
+        PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 120.0),
+            CornerRadii::uniform(40.0),
+            -1.0,
+            placement,
+        )
+    }
+
+    fn sheared() -> Transform {
+        Transform::rotate_degrees(25.0).then(&Transform::scale_xy(3.0, 1.0))
+    }
+
+    /// A band claims only what the shape covers at *every* height inside it.
+    ///
+    /// This is the promise the whole band loop rests on, and for the convex
+    /// part of a shape it is free: the left boundary is a convex function of
+    /// `y` and the right a concave one, so the intersection of the two edge
+    /// scanlines is inside the shape everywhere between them.
+    ///
+    /// A bite is where it has to be earned. Asked through
+    /// `placed_shape_to_rects` this is nearly untestable — bands are about a
+    /// pixel tall, the chord half a pixel from an ellipse's widest point is
+    /// shorter by a fraction of one, and whole-pixel rounding swallows the
+    /// difference. Three mutants of `removed_between` survived the entire
+    /// suite for exactly that reason: swap its two arguments, or take the
+    /// wrong reflection of the widest point, and every published rectangle
+    /// came back identical.
+    ///
+    /// So this asks the geometry rather than the pixels: sample the claim
+    /// across the band, and every sampled column must be inside the shape at
+    /// twenty-one heights spanning it. A bite subtracted at one height rather
+    /// than across the band fails it, because the ellipse a shear places has a
+    /// chord that *slides* as it grows.
+    #[test]
+    fn a_band_claims_nothing_the_shape_misses_anywhere_in_it() {
+        for placement in [
+            Transform::IDENTITY,
+            Transform::rotate_degrees(30.0),
+            sheared(),
+        ] {
+            let shape = scooped(placement);
+            let outline = shape.outline();
+            let (top, bottom) = shape.y_bounds();
+            // Deliberately coarser than the band loop's one-per-pixel: a
+            // taller band is where a bite's widest point is furthest from
+            // either edge, and it is the case the arithmetic exists for.
+            let bands = 24;
+            let step = (bottom - top) / bands as f32;
+
+            let mut checked = 0;
+            for i in 0..bands {
+                let (y0, y1) = (top + i as f32 * step, top + (i + 1) as f32 * step);
+                let (Some(a), Some(b)) = (outline.bounds_at(y0), outline.bounds_at(y1)) else {
+                    continue;
+                };
+                let band = (a.0.max(b.0), a.1.min(b.1));
+                let mut claimed = Spans::new();
+                if band.0 < band.1 {
+                    claimed.push(band);
+                }
+                outline.take_bites_from(&mut claimed, y0, y1);
+
+                for &(lo, hi) in &claimed {
+                    for t in 0..=8 {
+                        let x = lo + (hi - lo) * t as f32 / 8.0;
+                        for s in 0..=20 {
+                            let y = y0 + (y1 - y0) * s as f32 / 20.0;
+                            let there = outline.span_at(y);
+                            let covered = there
+                                .iter()
+                                .any(|&(left, right)| x >= left - 1e-3 && x <= right + 1e-3);
+                            assert!(
+                                covered,
+                                "the band {y0}..{y1} claims x={x}, which the shape does not \
+                                 cover at y={y}: it is {there:?} there"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                checked > 2000,
+                "the bands have to actually claim something to be worth checking: {checked}"
+            );
+        }
+    }
+
+    /// A band is the same band whichever end it is named from.
+    ///
+    /// `removed_between` normalises its two arguments, and nothing reaches it
+    /// backwards today — the band loop counts upward and `span_at` passes the
+    /// same height twice. That makes the normalisation exactly the kind of
+    /// line a test never reaches and a later caller relies on, so it is asked
+    /// here directly rather than left to be discovered.
+    #[test]
+    fn a_bite_does_not_care_which_end_of_the_band_it_is_given() {
+        let outline = scooped(sheared()).outline();
+        let (top, bottom) = scooped(sheared()).y_bounds();
+
+        let mut agreed = 0;
+        for i in 0..24 {
+            let (y0, y1) = (
+                top + (bottom - top) * i as f32 / 24.0,
+                top + (bottom - top) * (i + 1) as f32 / 24.0,
+            );
+            let mut forward = Spans::new();
+            forward.push((-1e4, 1e4));
+            outline.take_bites_from(&mut forward, y0, y1);
+
+            let mut backward = Spans::new();
+            backward.push((-1e4, 1e4));
+            outline.take_bites_from(&mut backward, y1, y0);
+
+            assert_eq!(
+                forward, backward,
+                "the band {y0}..{y1} lost a different bite when named backwards"
+            );
+            if forward.len() > 1 {
+                agreed += 1;
+            }
+        }
+        assert!(
+            agreed > 0,
+            "no band here actually had a bite taken out of it, so the two \
+             orders agreed on nothing"
+        );
+    }
+}
