@@ -670,6 +670,24 @@ mod tests {
         assert!(!Transform::scale_xy(0.0, 1.0).rect_stays_rect());
         assert!(!Transform::scale_xy(1.0, 0.0).rect_stays_rect());
         assert!(!Transform { data: [0.0; 6] }.rect_stays_rect());
+
+        // Half of a quarter turn and half of a skew. Each row has to answer the
+        // same way: one row looking like a turn while the other leans is a
+        // shear, and a shear sends a rect to a parallelogram. Written because
+        // nothing else here has a matrix where the two rows disagree — every
+        // named constructor makes them agree, so the conjunction went untested
+        // and `||` would have passed the whole suite.
+        for data in [
+            [0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+        ] {
+            assert!(
+                !Transform { data }.rect_stays_rect(),
+                "one row turned and the other leaning is a shear: {data:?}"
+            );
+        }
     }
 
     /// The permutation says where each corner lands, in `CornerRadii`'s order:
