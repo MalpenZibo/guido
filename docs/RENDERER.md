@@ -310,8 +310,31 @@ any two drift — which they had: the backdrop read the curvature as
 `max(k, 0.05) * 2` against the others' `pow(2, k)`, and those agree at exactly
 k = 1 and k = 2, which is every curvature any golden drew *with a backdrop
 blur* (#403). The Rust copy cannot be compared with WGSL as text, so the same
-test pins it to the geometry: a point sitting exactly on the superellipse must
-measure zero.
+test pins it to the geometry: the point sitting on the superellipse is
+bracketed a twentieth of a pixel either side, and the boundary must fall
+between. It is bracketed rather than measured at the point itself because the
+computed distance there lands within a few millionths of a pixel of zero, and
+which side of zero it lands on is the last bit of two `pow` calls.
+
+All four copies divide by the larger component before raising it. Taken
+straight, `|x|^n` with `n = 2^k` leaves `f32` a little above k = 4 at an
+ordinary radius — 28^32 is about 1e46 — and the sum is `inf` whatever the
+other component holds, so the distance was `inf` for every fragment the corner
+box reaches: along the sides as much as around the corners (#411). What a
+pipeline makes of `inf` is undefined, and the two kinds of consumer answered
+differently. The Rust copy reads it as outside, which is provable and was
+measured: a 120×120 with `Corners::superellipse(40.0, 6.0)` took clicks on
+2304 of its 14,400 pixels — the inner square, where `inside` alone decides,
+and nothing else. The shaders reach `fwidth` with it, and on lavapipe the
+antialiasing collapses and the shape is drawn as a hard-edged box a pixel
+wider all round. Another adapter may do something else; that is what
+undefined means, and it is reachable at a curvature `Corners::superellipse`
+accepts and a transition can sweep through.
+
+Scaled, the larger term is exactly 1 and the smaller at most 1, and as `n`
+grows the smaller underflows so the norm tends to `max(|x|, |y|)` — the square
+corner a superellipse approaches. The tessellator was never affected: it
+samples `cos(t)^(2/n)`, whose exponent *shrinks* as `n` grows.
 
 ### Regions
 
