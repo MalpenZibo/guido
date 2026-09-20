@@ -28,6 +28,21 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     hasher.finish()
 }
 
+/// The buffer glyphon is given to shape a text of this layout box in, in
+/// physical pixels.
+///
+/// The floors are glyphon's: a buffer narrower than the text it holds wraps it,
+/// and a measured box can come back a hair narrower than the thing it measured.
+///
+/// It is a function and not four inline multiplications because a text's frost
+/// is shaped separately from the text — see [`text_mask`](super::text_mask) —
+/// and two shapings that disagree break their lines in different places, which
+/// puts frost beside a letter that wrapped somewhere else. The sibling for the
+/// transformed path is [`text_quad::shaping_buffer`](super::text_quad::shaping_buffer).
+pub(super) fn shaping_buffer(rect: crate::widgets::Rect, scale: f32) -> (f32, f32) {
+    (rect.width.max(200.0) * scale, rect.height.max(50.0) * scale)
+}
+
 pub struct TextRenderState {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -210,10 +225,11 @@ impl TextRenderState {
                     crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
                 let mut buffer =
                     Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
+                let (buffer_width, buffer_height) = shaping_buffer(entry.rect, scale_factor);
                 buffer.set_size(
                     &mut self.font_system,
-                    Some((entry.rect.width.max(200.0)) * scale_factor),
-                    Some((entry.rect.height.max(50.0)) * scale_factor),
+                    Some(buffer_width),
+                    Some(buffer_height),
                 );
                 let weight = if entry.font_weight == FontWeight::default() {
                     FontWeight::NORMAL

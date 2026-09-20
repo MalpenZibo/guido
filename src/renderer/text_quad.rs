@@ -28,6 +28,22 @@ use crate::widgets::font::FontWeight;
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
 
+/// The buffer glyphon is given to shape a transformed text in, in texture
+/// pixels — `scale_factor * TEXT_SUPERSAMPLE` of them per logical pixel.
+///
+/// Wider than the layout box by [`TEXT_MARGIN`], which is the slack the
+/// rasterizer wants and the reason this path cannot simply borrow
+/// [`text::shaping_buffer`](super::text::shaping_buffer): the two shape the
+/// same text in different buffers and break their lines in different places.
+/// A frosted text's coverage mask has to be shaped in whichever of the two will
+/// draw the glyphs over it — see [`text_mask`](super::text_mask).
+pub(super) fn shaping_buffer(rect: crate::widgets::Rect, effective_scale: f32) -> (f32, f32) {
+    (
+        rect.width * effective_scale * TEXT_MARGIN,
+        rect.height * effective_scale * TEXT_MARGIN,
+    )
+}
+
 /// A prepared text quad ready for rendering.
 pub struct PreparedTextQuad {
     cached: std::rc::Rc<CachedTextTexture>,
@@ -171,8 +187,7 @@ impl TextQuadRenderer {
 
         // Texture dimensions are deterministic from the entry, so they can
         // key the cache before any shaping happens
-        let buffer_width = entry.rect.width * effective_scale * TEXT_MARGIN;
-        let buffer_height = entry.rect.height * effective_scale * TEXT_MARGIN;
+        let (buffer_width, buffer_height) = shaping_buffer(entry.rect, effective_scale);
         let padding = TEXT_TEXTURE_PADDING * effective_scale;
         let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
         let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
