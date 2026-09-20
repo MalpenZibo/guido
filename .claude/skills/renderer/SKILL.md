@@ -96,7 +96,8 @@ function. It takes the shape and its transform and cuts bands out of the
 transformed outline, so a turned container claims what it drew rather than the
 box around it. The clip is a shape too and is intersected scanline by scanline
 rather than as a box — but what arrives is `effective_clip`, already collapsed
-by `intersect_clips`, so #397's fallback is still upstream of it.
+by `intersect_clips` — exactly when the two spaces are a scale, a quarter turn
+or a mirror apart, and to the box around both at any other angle.
 
 The backdrop blur's *mask* is the same story inside the renderer: the viewport
 is the box, the mask is the shape, tested in the container's own space.

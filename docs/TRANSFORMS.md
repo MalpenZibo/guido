@@ -195,6 +195,8 @@ impl Transform {
     pub fn is_translation_only(&self) -> bool;
     pub fn is_pure_translation(&self) -> bool;
     pub fn keeps_axes(&self) -> bool;
+    pub fn rect_stays_rect(&self) -> bool;
+    pub fn corner_permutation(&self) -> [usize; 4];
 }
 ```
 
@@ -204,7 +206,10 @@ replay; `is_pure_translation` is exact and guards undoing a placement by
 negating two components. `keeps_axes` asks whether a rect stays a rect *with its
 corners in the order the radii are written in* — so it refuses a quarter turn
 and a mirror, which do keep the rect but move the top-left corner elsewhere. It
-decides whether two clips can share one coordinate space; see #397.
+decides whether a fast path that assumes upright may run. `rect_stays_rect` is
+the wider question — does a rect stay a rect, however its corners move — and is
+what decides whether two clips can share one coordinate space, paired with
+`corner_permutation` to carry the radii across.
 
 ### Container Transform Methods
 

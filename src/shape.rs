@@ -11,8 +11,10 @@
 //! Now the geometry lives here and both are it. That is what lets a region be
 //! narrowed by a *shape* rather than by a box — the corners of a rounded
 //! scroller cut the card inside it, and a turned clip cuts what it covers. It
-//! does not undo #397: a region is narrowed by one clip, and the chain that
-//! produced it was collapsed before it arrived.
+//! does not undo the clip chain's own collapse: a region is narrowed by one
+//! clip, and the chain that produced it was reduced before it arrived — exactly
+//! where the spaces are a quarter turn, a mirror or a scale apart, and to the
+//! box around both otherwise.
 
 use crate::layout::Axis;
 use crate::renderer::CornerRadii;
@@ -44,10 +46,12 @@ use smallvec::SmallVec;
 ///
 /// **What it cannot express is two shapes in two different rotated spaces.**
 /// One rect and one matrix describe one parallelogram, and the intersection of
-/// two that are turned differently is not one. `intersect_clips` in the
-/// flattener falls back to the box around both and #397 records it. The
-/// tessellator is the exception: it never writes the intersection down, so it
-/// can take both shapes and meet them a scanline at a time.
+/// two that are turned differently is not one — unless the turn between them is
+/// a quarter of one, or a mirror, where the image of a rect is still a rect and
+/// `intersect_clips` rewrites one in the other's space. For any other angle it
+/// falls back to the box around both. The tessellator is the exception: it
+/// never writes the intersection down, so it can take both shapes and meet them
+/// a scanline at a time.
 #[derive(Debug, Clone, Copy)]
 pub struct PlacedShape {
     /// The rect, in the space of the widget that declared it.
