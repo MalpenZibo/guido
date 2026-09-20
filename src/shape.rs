@@ -781,6 +781,111 @@ mod tests {
         Transform::rotate_degrees(25.0).then(&Transform::scale_xy(3.0, 1.0))
     }
 
+    /// A scanline the circle does not reach has no answer, and one it does
+    /// reach is answered on the circle.
+    ///
+    /// Both of `at_height`'s branches open with a guard, and both guards are
+    /// invisible to everything downstream. Past them the arithmetic does not
+    /// blow up — it quietly lands somewhere real: the upright branch takes
+    /// `sqrt` of a clamped negative and gets `cos t = 0`, the turned branch
+    /// `acos` of a clamped ratio and gets the circle's own vertical extreme.
+    /// Either way the point's x is the corner circle's centre, which lies
+    /// inside the shape at every scanline that reaches it — so `bounds_at`'s
+    /// min/max never moves and no published pixel changes. Ten mutants of
+    /// these two lines survived the whole suite on that.
+    ///
+    /// Harmless is not the same as right. A solution returned for a height
+    /// the circle does not cross is a wrong answer that happens not to be
+    /// used, and the next caller to trust `at_height` — `removed_between`
+    /// already does, without a quadrant filter to hide behind — has no reason
+    /// to expect one. So the guard is asked directly.
+    #[test]
+    fn a_circle_answers_only_the_scanlines_it_crosses() {
+        let corner = Corner {
+            centre: (40.0, 40.0),
+            radius: 40.0,
+            quadrant: (-1.0, -1.0),
+        };
+        // A circle with no height left answers nothing at all. Without that
+        // guard the solve divides zero by zero, and `NaN` is a point on no
+        // circle — the other side of the same line, and the only case that
+        // separates `< EPSILON` from `== EPSILON`.
+        //
+        // One flattened case per branch, because they guard separately. A
+        // radius of zero leaves an upright placement upright; scaling y to
+        // nothing costs the placement its `keeps_axes` and sends it the other
+        // way. Note that a *rotated* flat circle is not this: it is a slanted
+        // segment, and it crosses scanlines perfectly well.
+        for flat in [
+            Arc::placed(
+                &Corner {
+                    radius: 0.0,
+                    ..corner
+                },
+                &Transform::IDENTITY,
+            ),
+            Arc::placed(&corner, &Transform::scale_xy(1.0, 0.0)),
+        ] {
+            for target in [0.0_f32, 1.0, -1.0] {
+                assert!(
+                    flat.at_height(target).is_none(),
+                    "a circle with no height crosses no scanline, and answering \
+                     one means answering with NaN"
+                );
+            }
+        }
+
+        for placement in [
+            Transform::IDENTITY,
+            Transform::rotate_degrees(30.0),
+            sheared(),
+            Transform::scale_xy(2.0, 3.0),
+        ] {
+            let arc = Arc::placed(&corner, &placement);
+
+            // The circle's own reach, whatever the placement did to it.
+            let reach = match arc.solve {
+                Solve::Upright { half_height } => half_height.abs(),
+                Solve::Turned { amplitude, .. } => amplitude,
+            };
+            assert!(reach > 1.0, "the placed circle has to have some height");
+
+            for (target, crosses) in [
+                (0.0, true),
+                (reach * 0.5, true),
+                (-reach * 0.5, true),
+                // Exactly tangent, at both extremes. The scanline grazes the
+                // circle at one point, so there *is* an answer — and it is
+                // the only height where `>` and `>=` disagree.
+                (reach, true),
+                (-reach, true),
+                (reach * 1.01, false),
+                (-reach * 1.01, false),
+                (reach * 4.0, false),
+            ] {
+                let answer = arc.at_height(target);
+                assert_eq!(
+                    answer.is_some(),
+                    crosses,
+                    "a height of {target} against a reach of {reach}"
+                );
+                // And what comes back is on the circle, at the height asked.
+                for (ct, st) in answer.into_iter().flatten() {
+                    assert!(
+                        (ct * ct + st * st - 1.0).abs() < 1e-3,
+                        "({ct}, {st}) is not on the unit circle"
+                    );
+                    let (_, y) = arc.point_of(ct, st);
+                    assert!(
+                        (y - arc.centre_y - target).abs() < 1e-2,
+                        "asked for height {target} and got a point at {}",
+                        y - arc.centre_y
+                    );
+                }
+            }
+        }
+    }
+
     /// `subtract` keeps its promise: what it returns is what was in the span
     /// and not in the cut, and every span it returns is a real interval.
     ///
