@@ -267,10 +267,33 @@ The mask is the one part a caller replaces. `Text::backdrop_blur` emits
 `DrawCommand::TextBackdropBlur`, which resolves to the same blur with a
 coverage texture in place of the SDF: the glyphs are rasterized into it by
 `src/renderer/text_mask.rs`, shaped exactly as `TextRenderState` shapes the
-text drawn afterwards, one texel per pixel of a region snapped to the pixel
-grid. Sub-pixel position is handed to the mask as its glyph origin rather than
-rounded away, and a text under a rotation or scale is skipped — the mask is
-axis-aligned.
+text drawn afterwards.
+
+It takes the same journey as the corners, and that is the whole of how a
+transform is handled. `shape` is the text's layout box plus the slack a
+descender or a contour needs, in the text's **own** space; the mask covers that
+frame; the composite carries each fragment back there and reads the texel it
+lands on. Both regions are built by one `backdrop_region`, so the viewport is
+always the box around the shape it travels with.
+
+Where the mask is read is all the transform decides; how finely it is made
+turns on one bit of the transform and not on its magnitude. A text only moved
+is rasterized at the surface scale, one texel per physical pixel. One a
+transform stretches takes `TEXT_SUPERSAMPLE` times that, the density its glyph
+texture already has, because it will be read back across more pixels than it
+has texels. A boolean rather than the stretch itself, so a scale animation
+rasterizes twice over its length instead of once a frame. Both flat rules were
+tried and each is worse in half the cases; the measurement is in the comment on
+`command_to_text_backdrop` and is not repeated here, so there is one copy of it
+to keep true.
+
+The frame the mask is read over is a whole number of texels, not the box the
+ink needs: the shader divides by that rect to find its texel, so a frame wider
+than the texture it stands for would display the coverage short — about a per
+cent, which is half a pixel of frost beside its letters at the edges.
+
+A `text_stroke` over frost is dilated from the same mask, so its width is in
+mask texels too.
 
 ### Regions
 

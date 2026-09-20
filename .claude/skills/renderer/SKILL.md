@@ -64,6 +64,15 @@ glyphon — it is rasterised to a texture and drawn as a quad
 (`text_quad.rs`, `textured_quad_shader.wgsl`). Anything true of axis-aligned
 text has to be checked again there.
 
+A frosted text's coverage mask follows the same recipe as that quad: rasterised
+in the text's own space, read back through `to_shape` by the composite, and
+taking `TEXT_SUPERSAMPLE` only when a transform stretches it — both flat rules
+are worse in half the cases, measured in the comment on
+`command_to_text_backdrop`. Where it is read is all the transform decides, so a
+scale animation reuses one rasterisation rather than asking for a new one per
+frame — a mask per *text*, not per *transform*. `frosted_text_follows_its_letters` is the golden; before it the
+renderer refused the job outright for anything but a translation.
+
 ## Clipping
 
 `PlacedShape` (`src/shape.rs`) holds a rounded rect as its widget declared it
