@@ -955,6 +955,21 @@ mod tests {
                     bottom_left: 0.0,
                 },
             ),
+            // The same shape on its side. The shader's clamp is
+            // `min(r, min(half_w, half_h))`, and a box that is only ever
+            // limited by its height leaves the width half of that untested —
+            // both shapes above are, so mutating `width * 0.5` changed
+            // nothing and nothing objected.
+            (
+                60.0,
+                120.0,
+                CornerRadii {
+                    top_left: 50.0,
+                    top_right: 0.0,
+                    bottom_right: 0.0,
+                    bottom_left: 50.0,
+                },
+            ),
         ] {
             let k = -1.0;
             let shape =

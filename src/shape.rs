@@ -857,6 +857,47 @@ mod tests {
         }
     }
 
+    /// A corner with no radius is not a bite.
+    ///
+    /// The filter that says so is invisible to anything counting pixels. A
+    /// zero-radius bite answers no scanline — `at_height` refuses it — but its
+    /// widest point is the corner itself, so it removes a zero-width interval,
+    /// and `subtract` splits the span it lands in *into two that abut*. The
+    /// published pixels are identical; there are simply twice as many
+    /// rectangles covering them, and a `wl_region` is a list the compositor
+    /// has to receive.
+    ///
+    /// So this counts bites rather than pixels. `top(50.0)` scoops two corners
+    /// and leaves two at zero, which is the shape the filter exists for.
+    #[test]
+    fn a_corner_with_no_radius_is_not_a_bite() {
+        let shape = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 60.0),
+            CornerRadii {
+                top_left: 50.0,
+                top_right: 50.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            -1.0,
+            Transform::IDENTITY,
+        );
+        assert_eq!(
+            shape.outline().bites.len(),
+            2,
+            "two corners are scooped and two have no radius at all"
+        );
+
+        // And a convex curvature has none of them whatever its radii.
+        let round = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 60.0),
+            CornerRadii::uniform(20.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+        assert!(round.outline().bites.is_empty(), "only a scoop bites");
+    }
+
     /// A band is the same band whichever end it is named from.
     ///
     /// `removed_between` normalises its two arguments, and nothing reaches it
