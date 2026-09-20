@@ -173,7 +173,7 @@ impl TextRenderState {
 
             // Skip text that is completely outside its clip region (culling optimization)
             // Check this FIRST so culled texts don't get rendered via texture path either
-            if let Some(clip) = &entry.clip_rect {
+            if let Some(clip) = &entry.clip.map(|c| c.world_aabb()) {
                 // Get text bounding box in world space (same coordinate system as clip rect)
                 let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
                 let (p2x, p2y) = entry.transform.transform_point(
@@ -291,7 +291,12 @@ impl TextRenderState {
                 // Use clip rect if provided, otherwise use full screen
                 // Clip bounds stay in screen space - don't apply transform translation
                 // (text position is transformed, but clip region should remain fixed)
-                let bounds = if let Some(clip_rect) = &entry.clip_rect {
+                // The box around the clip, because `TextBounds` is four
+                // integers and glyphon has nowhere to put a shape. The quad
+                // path beside this one cuts the shape itself; this is the half
+                // of #405 that cannot, and a turned clip over glyphon-drawn
+                // text still lets it out at the corners.
+                let bounds = if let Some(clip_rect) = &entry.clip.map(|c| c.world_aabb()) {
                     TextBounds {
                         left: (clip_rect.x * scale_factor) as i32,
                         top: (clip_rect.y * scale_factor) as i32,

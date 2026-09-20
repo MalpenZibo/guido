@@ -917,23 +917,17 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size,
             font_family,
             font_weight,
-        } => {
-            // glyphon clips to four integers, so text gets the world box of
-            // the clip and not its shape. A turned clip over text is #405.
-            let clip_rect = cmd.clip.as_ref().map(PlacedShape::world_aabb);
-
-            Some(TextEntry {
-                text: text.clone(),
-                rect: *rect,
-                color: *color,
-                font_size: *font_size,
-                font_family: font_family.clone(),
-                font_weight: *font_weight,
-                clip_rect,
-                transform: cmd.world_transform,
-                transform_origin: cmd.world_transform_origin,
-            })
-        }
+        } => Some(TextEntry {
+            text: text.clone(),
+            rect: *rect,
+            color: *color,
+            font_size: *font_size,
+            font_family: font_family.clone(),
+            font_weight: *font_weight,
+            clip: cmd.clip,
+            transform: cmd.world_transform,
+            transform_origin: cmd.world_transform_origin,
+        }),
         _ => None,
     }
 }

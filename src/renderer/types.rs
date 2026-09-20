@@ -2,7 +2,6 @@
 
 use crate::transform::Transform;
 use crate::widgets::font::{FontFamily, FontWeight};
-use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::{Color, Rect};
 
 /// Gradient direction for linear gradients
@@ -138,26 +137,11 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
-    /// Optional clip rectangle to constrain text rendering
-    pub clip_rect: Option<Rect>,
+    /// The clip this text was flattened under, as the shape it is rather than
+    /// the box around it. The quad path cuts in the clip's own space; the
+    /// glyphon path asks for the box, because `TextBounds` is four integers.
+    pub clip: Option<crate::shape::PlacedShape>,
     /// Transform to apply to this text
-    pub transform: Transform,
-    /// Custom transform origin in logical screen coordinates, if any
-    pub transform_origin: Option<(f32, f32)>,
-}
-
-/// An image entry for rendering.
-#[derive(Clone)]
-pub struct ImageEntry {
-    /// The image source
-    pub source: ImageSource,
-    /// The bounding rectangle for the image in logical pixels
-    pub rect: Rect,
-    /// How the image content should fit within its bounds
-    pub content_fit: ContentFit,
-    /// Optional clip rectangle to constrain image rendering
-    pub clip_rect: Option<Rect>,
-    /// Transform to apply to this image
     pub transform: Transform,
     /// Custom transform origin in logical screen coordinates, if any
     pub transform_origin: Option<(f32, f32)>,
