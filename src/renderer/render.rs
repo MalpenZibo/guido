@@ -10,8 +10,9 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
-use super::backdrop_pass::{BackdropRegion, BackdropRenderer};
+use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask};
 use super::commands::{CornerRadii, DrawCommand};
+use super::constants::TEXT_SUPERSAMPLE;
 use super::flatten::{CommandLayer, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
@@ -21,7 +22,6 @@ use super::text_mask::{MaskSpec, TextMaskRenderer};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 use super::types::TextEntry;
 use crate::shape::PlacedShape;
-use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
 /// The renderer using instanced rendering.
@@ -414,14 +414,18 @@ impl Renderer {
                             // The mask is rasterized and submitted on its own
                             // encoder, so it is ready by the time this frame's
                             // encoder reaches the composite below.
-                            if let Some(mask) =
+                            if let Some(view) =
                                 self.text_mask.mask(&self.device, &self.queue, &frost.spec)
                             {
+                                let mask = CoverageMask {
+                                    view: &view,
+                                    size: frost.spec.size,
+                                };
                                 self.backdrop.apply_masked(
                                     &self.device,
                                     &mut encoder,
                                     &frost.region,
-                                    &mask,
+                                    mask,
                                 );
                                 // After the blur and before the glyphs: a
                                 // contour on the glass, not under it.
@@ -430,7 +434,7 @@ impl Renderer {
                                         &self.device,
                                         &mut encoder,
                                         &frost.region,
-                                        &mask,
+                                        mask,
                                         color,
                                         width,
                                     );
@@ -627,20 +631,62 @@ fn begin_pass<'a>(
     })
 }
 
+/// A logical rect in physical pixels.
+///
+/// Every rect the backdrop pass is handed has made this trip, and it is the one
+/// place the convention is written down: the pass works in physical pixels, and
+/// the shapes it cuts against do not.
+fn to_physical(rect: Rect, scale: f32) -> Rect {
+    Rect::new(
+        rect.x * scale,
+        rect.y * scale,
+        rect.width * scale,
+        rect.height * scale,
+    )
+}
+
 /// The clip a command was flattened under, in physical pixels.
 ///
 /// The axis-aligned world box of it: a rounded or rotated clip is approximated
 /// by that box, which is one pixel of slack at the corners against a blurred
 /// rectangle where the content has been scrolled away — and a good deal more
-/// than that against a turned one, which is #198.
+/// than that against a turned one, which is #401.
 fn clip_rect(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
-    let clip = cmd.clip.as_ref()?.world_aabb();
-    Some(Rect::new(
-        clip.x * scale,
-        clip.y * scale,
-        clip.width * scale,
-        clip.height * scale,
-    ))
+    Some(to_physical(cmd.clip.as_ref()?.world_aabb(), scale))
+}
+
+/// Where a placed shape lands for the backdrop pass.
+///
+/// The *viewport* is the box around the shape, because a viewport has no other
+/// shape to be: it says which pixels the pass may touch, and wgpu takes four
+/// integers. The *shape* travels in its own space, alongside the map back into
+/// it, and the pass carries each fragment there before deciding what to cut —
+/// which is how a turned container frosts what it drew rather than an upright
+/// rounded rect the size of its box, and how a turned text's coverage stays on
+/// its letters.
+///
+/// Both callers construct it the same way, and that is the point: the viewport
+/// is derived from the very shape it accompanies, so the two cannot drift.
+fn backdrop_region(
+    shape: PlacedShape,
+    radius: f32,
+    cmd: &FlattenedCommand,
+    scale: f32,
+) -> Option<BackdropRegion> {
+    Some(BackdropRegion {
+        rect: to_physical(shape.world_aabb(), scale),
+        radius: radius * scale,
+        // Logical, like the clip's rect and for the same reason: `to_shape`
+        // lands a physical fragment in the shape's own *logical* space, because
+        // the surface scale is folded into the map. Scaling it here as well
+        // applies it twice — and at scale 1 the two conventions agree, so the
+        // pairing has to be got right somewhere a golden can see it.
+        shape: shape.rect,
+        to_shape: shape.to_local(scale)?,
+        radii: shape.radii,
+        curvature: shape.curvature,
+        clip: clip_rect(cmd, scale),
+    })
 }
 
 /// Resolve a backdrop command to the physical-pixel region it filters.
@@ -661,49 +707,35 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
         return None;
     }
 
-    // The *viewport* is the box, because a viewport has no other shape to be:
-    // it says which pixels the pass may touch, and wgpu takes four integers.
-    let world = cmd.world_transform.map_rect(*rect);
-    // The *mask* is the shape. It is cut in the container's own space, which is
-    // where its corners are circles and its sides are its sides, and the
-    // fragment is carried back there — so a turned container frosts the shape
-    // it drew rather than an upright rounded rect the size of its box.
-    let to_shape = cmd.world_transform.physical_inverse(scale)?;
-
-    Some(BackdropRegion {
-        rect: Rect::new(
-            world.x * scale,
-            world.y * scale,
-            world.width * scale,
-            world.height * scale,
-        ),
-        radius: radius * scale,
-        // Logical, like the clip's rect and for the same reason: `to_shape`
-        // lands a physical fragment in the container's own *logical* space,
-        // because the surface scale is folded into the map. Scaling these as
-        // well applies it twice — and at scale 1 the two conventions agree, so
-        // the pairing has to be got right somewhere a golden can see it.
-        shape: *rect,
-        to_shape,
-        radii: *corner_radii,
-        curvature: *curvature,
-        clip: clip_rect(cmd, scale),
-    })
+    // The corners are the container's own, so the mask is cut where they are
+    // circles and its sides are its sides.
+    backdrop_region(
+        PlacedShape::placed(*rect, *corner_radii, *curvature, cmd.world_transform),
+        *radius,
+        cmd,
+        scale,
+    )
 }
 
 /// A frosted text resolved to the region it filters and the mask that cuts it.
 struct TextBackdrop<'a> {
     region: BackdropRegion,
     spec: MaskSpec<'a>,
-    /// The contour to draw around the coverage, in physical pixels.
+    /// The contour to draw around the coverage, in mask texels — the space it
+    /// is dilated in, so it arrives on the target stretched with the letters.
     outline: Option<(Color, f32)>,
 }
 
 /// Resolve a text backdrop command to its region and the mask to shape it with.
 ///
-/// The region is snapped to whole pixels so the mask is one texel per pixel of
-/// it; whatever the snap moved is handed back to the mask as the glyph origin,
-/// which is why a text half a pixel off the grid still frosts its own shape.
+/// The mask covers the text's layout box plus slack, in the text's **own**
+/// space, and the region is the box around wherever the transform puts that
+/// frame — the shape a container's blur carries, with a coverage texture where
+/// its corners would be. The composite carries each fragment back into the
+/// frame to read it, so a turned or stretched text keeps a frost that follows
+/// its letters; and where the mask sits is all the transform decides, so an
+/// animating one reuses a rasterization rather than asking for a new one every
+/// frame.
 fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBackdrop<'_>> {
     let DrawCommand::TextBackdropBlur {
         text,
@@ -718,53 +750,84 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         return None;
     };
 
-    // A rotated or scaled text is drawn from a texture, at an angle an
-    // axis-aligned mask cannot follow. Skipping is the honest answer: a frost
-    // that sits beside its letters is worse than none.
-    if !cmd.world_transform.is_translation_only() {
-        return None;
-    }
-
-    let (world_x, world_y) = cmd.world_transform.transform_point(rect.x, rect.y);
     // Glyphs overshoot their layout box — descenders, italics, marks — and the
     // slack here is the one the flattener already uses for a text's bounds. A
-    // contour reaches further still, and what falls outside the region is not
+    // contour reaches further still, and what falls outside the frame is not
     // drawn at all.
     let slack = font_size * 0.5 + stroke.map(|s| s.width).unwrap_or(0.0);
-    let left = (world_x - slack) * scale;
-    let top = (world_y - slack) * scale;
-    let right = (world_x + rect.width + slack) * scale;
-    let bottom = (world_y + rect.height + slack) * scale;
+    let box_of_ink = rect.outset(slack);
 
-    let x = left.floor();
-    let y = top.floor();
-    let width = (right.ceil() - x).max(1.0);
-    let height = (bottom.ceil() - y).max(1.0);
+    // Texels per logical pixel. A text the transform only moves is read back at
+    // the density it was made, so the surface scale is the whole of it; one the
+    // transform stretches is read back across more pixels than it has texels,
+    // and takes the supersample the glyph textures take for the same reason.
+    //
+    // A boolean and not the transform's own magnitude, so the mask survives an
+    // animation: a scale sweeping 1.0 -> 1.6 crosses this once and rasterizes
+    // twice, where a density that tracked the stretch would rasterize afresh
+    // every frame.
+    //
+    // Both flat rules were tried and both are worse, in half the cells each.
+    // Pixels of half-covered glyph edge over the six cells of
+    // `frosted_text_follows_its_letters_at_scale_2x` — fewer is tighter:
+    //
+    //                at rest  scale 1.6  stretch  rotate  clipped  wrapped
+    //     this rule      244       2052      989     747      692     1677
+    //     flat 2x        295       2052      989     747      698     1677
+    //     scale only     244       2264     1128     875      692     2102
+    //
+    // The numbers live here and nowhere else; what the reference and the skill
+    // carry is the shape of the result and a pointer back.
+    let density = if cmd.world_transform.is_translation_only() {
+        scale
+    } else {
+        scale * TEXT_SUPERSAMPLE
+    };
+    let width = (box_of_ink.width * density).ceil().max(1.0);
+    let height = (box_of_ink.height * density).ceil().max(1.0);
+
+    // The frame is the texture's extent and not the ink's: a whole number of
+    // texels, so the rect the shader reads the mask over and the rect the mask
+    // was drawn into are the same rect. Sizing it from the ink instead leaves
+    // the mask displayed short by `ceil(w·density)/(w·density)` — a per cent or
+    // so, which is half a pixel of frost beside its letters at the frame's
+    // edges, and the one failure this whole change is about.
+    let frame = Rect::new(
+        box_of_ink.x,
+        box_of_ink.y,
+        width / density,
+        height / density,
+    );
+
+    // Cornerless: the masked composite reads coverage over this frame and never
+    // asks the rounded-rect SDF, so the shape here is entirely the mask's.
+    let region = backdrop_region(
+        PlacedShape::placed(frame, CornerRadii::uniform(0.0), 1.0, cmd.world_transform),
+        *radius,
+        cmd,
+        scale,
+    )?;
 
     Some(TextBackdrop {
-        region: BackdropRegion {
-            rect: Rect::new(x, y, width, height),
-            radius: radius * scale,
-            // The shape is entirely the mask's: a frost cut to glyphs takes
-            // `fs_composite_mask`, which samples coverage and never asks the
-            // rounded-rect SDF. Nothing reads the four fields below.
-            shape: Rect::new(x, y, width, height),
-            to_shape: Transform::scale(1.0 / scale),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            clip: clip_rect(cmd, scale),
-        },
+        region,
         spec: MaskSpec {
             text,
             font_size: *font_size,
             font_family,
             font_weight: *font_weight,
-            logical: (rect.width, rect.height),
+            // Shaped by whichever path will draw the glyphs over the frost:
+            // the two break their lines in different places, and the frost has
+            // to break its own where the letters do.
+            buffer: if cmd.world_transform.is_translation_only() {
+                super::text::shaping_buffer(*rect, density)
+            } else {
+                super::text_quad::shaping_buffer(*rect, density)
+            },
             size: (width as u32, height as u32),
-            offset: (world_x * scale - x, world_y * scale - y),
-            scale_factor: scale,
+            offset: (slack * density, slack * density),
+            density,
         },
-        outline: stroke.map(|s| (s.color, s.width * scale)),
+        outline: stroke.map(|s| (s.color, s.width * density)),
     })
 }
 
@@ -902,25 +965,42 @@ mod tests {
         }
     }
 
-    /// The mask is one texel per pixel of the region, which only works if the
-    /// region lands on the pixel grid. What the snap moves has to come back as
-    /// the glyph origin, or the frost sits beside its own letters.
+    /// The mask is read over `shape`, with the glyph origin `offset` texels
+    /// into it. Those two have to meet at the text's own position, or the
+    /// frost sits beside its letters — and they meet there in the text's own
+    /// space, which is why no transform can pull them apart.
     #[test]
-    fn the_region_is_snapped_and_the_remainder_goes_to_the_mask() {
-        let cmd = frosted(Rect::new(10.3, 20.6, 100.0, 30.0), Transform::IDENTITY);
-        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
-
-        let rect = frost.region.rect;
-        assert_eq!(rect.x, rect.x.floor(), "x is a whole pixel, got {}", rect.x);
-        assert_eq!(rect.y, rect.y.floor(), "y is a whole pixel, got {}", rect.y);
-        assert_eq!(rect.width, rect.width.floor());
-        assert_eq!(rect.height, rect.height.floor());
-        assert_eq!(frost.spec.size, (rect.width as u32, rect.height as u32));
-
-        // The glyph origin, measured from the snapped corner, still lands on
-        // the text's own position.
-        assert!((rect.x + frost.spec.offset.0 - 10.3).abs() < 1e-3);
-        assert!((rect.y + frost.spec.offset.1 - 20.6).abs() < 1e-3);
+    fn the_glyph_origin_in_the_mask_is_where_the_text_is() {
+        for transform in [
+            Transform::IDENTITY,
+            Transform::translate(40.0, 5.0),
+            Transform::scale(2.5),
+            Transform::scale_xy(0.5, 3.0),
+            Transform::rotate(0.4),
+        ] {
+            let cmd = frosted(Rect::new(10.3, 20.6, 100.0, 30.0), transform);
+            let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
+            let frame = frost.region.shape;
+            let origin = (
+                frame.x + frost.spec.offset.0 / frost.spec.density,
+                frame.y + frost.spec.offset.1 / frost.spec.density,
+            );
+            assert!(
+                (origin.0 - 10.3).abs() < 1e-3 && (origin.1 - 20.6).abs() < 1e-3,
+                "{origin:?} is not the text's own origin under {transform:?}"
+            );
+            // Exactly, not to the nearest texel: the shader reads the mask
+            // over `frame` and divides by its width, so a frame wider than the
+            // texture it stands for displays the coverage short.
+            assert_eq!(
+                (
+                    frame.width * frost.spec.density,
+                    frame.height * frost.spec.density
+                ),
+                (frost.spec.size.0 as f32, frost.spec.size.1 as f32),
+                "the frame and the texture are the same extent under {transform:?}"
+            );
+        }
     }
 
     /// Descenders and italics reach past the layout box, and so must the frost:
@@ -934,25 +1014,29 @@ mod tests {
     }
 
     #[test]
-    fn the_scale_factor_reaches_the_region_and_the_radius() {
+    fn the_scale_factor_reaches_the_region_the_radius_and_the_density() {
         let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
         let one = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
         let two = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
         assert_eq!(two.region.radius, one.region.radius * 2.0);
         assert!(two.region.rect.width >= one.region.rect.width * 2.0 - 1.0);
-        assert_eq!(two.spec.scale_factor, 2.0);
+        assert_eq!(two.spec.density, one.spec.density * 2.0);
     }
 
-    /// A translated text is still axis-aligned, so the mask can follow it.
+    /// A translation moves the viewport and leaves the mask alone, which is
+    /// what lets a dragged surface reuse the one it already has.
     #[test]
     fn a_translated_text_is_frosted_where_it_ends_up() {
-        let cmd = frosted(
-            Rect::new(10.0, 20.0, 100.0, 30.0),
-            Transform::translate(40.0, 5.0),
-        );
-        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
-        assert!((frost.region.rect.x + frost.spec.offset.0 - 50.0).abs() < 1e-3);
-        assert!((frost.region.rect.y + frost.spec.offset.1 - 25.0).abs() < 1e-3);
+        let rect = Rect::new(10.0, 20.0, 100.0, 30.0);
+        let at_rest = frosted(rect, Transform::IDENTITY);
+        let at_rest = command_to_text_backdrop(&at_rest, 1.0).expect("a frost");
+        let moved = frosted(rect, Transform::translate(40.0, 5.0));
+        let moved = command_to_text_backdrop(&moved, 1.0).expect("a frost");
+
+        assert_eq!(moved.spec.size, at_rest.spec.size);
+        assert_eq!(moved.spec.offset, at_rest.spec.offset);
+        assert!((moved.region.rect.x - at_rest.region.rect.x - 40.0).abs() < 1e-3);
+        assert!((moved.region.rect.y - at_rest.region.rect.y - 5.0).abs() < 1e-3);
     }
 
     /// A frost inside a scroll view must not paint where the text has been
@@ -974,11 +1058,75 @@ mod tests {
         );
     }
 
-    /// A rotated or scaled one is not: the mask is rasterized square, and a
-    /// frost beside its letters is worse than no frost.
+    /// A turned text is frosted too, and along its letters: the viewport is
+    /// the box around the turned frame, and the frame carried back through
+    /// `to_shape` is where the mask is read — so the coverage turns with the
+    /// glyphs instead of being skipped.
     #[test]
-    fn a_rotated_text_is_left_alone() {
+    fn a_turned_text_is_frosted_along_its_letters() {
         let cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::rotate(0.4));
-        assert!(command_to_text_backdrop(&cmd, 1.0).is_none());
+        let frost = command_to_text_backdrop(&cmd, 1.0).expect("a frost");
+
+        let frame = frost.region.shape;
+        let turned = cmd.world_transform.map_rect(frame);
+        assert!(
+            (frost.region.rect.x - turned.x).abs() < 1e-3
+                && (frost.region.rect.width - turned.width).abs() < 1e-3,
+            "the viewport is the box around the turned frame: {:?} vs {turned:?}",
+            frost.region.rect
+        );
+        assert!(
+            turned.width > frame.width,
+            "a turn widens the box it needs, or this proves nothing"
+        );
+
+        // The frame's own corner, carried from the target back into the text's
+        // space, lands on the frame — which is what the composite does to find
+        // its mask texel.
+        let to_shape = frost.region.to_shape;
+        let (x, y) = cmd.world_transform.transform_point(frame.x, frame.y);
+        let (back_x, back_y) = to_shape.transform_point(x, y);
+        assert!((back_x - frame.x).abs() < 1e-2 && (back_y - frame.y).abs() < 1e-2);
+    }
+
+    /// The mask is rasterized in the text's own space, as the glyphs of a
+    /// transformed text already are, and how much the transform stretches it is
+    /// no part of that. So every frame of a scale animation asks for the same
+    /// mask while its viewport grows — one rasterization over the length of it,
+    /// rather than one per size it passes through.
+    #[test]
+    fn a_scale_grows_the_viewport_and_leaves_the_mask_alone() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 30.0);
+        let small = frosted(rect, Transform::scale(1.6));
+        let small = command_to_text_backdrop(&small, 1.0).expect("a frost");
+        let large = frosted(rect, Transform::scale(3.0));
+        let large = command_to_text_backdrop(&large, 1.0).expect("a frost");
+
+        assert_eq!(large.spec.size, small.spec.size);
+        assert_eq!(large.spec.density, small.spec.density);
+        assert_eq!(large.region.shape, small.region.shape);
+        assert!(
+            (large.region.rect.width - small.region.rect.width / 1.6 * 3.0).abs() < 1e-2,
+            "{:?} did not grow with the scale against {:?}",
+            large.region.rect,
+            small.region.rect
+        );
+    }
+
+    /// A text the transform only moves is read back at the density it was made,
+    /// and takes no supersample for it. One the transform stretches is read
+    /// back across more pixels than it has texels, and does — measured at the
+    /// glyph edge in `frosted_text_follows_its_letters_at_scale_2x`, it is the
+    /// wrong way round in both directions otherwise.
+    #[test]
+    fn only_a_stretched_text_pays_for_the_supersample() {
+        let rect = Rect::new(10.0, 20.0, 100.0, 30.0);
+        let moved = frosted(rect, Transform::translate(40.0, 5.0));
+        let moved = command_to_text_backdrop(&moved, 2.0).expect("a frost");
+        let turned = frosted(rect, Transform::rotate(0.4));
+        let turned = command_to_text_backdrop(&turned, 2.0).expect("a frost");
+
+        assert_eq!(moved.spec.density, 2.0, "the surface scale, and no more");
+        assert_eq!(turned.spec.density, 2.0 * TEXT_SUPERSAMPLE);
     }
 }

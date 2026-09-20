@@ -7,11 +7,21 @@
 //! for a backdrop blur is shaped once into a texture, in white on nothing, and
 //! the composite reads its alpha where it would otherwise evaluate an SDF.
 //!
-//! The mask is rasterized to cover exactly the region being filtered, one texel
-//! per physical pixel, so the composite can sample it with the destination uv.
-//! Shaping mirrors [`TextRenderState`](super::text::TextRenderState) exactly —
-//! same metrics, same buffer size — because the glyphs drawn over the frost come
-//! from there, and two shapings that disagree would show as a halo.
+//! The mask is rasterized in the text's **own space** — the one the layout box
+//! is written in, before any transform — and the composite carries each
+//! fragment back into that space to find its texel, so the coverage is turned
+//! and stretched with the letters rather than laid over them square. What the
+//! transform decides is only where the mask is read, never how it is made, so
+//! one rasterization serves a whole animation.
+//!
+//! Shaping mirrors whatever will draw the glyphs over the frost exactly — same
+//! metrics, same buffer — because two shapings that disagree break their lines
+//! in different places, and the frost then lands beside a letter that wrapped
+//! elsewhere. There are two to mirror, not one: [`text`](super::text) draws an
+//! untransformed text and [`text_quad`](super::text_quad) a transformed one,
+//! and their buffers are not the same size — a 72-point box at 30px shapes in
+//! 400 texels through one and 317 through the other. So the caller hands the
+//! buffer in rather than this module guessing which is about to be used.
 //!
 //! Colour is deliberately absent from the cache key: the frost of a white label
 //! and a red one is the same hole.
@@ -36,9 +46,10 @@ use crate::widgets::font::FontWeight;
 /// keeps whatever the current frame touched.
 const MAX_CACHED: usize = 32;
 
-/// Refuse a mask larger than this per side. A frost is an effect on a label, and
-/// an accidental one over a full-screen text would allocate a second framebuffer
-/// with no warning.
+/// Refuse a mask larger than this per side, in texels. The logical text that
+/// allows is this over the density, so a HiDPI screen halves it and a transform
+/// halves it again. A frost is an effect on a label, and an accidental one over
+/// a full-screen text would allocate a second framebuffer with no warning.
 const MAX_SIDE: u32 = 2048;
 
 /// What a mask has to be rasterized from.
@@ -47,16 +58,25 @@ pub struct MaskSpec<'a> {
     pub font_size: f32,
     pub font_family: &'a FontFamily,
     pub font_weight: FontWeight,
-    /// The text's layout box in logical pixels — the buffer is sized from it,
-    /// exactly as the on-screen shaping is.
-    pub logical: (f32, f32),
-    /// Mask size in physical pixels: the region the composite will cover.
+    /// The buffer to shape in, in the same texels as everything else here.
+    ///
+    /// Handed in rather than derived, because the rule belongs to whichever
+    /// path will draw the glyphs and there are two of them — see the module
+    /// documentation.
+    pub buffer: (f32, f32),
+    /// Mask size in texels: the frame the composite reads it over.
     pub size: (u32, u32),
-    /// Where the glyph origin sits inside that region, in physical pixels.
-    /// Sub-pixel, because the region is snapped to the pixel grid and the text
-    /// is not.
+    /// Where the glyph origin sits inside that frame, in texels — the slack the
+    /// frame carries on every side so a descender or a contour has somewhere to
+    /// reach.
     pub offset: (f32, f32),
-    pub scale_factor: f32,
+    /// Texels per logical pixel: the surface scale, and
+    /// [`TEXT_SUPERSAMPLE`](super::constants::TEXT_SUPERSAMPLE) times it when
+    /// the transform stretches the mask over more pixels than it has texels.
+    ///
+    /// Whether it stretches, never by how much — so the mask a scale animation
+    /// reads is rasterized twice over its length rather than once a frame.
+    pub density: f32,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -67,9 +87,11 @@ struct MaskKey {
     family: FontFamily,
     width: u32,
     height: u32,
-    /// The sub-pixel offset, in quarter pixels. Quantised because it varies
-    /// continuously while a surface is dragged, and a mask per unique float
-    /// would never hit.
+    /// Rounded, and in the key because it decides where the lines break: two
+    /// masks alike in every other field can still be shaped differently.
+    buffer: (u32, u32),
+    /// The glyph origin inside the frame, in quarter texels. Quantised because
+    /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
 }
 
@@ -168,7 +190,7 @@ impl TextMaskRenderer {
             return None;
         }
 
-        let font_size = spec.font_size * spec.scale_factor;
+        let font_size = spec.font_size * spec.density;
         let weight = if spec.font_weight == FontWeight::default() {
             FontWeight::NORMAL
         } else {
@@ -181,6 +203,7 @@ impl TextMaskRenderer {
             family: spec.font_family.clone(),
             width,
             height,
+            buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),
             offset: (
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
@@ -203,8 +226,8 @@ impl TextMaskRenderer {
         let mut buffer = Buffer::new(&mut shaper.font_system, Metrics::new(size, line_height));
         buffer.set_size(
             &mut shaper.font_system,
-            Some(spec.logical.0.max(200.0) * spec.scale_factor),
-            Some(spec.logical.1.max(50.0) * spec.scale_factor),
+            Some(spec.buffer.0),
+            Some(spec.buffer.1),
         );
         buffer.set_text(
             &mut shaper.font_system,
