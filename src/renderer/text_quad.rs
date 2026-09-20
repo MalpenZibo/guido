@@ -415,12 +415,15 @@ impl TextQuadRenderer {
             })
             .collect();
 
-        // Physical world pixels, to match the corners above: glyphon clips
-        // text to an integer box and this path matches it, so a turned clip
-        // over text cuts the box and not the shape — #405.
-        let clip = entry.clip_rect.map_or(QuadClip::NONE, |rect| {
-            QuadClip::world_box(rect, scale_factor)
-        });
+        // The clip's own space, like the image quad beside it: a turned clip
+        // cuts the turned shape, and a rounded or squircle one cuts its corners
+        // rather than the box they sit in. The corners above are in physical
+        // world pixels and this is not — `QuadClip::shape` folds the scale into
+        // its map, which is what keeps the rect in the units the widget wrote.
+        let clip = entry
+            .clip
+            .as_ref()
+            .map_or(QuadClip::NONE, |clip| QuadClip::shape(clip, scale_factor));
 
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
         let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {

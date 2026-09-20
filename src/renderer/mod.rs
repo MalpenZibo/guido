@@ -42,4 +42,4 @@ pub use text_measurer::{
     measure_text_to_char_styled,
 };
 pub use tree::{NodeId, RenderNode};
-pub use types::{Gradient, GradientDir, ImageEntry, Shadow, TextEntry};
+pub use types::{Gradient, GradientDir, Shadow, TextEntry};

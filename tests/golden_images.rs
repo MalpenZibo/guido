@@ -855,6 +855,59 @@ fn clipped_images() {
     golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
 }
 
+/// A text is clipped by the same shape a rectangle is, and follows it through
+/// a rotation.
+///
+/// The mirror of `clipped_images`, and the half of clipping that was still a
+/// box. Every other pipeline tests a fragment in the clip's own space; text
+/// took `PlacedShape::world_aabb` and was cut by the upright box around the
+/// shape, so a turned scroller let its text out at the corners — over an 80%
+/// larger area at 20 degrees (#405).
+///
+/// Left: upright, where the clip and its box are the same thing — the control,
+/// and the one cell glyphon draws, since only a transformed text takes the
+/// quad. Middle: the same text in the same clip, turned 30 degrees, so the cut
+/// has to follow the turned edge rather than the box. Right: turned the other
+/// way *and* a squircle, because the quad clip carries a curvature and a corner
+/// is where a box and a shape differ most — an upright squircle would have gone
+/// to glyphon and tested none of it.
+///
+/// Each line is long enough to run out of its clip on both sides, so the cut is
+/// what the picture is of.
+#[test]
+fn clipped_text() {
+    let clipped = |corners: Corners, degrees: f32| {
+        box_of(96.0, 96.0)
+            .corners(corners)
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .layout(Flex::column().main_alignment(MainAlignment::Center))
+            // Each line is about twice the width of the clip, so every one of
+            // them runs out on both sides. A text that fits its clip proves
+            // nothing about where the clip's edge is.
+            .child(nowrap_line("MMMMMMMM"))
+            .child(nowrap_line("WWWWWWWW"))
+            .child(nowrap_line("MMMMMMMM"))
+    };
+
+    fn nowrap_line(content: &'static str) -> Container {
+        container()
+            .width(220.0)
+            .child(label(content, 26.0).nowrap())
+    }
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .child(clipped(Corners::rounded(16.0), 0.0))
+        .child(clipped(Corners::rounded(16.0), 30.0))
+        .child(clipped(Corners::squircle(28.0), -20.0));
+
+    golden("clipped_text", (408.0, 156.0), 1.0, BACKDROP, view);
+}
+
 /// Two cards over stripes, one upright and one turned, each filtering the
 /// surface's own content through its own shape.
 ///
