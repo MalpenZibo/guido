@@ -79,14 +79,16 @@ renderer refused the job outright for anything but a translation.
 plus the transform that places it, and every consumer that can invert the
 placement and test in the clip's own space does: the shape shader, both quad
 pipelines — images and transformed text draw the same quad and take the same
-`QuadClip::shape` — and the region tessellator. `world_aabb()` is left for the
-two that cannot take a shape: glyphon, whose `TextBounds` is four integers, so
-an *upright* text is still cut by the box around a turned clip (#405), and the
-backdrop pass, which clips its effect to a box (#401).
+`QuadClip::shape` — and the region tessellator, and the backdrop pass, whose
+viewport is a box but whose fragments are tested against the clip's shape.
+`world_aabb()` is left for glyphon alone, whose `TextBounds` is four integers,
+so an *upright* text is still cut by the box around a turned clip (#405).
 
-Four pipelines, so a change to clipping has to be checked in all of them.
-`clipped_images` and `clipped_text` are the goldens; before each existed,
-nothing drew an image or a clipped text at all.
+Five pipelines, so a change to clipping has to be checked in all of them.
+`clipped_images`, `clipped_text`, `backdrop_blur_is_cut_by_its_scroller` and
+`frosted_text_is_cut_by_its_scroller` are the goldens; before each existed,
+nothing drew an image, a clipped text, or a clipped effect of either kind at
+all.
 
 ## Regions
 

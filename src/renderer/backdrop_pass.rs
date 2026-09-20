@@ -18,13 +18,14 @@
 //! takes a coverage texture instead, which is what lets glyphs be the window
 //! rather than a box — see [`text_mask`](super::text_mask).
 
-use crate::transform::Transform;
 use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
 
+use crate::shape::PlacedShape;
+use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
-use super::commands::CornerRadii;
+use super::gpu::{EMPTY_CLIP_RECT, NO_CLIP_RECT};
 
 /// How much the working texture is shrunk before blurring.
 ///
@@ -65,6 +66,16 @@ struct Params {
     stroke_color: [f32; 4],
     stroke_width: f32,
     _pad4: [f32; 3],
+    /// The clip, in its own space: `[x, y, width, height]`. Negative extents
+    /// are the no-clip sentinel and zero extents the lets-nothing-through one,
+    /// as in [`NO_CLIP_RECT`](super::gpu::NO_CLIP_RECT) — the same two spellings
+    /// the shape pipeline and the textured quad already read.
+    clip_rect: [f32; 4],
+    clip_radii: [f32; 4],
+    /// Target physical pixels to clip space, and the clip's curvature.
+    to_clip: [f32; 6],
+    clip_curvature: f32,
+    _pad6: f32,
 }
 
 /// A rasterized coverage mask and how big it is, which the view alone does not
@@ -75,55 +86,76 @@ pub struct CoverageMask<'a> {
     pub size: (u32, u32),
 }
 
-/// A blur to apply, resolved to physical pixels.
+/// A blur to apply: the shape it is cut to, and what it was flattened under.
+///
+/// Everything the pass works in is derived from these rather than stored beside
+/// them. The viewport used to be a field, computed by the caller as the world
+/// box of the very shape it travelled with — two values for one fact, free to
+/// drift, and nothing that would have said so (#402).
 #[derive(Debug, Clone, Copy)]
 pub struct BackdropRegion {
-    /// Region on the target, in physical pixels: the axis-aligned box the
-    /// effect is filtered inside.
+    /// The shape the effect is cut to: the rect its widget declared, its
+    /// corners, and the transform that placed it — all in the logical units it
+    /// was written in.
     ///
-    /// A viewport, and a viewport has no choice but to be a box — under a
-    /// rotation it is larger than the shape, and the mask is what cuts the
-    /// difference back off.
-    pub rect: Rect,
-    /// Blur radius in physical pixels.
+    /// A `PlacedShape` and not four loose fields, because that is what a clip
+    /// is and what the region tessellator takes, and this is the same object
+    /// (#198). The masked composite reads coverage over the same rect instead
+    /// of cutting corners out of it, so for a frosted text the corners are
+    /// zero — which says "a plain frame", not "a field nobody filled".
+    pub shape: PlacedShape,
+    /// Physical pixels per logical one. The pass needs it to place `shape` on
+    /// the target and to scale the radius; `shape` itself must stay logical.
+    pub scale: f32,
+    /// Blur radius, logical like the shape.
     pub radius: f32,
-    /// The shape the mask cuts, in the container's own space and the logical
-    /// units it was declared in.
+    /// What the effect is allowed to write: the clip it was flattened under,
+    /// if any. The mask says which pixels of the region are filtered; this says
+    /// which of them are on show at all.
     ///
-    /// **Not the viewport.** This used to be implicit — the mask was a rounded
-    /// rect filling `rect`, which is the shape only while the container keeps
-    /// the axes. A container turned 20° filtered its 73%-larger box and masked
-    /// it with an upright rounded rect of the wrong size, so the frost sat in a
-    /// square patch that did not match the card drawn on top of it (#198).
-    pub shape: Rect,
-    /// Target physical pixels to the space `shape` is written in — which
-    /// carries the surface scale, so `shape` must not.
-    pub to_shape: Transform,
-    /// Corner radii of `shape`, in that same space.
-    pub radii: CornerRadii,
-    pub curvature: f32,
-    /// What the effect is allowed to write, in physical pixels: the clip it
-    /// was flattened under, if any. The mask says which pixels of the region
-    /// are filtered; this says which of them are on show at all.
-    pub clip: Option<Rect>,
+    /// A shape, like the one above and for the same reason. It is tested per
+    /// fragment in its own space, so a rounded scroller keeps its corners and a
+    /// turned one keeps its edges; the viewport is still narrowed by the box
+    /// around it, because a viewport is four integers and narrowing it is free.
+    pub clip: Option<PlacedShape>,
 }
 
 impl BackdropRegion {
+    /// The box on the target the effect may touch, in physical pixels.
+    ///
+    /// Derived from the shape rather than handed in beside it: a viewport has
+    /// no choice but to be a box — under a rotation it is larger than the shape
+    /// — and the mask is what cuts the difference back off.
+    pub(crate) fn viewport(&self) -> Rect {
+        let world = self.shape.world_aabb();
+        Rect::new(
+            world.x * self.scale,
+            world.y * self.scale,
+            world.width * self.scale,
+            world.height * self.scale,
+        )
+    }
+
     /// Clamp to the target so a card running off-screen cannot ask for a
     /// viewport wgpu will reject.
     fn clamped(&self, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
         // The clip comes first: a region scrolled out of its container has
         // nothing on show, and filtering it would leave a blurred rectangle
         // where the content is not.
-        let mut left = self.rect.x;
-        let mut top = self.rect.y;
-        let mut right_f = self.rect.x + self.rect.width;
-        let mut bottom_f = self.rect.y + self.rect.height;
+        let rect = self.viewport();
+        let mut left = rect.x;
+        let mut top = rect.y;
+        let mut right_f = rect.x + rect.width;
+        let mut bottom_f = rect.y + rect.height;
         if let Some(clip) = self.clip {
-            left = left.max(clip.x);
-            top = top.max(clip.y);
-            right_f = right_f.min(clip.x + clip.width);
-            bottom_f = bottom_f.min(clip.y + clip.height);
+            // The box around the clip, which is all a viewport can be. What the
+            // box over-claims is cut back off per fragment by the shader, the
+            // same way the shape's own box is.
+            let clip = clip.world_aabb();
+            left = left.max(clip.x * self.scale);
+            top = top.max(clip.y * self.scale);
+            right_f = right_f.min((clip.x + clip.width) * self.scale);
+            bottom_f = bottom_f.min((clip.y + clip.height) * self.scale);
         }
 
         let x = left.floor().max(0.0) as u32;
@@ -144,21 +176,45 @@ impl BackdropRegion {
     /// contour around one — works by carrying its fragment from the target
     /// back into the shape's own space, so they all need the same fields and
     /// none of them should spell them out again.
-    fn shape_params(&self, origin: (u32, u32), mask: Option<CoverageMask<'_>>) -> Params {
-        Params {
-            curvature: self.curvature,
-            radii: self.radii.to_array(),
-            shape_rect: [
-                self.shape.x,
-                self.shape.y,
-                self.shape.width,
-                self.shape.height,
-            ],
+    fn shape_params(&self, origin: (u32, u32), mask: Option<CoverageMask<'_>>) -> Option<Params> {
+        // A placement that collapses has no inverse, so there is no way back
+        // into the shape's own space and nothing to cut. The effect is skipped,
+        // which is what a zero-area shape deserves.
+        let to_shape = self.shape.to_local(self.scale)?;
+        let rect = self.shape.rect;
+        // The two sentinels the shape pipeline already uses, spelled the same
+        // way: negative extents mean there is no clip, zero extents mean one
+        // that lets nothing through. A placement that collapses is the second —
+        // it has no inverse, so there is no space to test a fragment in, and
+        // the honest answer is that nothing shows rather than everything.
+        let (clip_rect, clip_radii, clip_curvature, to_clip) = match self.clip {
+            None => (NO_CLIP_RECT, [0.0; 4], 1.0, Transform::IDENTITY),
+            Some(clip) => match clip.to_local(self.scale) {
+                Some(to_clip) => {
+                    let r = clip.rect;
+                    (
+                        [r.x, r.y, r.width, r.height],
+                        clip.radii.to_array(),
+                        clip.curvature,
+                        to_clip,
+                    )
+                }
+                None => (EMPTY_CLIP_RECT, [0.0; 4], 1.0, Transform::IDENTITY),
+            },
+        };
+        Some(Params {
+            curvature: self.shape.curvature,
+            radii: self.shape.radii.to_array(),
+            shape_rect: [rect.x, rect.y, rect.width, rect.height],
             viewport_origin: [origin.0 as f32, origin.1 as f32],
-            to_shape: self.to_shape.data,
+            to_shape: to_shape.data,
             mask_size: mask.map_or([1.0, 1.0], |m| [m.size.0 as f32, m.size.1 as f32]),
+            clip_rect,
+            clip_radii,
+            clip_curvature,
+            to_clip: to_clip.data,
             ..Params::zeroed()
-        }
+        })
     }
 }
 
@@ -577,7 +633,10 @@ impl BackdropRenderer {
             dst_size: [dst_width as f32, dst_height as f32],
             stroke_color: [color.r, color.g, color.b, color.a],
             stroke_width: width,
-            ..region.shape_params((x, y), Some(mask))
+            ..match region.shape_params((x, y), Some(mask)) {
+                Some(params) => params,
+                None => return,
+            }
         };
         // Binding 0 goes unread by this pipeline; the working texture fills it
         // because the scene is the target and may not be bound as a resource
@@ -613,7 +672,7 @@ impl BackdropRenderer {
 
         // Radius shrinks with the working texture; the downsample already
         // spent the rest of it.
-        let sigma = (region.radius / WORKING_SCALE as f32 / 2.0).max(0.5);
+        let sigma = (region.radius * region.scale / WORKING_SCALE as f32 / 2.0).max(0.5);
         let taps = (sigma * 2.5).ceil().min(MAX_TAPS);
 
         let scene_rect = [
@@ -637,7 +696,10 @@ impl BackdropRenderer {
             sigma,
             taps,
             dst_size: [width as f32, height as f32],
-            ..region.shape_params((x, y), mask)
+            ..match region.shape_params((x, y), mask) {
+                Some(params) => params,
+                None => return,
+            }
         };
 
         // 1. Scene region → working[0], shrunk.

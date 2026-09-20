@@ -257,11 +257,13 @@ back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
 The viewport is the shape's world box, because a viewport is four integers and
-has no other shape to be. The **mask** is the shape: `BackdropRegion` carries it
-in the container's own space along with the map back there, and the composite
-carries each fragment into that space before testing it — so a turned container
-frosts what it drew instead of an upright rounded rect the size of its box.
-That map is `Transform::physical_inverse`, the same one a clip uses.
+has no other shape to be. The **mask** is the shape: `BackdropRegion` carries a
+`PlacedShape` — the same type a clip is — plus the surface scale, and derives
+the rest. The composite carries each fragment into the shape's own space before
+testing it, so a turned container frosts what it drew instead of an upright
+rounded rect the size of its box. That map is `Transform::physical_inverse`, the
+same one a clip uses, and the viewport is the shape's own `world_aabb` rather
+than a second field that has to agree with it.
 
 The mask is the one part a caller replaces. `Text::backdrop_blur` emits
 `DrawCommand::TextBackdropBlur`, which resolves to the same blur with a
@@ -405,6 +407,7 @@ Keeping the declaration answers every consumer:
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
 | transformed text (`text_quad.rs`) | the same map again, on the same quad — it is the image pipeline with a glyph texture in it, and it takes the same `QuadClip::shape` |
 | upright text (glyphon) | `world_aabb()` — `TextBounds` is four integers and glyphon has nowhere to put a shape, so this half still gets the box (#405) |
+| the backdrop pass | both: `world_aabb()` narrows the viewport, because a viewport is four integers, and then each fragment is carried into the clip's own space and tested there, so a rounded scroller keeps its corners |
 | compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline rather than as a box. The clip *chain* is still collapsed before it arrives (#397) |
 
 What one rect and one matrix cannot express is **two clips in two different

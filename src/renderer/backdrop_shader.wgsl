@@ -36,6 +36,13 @@ struct Params {
     _pad1: f32,
     _pad2: f32,
     _pad3: f32,
+    // The clip, in its own space, and the map from target pixels into it.
+    clip_rect: vec4<f32>,
+    clip_radii: vec4<f32>,
+    to_clip_0: vec4<f32>,
+    to_clip_1: vec2<f32>,
+    clip_curvature: f32,
+    _pad7: f32,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -85,6 +92,29 @@ fn in_shape_space(uv: vec2<f32>) -> vec2<f32> {
 // so its uv is the fragment's place within that rect.
 fn mask_uv(uv: vec2<f32>) -> vec2<f32> {
     return (in_shape_space(uv) - params.shape_rect.xy) / params.shape_rect.zw;
+}
+
+// How much of this fragment the clip lets through.
+//
+// The same journey as the shape's, into a second space: the viewport has
+// already been narrowed to the box around the clip, and this is what cuts the
+// difference — a rounded scroller's corners, a turned one's edges.
+//
+// Negative extents mean there is no clip, which is the sentinel the shape
+// shader and the textured quad both read; zero extents mean a clip that lets
+// nothing through, and the SDF answers that one on its own.
+fn clip_coverage(uv: vec2<f32>) -> f32 {
+    if (params.clip_rect.z < 0.0 || params.clip_rect.w < 0.0) {
+        return 1.0;
+    }
+    let on_target = params.viewport_origin + uv * params.dst_size;
+    let p = vec2<f32>(
+        params.to_clip_0.x * on_target.x + params.to_clip_0.y * on_target.y + params.to_clip_0.z,
+        params.to_clip_0.w * on_target.x + params.to_clip_1.x * on_target.y + params.to_clip_1.y
+    );
+    let distance = rounded_rect_sdf(p, params.clip_rect, params.clip_radii, params.clip_curvature);
+    let aa = max(fwidth(distance) * 0.5, 0.0001);
+    return 1.0 - smoothstep(-aa, aa, distance);
 }
 
 // Copy the region into the working texture. Rendering into a smaller target
@@ -222,7 +252,7 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa = max(fwidth(distance) * 0.5, 0.0001);
     let mask = 1.0 - smoothstep(-aa, aa, distance);
 
-    return vec4<f32>(blurred.rgb, blurred.a * mask);
+    return vec4<f32>(blurred.rgb, blurred.a * mask * clip_coverage(in.uv));
 }
 
 // A contour around the coverage, drawn outside it.
@@ -258,7 +288,10 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let contour = clamp(dilated - own, 0.0, 1.0);
-    return vec4<f32>(params.stroke_color.rgb, params.stroke_color.a * contour);
+    return vec4<f32>(
+        params.stroke_color.rgb,
+        params.stroke_color.a * contour * clip_coverage(in.uv)
+    );
 }
 
 // The same composite, shaped by a coverage mask instead of a rectangle: what
@@ -273,5 +306,5 @@ fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
     let coverage = textureSample(t_mask, s_source, mask_uv(in.uv)).a;
 
-    return vec4<f32>(blurred.rgb, blurred.a * coverage);
+    return vec4<f32>(blurred.rgb, blurred.a * coverage * clip_coverage(in.uv));
 }

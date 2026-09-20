@@ -1068,6 +1068,182 @@ fn backdrop_blur_follows_its_shape_at_scale_2x() {
     );
 }
 
+/// A backdrop blur is cut by its scroller's shape, not by the box around it.
+///
+/// The backdrop pass was the last consumer to test a clip as four numbers.
+/// Every other pipeline carries a clip as a `PlacedShape` and tests the
+/// fragment in the clip's own space; this one narrowed its viewport to
+/// `world_aabb` and stopped there, so a frosted card in the corner of a rounded
+/// scroller blurred the corner the scroller had not drawn, and a turned
+/// scroller leaked by the same 73% that motivated #198 (#401).
+///
+/// Each cell is a card larger than its scroller, so the blur runs at the clip
+/// on every side and the cut is the picture. Left: a rounded scroller, where
+/// the corners are what a box gets wrong. Right: the same, turned 20°, where
+/// the whole outline is.
+#[test]
+fn backdrop_blur_is_cut_by_its_scroller() {
+    golden(
+        "backdrop_blur_is_cut_by_its_scroller",
+        (360.0, 180.0),
+        1.0,
+        BACKDROP,
+        scrollers(),
+    );
+}
+
+/// One scene for both scales, so "the same two scrollers" stays true when
+/// either is edited.
+fn scrollers() -> Container {
+    // Shifted up and to the left so it juts out of the scroller on those sides
+    // as well as the others. A card the layout has already fitted inside its
+    // clip leaves the clip nothing to narrow, and the narrowing is what a
+    // viewport is.
+    let card = || {
+        box_of(150.0, 150.0)
+            .background(Color::rgba(0.10, 0.10, 0.16, 0.30))
+            .translate((-34.0, -30.0))
+            .backdrop_blur(BackdropBlur::new(14.0).sources(BackdropSources::SURFACE))
+    };
+
+    let scroller = |degrees: f32| {
+        container()
+            .width(180.0)
+            .height(180.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(
+                box_of(104.0, 104.0)
+                    .corners(Corners::rounded(34.0))
+                    .overflow(Overflow::Hidden)
+                    .rotate(degrees)
+                    .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.75))
+                    .layout(ZStack::new())
+                    .child(card()),
+            )
+            .into_any()
+    };
+
+    container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(360.0, 13, 14.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([scroller(0.0), scroller(20.0)])
+                .into_any(),
+        ])
+}
+
+/// The same two scrollers at scale 2.
+///
+/// The clip arrives logical, like the shape beside it, and the pass carries the
+/// surface scale itself — so the viewport is narrowed by `clip * scale` and the
+/// fragment is carried back by a map with the scale already folded in. Two
+/// conventions, and at scale 1 every wrong pairing of them agrees.
+///
+/// Neither scroller sits at the origin, which is the other half: a clip whose
+/// corner is at zero scales the same whether the factor is applied or divided.
+#[test]
+fn backdrop_blur_is_cut_by_its_scroller_at_scale_2x() {
+    golden(
+        "backdrop_blur_is_cut_by_its_scroller_at_scale_2x",
+        (360.0, 180.0),
+        2.0,
+        BACKDROP,
+        scrollers(),
+    );
+}
+
+/// A frosted text is cut by its scroller's shape too, and so is its contour.
+///
+/// The clip reaches three fragment shaders, not one: `fs_composite` cuts a
+/// container's blur, `fs_composite_mask` cuts a text's, and `fs_outline` cuts
+/// the contour dilated around it. `backdrop_blur_is_cut_by_its_scroller` covers
+/// the first. This covers the other two, and it has to exist rather than being
+/// a third cell there, because the only frosted text in a clip anywhere else is
+/// in an **upright square** one — the single placement where a clip's shape and
+/// the box around it are the same picture, so nothing there could tell them
+/// apart.
+///
+/// Left: a turned scroller, where the box leaks four corner triangles. Right: a
+/// rounded one, where it leaks four corners. Both texts carry a stroke, so the
+/// contour runs at the clip as well — a clip that stopped a frost but not the
+/// stroke on it would be two halves of one effect disagreeing.
+#[test]
+fn frosted_text_is_cut_by_its_scroller() {
+    let frosted = || {
+        label("MMMM", 22.0)
+            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+            .backdrop_blur(12.0)
+            .text_stroke(TextStroke::new(2.0, Color::BLACK))
+            .nowrap()
+    };
+
+    let scroller = |corners: Corners, degrees: f32| {
+        container()
+            .width(180.0)
+            .height(180.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(
+                box_of(84.0, 84.0)
+                    .corners(corners)
+                    .overflow(Overflow::Hidden)
+                    .rotate(degrees)
+                    .layout(
+                        Flex::row()
+                            .main_alignment(MainAlignment::Center)
+                            .cross_alignment(CrossAlignment::Center),
+                    )
+                    .child(
+                        container()
+                            .width(150.0)
+                            .layout(Flex::column().spacing(2.0))
+                            .child(frosted())
+                            .child(frosted())
+                            .child(frosted()),
+                    ),
+            )
+            .into_any()
+    };
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(360.0, 13, 14.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([
+                    scroller(Corners::rounded(8.0), 25.0),
+                    scroller(Corners::rounded(40.0), 0.0),
+                ])
+                .into_any(),
+        ]);
+
+    golden(
+        "frosted_text_is_cut_by_its_scroller",
+        (360.0, 180.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// A backdrop blur cut by the three corner curvatures that are not a circle.
 ///
 /// `backdrop_blur_follows_its_shape` uses `corners(16.0)` — `Corners::rounded`,
