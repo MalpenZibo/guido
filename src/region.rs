@@ -169,6 +169,14 @@ pub(crate) fn placed_shape_to_rects(
         // The tighter of the band's two edges keeps the slab inside the curve:
         // the outer boundary is convex, so between them neither is narrower.
         let band = (a0.max(a1), b0.min(b1));
+        // The two boundaries may not overlap at all, and everything below
+        // takes a band that is a real interval: `subtract` keeps whatever it
+        // is given in order, so an inverted seed would travel as far as the
+        // rounding before anything noticed.
+        if band.0 >= band.1 {
+            previous.clear();
+            continue;
+        }
         // Then each shape takes its bites out, at their widest across the
         // band. A bite is a disc, whose widest chord can sit strictly between
         // two scanlines, so this cannot be read off the two edges the way the
@@ -184,9 +192,7 @@ pub(crate) fn placed_shape_to_rects(
         }
 
         let mut spans = Spans::new();
-        if band.0 < band.1 {
-            spans.push(band);
-        }
+        spans.push(band);
         outline.take_bites_from(&mut spans, y0, y1);
         if let Some(ref clip) = clip_outline {
             clip.take_bites_from(&mut spans, y0, y1);
@@ -212,7 +218,10 @@ pub(crate) fn placed_shape_to_rects(
 /// split a band in two.
 ///
 /// Returns where the span ended up, which is what the next band needs and
-/// only a bitten one keeps.
+/// only a bitten one keeps, or `None` where the rounding leaves no rectangle
+/// at all. Every span reaching here is a real interval — the band loop drops
+/// an empty band before it splits one, and `subtract` cannot make an empty
+/// span out of a real one.
 #[inline]
 fn place(
     out: &mut Vec<RegionRect>,
@@ -221,9 +230,6 @@ fn place(
     band_h: f32,
     above: Option<&SmallVec<[usize; 2]>>,
 ) -> Option<usize> {
-    if right <= left {
-        return None;
-    }
     let rect = to_region_rect(Rect::new(left, y0, right - left, band_h))?;
     let grows = |prev: &RegionRect| {
         prev.x == rect.x && prev.width == rect.width && prev.y + prev.height == rect.y
