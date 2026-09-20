@@ -4691,6 +4691,81 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
     assert!(worst > 0.0, "the flicker has to actually raise a shadow");
 }
 
+/// A shadow's reach covers what its *timeline* can reach, not only what its
+/// declarations resolve to.
+///
+/// `animated_shadow` clamps whatever is in flight with
+/// `shrunk_to(shadow_reach)`, and that reach is what `layout` recorded from
+/// `max_shadow_extent`: the declared shadow, every state layer's, and the
+/// overshoot a spring still has to come. A timeline's keyframes were in none
+/// of it, so a sequence that grows the shadow was scaled straight back down to
+/// where it started — the animation ran, `advance` moved it, and the painted
+/// blur was the declared 2.0 on every frame of it (#384).
+///
+/// The clamp is right in itself: it is what keeps a shadow inside the rect the
+/// layout reserved for damage, and
+/// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect` is what holds
+/// it there. What was missing is the keyframes in the reach.
+///
+/// `transition` was never affected — it moves the declared signal, which layout
+/// tracks — which is why every shadow test here passed while this did not.
+#[test]
+fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
+    let plays = create_signal(0u32);
+    let deep = Shadow::new((0.0, 0.0), 20.0, 0.0, Color::BLACK);
+    let shallow = Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK);
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(
+                shallow.timeline(
+                    Keyframes::new(200.0)
+                        .at(0.0, shallow)
+                        .at(1.0, deep)
+                        .played_by(plays),
+                ),
+            ),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    // The reach has to be reserved before the sequence is asked for: it is
+    // recorded by layout, and the frames that carry the sequence are not
+    // allowed to need a bigger one than the frame that reserved it.
+    let reach = h.tree.paint_overflow(h.root);
+    assert!(
+        reach >= deep.extent() - 0.01,
+        "the reach has to cover the deepest keyframe ({}), got {reach}",
+        deep.extent()
+    );
+
+    plays.set(1);
+    pump(&mut h);
+    let mut deepest: f32 = 0.0;
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        let node = h.paint();
+        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
+            deepest = deepest.max(extent);
+            assert!(
+                extent <= reach + 0.01,
+                "drew a shadow reaching {extent} outside a damage rect of {reach}"
+            );
+        }
+    }
+    assert!(
+        deepest > shallow.extent() + 1.0,
+        "the sequence has to actually deepen the shadow past the declared \
+         {} it was clamped back to, got {deepest}",
+        shallow.extent()
+    );
+}
+
 /// A declared shadow changing does need a new reach, so it must invalidate the
 /// layout that recorded the old one.
 #[test]

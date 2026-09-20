@@ -97,6 +97,37 @@ impl<T: Animatable> Keyframes<T> {
         }
     }
 
+    /// How far a value declared here can travel, measured however the caller
+    /// measures one, and inflated by the worst overshoot any segment's easing
+    /// still has to come.
+    ///
+    /// What a *reach* is made of. A property whose damage rect is sized from
+    /// its declarations has to count a sequence's stops as declarations too:
+    /// they are values the property will hold, and nothing else mentions
+    /// them. `Container::max_shadow_extent` is the caller, and #384 is what it
+    /// looked like without this — a shadow's timeline played and paint clamped
+    /// every frame of it back to the declared value, because the reach knew
+    /// only what the signals said.
+    ///
+    /// The overshoot is applied as a fraction of the measured value rather
+    /// than of each segment's distance, which is the same crude bound the
+    /// declared side takes: it over-reserves for a sequence that travels less
+    /// than its deepest stop, and a reserved pixel nobody draws on costs
+    /// nothing but the damage rect.
+    pub(crate) fn reach(&self, measure: impl Fn(&T) -> f32) -> f32 {
+        let deepest = self
+            .stops
+            .iter()
+            .map(|stop| measure(&stop.value))
+            .fold(0.0_f32, f32::max);
+        let overshoot = self
+            .stops
+            .iter()
+            .map(|stop| stop.easing.peak_overshoot())
+            .fold(0.0_f32, f32::max);
+        deepest * (1.0 + overshoot)
+    }
+
     /// A stop, at a fraction of the run. The segment leaving it is linear.
     pub fn at(self, offset: f32, value: T) -> Self {
         self.at_with(offset, value, TimingFunction::Linear)
@@ -251,6 +282,47 @@ mod tests {
             .at(0.0, 0.0)
             .at(0.5, 10.0)
             .at(1.0, 0.0)
+    }
+
+    /// A reach covers the stops, and the overshoot the easing between them
+    /// still has to come.
+    ///
+    /// `Container::max_shadow_extent` sizes a damage rect from this, and a
+    /// bound that stops at the deepest stop is not one: a segment eased with a
+    /// curve whose control points leave `[0, 1]` travels past the stop it is
+    /// heading for, and a shadow drawn outside its damage rect is composited
+    /// nowhere and left on screen.
+    ///
+    /// Both halves are asserted separately, because with a linear timeline the
+    /// overshoot term is zero and *every* way of writing it agrees — which is
+    /// how three surviving mutants on that one line were found.
+    #[test]
+    fn a_reach_covers_the_stops_and_the_overshoot_between_them() {
+        let flat = Keyframes::new(100.0).at(0.0, 2.0).at(1.0, 20.0);
+        assert_eq!(
+            flat.reach(|v| *v),
+            20.0,
+            "nothing overshoots a linear segment, so the deepest stop is the reach"
+        );
+
+        // `cubic_bezier(0.5, -0.6, 0.5, 1.2)` is the shape every "wind up
+        // first" easing has: it dips below its start and sails past its end.
+        let overshooting = TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2);
+        let expected = 20.0 * (1.0 + overshooting.peak_overshoot());
+        assert!(
+            expected > 20.5,
+            "the curve has to actually overshoot for this to test anything"
+        );
+
+        let wound = Keyframes::new(100.0)
+            .at_with(0.0, 2.0, overshooting)
+            .at(1.0, 20.0);
+        assert!(
+            (wound.reach(|v| *v) - expected).abs() < 1e-3,
+            "the reach has to cover where the easing travels past the stop: \
+             expected {expected}, got {}",
+            wound.reach(|v| *v)
+        );
     }
 
     #[test]

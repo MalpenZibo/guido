@@ -157,6 +157,14 @@ impl Container {
     ///   pick.get())` written from deep to none re-runs this layout on the
     ///   write, at which point every declaration reads as nothing while the
     ///   shadow on screen is still 8 deep.
+    /// - **and every stop of a declared timeline**, which no signal mentions
+    ///   either. A sequence's keyframes are values the shadow will hold, and
+    ///   `animated_shadow` clamps whatever is in flight to this number — so
+    ///   leaving them out meant a timeline that grows the shadow was scaled
+    ///   straight back down to where it started. The animation ran, `advance`
+    ///   moved it, and the painted blur was the declared value on every frame
+    ///   of it (#384). `transition` was never affected: it moves the declared
+    ///   signal, which this reads, so the reach follows it.
     ///
     /// Reading every state layer under layout tracking is what the comment on
     /// [`max_transform_reach`](Self::max_transform_reach) is about: every shadow
@@ -189,7 +197,9 @@ impl Container {
             // peak on a sign-crossing bounce rather than a ring outside the
             // damage rect — the same one-sided error the clamp already trades
             // for not sizing every rect to a resonant gain.
-            Some(anim) => (declared * (1.0 + anim.peak_overshoot())).max(anim.current().extent()),
+            Some(anim) => (declared * (1.0 + anim.peak_overshoot()))
+                .max(anim.current().extent())
+                .max(anim.sequence_reach(Shadow::extent)),
             None => declared,
         }
     }

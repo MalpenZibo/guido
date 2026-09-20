@@ -385,6 +385,18 @@ impl<T: Animatable> AnimationState<T> {
         }
     }
 
+    /// How far a sequence declared on this property can reach, or zero where
+    /// there is no sequence.
+    ///
+    /// A timeline's stops are values the property will hold and no signal
+    /// mentions, so anything sizing a reach from the declarations has to ask
+    /// this as well — see [`Keyframes::reach`].
+    pub(crate) fn sequence_reach(&self, measure: impl Fn(&T) -> f32) -> f32 {
+        self.timeline
+            .as_ref()
+            .map_or(0.0, |t| t.keyframes.reach(measure))
+    }
+
     /// How far past its target this animation can travel, as a fraction of the
     /// distance — the worse of the forward and reverse curves.
     pub fn peak_overshoot(&self) -> f32 {
