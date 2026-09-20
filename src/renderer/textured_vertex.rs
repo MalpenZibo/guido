@@ -18,11 +18,9 @@ pub struct TexturedVertex {
     /// written in.
     ///
     /// The clip test is an SDF against a rect, and the only thing it needs is
-    /// for the point and the rect to be in one space. Which space that is, is
-    /// the caller's business: an image is clipped in the clip's *own* space, so
-    /// a turned clip cuts the turned shape; text is clipped in physical world
-    /// pixels against the box around that shape, because glyphon needs a box
-    /// anyway and #405 is where the rest of it lives.
+    /// for the point and the rect to be in one space. That space is the clip's
+    /// own, for an image and for a transformed text alike, so a turned clip
+    /// cuts the turned shape rather than the box around it.
     ///
     /// Mapping the four corners on the CPU is what keeps this free. The map is
     /// affine, and interpolating an affine function of position across a
@@ -42,17 +40,16 @@ pub struct TexturedVertex {
     pub clip_curvature: [f32; 4],
 }
 
-/// The clip a textured quad is cut by, in whatever space the caller chose.
+/// The clip a textured quad is cut by, in the clip's own coordinates.
 ///
 /// Four values that always travel together and always have to agree about
 /// which space they are in, which is exactly the thing that is easy to get
 /// wrong when they are four arguments in a row.
 ///
-/// Which space it is, is the caller's business. [`shape`](Self::shape) cuts in
-/// the clip's *own* coordinates, so a turned clip cuts the turned shape;
-/// [`world_box`](Self::world_box) cuts in physical world pixels against the box
-/// around that shape, which is all glyphon can be given — #405 is the rest of
-/// that story.
+/// There used to be a second spelling — a plain box in physical world pixels —
+/// because text was cut by the box around its clip rather than the clip. Both
+/// quad pipelines now take [`shape`](Self::shape), so a turned clip cuts the
+/// turned shape whichever of them is drawing.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadClip {
     /// `[x, y, width, height]`. Negative width/height is the no-clip sentinel.
@@ -99,21 +96,6 @@ impl QuadClip {
             radii: clip.radii.to_array(),
             curvature: clip.curvature,
             to_clip_space,
-        }
-    }
-
-    /// Cut to a plain box in physical world pixels.
-    pub fn world_box(rect: crate::widgets::Rect, scale: f32) -> Self {
-        Self {
-            rect: [
-                rect.x * scale,
-                rect.y * scale,
-                rect.width * scale,
-                rect.height * scale,
-            ],
-            radii: [0.0; 4],
-            curvature: 1.0,
-            to_clip_space: Transform::IDENTITY,
         }
     }
 
@@ -206,34 +188,13 @@ mod tests {
     use crate::shape::PlacedShape;
     use crate::widgets::Rect;
 
-    /// The two constructors put their clip in two different spaces, and each
-    /// has to scale — or not scale — accordingly.
-    ///
-    /// `world_box` is the text path: glyphon clips to a box in physical
-    /// pixels, so the rect is scaled here and the map is the identity.
-    /// `shape` is the image path: the rect stays in the logical units the
-    /// widget declared, and the scale is folded into the map instead. Getting
-    /// that backwards in either one scales twice or not at all, and the
-    /// symptom is a HiDPI surface clipped to a quarter of its viewport.
-    ///
-    /// Written because the mutation job found every multiply in `world_box`
-    /// could be a plus or a divide with the suite still green: nothing called
-    /// it.
+    /// The rect stays in the logical units the widget declared and the scale is
+    /// folded into the map instead. Getting that backwards scales twice or not
+    /// at all, and the symptom is a HiDPI surface clipped to a quarter of its
+    /// viewport.
     #[test]
-    fn a_clip_is_scaled_in_exactly_one_of_the_two_spaces() {
+    fn a_clip_is_scaled_by_its_map_and_not_by_its_rect() {
         let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
-
-        let boxed = QuadClip::world_box(rect, 2.0);
-        assert_eq!(
-            boxed.rect,
-            [20.0, 40.0, 200.0, 100.0],
-            "origin and extent both in physical pixels"
-        );
-        assert_eq!(
-            boxed.place(20.0, 40.0),
-            [20.0, 40.0],
-            "and the corner is left where it is, because it is already there"
-        );
 
         let shaped = QuadClip::shape(
             &PlacedShape {
