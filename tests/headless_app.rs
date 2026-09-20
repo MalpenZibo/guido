@@ -611,6 +611,47 @@ fn a_bevelled_island_takes_input_inside_its_cut() {
     );
 }
 
+/// A squircled island takes input out to the curve it drew, not in to the
+/// circle inside it.
+///
+/// The mirror of the bevel above, and the other direction of the same error.
+/// `Corners::squircle` is K = 2, and a squircle is *larger* than the circle of
+/// the same radius — so cutting the region as a circle gave up a band along
+/// each corner diagonal, 7.6 pixels of it at a radius of 40. Inside that band
+/// the island is painted and the surface does not claim it, so the compositor
+/// sends the click to whatever is behind and nothing happens (#400).
+///
+/// Between them the two tests pin the region to the curve from both sides: a
+/// bevel must not reach past its cut, a squircle must reach out to its own.
+#[test]
+fn a_squircled_island_takes_input_out_to_its_curve() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar().click_through(), || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .corners(Corners::squircle(40.0))
+                .takes_input(true),
+        )
+    });
+    app.configure(surface, 200, 120, 1.0);
+    app.step();
+
+    assert!(
+        app.input_reaches(surface, 40.0, 40.0),
+        "the middle of the island is the island"
+    );
+    // 9 in and 9 down: 2·31^4 is 1,847,042 against 40^4 of 2,560,000, so it is
+    // inside the squircle — and 31·√2 is 43.8 against a radius of 40, so it is
+    // outside the circle the region used to publish.
+    assert!(
+        app.input_reaches(surface, 9.0, 9.0),
+        "the squircle is drawn here, so the surface has to claim it — the \
+         circle inscribed in it does not reach this pixel"
+    );
+}
+
 /// The region is the shape that was *drawn*. A `WidgetRef` reports the box a
 /// widget was laid out in, which is why the region could never follow one.
 #[test]

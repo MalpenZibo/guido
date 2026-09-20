@@ -208,6 +208,25 @@ impl PlacedShape {
         self.outline_radii().max() * sx.max(sy)
     }
 
+    /// How many points to sample a corner's curve at, when there is no closed
+    /// form for it.
+    ///
+    /// The sag of a chord across an arc of angle `θ` is about `r·θ²/8`, so for
+    /// a quarter turn cut into `n + 1` chords the worst gap between the curve
+    /// and the polyline is roughly `r · (π/2)²/8 / (n+1)²`. Asking for under
+    /// half a pixel of it gives `n ≈ sqrt(r · 0.31 / 0.5)`, which is 5 for a 40
+    /// pixel corner and 8 for a 100 pixel one.
+    ///
+    /// Taken from the corner as it lands **on the surface**, not as it was
+    /// declared: a shape scaled down needs fewer points for the same accuracy,
+    /// and a shape scaled up needs more. Clamped low because each sample is an
+    /// edge the scanline loop tests, and clamped high because a region is a
+    /// list the compositor has to receive.
+    fn samples_per_corner(&self) -> usize {
+        let radius = self.largest_corner_on_surface();
+        ((radius * 0.62).sqrt().ceil() as usize).clamp(2, 12)
+    }
+
     /// The outline, transformed once and ready to be asked about scanlines.
     ///
     /// **Once, because the band loop asks hundreds of times.** A tall shape is
@@ -215,15 +234,25 @@ impl PlacedShape {
     /// four edges and four corners, clamping the radii and transforming eight
     /// points for each of them is the same answer computed five hundred times.
     ///
-    /// **A corner flatter than a circle becomes a chord.** The arc solve
-    /// parameterises a circle, and `curvature` says the corner is a
-    /// superellipse — `k = 0` a bevel, `1` a circle, `2` a squircle. Above a
-    /// circle the drawn shape is *larger*, so cutting the circle inscribes it
-    /// and the tessellation's promise holds. Below one it is smaller, and
-    /// cutting the circle would claim ground the shape does not cover: a
-    /// bevelled container would blur the desktop past its own diagonal and take
-    /// clicks there. The chord between the arc's two ends is inside every
-    /// superellipse with `k >= 0`, and is exactly the bevel itself.
+    /// **Every corner is cut as the curve it is.** `curvature` says the corner
+    /// is a superellipse — `k = 0` a bevel, `1` a circle, `2` a squircle — and
+    /// the arc solve parameterises a circle and nothing else. So a circle takes
+    /// the closed form, a bevel takes the chord between the arc's two ends,
+    /// which *is* the bevel, and everything else is sampled: chords of a convex
+    /// curve lie inside it, so the tessellation's promise — never claim a pixel
+    /// the shape does not cover — holds by construction.
+    ///
+    /// Cutting the circle for all of them was the old answer and it failed in
+    /// both directions. Below a circle the shape is smaller, so a bevelled
+    /// container blurred the desktop past its own diagonal and took clicks
+    /// there. Above one the shape is larger, so a squircle gave up 14% of each
+    /// corner box — a 7.6 pixel dead band along the diagonal of a 40 pixel
+    /// corner, where a click fell through to whatever was behind (#400).
+    ///
+    /// A scoop is the one still approximated: it curves inward, so chords of it
+    /// fall *outside* the shape and sampling cannot be used. `outline_radii`
+    /// gives it the tangent chord instead, which never over-claims and gives up
+    /// about a sixth — #410.
     pub(crate) fn outline(&self) -> Outline {
         let r = self.outline_radii();
         let (x0, y0) = (self.rect.x, self.rect.y);
@@ -267,14 +296,36 @@ impl PlacedShape {
 
         let mut arcs: SmallVec<[Arc; 4]> = SmallVec::new();
         for corner in corners.iter().filter(|c| c.radius > 0.0) {
-            if self.curvature >= 1.0 {
+            // An exact form where there is one, and a polyline where there is
+            // not. The circle is the only curve here a scanline meets in closed
+            // form; every other exponent would need a root-find per band per
+            // corner, inside a loop that already runs one band per pixel.
+            //
+            // Chords of a convex curve lie inside it, so sampling keeps the
+            // promise the whole tessellator rests on: the region never claims a
+            // pixel the shape does not cover. It gives some back instead, and
+            // `samples_per_corner` is what bounds how much.
+            let k = self.curvature;
+            if k == 1.0 {
                 arcs.push(Arc::placed(corner, &self.placement));
-            } else {
+            } else if k <= 0.0 {
+                // A bevel is a straight cut, and the chord between the arc's
+                // ends is not an approximation of it — it is the shape. A scoop
+                // curves the other way, so chords of it fall *outside*;
+                // `outline_radii` has already replaced its radius with the
+                // tangent chord's, and that chord is what cuts here (#410).
                 edges.push(Edge::placed(
                     corner.on_x_side(),
                     corner.on_y_side(),
                     &self.placement,
                 ));
+            } else {
+                let mut previous = corner.on_x_side();
+                for point in corner.superellipse(k, self.samples_per_corner()) {
+                    edges.push(Edge::placed(previous, point, &self.placement));
+                    previous = point;
+                }
+                edges.push(Edge::placed(previous, corner.on_y_side(), &self.placement));
             }
         }
 
@@ -373,6 +424,26 @@ struct Corner {
 }
 
 impl Corner {
+    /// Points along the superellipse between the two sides, exclusive of both.
+    ///
+    /// Parameterised so the samples are spread evenly around the corner rather
+    /// than evenly in x: `(cos t)^(2/n)` and `(sin t)^(2/n)` trace
+    /// `|x|^n + |y|^n = r^n` for `t` in the first quadrant, which is where the
+    /// curve bends most and where chords of it fall furthest inside.
+    fn superellipse(&self, curvature: f32, samples: usize) -> impl Iterator<Item = (f32, f32)> {
+        let n = 2f32.powf(curvature);
+        let (cx, cy) = self.centre;
+        let (qx, qy) = self.quadrant;
+        let r = self.radius;
+        (1..=samples).map(move |i| {
+            let t = std::f32::consts::FRAC_PI_2 * i as f32 / (samples + 1) as f32;
+            (
+                cx + qx * r * t.cos().powf(2.0 / n),
+                cy + qy * r * t.sin().powf(2.0 / n),
+            )
+        })
+    }
+
     /// Where the arc meets the side it shares an x with — the left or right
     /// edge.
     fn on_x_side(&self) -> (f32, f32) {
