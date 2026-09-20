@@ -993,6 +993,72 @@ fn backdrop_blur_follows_its_shape_at_scale_2x() {
     );
 }
 
+/// A backdrop blur cut by the three corner curvatures that are not a circle.
+///
+/// `backdrop_blur_follows_its_shape` uses `corners(16.0)` — `Corners::rounded`,
+/// k = 1. The backdrop composite read the curvature as `max(k, 0.05) * 2` where
+/// the shape shader and the quad shader read `pow(2, k)`, and those two
+/// expressions agree at exactly k = 1 and k = 2 — `rounded` and `squircle`, the
+/// two a scenario reaches for. So #403 sat under every picture there was.
+///
+/// These are the three that tell them apart: a **bevel** (k = 0), where the
+/// wrong reading gives n = 0.1 and blurs a deep concave notch inside an
+/// octagonal border; a **scoop** (k = −1), which the backdrop had no concave
+/// branch for at all; and a k of 0.5 between the two agreeing points, because
+/// `Corners` interpolates and an animation sweeps k continuously rather than
+/// landing on the constants.
+///
+/// Each card's border marks the shape, drawn by the shape shader; the blurred
+/// area is the backdrop's own idea of it. The two read one `curvature` and have
+/// to make one corner out of it.
+#[test]
+fn backdrop_blur_follows_every_curvature() {
+    let case = |corners: Corners| {
+        container()
+            .width(150.0)
+            .height(150.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(
+                box_of(110.0, 110.0)
+                    .corners(corners)
+                    .background(Color::rgba(0.10, 0.10, 0.16, 0.35))
+                    .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.75))
+                    .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE)),
+            )
+            .into_any()
+    };
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(450.0, 11, 14.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([
+                    case(Corners::bevel(34.0)),
+                    case(Corners::superellipse(34.0, 0.5)),
+                    case(Corners::scoop(34.0)),
+                ])
+                .into_any(),
+        ]);
+
+    golden(
+        "backdrop_blur_follows_every_curvature",
+        (450.0, 150.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// A frosted text over the same stripes, at rest and under three transforms.
 ///
 /// The glyphs are the window: what they cover shows the backdrop blurred, and
