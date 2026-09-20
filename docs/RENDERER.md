@@ -384,7 +384,8 @@ Keeping the declaration answers every consumer:
 | --- | --- |
 | the shape shader | `PlacedShape::to_local` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
-| text (`text_quad.rs`, glyphon) | `world_aabb()` — glyphon clips to four integers, so text still gets the box (#405) |
+| transformed text (`text_quad.rs`) | the same map again, on the same quad — it is the image pipeline with a glyph texture in it, and it takes the same `QuadClip::shape` |
+| upright text (glyphon) | `world_aabb()` — `TextBounds` is four integers and glyphon has nowhere to put a shape, so this half still gets the box (#405) |
 | compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline rather than as a box. The clip *chain* is still collapsed before it arrives (#397) |
 
 What one rect and one matrix cannot express is **two clips in two different

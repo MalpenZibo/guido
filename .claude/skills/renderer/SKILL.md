@@ -76,13 +76,17 @@ renderer refused the job outright for anything but a translation.
 ## Clipping
 
 `PlacedShape` (`src/shape.rs`) holds a rounded rect as its widget declared it
-plus the transform that
-places it, and every consumer asks it for what it can use: the shape shader and
-the image quad invert the placement and test in the clip's own space, so a
-turned clip cuts the turned shape; text and the compositor regions take
-`world_aabb()`, because glyphon wants four integers. Three pipelines, so a
-change to clipping has to be checked in all three — and until `clipped_images`
-there was no golden that drew an image at all.
+plus the transform that places it, and every consumer that can invert the
+placement and test in the clip's own space does: the shape shader, both quad
+pipelines — images and transformed text draw the same quad and take the same
+`QuadClip::shape` — and the region tessellator. `world_aabb()` is left for the
+two that cannot take a shape: glyphon, whose `TextBounds` is four integers, so
+an *upright* text is still cut by the box around a turned clip (#405), and the
+backdrop pass, which clips its effect to a box (#401).
+
+Four pipelines, so a change to clipping has to be checked in all of them.
+`clipped_images` and `clipped_text` are the goldens; before each existed,
+nothing drew an image or a clipped text at all.
 
 ## Regions
 

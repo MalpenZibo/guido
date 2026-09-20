@@ -89,9 +89,12 @@ impl PlacedShape {
 
     /// The axis-aligned world box containing the shape.
     ///
-    /// What a clip used to be, for the consumer that can still only take a
-    /// box: glyphon clips text to an integer rect, which is over-generous
-    /// under rotation — #405.
+    /// What a clip used to be, and still is for the consumers that cannot take
+    /// a shape: glyphon clips text to an integer rect (#405), and the backdrop
+    /// pass clips its effect to a box (#401). Both are over-generous under
+    /// rotation. The shape shader, both quad pipelines and the region
+    /// tessellator test in the clip's own space instead, so this is the
+    /// fallback rather than the answer.
     #[inline]
     pub fn world_aabb(&self) -> Rect {
         self.placement.map_rect(self.rect)
