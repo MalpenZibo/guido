@@ -37,8 +37,9 @@ the README as well. Documentation that names an API is followed rather than read
 sceptically — so being quietly wrong costs more there than in code.
 `tests/documentation_references.rs` is what keeps the prose honest, and it runs
 before you stop. It reads what is written between backticks and skips fenced
-blocks, so the book's code samples — which is most of the book — are not
-covered by it or by anything else.
+blocks; the book's code samples — which is most of the book — are compiled by
+`mdbook test` instead, and the same file checks that every fence says which of
+the two it is.
 
 **A design decision that is not obvious is researched before it is proposed.**
 When a change turns on a choice with no settled answer here — where a piece of
@@ -125,7 +126,7 @@ every run for months.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
-| API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 32% are `ignore`: samples that describe internals, or that cannot stand alone |
+| API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 15% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | new per-thread state — a `thread_local!` or a `static` `GlobalSignal` | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
 | the application above the compositor — a surface configuring, a frame opening, input routing, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |

@@ -284,34 +284,16 @@ fn every_fence_in_the_book_says_what_it_holds() {
     // wgsl is a shader, and there is exactly one.
     const ALSO: [&str; 1] = ["wgsl"];
 
-    let mut pages = Vec::new();
-    read_dir_files(&repo().join("book/src"), "md", &mut pages);
-    assert!(
-        !pages.is_empty(),
-        "no book chapters found: scanning nothing"
-    );
-
     let mut wrong = Vec::new();
     let mut checked = 0usize;
-    for doc in pages {
-        let source = std::fs::read_to_string(&doc).expect("unreadable chapter");
-        let mut inside = false;
-        for (number, line) in source.lines().enumerate() {
-            if !line.starts_with("```") {
-                continue;
-            }
-            if inside {
-                inside = false;
-                continue;
-            }
-            inside = true;
+    for (path, source) in book_pages() {
+        let name = path.strip_prefix(repo()).unwrap_or(&path).display();
+        for (line, info, _) in fences(&source) {
             checked += 1;
-            let info = line[3..].trim();
             if ALLOWED.contains(&info) || ALSO.contains(&info) {
                 continue;
             }
-            let name = doc.strip_prefix(repo()).unwrap_or(&doc).display();
-            wrong.push(format!("  {name}:{}: ```{info}", number + 1));
+            wrong.push(format!("  {name}:{line}: ```{info}"));
         }
     }
 
@@ -323,6 +305,198 @@ fn every_fence_in_the_book_says_what_it_holds() {
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// What an `ignore`d sample's first line has to start with, in the book as in
+/// `src/`. The book hides it behind mdbook's `#`, so the reason reaches the
+/// next author without reaching the reader, for whom it is noise.
+const REASON: &str = "// not compiled:";
+
+/// Every chapter of the book, as (path, source).
+fn book_pages() -> Vec<(PathBuf, String)> {
+    let mut pages = Vec::new();
+    read_dir_files(&repo().join("book/src"), "md", &mut pages);
+    assert!(
+        !pages.is_empty(),
+        "no book chapters found: scanning nothing"
+    );
+    pages.sort();
+    pages
+        .into_iter()
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("unreadable chapter");
+            (path, source)
+        })
+        .collect()
+}
+
+/// The fences in one chapter: line number, info string, and the body's lines.
+fn fences(source: &str) -> Vec<(usize, &str, Vec<&str>)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if !lines[index].starts_with("```") {
+            index += 1;
+            continue;
+        }
+        let info = lines[index][3..].trim();
+        let opened = index + 1;
+        index += 1;
+        let mut body = Vec::new();
+        while index < lines.len() && !lines[index].starts_with("```") {
+            body.push(lines[index]);
+            index += 1;
+        }
+        found.push((opened, info, body));
+        index += 1;
+    }
+    found
+}
+
+/// A fence rustdoc will not compile.
+fn is_ignored(info: &str) -> bool {
+    info.split(',').any(|token| token.trim() == "ignore")
+}
+
+/// Every `ignore`d sample in the book says why, where the next author will see it.
+///
+/// `mdbook test` compiles the book, which is what makes a rename in the library
+/// show up as a red chapter — and an `ignore` is exempt from it. That is a real
+/// need: a fragment of a trait implementation, or a line that is deliberately
+/// wrong because the chapter is about why it is wrong, cannot be made to
+/// compile without teaching something false. What it must not be is the default
+/// for a block nobody got round to, which is what it had become: #294 made the
+/// book compile and left a third of it `ignore`d, including fifteen of the
+/// eighteen blocks in the chapter that teaches `#[component]` — beside each of
+/// which sat a *hidden* stub the harness checked instead of the definition the
+/// reader was shown.
+///
+/// So an `ignore` costs a sentence now. `architecture/` is exempt as a chapter:
+/// its blocks describe guido's internals — `widget.paint(tree, ctx)`,
+/// `sdf_rounded_rect` — and inventing a plausible `ctx` would teach something
+/// false rather than prove something true.
+#[test]
+fn every_ignored_sample_in_the_book_says_why_not() {
+    let mut unexplained = Vec::new();
+    let (mut exempt, mut by_chapter) = (0usize, 0usize);
+
+    for (path, source) in book_pages() {
+        let name = path.strip_prefix(repo()).unwrap_or(&path).display();
+        let internals = path.components().any(|c| c.as_os_str() == "architecture");
+        for (line, info, body) in fences(&source) {
+            if !is_ignored(info) {
+                continue;
+            }
+            if internals {
+                by_chapter += 1;
+                continue;
+            }
+            let first = body.first().copied().unwrap_or_default().trim_start();
+            // The reason is hidden from the rendered page with mdbook's `#`,
+            // which `book.toml` sets as the hide-lines marker for Rust.
+            let first = first.strip_prefix("# ").unwrap_or(first);
+            if first.starts_with(REASON) {
+                exempt += 1;
+            } else {
+                unexplained.push(format!("  {name}:{line}"));
+            }
+        }
+    }
+
+    assert!(
+        unexplained.is_empty(),
+        "{} sample(s) in the book are marked `ignore`, so `mdbook test` does not \
+         compile them and nothing else checks the names inside them. Either drop \
+         the `ignore` — adding whatever hidden `#` setup lines it takes, or \
+         `no_run` where the sample compiles but must not open a surface — or \
+         state the reason on the block's first line as `# {REASON} ...`.\n{}\n\n\
+         ({exempt} exempt with a reason, {by_chapter} in architecture/)",
+        unexplained.len(),
+        unexplained.join("\n")
+    );
+}
+
+/// The share of the book that is `ignore`d is the share the documentation quotes.
+///
+/// `AGENTS.md` and the `book` skill both tell their reader how much of the book
+/// the compiler is watching, and that reader decides on the strength of it
+/// whether to grep for a renamed spelling by hand. A number that drifts is worse
+/// than no number: it is trusted. So it is recounted here rather than
+/// remembered, out of the same fences the tests above walk.
+#[test]
+fn the_ignored_share_the_documentation_quotes_is_the_real_one() {
+    let (mut rust, mut ignored) = (0usize, 0usize);
+    for (_, source) in book_pages() {
+        for (_, info, _) in fences(&source) {
+            if !info.starts_with("rust") {
+                continue;
+            }
+            rust += 1;
+            if is_ignored(info) {
+                ignored += 1;
+            }
+        }
+    }
+    assert!(rust > 0, "no Rust fences in the book: counting nothing");
+    let share = (ignored * 100 + rust / 2) / rust;
+
+    for doc in [
+        repo().join("AGENTS.md"),
+        repo().join(".claude/skills/book/SKILL.md"),
+    ] {
+        let source = std::fs::read_to_string(&doc).expect("unreadable documentation");
+        let name = doc.strip_prefix(repo()).unwrap_or(&doc).display();
+        let quoted = quoted_ignored_shares(&source);
+        assert!(
+            !quoted.is_empty(),
+            "{name} no longer says what share of the book is `ignore`d. It is \
+             {share}% ({ignored} of {rust} Rust blocks), and the reader of that \
+             file decides whether to grep by hand on the strength of it."
+        );
+        for (line, percent) in quoted {
+            assert_eq!(
+                percent, share,
+                "{name}:{line} says {percent}% of the book is `ignore`d. It is \
+                 {share}% — {ignored} of {rust} Rust blocks — as of this run."
+            );
+        }
+    }
+}
+
+/// Every percentage a document writes just before the word `ignore`.
+///
+/// Matched loosely on purpose: the sentence around the number is free to be
+/// rewritten, and the number stays checked. Loosely, and per *paragraph* — this
+/// repository hard-wraps its prose at eighty columns, so where the line break
+/// falls is a fact about the wrap and not about the sentence, and a scan that
+/// read one line at a time would report the number missing the first time
+/// somebody reflowed the paragraph it sits in.
+fn quoted_ignored_shares(source: &str) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut line = 1usize;
+    for paragraph in source.split("\n\n") {
+        let first_line = line;
+        // Two for the blank line this split consumed. A wider gap leaves its
+        // extra newlines at the head of the *next* chunk, where they are
+        // counted there, so the tally holds however widely the prose is spaced.
+        line += paragraph.matches('\n').count() + 2;
+        let flowed = paragraph.replace('\n', " ");
+        let mut rest = flowed.as_str();
+        while let Some(at) = rest.find('%') {
+            let start = rest[..at]
+                .rfind(|c: char| !c.is_ascii_digit())
+                .map_or(0, |end| end + 1);
+            let near: String = rest[at..].chars().take(40).collect();
+            if let Ok(percent) = rest[start..at].parse::<usize>()
+                && near.contains("`ignore`")
+            {
+                found.push((first_line, percent));
+            }
+            rest = &rest[at + 1..];
+        }
+    }
+    found
 }
 
 /// Every rustdoc sample in `src/` is compiled, or says why it is not.
@@ -348,9 +522,6 @@ fn every_fence_in_the_book_says_what_it_holds() {
 /// has a reason and should carry it where the next reader meets it.
 #[test]
 fn every_rustdoc_sample_is_compiled_or_says_why_not() {
-    /// What an exempt block's first line has to start with.
-    const REASON: &str = "// not compiled:";
-
     // Both crates, as the prose test above reads both: `guido-macros` carries the
     // `#[component]` sample, which is the first one a new caller copies.
     let mut sources = Vec::new();
@@ -375,7 +546,7 @@ fn every_rustdoc_sample_is_compiled_or_says_why_not() {
             let Some(info) = fence.trim().strip_prefix("```") else {
                 continue;
             };
-            if !info.split(',').any(|token| token.trim() == "ignore") {
+            if !is_ignored(info) {
                 continue;
             }
             // The first line of the block, which is where the reason goes.

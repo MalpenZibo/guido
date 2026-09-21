@@ -36,6 +36,12 @@ Every fence is one of four things, and picking wrong is silent:
 | a signature listing, a diagram, terminal output | ```` ```text ```` | **an unlabelled fence is given to rustdoc as Rust** |
 | genuinely illustrative — internals, elisions | ```` ```rust,ignore ```` | and it then proves nothing, so prefer the others |
 
+An `ignore` outside `book/src/architecture/` carries its reason on the block's first
+line, hidden: `# // not compiled: ...`. That is what
+`every_ignored_sample_in_the_book_says_why_not` asks for, and the point of
+asking is that a block nobody got round to and a block that cannot compile look
+identical without it.
+
 The hidden preamble for a fragment, none of which the reader sees — `book.toml`
 hides `#` lines:
 
@@ -54,7 +60,9 @@ introduced in an earlier block gets a hidden `let` too — each sample is compil
 alone, and nothing carries between them.
 
 `tests/documentation_references.rs` checks that every fence carries an info
-string rustdoc knows. It does not check that the sample is *good*.
+string rustdoc knows, that every `ignore` says why, and that the share quoted
+below is the share the book actually has. It does not check that the sample is
+*good*.
 
 ## Which chapter
 
@@ -74,9 +82,11 @@ does not exist.
 
 The failure mode is not a missing chapter, it is a code sample that no longer
 compiles against the library it documents — and until #294 nothing compiled
-them, so a rename was invisible here. It is CI's job now, but 32% of the blocks
-are `ignore` and CI is silent about those: when you change a signature, grep
-`book/` for the old spelling rather than trusting the green tick.
+them, so a rename was invisible here. It is CI's job now, but 15% are `ignore`
+and CI is silent about those: when you change a signature, grep `book/` for the
+old spelling rather than trusting the green tick. Under a third of those are
+`book/src/architecture/`; the rest each say on their first line why they cannot
+be compiled.
 
 If the feature has a visual result, capture a screenshot with `grim` and put it
 beside the text. The chapters that show what a thing looks like are the ones
