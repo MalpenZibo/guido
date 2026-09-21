@@ -486,6 +486,67 @@ mod laid_out_tests {
             falls_outside(Rect::new(0.0, 0.0, 50.0, 50.0), clip),
             "off the top-left corner"
         );
+
+        // The tolerance, which is the whole reason there is one. A text
+        // ending exactly where its clip begins is kept, and so is one a
+        // hundredth of a pixel short of it — which is where a float lands
+        // after a transform. Half a pixel past is gone. The margin runs
+        // outward on every side; inward on any of them drops a text that is
+        // still touching its clip.
+        for (label, text) in [
+            (
+                "ending exactly at the left edge",
+                Rect::new(20.0, 120.0, 80.0, 20.0),
+            ),
+            (
+                "a hundredth short of the left edge",
+                Rect::new(20.0, 120.0, 79.99, 20.0),
+            ),
+            (
+                "starting exactly at the right edge",
+                Rect::new(300.0, 120.0, 80.0, 20.0),
+            ),
+            (
+                "a hundredth past the right edge",
+                Rect::new(300.01, 120.0, 80.0, 20.0),
+            ),
+            (
+                "ending exactly at the top edge",
+                Rect::new(150.0, 20.0, 40.0, 80.0),
+            ),
+            (
+                "starting exactly at the bottom edge",
+                Rect::new(150.0, 200.0, 40.0, 80.0),
+            ),
+        ] {
+            assert!(
+                !falls_outside(text, clip),
+                "{label}: a text touching its clip is still drawn"
+            );
+        }
+        for (label, text) in [
+            (
+                "half a pixel short of the left edge",
+                Rect::new(20.0, 120.0, 79.5, 20.0),
+            ),
+            (
+                "half a pixel past the right edge",
+                Rect::new(300.5, 120.0, 80.0, 20.0),
+            ),
+            (
+                "half a pixel short of the top edge",
+                Rect::new(150.0, 20.0, 40.0, 79.5),
+            ),
+            (
+                "half a pixel past the bottom edge",
+                Rect::new(150.0, 200.5, 40.0, 80.0),
+            ),
+        ] {
+            assert!(
+                falls_outside(text, clip),
+                "{label}: past the tolerance is past the clip"
+            );
+        }
     }
 
     #[test]
