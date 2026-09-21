@@ -39,6 +39,13 @@ Multiple surfaces share one reactive state and one renderer.
   primary selection
 - **Compositor effects** — `ext-background-effect-v1` for backdrop blur, with
   `compositor_effects()` to ask what is available
+- **Fractional scaling** (`wp_fractional_scale_v1` + `wp_viewporter`) — bound
+  directly, because sctk's `SurfaceData::scale_factor` is an `AtomicI32` and
+  cannot say 1.5. Both globals optional and useless apart, so a surface holds
+  one `SurfaceScaling` or none; with one the buffer is `logical * scale`
+  rounded halfway away from zero, a `wp_viewport` destination declares the
+  logical size, and `set_buffer_scale` is never touched. With none, the integer
+  path is unchanged. See `src/platform/scaling.rs`
 
 ## The thing to know before changing it
 
