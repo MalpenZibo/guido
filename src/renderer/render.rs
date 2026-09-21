@@ -85,16 +85,31 @@ impl Renderer {
         // Create bind group layout for uniforms
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Renderer Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // The instances, read by `@builtin(instance_index)` rather
+                // than fetched as vertex attributes — which is what lifts the
+                // sixteen-attribute ceiling the layout had reached (#398).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         // Create pipeline
@@ -122,24 +137,21 @@ impl Renderer {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
-        // Create uniform bind group
-        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Renderer Uniform Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
         // Create initial instance buffer (will be resized as needed)
         let initial_capacity = 256;
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Renderer Instance Buffer"),
             size: (initial_capacity * std::mem::size_of::<ShapeInstance>()) as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        let uniform_bind_group = Self::make_bind_group(
+            &device,
+            &bind_group_layout,
+            &uniform_buffer,
+            &instance_buffer,
+        );
 
         // Initialize text renderer
         let text_state = TextRenderState::new(&device, &queue, format);
@@ -198,7 +210,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_main"),
-                buffers: &[QuadVertex::desc(), ShapeInstance::desc()],
+                buffers: &[QuadVertex::desc()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -249,6 +261,33 @@ impl Renderer {
         self.scale_factor = scale;
     }
 
+    /// The uniforms, and the instances the vertex stage indexes into.
+    ///
+    /// Rebuilt whenever the instance buffer is, because a bind group holds the
+    /// buffer it was made from — which a vertex buffer binding did not, since
+    /// that one was named at draw time.
+    fn make_bind_group(
+        device: &wgpu::Device,
+        layout: &BindGroupLayout,
+        uniforms: &Buffer,
+        instances: &Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Renderer Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instances.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
     /// Ensure instance buffer has enough capacity.
     fn ensure_instance_capacity(&mut self, count: usize) {
         if count > self.instance_buffer_capacity {
@@ -257,10 +296,16 @@ impl Renderer {
             self.instance_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Renderer Instance Buffer"),
                 size: (new_capacity * std::mem::size_of::<ShapeInstance>()) as u64,
-                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
             self.instance_buffer_capacity = new_capacity;
+            self.uniform_bind_group = Self::make_bind_group(
+                &self.device,
+                &self.bind_group_layout,
+                &self.uniform_buffer,
+                &self.instance_buffer,
+            );
         }
     }
 
@@ -482,7 +527,6 @@ impl Renderer {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
     }
 

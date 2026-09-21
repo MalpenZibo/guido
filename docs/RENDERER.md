@@ -505,34 +505,51 @@ Per-instance data for each shape (240 bytes):
 ```rust
 pub struct ShapeInstance {
     pub rect: [f32; 4],           // [x, y, width, height] in physical pixels
-    pub corner_radius: f32,       // Corner radius
-    pub shape_curvature: f32,     // Superellipse K-value
+    pub corner_radii: [f32; 4],   // [top_left, top_right, bottom_right, bottom_left]
     pub fill_color: [f32; 4],     // RGBA
     pub border_color: [f32; 4],   // RGBA
-    pub border_width: f32,
+    pub shadow_color: [f32; 4],   // RGBA
     pub shadow_offset: [f32; 2],
     pub shadow_blur: f32,
     pub shadow_spread: f32,
-    pub shadow_color: [f32; 4],
-    pub clip_curvature: f32,      // next to the border's, not next to the clip
     pub transform: [f32; 6],      // 2x3 affine matrix [a, b, tx, c, d, ty]
-    pub clip_inverse_1: [f32; 2], // the clip inverse's [d, ty]
+    pub _pad_transform: [f32; 2],
     pub clip_rect: [f32; 4],      // in the clip's own space, logical pixels
-    pub clip_inverse_0: [f32; 4], // the clip inverse's [a, b, tx, c]
+    pub clip_radii: [f32; 4],     // in the clip's own space, logical units
+    pub clip_inverse: [f32; 6],   // world to clip space, the same 2x3 shape
+    pub clip_curvature: f32,
+    pub _pad_clip: f32,
     pub gradient_start: [f32; 4],
     pub gradient_end: [f32; 4],
+    pub border_width: f32,
+    pub shape_curvature: f32,     // superellipse K-value
     pub gradient_type: u32,       // 0=none, 1=horizontal, 2=vertical, 3/4=diagonal
-    pub clip_radii: [f32; 4],     // [top_left, top_right, bottom_right, bottom_left]
+    pub _pad_tail: u32,
 }
 ```
 
-**The clip's inverse is six floats in two places, and the reason is a hardware
-limit.** `max_vertex_attributes` is 16 on every backend worth the name and this
-layout declares 16, so a seventeenth is a pipeline validation error rather than a
-cost — the matrix went into padding that already existed. Moving
-`clip_curvature` next to the border's freed a whole attribute for `[a, b, tx, c]`,
-and `[d, ty]` rides in the two spare floats beside `transform`. The shader reads
-it back whole, which is the only place it means anything.
+**It arrives as a storage buffer, not as vertex attributes.** The vertex shader
+reads `instances[instance_index]`, which is why the struct can hold whatever it
+needs to: a vertex layout may declare sixteen attributes and this one had
+declared sixteen, so a seventeenth was a pipeline validation error rather than a
+cost. Under that ceiling the clip's six floats lived in two places and its
+curvature sat in the border block, because padding was the only room left
+(#398).
+
+The read is per *vertex* — four per instance, since the quad is four vertices
+and six indices — not per fragment: the fragment stage is untouched, because
+the vertex output already carries everything it needs as varyings.
+
+It is not slower. Measured end to end — encode, submit and complete a frame —
+on an AMD Radeon 860M (RADV) over five scenes from 400 to 40,000 instances,
+the storage build finished every one faster than the attribute build it
+replaced, by between four and thirteen hundredths of a millisecond per frame.
+That harness cannot say where the saving is: it is dominated by frame
+submission on this hardware, and the deltas are near-constant rather than
+scaling with vertex count, so they are *not* explained by the attribute
+fetches that went away. Isolating the GPU's own share would need timestamp
+queries, which nothing here has yet. What the numbers support is the direction
+and nothing finer.
 
 ### HiDPI Scaling
 
