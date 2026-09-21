@@ -92,6 +92,13 @@ harness = false
 test = false
 required-features = ["testing", "render-stats"]
 
+[[bench]]
+name = "static_clip"
+path = "benches/static_clip/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
 [[example]]
 name = "status_bar"
 path = "examples/status_bar.rs"

@@ -44,6 +44,11 @@ use smallvec::SmallVec;
 /// [`world_aabb`](Self::world_aabb) for one, and `world_radii` to cut it
 /// with.
 ///
+/// **Equality is representational.** Two shapes covering the same area with a
+/// different split between `rect` and `placement` compare unequal — which is
+/// the conservative answer wherever the question is "is this the same clip as
+/// last frame", and not an answer about geometry.
+///
 /// **What it cannot express is two shapes in two different rotated spaces.**
 /// One rect and one matrix describe one parallelogram, and the intersection of
 /// two that are turned differently is not one — unless the turn between them is
@@ -52,7 +57,7 @@ use smallvec::SmallVec;
 /// falls back to the box around both. The tessellator is the exception: it
 /// never writes the intersection down, so it can take both shapes and meet them
 /// a scanline at a time.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlacedShape {
     /// The rect, in the space of the widget that declared it.
     pub rect: Rect,
@@ -88,6 +93,20 @@ impl PlacedShape {
             radii,
             curvature,
             placement,
+        }
+    }
+
+    /// The same shape, moved across the surface by `(dx, dy)`.
+    ///
+    /// The declaration does not change — the rect and the radii are in the
+    /// shape's own space, and that space has not moved relative to whatever
+    /// declared it. What moves is where that space sits, which is the
+    /// placement.
+    #[inline]
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            placement: self.placement.translated(dx, dy),
+            ..*self
         }
     }
 

@@ -6,6 +6,7 @@ use std::rc::Rc;
 use smallvec::SmallVec;
 
 use crate::pivot::Pivot;
+use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
@@ -41,6 +42,72 @@ pub struct CachedFlatten {
     pub commands: Vec<FlattenedCommand>,
     /// The world transform at the time of caching.
     pub world_transform: Transform,
+    /// The clip inherited from above at the time of caching.
+    ///
+    /// Every command below carries its clip already intersected with this one
+    /// and in world coordinates, so replaying them shifts that clip along with
+    /// the content. Kept so the next frame can ask whether the inherited clip
+    /// underwent the same shift the content did — see
+    /// [`replay_offset`](Self::replay_offset).
+    pub parent_clip: Option<PlacedShape>,
+}
+
+impl CachedFlatten {
+    /// How far this entry would have to move to stand in for the frame being
+    /// flattened — or `None` if it cannot stand in for it at all.
+    ///
+    /// Replay shifts each command by one `(dx, dy)`, so a subtree that did
+    /// anything but translate is refused outright, and so is one whose
+    /// inherited clip did not make the same journey its content did. That last
+    /// one is the whole of what a clip costs here: every command carries its
+    /// clip already intersected with this one and in world coordinates, so the
+    /// shift moves the clip too. A static `Overflow::Hidden` box passes it with
+    /// `dx = dy = 0`, and so does a clipped subtree carried bodily by an
+    /// ancestor. Scrolling is what it refuses — the rows move and the viewport
+    /// does not, and a clip dragged along with the rows would leave the
+    /// viewport with them and cut nothing, on the first scrolled frame.
+    ///
+    /// Reaching this from inside a *scroller* is #441, and needs the clip to
+    /// stop being baked into each command in the first place.
+    pub fn replay_offset(
+        &self,
+        world_transform: Transform,
+        parent_clip: Option<&PlacedShape>,
+    ) -> Option<(f32, f32)> {
+        if !self.world_transform.is_translation_only() || !world_transform.is_translation_only() {
+            return None;
+        }
+        let dx = world_transform.tx() - self.world_transform.tx();
+        let dy = world_transform.ty() - self.world_transform.ty();
+        // The whole shape, not just where it sits: a viewport resized between
+        // the two frames cuts differently at the same offset.
+        let moved = self.parent_clip.map(|clip| clip.translated(dx, dy));
+        (moved == parent_clip.copied()).then_some((dx, dy))
+    }
+}
+
+/// Where a node was when it was last flattened, and whether it had already
+/// been there.
+///
+/// Under a clip a cached subtree is only ever replayed where it already is —
+/// [`CachedFlatten::replay_offset`] takes a delta of zero there and nothing
+/// else — so collecting its commands repays the copy only for a subtree that
+/// is standing still. **One frame of stillness is not that.** Measured on
+/// `benches/scroll_list` at 5000 rows: 18% of the nodes under the scroller's
+/// clip are where they were the frame before, and not one of them is still
+/// there the frame after. Acting on the first frame buys 945 replays across
+/// the run and pays 21501 entries for them, which is how the flatten phase
+/// came to cost twice what not caching at all costs (#445).
+///
+/// So the entry waits for two agreements rather than one, and is collected on
+/// the **third** flatten in one place: the first one to find the node where
+/// the two before it did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlattenPlace {
+    /// The world transform the last flatten saw.
+    pub at: Transform,
+    /// Whether the flatten before that one saw the same.
+    pub again: bool,
 }
 
 /// A node in the render tree representing a widget's visual output.
@@ -127,6 +194,15 @@ pub struct RenderNode {
     /// so shallow node clones inherit it for free. Interior-mutable because
     /// flatten writes it while the tree is Rc-shared.
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>,
+
+    /// Where this node was when it was last flattened, and whether it had
+    /// already been there.
+    ///
+    /// Two frames of memory, kept whether or not either flatten was worth
+    /// caching, because it is what decides whether the next one is. A transform
+    /// and a flag, and no allocation, which is what makes it affordable for
+    /// every node on every frame; the entry it decides against is not.
+    pub last_flatten: Cell<Option<FlattenPlace>>,
 }
 
 impl RenderNode {
@@ -146,6 +222,7 @@ impl RenderNode {
             repainted: Cell::new(true),
             partial: false,
             cached_flatten: RefCell::new(None),
+            last_flatten: Cell::new(None),
         }
     }
 
@@ -170,5 +247,6 @@ impl RenderNode {
         self.repainted.set(true);
         self.partial = false;
         *self.cached_flatten.borrow_mut() = None;
+        self.last_flatten.set(None);
     }
 }

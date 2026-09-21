@@ -33,6 +33,7 @@ pub struct RenderNode {
     pub repainted: Cell<bool>,               // true = freshly painted this frame
     pub partial: bool,                       // Some children were not painted (do not cache)
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>, // Cached flatten output
+    pub last_flatten: Cell<Option<FlattenPlace>>, // Where the last two flattens saw it
 }
 ```
 
@@ -486,6 +487,7 @@ The flattener caches results per node to avoid re-flattening clean subtrees:
 pub struct CachedFlatten {
     pub commands: Vec<FlattenedCommand>,  // Flattened output from this subtree
     pub world_transform: Transform,       // World transform at time of caching
+    pub parent_clip: Option<PlacedShape>, // Clip inherited from above, back then
 }
 ```
 
@@ -493,6 +495,38 @@ When a `RenderNode` has `repainted == false` (reused from paint cache) and both 
 cached and current world transforms are translation-only, the flattener reuses cached
 commands with a (dx, dy) offset instead of recursing into children. After a full flatten,
 results are cached back onto the node for next frame.
+
+`parent_clip` is what makes that safe under a clip, and
+`CachedFlatten::replay_offset` is where the rule lives: the entry may be
+replayed only when the clip it was cached under, translated by `(dx, dy)`,
+equals the one inherited this frame — the whole `PlacedShape` and not just
+where it sits, so a resized viewport is refused along with a moved one. A
+static `Overflow::Hidden` box passes with `dx = dy = 0`; a scrolling one does
+not, because the rows move and the viewport does not.
+
+A node that sets a clip of *its own* still caches nothing. Replaying it would
+have to place that clip too, and reaching the cache from inside a scroller
+needs the clip to stop being baked into each command in the first place (#441).
+
+`last_flatten` decides the other half: not whether an entry may be *used* but
+whether it is worth *making*. Collecting one copies everything the subtree
+pushed, and under a clip that copy is repaid only where the subtree already is
+— so only a subtree that is standing still is worth collecting, and **one frame
+of stillness is not standing still**. `FlattenPlace` records where the last
+flatten saw the node and whether the one before it saw the same, so an entry is
+collected on the **third** frame in one place — the first to find the node
+where the two before it did. Above a clip, where any delta is accepted, it is
+made whatever the subtree did.
+
+That threshold is a measurement, not a taste. On `benches/scroll_list` at 5000
+rows, 18% of the nodes under the scroller's clip are where they were the frame
+before and **not one** of them is still there the frame after: writing on the
+first frame bought 945 replays across the run and paid 21501 entries for them,
+and the flatten phase cost twice what not caching at all costs. Writing on the
+second brings it back to parity and keeps the static case, which is the one the
+feature is for. `FRAMES_TO_SETTLE` in `tests/paint_cache_across_frames.rs` is
+that threshold written down as a test: one frame in one place must leave no
+entry behind, and the third must leave one.
 
 The cache lives in `RefCell<Option<Rc<CachedFlatten>>>` on the node, so flatten
 only needs `&RenderNode` and shallow node clones share the cached output.
