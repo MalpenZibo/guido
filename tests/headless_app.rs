@@ -1241,3 +1241,119 @@ fn a_first_layout_dates_from_the_frame_that_asked_for_it() {
         "a transition and a half in, it has arrived"
     );
 }
+
+/// A subtree that skips does not erase what the pass has already been told.
+///
+/// A skip folds two things together: whatever the subtree around this one has
+/// already said, and what this one said when it last ran. It has to carry both
+/// out, or a parent that lays out an animation and then a settled sibling ends
+/// the second one having forgotten the first, and caches its own answer as
+/// settled. The measure that follows then asks the same question at the same
+/// constraints, reads the in-flight size back off that entry instead of
+/// descending to where the animation is going, and the compositor is asked for
+/// a height the animation is merely passing through — the defect #368 was
+/// about, arriving by another route.
+///
+/// The tree is that shape: an animated child, and a fixed one after it that
+/// skips. `a_growing_child_configures_the_surface_once_to_where_it_is_going`
+/// is the same scenario without the sibling, and cannot see this — its root is
+/// asked different constraints by the two passes, so the measure descends
+/// whatever the cached answer says. Here the root pins both axes it hands
+/// down, `fill()` across and `at_most` down, so everything below it is asked
+/// the same question by both passes and the cached flag is the only thing
+/// deciding whether the measure descends.
+#[test]
+fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
+    let Some(mut app) = headless() else { return };
+    let tall = create_signal(false);
+    let bar = app.surface(content_bar(), move || {
+        container().width(fill()).height(at_most(24.0)).child(
+            container()
+                .child(
+                    container().height(
+                        (move || if tall.get() { 16.0 } else { 8.0 })
+                            .transition(Transition::new(100.0, TimingFunction::Linear)),
+                    ),
+                )
+                .child(container().height(4.0)),
+        )
+    });
+    app.configure(bar, 200, 24, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+
+    tall.set(true);
+    for ms in [0, 20, 40] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    let part_way = app.root_size(bar).1;
+    for ms in [60, 80, 100, 120] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+
+    // Without this the assertion below is also what an animation that never
+    // played at all would produce, and a skip has nothing to report about a
+    // subtree that was never in flight.
+    assert!(
+        part_way > 12.0 && part_way < 20.0,
+        "part way through, the layout is between the animation's ends: \
+         {part_way}"
+    );
+    assert_eq!(
+        app.exclusive_zones_asked(bar),
+        [1, 12, 20],
+        "the placeholder, the height it stood at, and the height it is going \
+         to — and nothing in between, which is what the measure would report \
+         if the skip had handed its parent a settled answer"
+    );
+}
+
+/// A layout root is restarted under its own constraints, not the surface's.
+///
+/// Partial layout re-enters the tree at a relayout boundary, which has no
+/// parent above it to say what room it has. `Tree::last_layout_constraints`
+/// is that memory: the constraints the boundary was last really laid out
+/// under. Without them the boundary is handed the whole surface, and one
+/// inside a padded parent grows to a width its parent never offered.
+///
+/// The boundary here declares 150 inside a parent that offers 100, so the two
+/// answers differ: its own constraints clamp it to 100, the surface's leave it
+/// at 150. The height moves so the assertion cannot pass by the restart never
+/// happening at all.
+#[test]
+fn a_restarted_layout_root_keeps_the_constraints_it_was_placed_under() {
+    let Some(mut app) = headless() else { return };
+    let tall = create_signal(false);
+    let boundary = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding([0.0, 50.0]).child(
+            container()
+                .width(150.0)
+                .height(move || if tall.get() { 30.0 } else { 20.0 })
+                .widget_ref(boundary),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let placed = boundary.rect().get_untracked();
+    assert_eq!(
+        (placed.width, placed.height),
+        (100.0, 20.0),
+        "declared 150 wide, clamped by the 100 its padded parent offers"
+    );
+
+    tall.set(true);
+    app.step();
+
+    let restarted = boundary.rect().get_untracked();
+    assert_eq!(
+        restarted.height, 30.0,
+        "the layout really did re-run, and nothing resized, so it re-ran from \
+         the boundary"
+    );
+    assert_eq!(
+        restarted.width, 100.0,
+        "and at its own constraints: the surface's would leave it at 150"
+    );
+}
