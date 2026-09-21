@@ -1307,3 +1307,53 @@ fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
          if the skip had handed its parent a settled answer"
     );
 }
+
+/// A layout root is restarted under its own constraints, not the surface's.
+///
+/// Partial layout re-enters the tree at a relayout boundary, which has no
+/// parent above it to say what room it has. `Tree::last_layout_constraints`
+/// is that memory: the constraints the boundary was last really laid out
+/// under. Without them the boundary is handed the whole surface, and one
+/// inside a padded parent grows to a width its parent never offered.
+///
+/// The boundary here declares 150 inside a parent that offers 100, so the two
+/// answers differ: its own constraints clamp it to 100, the surface's leave it
+/// at 150. The height moves so the assertion cannot pass by the restart never
+/// happening at all.
+#[test]
+fn a_restarted_layout_root_keeps_the_constraints_it_was_placed_under() {
+    let Some(mut app) = headless() else { return };
+    let tall = create_signal(false);
+    let boundary = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding([0.0, 50.0]).child(
+            container()
+                .width(150.0)
+                .height(move || if tall.get() { 30.0 } else { 20.0 })
+                .widget_ref(boundary),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let placed = boundary.rect().get_untracked();
+    assert_eq!(
+        (placed.width, placed.height),
+        (100.0, 20.0),
+        "declared 150 wide, clamped by the 100 its padded parent offers"
+    );
+
+    tall.set(true);
+    app.step();
+
+    let restarted = boundary.rect().get_untracked();
+    assert_eq!(
+        restarted.height, 30.0,
+        "the layout really did re-run, and nothing resized, so it re-ran from \
+         the boundary"
+    );
+    assert_eq!(
+        restarted.width, 100.0,
+        "and at its own constraints: the surface's would leave it at 150"
+    );
+}
