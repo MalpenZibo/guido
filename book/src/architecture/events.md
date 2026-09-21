@@ -202,7 +202,9 @@ pub struct Container {
 The state layer system uses events internally:
 
 1. **MouseEnter** → Set hover state true
-2. **MouseLeave** → Set hover state false
+2. **MouseLeave** → Set hover state false, and pressed state false with the
+   ripple *cancelled* rather than completed — a press that ends this way
+   activated nothing, which is also how a cancelled touch gesture ends
 3. **MouseDown** → Set pressed state true, record click point
 4. **MouseUp** → Set pressed state false, trigger ripple contraction
 
