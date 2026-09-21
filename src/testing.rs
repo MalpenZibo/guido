@@ -559,6 +559,15 @@ impl Headless {
             .expect("no target; step once after configuring")
     }
 
+    /// The name of the adapter every surface here draws with.
+    ///
+    /// A harness that measures has to be able to say what produced the number:
+    /// the same frame costs one thing on a GPU and another on lavapipe, and a
+    /// timing that does not name its adapter is a claim about neither.
+    pub fn adapter_name(&self) -> &str {
+        &self.gpu.adapter_info.name
+    }
+
     /// The size a surface's root widget was measured at, in logical pixels.
     pub fn root_size(&self, id: SurfaceId) -> (f32, f32) {
         let bounds = self.tree.get_bounds(self.root(id)).unwrap_or_default();

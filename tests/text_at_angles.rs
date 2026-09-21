@@ -179,19 +179,13 @@ fn no_angle_loses_its_glyphs() {
         return;
     };
 
-    let adapter = pollster::block_on(ctx.instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map(|a| a.get_info().name)
-    .unwrap_or_else(|_| "<unknown>".to_string());
+    let adapter = &ctx.adapter_info.name;
 
     // Counting glyphs does not depend on the rasterizer the way a golden does,
     // but the amount does: a different one antialiases a different number of
     // pixels past the threshold. The bar is "some glyphs", not "this many", so
     // it holds anywhere — and it still runs where the goldens run.
-    if !is_software_rasterizer(&adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
+    if !is_software_rasterizer(adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
         eprintln!("skipping: `{adapter}` is not the reference rasterizer");
         return;
     }
