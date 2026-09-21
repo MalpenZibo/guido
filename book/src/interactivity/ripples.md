@@ -146,7 +146,6 @@ numbers:
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
-# use guido::widgets::RippleConfig;
 # fn main() {
 # container()
 .when_pressed(|s| s.ripple_config(RippleConfig {
