@@ -394,9 +394,9 @@ widest part of a bite can sit strictly between two scanlines, which is not
 something a convex boundary can do.
 
 **One clip, though.** What arrives is one resolved shape, which
-`intersect_clips` has already collapsed from the chain the clip tree holds. That collapse is exact when the two spaces differ by a
-scale, a quarter turn or a mirror, and is the box around both for any other
-angle. What this consumer escapes is the *shape against clip* box intersection,
+`intersect_clips` has already collapsed from the chain the clip tree holds.
+That collapse is exact when the two spaces differ by a scale, a quarter turn or
+a mirror, and is the box around both for any other angle. What this consumer escapes is the *shape against clip* box intersection,
 not the clip chain's own.
 
 **`clamp_radii` is the shader's clamp**, each corner cut to at most half the
@@ -520,12 +520,24 @@ reuses cached commands with a (dx, dy) offset instead of recursing into
 children. After a full flatten, results are cached back onto the node for next
 frame.
 
-`CachedFlatten::replay_offset` is the whole of the rule, and a translation is the whole of what it asks. It used to ask a second
+`CachedFlatten::replay_offset` is the whole of the rule for *using* an entry,
+and a translation is the whole of what it asks. It used to ask a second
 question — whether the clip inherited from above had made the same journey the
 content did — which is what excluded every scrolling subtree, and what #441
 removed by removing the copy the question was about.
 
-A clip costs a replay three lines instead, in `replay_clips`. A clip the
+Whether an entry is worth *making* is a second rule, and it is the paint
+cache's: an entry is collected only for a subtree with nothing culled under it.
+`cache_paint_results` drops a partial paint from the paint cache, so the widget
+repaints next frame, so the replay path is never offered its entry — collecting
+one is a copy of everything the subtree drew, made for a frame that cannot ask
+for it. Flatten computes the same partial-ness the cache walk does, one phase
+earlier, by having `flatten_node` return it. In a scrolling list that is the
+list itself and every ancestor of it: on `benches/scroll_list` at 5000 rows it
+is 45 commands copied per frame instead of 266, for the same 4108 replays
+across the run — seventeen a frame.
+
+A clip costs a replay three cases instead, in `ClipTree::replay`. A clip the
 subtree placed itself travels with it: translated by the same offset as the
 content, then cut afresh by its parent, so a viewport resized above cuts the
 new intersection rather than the old one shifted. A clip it inherited is not

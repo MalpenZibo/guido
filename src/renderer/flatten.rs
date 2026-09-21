@@ -424,7 +424,7 @@ fn flatten_node(
     parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<ClipIndex>,
     out: &mut LayeredCommands,
-) {
+) -> bool {
     // Compute this node's world transform
     let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
 
@@ -466,7 +466,9 @@ fn flatten_node(
             out.push(replayed);
         }
         crate::render_stats::record_flatten_cached();
-        return;
+        // Whatever was replayed came out of the paint cache, which keeps only
+        // complete subtrees.
+        return false;
     }
 
     // Full flatten — existing logic
@@ -474,7 +476,8 @@ fn flatten_node(
     // (including its children, and including the clip it is about to place)
     // can be picked out again and kept. A subtree that did anything but
     // translate can be put back by no offset at all, so there is nothing to
-    // mark for it.
+    // mark for it; whether the rest is worth keeping is decided at the bottom,
+    // once the children have said whether any of them was cut short.
     let marks = world_transform
         .is_translation_only()
         .then(|| (out.mark(), out.clips.mark()));
@@ -537,8 +540,9 @@ fn flatten_node(
     }
 
     // Recurse to children with effective clip
+    let mut subtree_partial = node.partial;
     for child in &node.children {
-        flatten_node(child, world_transform, world_origin, clip_index, out);
+        subtree_partial |= flatten_node(child, world_transform, world_origin, clip_index, out);
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.
@@ -572,21 +576,32 @@ fn flatten_node(
         }
     }
 
-    // Cache flatten results for next frame, but only when reuse is possible.
-    // A replay shifts everything the entry kept by one offset, so a subtree
-    // that did anything but translate cannot be put back by one — and that is
-    // the whole of the rule now. A clip is no longer part of it: the clips a
-    // subtree places travel with it and the one it inherits is looked up where
-    // it now is, so a row under a scroller is as replayable as a card on a
-    // desktop.
-    *node.cached_flatten.borrow_mut() = marks.map(|(mark, clip_mark)| {
-        Rc::new(CachedFlatten {
-            commands: out.commands_since(mark, inherited.as_ref()),
-            clips: out.clips.since(clip_mark),
-            world_transform,
-        })
-    });
+    // Cache flatten results for next frame, but only when reuse is possible,
+    // which is two questions.
+    //
+    // Can the entry be replayed? A replay shifts everything it kept by one
+    // offset, so a subtree that did anything but translate cannot be put back
+    // by one. A clip is no longer part of that question: the clips a subtree
+    // places travel with it and the one it inherits is looked up where it now
+    // is, so a row under a scroller is as replayable as a card on a desktop.
+    //
+    // Will it ever be *read*? Only a subtree the paint cache hands back clean
+    // is ever offered to the replay path, and `cache_paint_results` keeps only
+    // complete paints — a subtree with anything culled under it is dropped
+    // from the paint cache and repaints next frame. Collecting an entry for
+    // one is a copy of everything it drew, made for a frame that cannot ask
+    // for it. That is most of the cost of caching in a scrolling list, where
+    // the list culls and every ancestor of it inherits the culling.
+    *node.cached_flatten.borrow_mut() =
+        marks.filter(|_| !subtree_partial).map(|(mark, clip_mark)| {
+            Rc::new(CachedFlatten {
+                commands: out.commands_since(mark, inherited.as_ref()),
+                clips: out.clips.since(clip_mark),
+                world_transform,
+            })
+        });
     crate::render_stats::record_flatten_full();
+    subtree_partial
 }
 
 /// Stand-in for "this could be anywhere", used when a command's extent is not

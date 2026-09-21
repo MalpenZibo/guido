@@ -769,6 +769,48 @@ fn a_clip_that_appears_above_a_replayed_subtree_cuts_it() {
     );
 }
 
+/// A list that culled its rows is not written down, and the caption beside it
+/// is.
+///
+/// The other half of the question flatten asks about an entry: not whether it
+/// could be replayed, but whether anything will ever ask for it. A subtree with
+/// something culled under it is dropped from the paint cache by
+/// `cache_paint_results`, so the widget repaints next frame and the replay path
+/// is never offered what flatten kept. Collecting it copies everything the
+/// subtree drew — the whole viewport, in a scrolling list, every frame — for a
+/// frame that cannot use it.
+///
+/// The caption is in the same tree and is cut short by nothing, which is what
+/// says this refuses the culled subtree rather than everything.
+#[test]
+fn a_list_that_culled_its_rows_is_not_written_down() {
+    let mut s = Surface::new(two_columns(), 2.0 * (PAD + VIEWPORT) + GAP, 400.0);
+
+    s.frame();
+    let scroller = s.scroller(0);
+    let list = s.surface.tree.get_children(scroller)[0];
+    s.scroll(0, SCROLL);
+    s.frame();
+
+    assert!(
+        s.surface.tree.get_children(list).len() > s.node_of(list).children.len(),
+        "nothing was culled, so this test is about a subtree that does not \
+         exist and would pass however the entry is decided"
+    );
+    assert!(
+        s.node_of(list).cached_flatten.borrow().is_none(),
+        "the list culled the rows that left the viewport, so its paint is \
+         partial, so it repaints next frame and no frame can ever replay what \
+         flatten copied down for it"
+    );
+    assert!(
+        s.caption_node(0).cached_flatten.borrow().is_some(),
+        "the caption had nothing culled under it and is where it was, so it is \
+         exactly what an entry is for — refusing it too would be refusing the \
+         cache itself"
+    );
+}
+
 /// A scrolled row is replayed where it now is, and its viewport stays put.
 ///
 /// This is the case the whole of #441 is about. The row is clean — the paint
