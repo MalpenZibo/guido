@@ -1531,3 +1531,107 @@ fn a_departed_outputs_surface_is_torn_down_rather_than_abandoned() {
         "the application holds the one monitor that is left, and nothing else"
     );
 }
+
+/// What a lock screen is built from: one per monitor, saying which.
+fn lock_screen(output: OutputInfo) -> Text {
+    text(format!("locked: {}", output.id.raw()))
+}
+
+/// A lock covers every connected monitor exactly once, and unlocking takes
+/// every cover away.
+///
+/// The whole of `src/session_lock.rs` had nothing watching it: `Recorder` took
+/// the trait's defaults for all four lock methods, so a test could call
+/// `lock_session` and the loop would find a compositor that refuses.
+#[test]
+fn a_lock_covers_each_connected_output_exactly_once() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+
+    lock_session(lock_screen);
+    app.step();
+
+    assert_eq!(
+        lock_state().get_untracked(),
+        LockState::Locking,
+        "asked for, and nothing has answered yet"
+    );
+    assert!(
+        app.lock_surface_requests().is_empty(),
+        "so no monitor has been asked to be covered"
+    );
+
+    app.grant_lock();
+    app.step();
+
+    assert!(app.is_locked(), "the compositor is holding a grant");
+    assert_eq!(
+        lock_state().get_untracked(),
+        LockState::Locked,
+        "and the application knows it"
+    );
+    let (covers, screens): (Vec<SurfaceId>, Vec<OutputId>) =
+        app.lock_surfaces_created().into_iter().unzip();
+    assert_eq!(
+        screens,
+        [laptop, external],
+        "one cover per monitor, and only one"
+    );
+
+    unlock_session();
+    app.step();
+
+    assert!(!app.is_locked(), "the grant was handed back");
+    assert_eq!(lock_state().get_untracked(), LockState::Unlocked);
+    // Sorted, not in the order they went: the teardown drains a map, and
+    // nothing in the protocol cares which cover is destroyed first — unlike a
+    // popup chain, where the order is the assertion.
+    let mut taken = app.surfaces_destroyed().to_vec();
+    taken.sort_by_key(|id| id.raw());
+    assert_eq!(taken, covers, "both covers were taken away");
+}
+
+/// A monitor unplugged while the session is locked is asked for nothing
+/// further.
+///
+/// This is #422 as the application sees it: a lock surface is asked for once
+/// per output per iteration until one exists, so an output that is gone but
+/// still listed is asked sixty times a second for ever — 104 refusals in five
+/// seconds on the screen it was found on. The count standing still over thirty
+/// frames is the assertion that would have caught it.
+#[test]
+fn an_output_that_leaves_mid_lock_is_asked_for_nothing_further() {
+    let Some(mut app) = headless() else { return };
+    let _laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+
+    lock_session(lock_screen);
+    app.step();
+    app.grant_lock();
+    app.step();
+
+    assert_eq!(app.lock_surface_requests().len(), 2, "one ask per monitor");
+    let going = app
+        .lock_surfaces_created()
+        .into_iter()
+        .find(|(_, output)| *output == external)
+        .map(|(id, _)| id)
+        .expect("the external monitor was covered");
+
+    app.disconnect_output(external);
+    for _ in 0..30 {
+        app.step();
+    }
+
+    assert_eq!(
+        app.lock_surface_requests().len(),
+        2,
+        "a monitor that has gone is not asked for a cover again"
+    );
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [going],
+        "its cover was taken away instead, and the one that stayed kept its own"
+    );
+}
