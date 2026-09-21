@@ -2378,6 +2378,12 @@ impl App {
             if let Some(reason) = iterate(ctx, &mut self.tree, &mut self.layout_roots, None) {
                 return reason;
             }
+
+            // The running commentary is the driver's to ask for. A frame
+            // accumulates and says nothing; this is the one loop that wants
+            // the once-a-second dump on stderr, and a harness stepping
+            // `iterate` itself keeps its counters.
+            render_stats::report_if_due();
         }
     }
 }
