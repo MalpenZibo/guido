@@ -1317,6 +1317,10 @@ impl Surface for WaylandSurface<'_> {
         self.state.set_surface_exclusive_zone(self.id, zone)
     }
 
+    fn set_viewport_destination(&mut self, width: u32, height: u32) {
+        self.state.set_viewport_destination(self.id, width, height)
+    }
+
     fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, f: F) {
         let id = self.id;
         // The batching is the state's — one commit for the group — and what the

@@ -405,15 +405,38 @@ pub(crate) fn honour_owned_axes(anchor: Anchor, width: u32, height: u32) -> (u32
 /// that is not a binary fraction cannot land the product on the wrong side of a
 /// half at 4K.
 ///
-/// The clamp is the one `init_gpu` has always carried: a scale below 1 would
-/// ask for a buffer smaller than the surface, which is a decision nobody has
-/// taken here, and a scale of zero would ask for no buffer at all.
+/// Nothing else: a scale is floored to 1 by [`adopted_scale`] before a surface
+/// ever holds one, so that every reader of it gets the same number rather than
+/// the buffer path alone.
 pub(crate) fn buffer_size((width, height): (u32, u32), scale: f32) -> (u32, u32) {
-    let scale = f64::from(scale.max(1.0));
+    let scale = f64::from(scale);
     (
         (f64::from(width) * scale).round() as u32,
         (f64::from(height) * scale).round() as u32,
     )
+}
+
+/// The scale a surface takes from a compositor that has just named one, and
+/// whether that moved it. `held` is what it had, or `None` if it has been told
+/// nothing yet.
+///
+/// **The floor is here** rather than at the buffer arithmetic, so the
+/// invariant is "a surface's scale is never below 1" rather than "the one path
+/// that happens to floor it" — the renderer and the damage rectangles read the
+/// same number. A scale below 1 asks for a buffer smaller than the surface,
+/// which is a decision nobody has taken here; zero asks for no buffer at all.
+///
+/// A first answer always moves, even when it is the 1.0 the surface started
+/// at, because "believed by default" and "confirmed by the compositor" are
+/// different states and only the second lets a surface stop repainting in
+/// full. A compositor repeating a number it has already sent moves nothing.
+///
+/// A free function, and not a method on the surface state, because that state
+/// holds a `wl_surface` and a shell role and so cannot be built by a test —
+/// which is the whole of what is worth checking here.
+pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
+    let named = named.max(1.0);
+    (named, held != Some(named))
 }
 
 impl SurfaceExtent {
@@ -1380,6 +1403,30 @@ mod tests {
                 .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())),
             "and the close is queued"
         );
+    }
+
+    /// A surface never holds a scale below 1, a first answer always counts as
+    /// a change, and a repeat never does.
+    ///
+    /// The floor used to live inside `buffer_size`, where only the buffer got
+    /// it; the renderer and the damage rectangles read the same number and did
+    /// not. The first-answer rule is what lets a surface stop repainting in
+    /// full — a compositor that confirms the 1.0 a surface already believed
+    /// has still told it something.
+    #[test]
+    fn a_scale_is_floored_at_one_and_a_repeat_of_it_is_not_a_change() {
+        assert_eq!(adopted_scale(None, 1.5), (1.5, true));
+        assert_eq!(adopted_scale(Some(1.5), 1.5), (1.5, false));
+        assert_eq!(adopted_scale(Some(1.5), 2.0), (2.0, true));
+
+        // A compositor confirming what the surface already believed is still
+        // the first thing it has been told.
+        assert_eq!(adopted_scale(None, 1.0), (1.0, true));
+
+        // Below 1 is floored, and the floor is what the repeat compares
+        // against — so 0.5 twice is one change, not two.
+        assert_eq!(adopted_scale(None, 0.5), (1.0, true));
+        assert_eq!(adopted_scale(Some(1.0), 0.5), (1.0, false));
     }
 
     /// The buffer is the logical size times the scale, rounded halfway away
