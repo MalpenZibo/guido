@@ -528,6 +528,7 @@ impl Container {
             Event::MouseDown {
                 at: Some(at),
                 button,
+                ..
             } if *button == MouseButton::Left => {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
@@ -568,7 +569,7 @@ impl Container {
             // ends on the release, which needs no position at all. The hover
             // below is the other half, and wants the opposite: over nothing
             // is not hovered.
-            Event::MouseMove { at } => {
+            Event::MouseMove { at, .. } => {
                 // Handle dragging
                 if let Some(at) = at {
                     if self.scroll_data().scroll_state.scrollbar_dragging {

@@ -423,15 +423,8 @@ fn translate_touch(
             // press at all.
             if primary.is_none() {
                 *primary = Some(id);
-                events.push((surface, at, Event::MouseMove { at: Some(position) }));
-                events.push((
-                    surface,
-                    at,
-                    Event::MouseDown {
-                        at: Some(position),
-                        button: MouseButton::Left,
-                    },
-                ));
+                events.push((surface, at, Event::finger_move(position.x, position.y)));
+                events.push((surface, at, Event::finger_down(position.x, position.y)));
             }
         }
         TouchEvent::Motion { id, at, position } => {
@@ -446,7 +439,7 @@ fn translate_touch(
             // the one that has to see the release.
             let surface = finger.0;
             if *primary == Some(id) {
-                events.push((surface, at, Event::MouseMove { at: Some(position) }));
+                events.push((surface, at, Event::finger_move(position.x, position.y)));
             }
         }
         TouchEvent::Up { id, at } => {
@@ -632,9 +625,7 @@ impl PointerHandler for WaylandState {
                         push_event(
                             events,
                             at,
-                            Event::MouseMove {
-                                at: Some(self.input.pointer_at),
-                            },
+                            Event::mouse_move(self.input.pointer_at.x, self.input.pointer_at.y),
                         );
                     }
                 }
@@ -658,9 +649,7 @@ impl PointerHandler for WaylandState {
                         push_event(
                             events,
                             at,
-                            Event::MouseMove {
-                                at: Some(self.input.pointer_at),
-                            },
+                            Event::mouse_move(self.input.pointer_at.x, self.input.pointer_at.y),
                         );
                     }
                 }
@@ -671,10 +660,11 @@ impl PointerHandler for WaylandState {
                     {
                         events.push((
                             at,
-                            Event::MouseDown {
-                                at: Some(self.input.pointer_at),
-                                button: mouse_button,
-                            },
+                            Event::mouse_down(
+                                self.input.pointer_at.x,
+                                self.input.pointer_at.y,
+                                mouse_button,
+                            ),
                         ));
                     }
                 }
@@ -1041,6 +1031,7 @@ delegate_keyboard!(WaylandState);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::PointerKind;
 
     /// A held modifier replaces the character xkb reports: Ctrl+C arrives as
     /// U+0003, not as 'c'. The keysym still carries the letter, and dropping
@@ -1123,7 +1114,7 @@ mod tests {
     const PY: f32 = 20.0;
 
     fn at(pointer: Point) -> Event {
-        Event::MouseMove { at: Some(pointer) }
+        Event::mouse_move(pointer.x, pointer.y)
     }
 
     /// The rule `push_event` took off its call sites. A queued move stands for
@@ -1138,7 +1129,15 @@ mod tests {
 
         push_event(&mut events, t0, at(Point::new(1.0, 1.0)));
         push_event(&mut events, later, at(Point::new(2.0, 2.0)));
-        let [(when, Event::MouseMove { at: Some(pointer) })] = events.as_slice() else {
+        let [
+            (
+                when,
+                Event::MouseMove {
+                    at: Some(pointer), ..
+                },
+            ),
+        ] = events.as_slice()
+        else {
             panic!("two moves are one move, got {events:?}");
         };
         assert_eq!(*pointer, Point::new(2.0, 2.0), "the newest position wins");
@@ -1147,10 +1146,7 @@ mod tests {
         push_event(
             &mut events,
             later,
-            Event::MouseDown {
-                at: Some(Point::new(2.0, 2.0)),
-                button: MouseButton::Left,
-            },
+            Event::mouse_down(2.0, 2.0, MouseButton::Left),
         );
         push_event(&mut events, later, at(Point::new(3.0, 3.0)));
         assert!(
@@ -1430,14 +1426,27 @@ mod tests {
 
     /// The move-and-press a landing finger synthesizes, as the surface it went
     /// to and where — or a panic naming what arrived instead.
+    ///
+    /// The pointer kind is asserted here rather than in a test of its own
+    /// because it is a property of every synthesized press: a scroller reads
+    /// it to tell a finger dragging its content from a mouse doing the same
+    /// (#429), so a fold that said `Mouse` would leave touch scrolling dead on
+    /// a device with every test still green.
     fn press(events: &[(SurfaceId, Event)]) -> (SurfaceId, Option<Point>) {
         let [
-            (moved_to, Event::MouseMove { at: moved }),
+            (
+                moved_to,
+                Event::MouseMove {
+                    at: moved,
+                    pointer: moved_by,
+                },
+            ),
             (
                 pressed_on,
                 Event::MouseDown {
                     at: pressed,
                     button,
+                    pointer: pressed_by,
                 },
             ),
         ] = events
@@ -1445,6 +1454,11 @@ mod tests {
             panic!("a landing finger moves then presses, got {events:?}");
         };
         assert_eq!(*button, MouseButton::Left, "a finger is a left button");
+        assert_eq!(
+            (*moved_by, *pressed_by),
+            (PointerKind::Finger, PointerKind::Finger),
+            "and a finger, which is what the fold cannot say any other way"
+        );
         assert_eq!(moved_to, pressed_on, "both to one surface");
         assert_eq!(moved, pressed, "and both at one place");
         (*pressed_on, *pressed)
@@ -1549,11 +1563,12 @@ mod tests {
         touch.send(down(0, landed_on, PX, PY));
 
         let slid = touch.send(motion(0, -40.0, 900.0));
-        let [(surface, Event::MouseMove { at })] = slid.as_slice() else {
+        let [(surface, Event::MouseMove { at, pointer })] = slid.as_slice() else {
             panic!("the primary finger moves the pointer, got {slid:?}");
         };
         assert_eq!(*surface, landed_on, "off the surface, still the surface's");
         assert_eq!(*at, Some(Point::new(-40.0, 900.0)));
+        assert_eq!(*pointer, PointerKind::Finger, "and still a finger");
 
         let lifted = touch.send(up(0));
         assert_eq!(

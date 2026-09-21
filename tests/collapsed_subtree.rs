@@ -187,9 +187,7 @@ fn a_collapsed_container_takes_no_hover() {
         200.0,
     );
 
-    h.send(Event::MouseMove {
-        at: Some(Point::new(40.0, 20.0)),
-    });
+    h.send(Event::mouse_move(40.0, 20.0));
     assert_eq!(hovers.get(), 0, "the pointer is not over anything");
 }
 
@@ -217,10 +215,7 @@ fn a_press_in_flight_is_given_up_when_the_container_collapses() {
         200.0,
     );
 
-    h.send(Event::MouseDown {
-        at: Some(Point::new(40.0, 20.0)),
-        button: MouseButton::Left,
-    });
+    h.send(Event::mouse_down(40.0, 20.0, MouseButton::Left));
 
     open.set(false);
     h.lay_out(400.0, 200.0);
@@ -267,16 +262,12 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
         200.0,
     );
 
-    h.send(Event::MouseMove {
-        at: Some(Point::new(40.0, 20.0)),
-    });
+    h.send(Event::mouse_move(40.0, 20.0));
     assert_eq!(hovers.take(), vec![true], "hovered while it was open");
 
     open.set(false);
     h.lay_out(400.0, 200.0);
-    h.send(Event::MouseMove {
-        at: Some(Point::new(40.0, 20.0)),
-    });
+    h.send(Event::mouse_move(40.0, 20.0));
     assert_eq!(
         hovers.take(),
         vec![false],
@@ -305,9 +296,7 @@ fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
         200.0,
     );
 
-    h.send(Event::MouseMove {
-        at: Some(Point::new(5.0, 5.0)),
-    });
+    h.send(Event::mouse_move(5.0, 5.0));
     assert_eq!(
         guido::reactive::cursor::get_current_cursor(),
         CursorIcon::Text,
@@ -316,9 +305,7 @@ fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
 
     open.set(false);
     h.lay_out(400.0, 200.0);
-    h.send(Event::MouseMove {
-        at: Some(Point::new(5.0, 5.0)),
-    });
+    h.send(Event::mouse_move(5.0, 5.0));
     assert_eq!(
         guido::reactive::cursor::get_current_cursor(),
         CursorIcon::Default,

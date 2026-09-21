@@ -201,7 +201,7 @@ impl Container {
                     callback(true);
                 }
             }
-            Event::MouseMove { at } => {
+            Event::MouseMove { at, .. } => {
                 // A pressed container keeps receiving moves that leave it —
                 // that implicit capture is what makes dragging work. A move
                 // with no position is not one of those: there is nowhere to
@@ -288,7 +288,7 @@ impl Container {
                 }
             }
 
-            Event::MouseDown { at, button } => {
+            Event::MouseDown { at, button, .. } => {
                 if pressed_inside
                     && let Some(at) = at
                     && *button == MouseButton::Left

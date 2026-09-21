@@ -826,7 +826,10 @@ fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
 
     // The container holding the scroller collapses: the move still arrives,
     // because that is what gives the press up, but it arrives with nowhere.
-    h.dispatch(Event::MouseMove { at: None });
+    h.dispatch(Event::MouseMove {
+        at: None,
+        pointer: PointerKind::Mouse,
+    });
 
     let after = h.handle_pos();
     assert!(

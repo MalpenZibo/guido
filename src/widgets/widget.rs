@@ -554,6 +554,32 @@ impl ScrollSource {
     }
 }
 
+/// What was moved or pressed: a mouse, or a finger on the glass.
+///
+/// Widgets understand one pointer, and touch is folded into it
+/// (`src/platform/input.rs`) so that every widget can alias the two in a
+/// single arm — which is what almost all of them want. This is the one
+/// distinction the fold cannot make for them: a finger dragging the content of
+/// a scroller scrolls it, and a mouse doing the same must keep selecting text
+/// rather than taking drag-select away inside every scrollable.
+///
+/// One field on the events that already exist, not a parallel touch event
+/// family. [`Event::Scroll`] carries a [`ScrollSource`] on the same principle,
+/// and for the same reason: the handling is shared, so only the source differs.
+///
+/// No `Default`. Every event is built by something that knows which device it
+/// came from — the constructors below, and the fold in `input.rs` — and a
+/// default here would be a policy saying an unknown pointer is a mouse, which
+/// is how a finger comes to be one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerKind {
+    /// A mouse, a trackball, a touchpad — anything that hovers before it
+    /// presses.
+    Mouse,
+    /// A finger on a touchscreen, folded into the pointer pipeline.
+    Finger,
+}
+
 /// Keyboard modifier state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Modifiers {
@@ -602,11 +628,17 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Mouse/pointer moved
-    MouseMove { at: Option<Point> },
+    MouseMove {
+        at: Option<Point>,
+        /// What is moving — see [`PointerKind`].
+        pointer: PointerKind,
+    },
     /// Mouse button pressed
     MouseDown {
         at: Option<Point>,
         button: MouseButton,
+        /// What is pressing — see [`PointerKind`].
+        pointer: PointerKind,
     },
     /// Mouse button released
     MouseUp {
@@ -676,6 +708,7 @@ impl Event {
     pub fn mouse_move(x: f32, y: f32) -> Self {
         Event::MouseMove {
             at: Some(Point::new(x, y)),
+            pointer: PointerKind::Mouse,
         }
     }
 
@@ -684,6 +717,28 @@ impl Event {
         Event::MouseDown {
             at: Some(Point::new(x, y)),
             button,
+            pointer: PointerKind::Mouse,
+        }
+    }
+
+    /// A finger moved to a place, as the fold synthesizes it. See
+    /// [`mouse_move`](Self::mouse_move).
+    pub fn finger_move(x: f32, y: f32) -> Self {
+        Event::MouseMove {
+            at: Some(Point::new(x, y)),
+            pointer: PointerKind::Finger,
+        }
+    }
+
+    /// A finger landed at a place, as the fold synthesizes it.
+    ///
+    /// No button to name: the primary finger presses
+    /// [`Left`](MouseButton::Left) and nothing else ever does.
+    pub fn finger_down(x: f32, y: f32) -> Self {
+        Event::MouseDown {
+            at: Some(Point::new(x, y)),
+            button: MouseButton::Left,
+            pointer: PointerKind::Finger,
         }
     }
 
@@ -729,7 +784,7 @@ impl Event {
     #[inline]
     pub fn coords(&self) -> Option<Point> {
         match self {
-            Event::MouseMove { at }
+            Event::MouseMove { at, .. }
             | Event::MouseDown { at, .. }
             | Event::MouseUp { at, .. }
             | Event::MouseEnter { at }
@@ -751,10 +806,16 @@ impl Event {
     /// without a position, so every bounds test below answers no.
     pub fn with_coords(&self, at: Option<Point>) -> Self {
         match self {
-            Event::MouseMove { .. } => Event::MouseMove { at },
-            Event::MouseDown { button, .. } => Event::MouseDown {
+            Event::MouseMove { pointer, .. } => Event::MouseMove {
+                at,
+                pointer: *pointer,
+            },
+            Event::MouseDown {
+                button, pointer, ..
+            } => Event::MouseDown {
                 at,
                 button: *button,
+                pointer: *pointer,
             },
             Event::MouseUp { button, .. } => Event::MouseUp {
                 at,
