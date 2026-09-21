@@ -5,7 +5,9 @@
 //! place rather than one struct each.
 //!
 //! Widgets only understand pointer events, so touch is folded into the same
-//! pipeline: the first finger down drives it, and a tap becomes a click.
+//! pipeline: the first finger down drives it, and a tap becomes a click. The
+//! rules of that folding are `translate_touch`, which the handlers call once
+//! they have resolved the one thing that needs a compositor.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -57,15 +59,27 @@ fn push_event(events: &mut Vec<(Instant, Event)>, at: Instant, event: Event) {
 
 /// The finger is gone: release the synthesized press, and clear hover, because
 /// unlike a real pointer nothing hovers after a lift.
-fn push_release(events: &mut Vec<(Instant, Event)>, at: Instant, pointer: Point) {
+fn push_release(
+    events: &mut Vec<(SurfaceId, Instant, Event)>,
+    surface: SurfaceId,
+    at: Instant,
+    pointer: Point,
+) {
     events.push((
+        surface,
         at,
         Event::MouseUp {
             at: Some(pointer),
             button: MouseButton::Left,
         },
     ));
-    events.push((at, Event::MouseLeave));
+    events.push((surface, at, Event::MouseLeave));
+}
+
+/// The compositor speaks in surface-local `f64` pairs; everything above this
+/// layer speaks in [`Point`].
+fn point(position: (f64, f64)) -> Point {
+    Point::new(position.0 as f32, position.1 as f32)
 }
 
 /// For the events the protocol gives no timestamp: `wl_pointer.enter` and
@@ -348,6 +362,128 @@ impl SeatHandler for WaylandState {
     }
 }
 
+/// What a `wl_touch` message says, with the only thing that needs a compositor
+/// — which surface the finger landed on — already looked up.
+enum TouchEvent {
+    Down {
+        id: i32,
+        surface: SurfaceId,
+        at: Instant,
+        position: Point,
+    },
+    Motion {
+        id: i32,
+        at: Instant,
+        position: Point,
+    },
+    Up {
+        id: i32,
+        at: Instant,
+    },
+    /// `wl_touch.cancel` carries neither a serial nor a time, so the handler
+    /// answers `untimed()` — the same answer the pointer's `enter` and `leave`
+    /// get, and for the same reason.
+    Cancel {
+        at: Instant,
+    },
+}
+
+/// What a touch message asks the surfaces to do, given the fingers already
+/// down and which of them is driving the pointer.
+///
+/// Free rather than inline, for the same reason `translate_axis` is: a callback
+/// that needs a compositor to run is a callback nothing checks, and the folding
+/// of touch into pointer is a state machine with rules of its own — which
+/// finger drives, what a second one does, where a drag is delivered once it
+/// leaves the surface it started on.
+fn translate_touch(
+    fingers: &mut HashMap<i32, (SurfaceId, f32, f32)>,
+    primary: &mut Option<i32>,
+    event: TouchEvent,
+) -> Vec<(SurfaceId, Instant, Event)> {
+    let mut events = Vec::new();
+    match event {
+        TouchEvent::Down {
+            id,
+            surface,
+            at,
+            position,
+        } => {
+            fingers.insert(id, (surface, position.x, position.y));
+
+            // The first finger down drives pointer emulation: move + press so
+            // hover and pressed state layers respond, and a tap becomes a
+            // click. A second finger is tracked and otherwise silent — widgets
+            // have one pointer, and a press it cannot release is worse than no
+            // press at all.
+            if primary.is_none() {
+                *primary = Some(id);
+                events.push((surface, at, Event::MouseMove { at: Some(position) }));
+                events.push((
+                    surface,
+                    at,
+                    Event::MouseDown {
+                        at: Some(position),
+                        button: MouseButton::Left,
+                    },
+                ));
+            }
+        }
+        TouchEvent::Motion { id, at, position } => {
+            let Some(finger) = fingers.get_mut(&id) else {
+                return events;
+            };
+            finger.1 = position.x;
+            finger.2 = position.y;
+
+            // The surface it landed on, not whatever is under it now:
+            // `wl_touch.motion` names none, and the widget holding the press is
+            // the one that has to see the release.
+            let surface = finger.0;
+            if *primary == Some(id) {
+                events.push((surface, at, Event::MouseMove { at: Some(position) }));
+            }
+        }
+        TouchEvent::Up { id, at } => {
+            let Some((surface, x, y)) = fingers.remove(&id) else {
+                return events;
+            };
+            if *primary == Some(id) {
+                *primary = None;
+                push_release(&mut events, surface, at, Point::new(x, y));
+            }
+        }
+        TouchEvent::Cancel { at } => {
+            // The compositor took over the gesture: release the synthesized
+            // press and clear hover so no widget is stuck pressed.
+            if let Some(id) = primary.take()
+                && let Some((surface, x, y)) = fingers.get(&id).copied()
+            {
+                push_release(&mut events, surface, at, Point::new(x, y));
+            }
+            fingers.clear();
+        }
+    }
+    events
+}
+
+impl WaylandState {
+    /// Translate a touch message and queue the result on the surfaces it
+    /// named. Everything the compositor is needed for happens before this.
+    fn touch_event(&mut self, event: TouchEvent) {
+        let translated = translate_touch(
+            &mut self.input.touch_fingers,
+            &mut self.input.primary_finger,
+            event,
+        );
+        for (surface_id, at, event) in translated {
+            if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
+                push_event(&mut surface_state.pending_events, at, event);
+            }
+        }
+    }
+}
+
 impl TouchHandler for WaylandState {
     fn down(
         &mut self,
@@ -365,22 +501,12 @@ impl TouchHandler for WaylandState {
             return;
         };
         let at = self.input.at(time);
-        let (x, y) = (position.0 as f32, position.1 as f32);
-        self.input.touch_fingers.insert(id, (surface_id, x, y));
-
-        // The first finger down drives pointer emulation: move + press so
-        // hover and pressed state layers respond, and a tap becomes a click.
-        if self.input.primary_finger.is_none() {
-            self.input.primary_finger = Some(id);
-            if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                surface_state
-                    .pending_events
-                    .push((at, Event::mouse_move(x, y)));
-                surface_state
-                    .pending_events
-                    .push((at, Event::mouse_down(x, y, MouseButton::Left)));
-            }
-        }
+        self.touch_event(TouchEvent::Down {
+            id,
+            surface: surface_id,
+            at,
+            position: point(position),
+        });
     }
 
     fn up(
@@ -392,16 +518,8 @@ impl TouchHandler for WaylandState {
         time: u32,
         id: i32,
     ) {
-        let Some((surface_id, x, y)) = self.input.touch_fingers.remove(&id) else {
-            return;
-        };
         let at = self.input.at(time);
-        if self.input.primary_finger == Some(id) {
-            self.input.primary_finger = None;
-            if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                push_release(&mut surface_state.pending_events, at, Point::new(x, y));
-            }
-        }
+        self.touch_event(TouchEvent::Up { id, at });
     }
 
     fn motion(
@@ -413,26 +531,12 @@ impl TouchHandler for WaylandState {
         id: i32,
         position: (f64, f64),
     ) {
-        let Some(finger) = self.input.touch_fingers.get_mut(&id) else {
-            return;
-        };
-        let (x, y) = (position.0 as f32, position.1 as f32);
-        finger.1 = x;
-        finger.2 = y;
-        let surface_id = finger.0;
         let at = self.input.at(time);
-
-        if self.input.primary_finger == Some(id)
-            && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
-        {
-            push_event(
-                &mut surface_state.pending_events,
-                at,
-                Event::MouseMove {
-                    at: Some(Point::new(x, y)),
-                },
-            );
-        }
+        self.touch_event(TouchEvent::Motion {
+            id,
+            at,
+            position: point(position),
+        });
     }
 
     fn shape(
@@ -457,17 +561,7 @@ impl TouchHandler for WaylandState {
     }
 
     fn cancel(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _touch: &wl_touch::WlTouch) {
-        // The compositor took over the gesture: release the synthesized
-        // press and clear hover so no widget is stuck pressed.
-        if let Some(id) = self.input.primary_finger.take()
-            && let Some((surface_id, x, y)) = self.input.touch_fingers.get(&id).copied()
-            && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
-        {
-            // The compositor is telling us the gesture is not ours any more.
-            let at = untimed();
-            push_release(&mut surface_state.pending_events, at, Point::new(x, y));
-        }
-        self.input.touch_fingers.clear();
+        self.touch_event(TouchEvent::Cancel { at: untimed() });
     }
 }
 
@@ -509,8 +603,7 @@ impl PointerHandler for WaylandState {
                     self.input.pointer_over_surface = true;
                     self.input.pointer_enter_serial = serial;
                     self.input.latest_input_serial = serial;
-                    self.input.pointer_at =
-                        Point::new(event.position.0 as f32, event.position.1 as f32);
+                    self.input.pointer_at = point(event.position);
 
                     // Track which surface has pointer focus
                     self.current_pointer_surface = surface_id;
@@ -546,8 +639,7 @@ impl PointerHandler for WaylandState {
                     }
                 }
                 PointerEventKind::Motion { .. } => {
-                    self.input.pointer_at =
-                        Point::new(event.position.0 as f32, event.position.1 as f32);
+                    self.input.pointer_at = point(event.position);
                     if let Some(events) = target_events {
                         push_event(
                             events,
@@ -1272,5 +1364,266 @@ mod tests {
             panic!("expected one scroll, got {events:?}");
         };
         assert_eq!(*source, ScrollSource::Wheel);
+    }
+
+    /// The finger map and the primary slot, which is all the translation
+    /// remembers between messages.
+    #[derive(Default)]
+    struct Touch {
+        fingers: HashMap<i32, (SurfaceId, f32, f32)>,
+        primary: Option<i32>,
+    }
+
+    impl Touch {
+        /// What this message asks of the surfaces. The instants are dropped:
+        /// they come from the compositor's clock, which
+        /// `an_events_time_is_read_as_a_distance_from_the_anchor` covers.
+        fn send(&mut self, event: TouchEvent) -> Vec<(SurfaceId, Event)> {
+            translate_touch(&mut self.fingers, &mut self.primary, event)
+                .into_iter()
+                .map(|(surface, _, event)| (surface, event))
+                .collect()
+        }
+    }
+
+    fn down(id: i32, surface: SurfaceId, x: f32, y: f32) -> TouchEvent {
+        TouchEvent::Down {
+            id,
+            surface,
+            at: Instant::now(),
+            position: Point::new(x, y),
+        }
+    }
+
+    fn motion(id: i32, x: f32, y: f32) -> TouchEvent {
+        TouchEvent::Motion {
+            id,
+            at: Instant::now(),
+            position: Point::new(x, y),
+        }
+    }
+
+    fn up(id: i32) -> TouchEvent {
+        TouchEvent::Up {
+            id,
+            at: Instant::now(),
+        }
+    }
+
+    fn cancel() -> TouchEvent {
+        TouchEvent::Cancel { at: untimed() }
+    }
+
+    /// The move-and-press a landing finger synthesizes, as the surface it went
+    /// to and where — or a panic naming what arrived instead.
+    fn press(events: &[(SurfaceId, Event)]) -> (SurfaceId, Option<Point>) {
+        let [
+            (moved_to, Event::MouseMove { at: moved }),
+            (
+                pressed_on,
+                Event::MouseDown {
+                    at: pressed,
+                    button,
+                },
+            ),
+        ] = events
+        else {
+            panic!("a landing finger moves then presses, got {events:?}");
+        };
+        assert_eq!(*button, MouseButton::Left, "a finger is a left button");
+        assert_eq!(moved_to, pressed_on, "both to one surface");
+        assert_eq!(moved, pressed, "and both at one place");
+        (*pressed_on, *pressed)
+    }
+
+    /// The release-and-leave a lifted or cancelled finger synthesizes.
+    fn release(events: &[(SurfaceId, Event)]) -> (SurfaceId, Option<Point>) {
+        let [
+            (released_on, Event::MouseUp { at, button }),
+            (left, Event::MouseLeave),
+        ] = events
+        else {
+            panic!("a leaving finger releases then un-hovers, got {events:?}");
+        };
+        assert_eq!(*button, MouseButton::Left);
+        assert_eq!(released_on, left, "both to one surface");
+        (*released_on, *at)
+    }
+
+    /// The whole of pointer emulation in one gesture: a finger landing is a
+    /// move and a press, so hover and pressed state layers respond, and
+    /// lifting it is a release and a leave — a tap is a click.
+    #[test]
+    fn a_tap_is_a_move_a_press_and_a_release() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+
+        let landed = touch.send(down(0, surface, PX, PY));
+        assert_eq!(
+            press(&landed),
+            (surface, Some(Point::new(PX, PY))),
+            "the press lands where the finger did"
+        );
+        assert_eq!(touch.primary, Some(0), "and that finger drives the pointer");
+
+        let lifted = touch.send(up(0));
+        assert_eq!(
+            release(&lifted),
+            (surface, Some(Point::new(PX, PY))),
+            "and the release is where it was last seen"
+        );
+        assert_eq!(touch.primary, None);
+        assert!(touch.fingers.is_empty(), "the finger is forgotten");
+    }
+
+    /// Only one finger drives the pointer. A second one landing would
+    /// otherwise press a second widget that nothing will release.
+    #[test]
+    fn a_second_finger_on_a_held_first_says_nothing() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, surface, PX, PY));
+
+        let second = touch.send(down(1, surface, 100.0, 200.0));
+        assert!(
+            second.is_empty(),
+            "the second finger is silent, got {second:?}"
+        );
+        assert_eq!(touch.primary, Some(0), "and the first one still drives");
+        assert_eq!(
+            touch.fingers.get(&1).copied(),
+            Some((surface, 100.0, 200.0)),
+            "but it is remembered, so its own up can be matched"
+        );
+    }
+
+    /// A non-primary finger moves without the pointer moving — and its
+    /// position is tracked anyway, because it is the point a cancel would
+    /// release it at.
+    #[test]
+    fn a_non_primary_fingers_motion_says_nothing_but_is_remembered() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, surface, PX, PY));
+        touch.send(down(1, surface, 100.0, 200.0));
+
+        let moved = touch.send(motion(1, 110.0, 210.0));
+        assert!(
+            moved.is_empty(),
+            "the pointer does not follow, got {moved:?}"
+        );
+        assert_eq!(
+            touch.fingers.get(&1).copied(),
+            Some((surface, 110.0, 210.0)),
+            "the stored position still moved"
+        );
+        assert_eq!(
+            touch.fingers.get(&0).copied(),
+            Some((surface, PX, PY)),
+            "and the primary finger did not"
+        );
+    }
+
+    /// Where a drag goes is decided at `down`. `wl_touch.motion` names no
+    /// surface, and the widget that took the press is the one that has to see
+    /// the release — so a finger sliding past the edge keeps reporting to the
+    /// surface it landed on.
+    #[test]
+    fn a_finger_that_slides_off_keeps_delivering_where_it_landed() {
+        let landed_on = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, landed_on, PX, PY));
+
+        let slid = touch.send(motion(0, -40.0, 900.0));
+        let [(surface, Event::MouseMove { at })] = slid.as_slice() else {
+            panic!("the primary finger moves the pointer, got {slid:?}");
+        };
+        assert_eq!(*surface, landed_on, "off the surface, still the surface's");
+        assert_eq!(*at, Some(Point::new(-40.0, 900.0)));
+
+        let lifted = touch.send(up(0));
+        assert_eq!(
+            release(&lifted),
+            (landed_on, Some(Point::new(-40.0, 900.0))),
+            "and so is the release, at the point it slid to"
+        );
+    }
+
+    /// The compositor has taken the gesture for itself. Every finger is gone
+    /// as far as this client is concerned, and the synthesized press has to be
+    /// released or the widget under it stays pressed forever.
+    #[test]
+    fn a_cancel_releases_the_press_and_forgets_every_finger() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, surface, PX, PY));
+        touch.send(down(1, surface, 100.0, 200.0));
+
+        let cancelled = touch.send(cancel());
+        assert_eq!(
+            release(&cancelled),
+            (surface, Some(Point::new(PX, PY))),
+            "the primary finger's press is released where it was"
+        );
+        assert_eq!(touch.primary, None);
+        assert!(
+            touch.fingers.is_empty(),
+            "and every finger goes, not only the primary"
+        );
+    }
+
+    /// A cancel can arrive with nothing pressed — the state
+    /// `a_lifted_primary_does_not_promote_the_finger_still_down` leaves
+    /// behind. There is no press to release, and the fingers still go.
+    #[test]
+    fn a_cancel_with_no_primary_finger_says_nothing_and_still_clears() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, surface, PX, PY));
+        touch.send(down(1, surface, 100.0, 200.0));
+        touch.send(up(0));
+
+        let cancelled = touch.send(cancel());
+        assert!(
+            cancelled.is_empty(),
+            "no press was held, so nothing is released, got {cancelled:?}"
+        );
+        assert!(touch.fingers.is_empty(), "and the rest of the hand is gone");
+    }
+
+    /// An up for a down this client never saw. The release it would
+    /// synthesize belongs to no surface and no position, so there is none.
+    #[test]
+    fn an_up_for_a_finger_that_was_never_down_says_nothing() {
+        let mut touch = Touch::default();
+        let stray = touch.send(up(7));
+        assert!(stray.is_empty(), "got {stray:?}");
+        assert_eq!(touch.primary, None);
+    }
+
+    /// Current behaviour, pinned rather than endorsed: when the primary finger
+    /// lifts while a second is still on the glass, the second is not promoted.
+    /// The pointer stays where it was until that finger is lifted and put back
+    /// down. Changing it is its own issue with its own acceptance.
+    #[test]
+    fn a_lifted_primary_does_not_promote_the_finger_still_down() {
+        let surface = SurfaceId::next();
+        let mut touch = Touch::default();
+        touch.send(down(0, surface, PX, PY));
+        touch.send(down(1, surface, 100.0, 200.0));
+
+        touch.send(up(0));
+        assert_eq!(touch.primary, None, "nobody drives the pointer now");
+        assert_eq!(
+            touch.fingers.get(&1).copied(),
+            Some((surface, 100.0, 200.0)),
+            "though a finger is still down"
+        );
+
+        let moved = touch.send(motion(1, 120.0, 220.0));
+        assert!(
+            moved.is_empty(),
+            "and moving it moves nothing, got {moved:?}"
+        );
     }
 }
