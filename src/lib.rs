@@ -2536,6 +2536,31 @@ fn iterate<P: Platform>(
     None
 }
 
+/// Everything an application leaves on **its own thread**, forgotten, so the
+/// next one there starts clean: the widgets, the reactive arena, the job
+/// queues.
+///
+/// Written once because it is read twice. `App` is the obvious caller;
+/// [`Headless`](testing::Headless) is the other, and a list hand-copied into it
+/// would go stale at the first cell added here — which is the failure
+/// `restart_tests` already records once, where the reset was a hand-written
+/// list of calls and the font was the line somebody missed.
+///
+/// What is deliberately *not* here is the state that belongs to the process
+/// rather than the thread: the wake flag and the ping in [`jobs`], the ingress
+/// sender. `App` clears those below, because a program has one; `Headless`
+/// must not, because a test binary runs several of them at once and clearing
+/// them reaches into somebody else's application.
+pub(crate) fn reset_thread_state(tree: &mut Tree) {
+    // The tree BEFORE the queues. Dropping widgets triggers
+    // ChildrenSource::drop() which pushes Unregister jobs; reset the queues
+    // first and those late jobs survive into the next application and destroy
+    // its widgets, which reuse the same ids.
+    tree.clear();
+    reactive::reset_reactive();
+    app_state::reset();
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         // Dispose the root owner first — cascades cleanup through the entire
@@ -2544,15 +2569,10 @@ impl Drop for App {
             reactive::dispose_owner_now(root_id);
         }
 
-        // Clear the tree BEFORE resetting jobs. Dropping widgets triggers
-        // ChildrenSource::drop() which pushes Unregister jobs. If we reset
-        // jobs first, these late Unregister jobs survive into the next App
-        // and destroy the new tree's widgets (which reuse the same IDs).
-        self.tree.clear();
+        reset_thread_state(&mut self.tree);
 
-        // Reset all thread-local and static state so the next App can start clean.
-        reactive::reset_reactive();
-        app_state::reset();
+        // And the process-wide half, which only a program that owns the process
+        // may clear.
         jobs::reset_wakeup();
         ingress::reset_ingress();
     }

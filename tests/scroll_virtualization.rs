@@ -70,7 +70,7 @@ fn rows(n: usize) -> Vec<guido::widgets::Container> {
 /// The rows are the same rows and the viewport is the same viewport, so the
 /// window has to reach the same number of them however deep they sit.
 ///
-/// After `examples/bench_list.rs`, which is written the wrapped way — as are
+/// After `examples/bench_list/list.rs`, which is written the wrapped way — as are
 /// `examples/scroll_example.rs` and `examples/perf_stress_test.rs`.
 #[test]
 fn a_wrapped_list_paints_the_rows_an_unwrapped_one_paints() {

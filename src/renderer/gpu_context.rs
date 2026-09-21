@@ -7,6 +7,12 @@ pub struct GpuContext {
     pub instance: Instance,
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
+    /// Which adapter answered. Kept because a timing is only a fact about the
+    /// hardware that produced it: lavapipe and a discrete GPU both draw the
+    /// same frame, and only one of them says anything about what a frame
+    /// costs. Asking wgpu again later would ask a *second* request_adapter,
+    /// which is free to answer differently.
+    pub adapter_info: wgpu::AdapterInfo,
 }
 
 impl Default for GpuContext {
@@ -65,6 +71,7 @@ impl GpuContext {
             instance,
             device: Arc::new(device),
             queue: Arc::new(queue),
+            adapter_info: adapter.get_info(),
         })
     }
 

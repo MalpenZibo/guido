@@ -120,17 +120,6 @@ fn ctx() -> Option<&'static GpuContext> {
     .as_ref()
 }
 
-/// What the pixels came out of, for the bless guard and for failure reports.
-fn adapter_name(ctx: &GpuContext) -> String {
-    pollster::block_on(ctx.instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-    }))
-    .map(|adapter| adapter.get_info().name)
-    .unwrap_or_else(|_| "<unknown>".to_string())
-}
-
 fn is_software_rasterizer(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
     name.contains("llvmpipe") || name.contains("lavapipe") || name.contains("swiftshader")
@@ -467,8 +456,8 @@ fn golden(
     // dozen pixels on the corner tangents, every time, for every scenario. On
     // another adapter it skips instead, which is what makes `cargo test` on a
     // machine with a GPU mean something. The job that must not skip says so.
-    let adapter = adapter_name(ctx);
-    if !is_software_rasterizer(&adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
+    let adapter = &ctx.adapter_info.name;
+    if !is_software_rasterizer(adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
         assert!(
             !required,
             "`{name}` ran on `{adapter}`, and GUIDO_GOLDEN_REQUIRED is set. The \
@@ -496,7 +485,7 @@ fn golden(
     let pixels = render_pixels(ctx, &mut renderer, widget, logical, scale, clear);
     drop(renderer);
 
-    assert_golden(name, &adapter, pixels);
+    assert_golden(name, adapter, pixels);
 }
 
 const BACKDROP: Color = Color::rgb(0.08, 0.08, 0.10);

@@ -74,6 +74,24 @@ wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# The scrolling benchmark. `harness = false` because it is a plain binary that
+# plays one scripted gesture and prints a table: criterion times a closure over
+# and over and reports the distribution, which is the wrong shape for a frame
+# loop whose caches are cold on the first frame and warm on every one after —
+# the warm frames are the measurement, and re-running the closure would only
+# average in more of the same warm frames while costing a dependency.
+#
+# `test = false` keeps it out of `cargo test`: it is slow, and its timings are
+# meaningless on a machine doing anything else. The part that has to hold every
+# time is the counts, and `tests/scroll_benchmark_is_repeatable.rs` asserts
+# those at a row count a test can afford.
+[[bench]]
+name = "scroll_list"
+path = "benches/scroll_list/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
 [[example]]
 name = "status_bar"
 path = "examples/status_bar.rs"
