@@ -1029,6 +1029,56 @@ fn clipped_text() {
     golden("clipped_text", (408.0, 156.0), 1.0, BACKDROP, view);
 }
 
+/// An upright text in an upright rounded card, which glyphon cannot cut.
+///
+/// The everyday half of #405, and the one that has nothing to do with
+/// rotation. `TextBounds` is four integers, so the only clip glyphon can
+/// honour is an upright rectangle — and a rounded card *is* upright, so
+/// nothing about the text or the container looked like the transformed case
+/// that was fixed first. The box around the card squares off its four
+/// corners, and any glyph reaching into one showed outside the card it is in.
+///
+/// A radius of 34 on a 130-wide card, and lines long enough to run out of it
+/// on both sides at the height where the corner is deepest. Left: the corners
+/// at the top, where two lines reach them. Right: the same card turned 12
+/// degrees, so the box is wrong along every edge rather than only at the
+/// corners — the two failures are different sizes and this shows both.
+#[test]
+fn text_is_cut_by_the_corners_of_its_card() {
+    let card = |degrees: f32| {
+        box_of(130.0, 96.0)
+            .corners(Corners::rounded(34.0))
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .layout(Flex::column().main_alignment(MainAlignment::Center))
+            .child(wide_line("MMMMMM"))
+            .child(wide_line("WWWWWW"))
+            .child(wide_line("MMMMMM"))
+    };
+
+    fn wide_line(content: &'static str) -> Container {
+        container()
+            .width(260.0)
+            .child(label(content, 28.0).nowrap())
+    }
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(28.0)
+        .layout(Flex::row().spacing(28.0))
+        .child(card(0.0))
+        .child(card(12.0));
+
+    golden(
+        "text_is_cut_by_the_corners_of_its_card",
+        (372.0, 152.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// Two cards over stripes, one upright and one turned, each filtering the
 /// surface's own content through its own shape.
 ///

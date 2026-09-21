@@ -7,6 +7,7 @@ use glyphon::{
 };
 use wgpu::{Device, MultisampleState, Queue};
 
+use crate::widgets::Rect;
 use crate::widgets::font::FontWeight;
 
 use super::types::TextEntry;
@@ -68,6 +69,26 @@ pub struct TextRenderState {
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,
+}
+
+/// A text's layout box, in world pixels.
+///
+/// What the culling check has always compared against a clip, lifted out so
+/// the routing question below can ask it too. Not outset: widening it here
+/// would widen what gets culled, and the two questions want different
+/// margins — see the call that adds one.
+fn laid_out_in(entry: &TextEntry) -> Rect {
+    let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
+    let (p2x, p2y) = entry.transform.transform_point(
+        entry.rect.x + entry.rect.width,
+        entry.rect.y + entry.rect.height,
+    );
+    Rect::new(
+        p1x.min(p2x),
+        p1y.min(p2y),
+        (p2x - p1x).abs(),
+        (p2y - p1y).abs(),
+    )
 }
 
 impl TextRenderState {
@@ -173,17 +194,12 @@ impl TextRenderState {
 
             // Skip text that is completely outside its clip region (culling optimization)
             // Check this FIRST so culled texts don't get rendered via texture path either
+            let laid_out = laid_out_in(entry);
             if let Some(clip) = &entry.clip.map(|c| c.world_aabb()) {
-                // Get text bounding box in world space (same coordinate system as clip rect)
-                let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
-                let (p2x, p2y) = entry.transform.transform_point(
-                    entry.rect.x + entry.rect.width,
-                    entry.rect.y + entry.rect.height,
-                );
-                let text_left = p1x.min(p2x);
-                let text_top = p1y.min(p2y);
-                let text_right = p1x.max(p2x);
-                let text_bottom = p1y.max(p2y);
+                let text_left = laid_out.x;
+                let text_top = laid_out.y;
+                let text_right = laid_out.x + laid_out.width;
+                let text_bottom = laid_out.y + laid_out.height;
 
                 let clip_right = clip.x + clip.width;
                 let clip_bottom = clip.y + clip.height;
@@ -205,7 +221,28 @@ impl TextRenderState {
 
             // Route all non-translation transforms (rotation, scale) to TextQuadRenderer.
             // This keeps the glyphon atlas stable — only identity/translation text goes through it.
-            if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
+            //
+            // And anything glyphon cannot cut. `TextBounds` is four integers,
+            // so the only clip it can honour is an upright rectangle: a turned
+            // one, or a corner this text actually reaches into, has to be
+            // tested in the clip's own space, and the quad is what does that
+            // (#405). Asked of where the two answers *differ* rather than
+            // whether they can, because a quad costs a rasterization and an
+            // upload per text — a label in the middle of a rounded card is cut
+            // the same by the box and stays with glyphon.
+            let moved = !entry.transform.is_identity() && !entry.transform.is_translation_only();
+            // Glyphs overshoot the box they were laid out in — descenders,
+            // italics, accents — and ink that overshoots into a corner is ink
+            // the box would not have cut. Half the font size is the slack
+            // `command_to_text_backdrop` allows for the same reason, and it
+            // errs the safe way here: too generous sends a text down the quad
+            // path the box would have cut correctly, costing a rasterization;
+            // too tight leaves ink outside its clip, which is the defect.
+            let ink = laid_out.outset(entry.font_size * 0.5);
+            let box_will_not_do = entry
+                .clip
+                .is_some_and(|clip| !clip.box_cuts_like_the_shape(ink));
+            if moved || box_will_not_do {
                 transformed_indices.push(idx);
                 continue; // Skip transformed text in direct rendering
             }
@@ -292,10 +329,11 @@ impl TextRenderState {
                 // Clip bounds stay in screen space - don't apply transform translation
                 // (text position is transformed, but clip region should remain fixed)
                 // The box around the clip, because `TextBounds` is four
-                // integers and glyphon has nowhere to put a shape. The quad
-                // path beside this one cuts the shape itself; this is the half
-                // of #405 that cannot, and a turned clip over glyphon-drawn
-                // text still lets it out at the corners.
+                // integers and glyphon has nowhere to put a shape. That is
+                // exact here rather than approximate: a text this box would
+                // cut differently from the shape never reaches this point —
+                // `box_cuts_like_the_shape` sent it down the quad path
+                // instead, which tests in the clip's own space (#405).
                 let bounds = if let Some(clip_rect) = &entry.clip.map(|c| c.world_aabb()) {
                     TextBounds {
                         left: (clip_rect.x * scale_factor) as i32,
