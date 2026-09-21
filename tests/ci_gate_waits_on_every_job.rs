@@ -20,16 +20,30 @@
 //! own comment has why — a skipped required check counts as a passing one — and
 //! the two tests below hold it to `if: always()` and to reading what its needs
 //! reported.
+//!
+//! What it cannot watch is the fence itself. Nothing here can see the ruleset,
+//! so the gate's display name is checked against it by a step that asks GitHub
+//! — `.github/required-context.sh`, run by a gating job — and what is left for
+//! a test is that the step is still there.
 
 use std::path::Path;
 
-/// The key of the job the ruleset waits for, and the display name it holds.
-///
-/// This string is the one coupling left between this repository and a
-/// repository setting, and the only one that can be written down on both sides,
-/// which is what this file does with it.
+/// The key of the job the ruleset waits for.
 const GATE: &str = "ci";
-const REQUIRED_CONTEXT: &str = "CI";
+
+/// The script that asks GitHub what the ruleset requires and compares the
+/// answer to the gate's `name:`.
+///
+/// The display name itself is written once, in `ci.yml`, and this file no
+/// longer holds a copy: a constant here could only say that the workflow agrees
+/// with the constant, and a rename that edits both lines in one commit passed
+/// it. What the ruleset actually requires is knowable only from GitHub, so it
+/// is read from GitHub — see #434.
+const RULESET_READER: &str = ".github/required-context.sh";
+
+fn repository(path: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(path)
+}
 
 /// The jobs that run in `ci.yml` and deliberately do not gate a merge.
 ///
@@ -51,7 +65,7 @@ const DOES_NOT_GATE: &[&str] = &["mutants"];
 /// an `env:`. `on:`, `concurrency:` and `env:` have children at that depth too,
 /// so the scan starts at `jobs:` and stops at the next key in column zero.
 fn jobs() -> Vec<(String, String)> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
+    let path = repository(".github/workflows/ci.yml");
     let yaml =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path:?}: {e}"));
     let mut found: Vec<(String, String)> = Vec::new();
@@ -290,26 +304,101 @@ fn a_gating_job_cannot_skip_or_excuse_its_failure() {
     }
 }
 
-/// The one string still written on both sides of the fence, and this pins only
-/// the side it can reach: that `ci.yml` agrees with the constant above. Neither
-/// of them can see the ruleset, so a rename that edits both still reaches
-/// `main` and leaves every pull request waiting on a check that can no longer
-/// report — #288, with one name instead of five. Reading the contexts back from
-/// GitHub is what would close it, and it can only be written once the ruleset
-/// requires this name: #434.
+/// The gate reports under its display name, so it has to have one. A job with
+/// no `name:` reports under its key, and the ruleset would be waiting for a
+/// context nothing produces.
 ///
-/// Until then the sequence is the one #289 had to work out by hand: the old
-/// name comes out of the ruleset first, then the rename merges, then the new
-/// name goes in. Adding the new name beside the old blocks just as hard,
-/// because a required check that never reports stays pending for ever.
+/// `required-context.sh` refuses a nameless gate too. This is the copy that
+/// needs no network and no shell, so it is the one that fails on a laptop.
 #[test]
-fn the_gate_carries_the_name_the_ruleset_requires() {
+fn the_gate_carries_a_name_for_the_ruleset_to_require() {
     let jobs = jobs();
     let name = job_level(body(&jobs, GATE), "name")
         .unwrap_or_else(|| panic!("the `{GATE}` job has no `name:`"));
-    assert_eq!(
-        name, REQUIRED_CONTEXT,
-        "the `main` ruleset requires the status check `{REQUIRED_CONTEXT}`. A job by another name \
-         cannot report it, and the required check stays pending for ever — which is #288."
+    assert!(
+        !name.is_empty(),
+        "the `{GATE}` job's `name:` is empty. It is the context the ruleset requires, and a \
+         required check that never reports stays pending for ever — which is #288."
+    );
+}
+
+/// The half neither this file nor `ci.yml` can decide by reading itself: that
+/// the name the gate reports under is the one the `main` ruleset waits for.
+///
+/// This used to be a constant here, and all it proved was that the workflow
+/// agreed with it — a rename edited both lines in one commit and passed. The
+/// ruleset is only knowable from GitHub, so a gating job asks GitHub. What is
+/// left for a test is that the asking still happens: delete the step and the
+/// coupling is unwatched again, with nothing red to say so.
+#[test]
+fn a_gating_job_reads_the_required_contexts_back_from_github() {
+    let script = repository(RULESET_READER);
+    let source = std::fs::read_to_string(&script).unwrap_or_else(|e| {
+        panic!(
+            "cannot read `{RULESET_READER}` ({e}). It is what compares the `{GATE}` job's `name:` \
+             to the contexts the `main` ruleset requires, and without it that name is written on \
+             one side of a fence nothing looks over."
+        )
+    });
+
+    // The one string the two of them still share. It is the job's key rather
+    // than its name, so a mismatch breaks `needs:` loudly as well — but the
+    // script would report it as a gate with no `name:`, which names the wrong
+    // fault, and this says so first.
+    assert!(
+        source.contains(&format!("\ngate={GATE}\n")),
+        "`{RULESET_READER}` does not read the `{GATE}` job. It is looking at some other job's \
+         `name:`, and comparing that to what the ruleset requires."
+    );
+
+    let jobs = jobs();
+    let gating = gating(&jobs);
+    assert!(
+        gating
+            .iter()
+            .any(|need| body(&jobs, need).contains(RULESET_READER)),
+        "no job in the `{GATE}` job's `needs:` runs `{RULESET_READER}`, so nothing fails when the \
+         ruleset and the gate's `name:` disagree. It belongs in a job the gate waits on: the gate \
+         itself cannot report a name it no longer has."
+    );
+}
+
+/// `run: .github/required-context.sh` is an execution, not an interpretation: a
+/// script committed without its executable bit fails the job with `Permission
+/// denied` and a reader who has to work out why.
+///
+/// The list is read out of `ci.yml` rather than written here, so a script added
+/// to a `run:` is covered by having been added.
+#[test]
+fn the_scripts_the_workflow_executes_are_executable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut found = 0;
+    for (_, body) in jobs() {
+        for line in body.lines() {
+            let Some(script) = line.trim().strip_prefix("run: ") else {
+                continue;
+            };
+            let script = script.trim();
+            // A bare path and nothing else. A `run:` with arguments, a pipe or
+            // an interpreter in front of it is somebody else's shell to read.
+            if !script.starts_with('.') || script.contains(char::is_whitespace) {
+                continue;
+            }
+            found += 1;
+            let mode = std::fs::metadata(repository(script))
+                .unwrap_or_else(|e| panic!("`ci.yml` runs `{script}`, which cannot be read: {e}"))
+                .permissions()
+                .mode();
+            assert!(
+                mode & 0o111 != 0,
+                "`{script}` is not executable ({mode:o}), and `ci.yml` runs it by path."
+            );
+        }
+    }
+    assert!(
+        found >= 3,
+        "only {found} of `ci.yml`'s `run:` lines were read as a script path. This scan has stopped \
+         seeing them, and an unexecutable script would now go unnoticed."
     );
 }
