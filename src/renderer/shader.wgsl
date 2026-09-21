@@ -22,39 +22,49 @@ struct VertexInput {
 
 // === Instance Input ===
 
+// One per shape, read by `@builtin(instance_index)` from a storage buffer
+// rather than fetched as vertex attributes.
+//
+// **This struct and `ShapeInstance` in `gpu.rs` are one layout written
+// twice**, field for field and in the same order. The unit test beside that
+// struct computes this one's offsets from WGSL's layout rules and checks them
+// against the Rust ones, and fails if they stop agreeing. The Rust side
+// carries explicit `_pad` members where this one is padded implicitly; they
+// are the only thing the two spell differently.
+//
+// Vertex attributes could not be checked that way. There were sixteen of
+// them — the whole allowance — and the map from struct field to attribute was
+// a hand-written offset table in `desc()` that agreed with the struct by
+// arithmetic and with this file by comment (#398).
 struct InstanceInput {
     // rect: [x, y, width, height] in logical pixels
-    @location(1) rect: vec4<f32>,
+    rect: vec4<f32>,
     // corner radii: [top_left, top_right, bottom_right, bottom_left]
-    @location(2) shape_radii: vec4<f32>,
-    // fill_color RGBA
-    @location(3) fill_color: vec4<f32>,
-    // border_color RGBA
-    @location(4) border_color: vec4<f32>,
-    // border_width, shape_curvature, clip_curvature, _pad
-    @location(5) border_params: vec4<f32>,
-    // shadow_offset.xy, shadow_blur, shadow_spread
-    @location(6) shadow_params: vec4<f32>,
-    // shadow_color RGBA
-    @location(7) shadow_color: vec4<f32>,
-    // transform: a, b, tx, c
-    @location(8) transform_0: vec4<f32>,
-    // transform: d, ty, then the clip inverse's d, ty — six floats of clip
-    // matrix in two homes, because sixteen attributes is the whole allowance
-    @location(9) transform_1: vec4<f32>,
+    corner_radii: vec4<f32>,
+    fill_color: vec4<f32>,
+    border_color: vec4<f32>,
+    shadow_color: vec4<f32>,
+    shadow_offset: vec2<f32>,
+    shadow_blur: f32,
+    shadow_spread: f32,
+    // a, b, tx, c, d, ty — row-major 2x3, origin already baked in
+    transform: array<f32, 6>,
     // clip_rect: [x, y, width, height] in the clip's own space, logical pixels
-    @location(10) clip_rect: vec4<f32>,
-    // clip inverse: a, b, tx, c
-    @location(11) clip_inverse_0: vec4<f32>,
-    // gradient_start RGBA
-    @location(12) gradient_start: vec4<f32>,
-    // gradient_end RGBA
-    @location(13) gradient_end: vec4<f32>,
-    // gradient_type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse), _pad, _pad, _pad
-    @location(14) gradient_params: vec4<u32>,
-    // clip corner radii: [top_left, top_right, bottom_right, bottom_left]
-    @location(15) clip_radii: vec4<f32>,
+    clip_rect: vec4<f32>,
+    // clip corner radii, in the clip's own space and logical units
+    clip_radii: vec4<f32>,
+    // world (physical pixels) to clip space, the same row-major 2x3
+    clip_inverse: array<f32, 6>,
+    clip_curvature: f32,
+    gradient_start: vec4<f32>,
+    gradient_end: vec4<f32>,
+    border_width: f32,
+    shape_curvature: f32,
+    // 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
+    gradient_type: u32,
 }
+
+@group(0) @binding(1) var<storage, read> instances: array<InstanceInput>;
 
 // === Vertex Output ===
 
@@ -123,22 +133,23 @@ fn to_ndc(pos: vec2<f32>) -> vec2<f32> {
 // === Vertex Shader ===
 
 @vertex
-fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
+fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOutput {
+    let instance = instances[index];
     var out: VertexOutput;
 
     // Extract transform components
     // Note: transform already includes center_at from CPU, so no origin handling needed here
-    let a = instance.transform_0.x;
-    let b = instance.transform_0.y;
-    let tx = instance.transform_0.z;
-    let c = instance.transform_0.w;
-    let d = instance.transform_1.x;
-    let ty = instance.transform_1.y;
+    let a = instance.transform[0];
+    let b = instance.transform[1];
+    let tx = instance.transform[2];
+    let c = instance.transform[3];
+    let d = instance.transform[4];
+    let ty = instance.transform[5];
 
     // Expand quad for shadow if needed
-    let shadow_blur = instance.shadow_params.z;
-    let shadow_spread = instance.shadow_params.w;
-    let shadow_offset = instance.shadow_params.xy;
+    let shadow_blur = instance.shadow_blur;
+    let shadow_spread = instance.shadow_spread;
+    let shadow_offset = instance.shadow_offset;
     let has_shadow = instance.shadow_color.a > 0.0;
 
     // Calculate shadow expansion (3x blur for smooth fadeout)
@@ -181,28 +192,28 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     // clip already in world coordinates, which is most of them.
     out.clip_pos = apply_transform(
         world_pos,
-        instance.clip_inverse_0.x, instance.clip_inverse_0.y, instance.clip_inverse_0.z,
-        instance.clip_inverse_0.w, instance.transform_1.z, instance.transform_1.w
+        instance.clip_inverse[0], instance.clip_inverse[1], instance.clip_inverse[2],
+        instance.clip_inverse[3], instance.clip_inverse[4], instance.clip_inverse[5]
     );
 
     // Pass instance data to fragment shader
     out.fill_color = instance.fill_color;
     out.border_color = instance.border_color;
     out.shape_rect = instance.rect;
-    out.shape_radii = instance.shape_radii;
-    out.border_params = instance.border_params.xy;  // border_width, curvature
-    out.shadow_params = instance.shadow_params;
+    out.shape_radii = instance.corner_radii;
+    out.border_params = vec2<f32>(instance.border_width, instance.shape_curvature);
+    out.shadow_params = vec4<f32>(instance.shadow_offset, instance.shadow_blur, instance.shadow_spread);
     out.shadow_color = instance.shadow_color;
 
     // Pass clip data to fragment shader
     out.clip_rect = instance.clip_rect;
-    out.clip_curvature = instance.border_params.z;
+    out.clip_curvature = instance.clip_curvature;
     out.clip_radii = instance.clip_radii;
 
     // Pass gradient data to fragment shader
     out.gradient_start = instance.gradient_start;
     out.gradient_end = instance.gradient_end;
-    out.gradient_type = instance.gradient_params.x;
+    out.gradient_type = instance.gradient_type;
 
     return out;
 }

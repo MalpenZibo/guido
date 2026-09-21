@@ -4,7 +4,6 @@
 //! Instanced rendering pipeline data structures. Instead of duplicating vertex
 //! data for each shape, we use a single unit quad and per-instance data.
 
-use crate::transform::Transform;
 use wgpu::{VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 /// Clip rect sentinel: negative width/height disables clipping in the shader.
@@ -98,7 +97,6 @@ pub struct ShapeInstance {
     // === Shape geometry (physical pixels, scaled in render.rs) ===
     /// Rectangle bounds: [x, y, width, height]
     pub rect: [f32; 4],
-
     /// Corner radii in physical pixels:
     /// [top_left, top_right, bottom_right, bottom_left]
     pub corner_radii: [f32; 4],
@@ -108,21 +106,8 @@ pub struct ShapeInstance {
     pub fill_color: [f32; 4],
     /// Border color RGBA
     pub border_color: [f32; 4],
-
-    // === Border ===
-    /// Border width in logical pixels
-    pub border_width: f32,
-    /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
-    pub shape_curvature: f32,
-    /// The clip's curvature, lodging here rather than beside the clip.
-    ///
-    /// A vertex layout may declare sixteen attributes and this one declares
-    /// sixteen, so the clip's inverse could only be carried in padding that
-    /// already existed. Evicting this float freed a whole 16-byte attribute
-    /// for it — see [`clip_inverse_0`](Self::clip_inverse_0).
-    pub clip_curvature: f32,
-    /// Padding for 16-byte alignment
-    pub _pad1: f32,
+    /// Shadow color RGBA
+    pub shadow_color: [f32; 4],
 
     // === Shadow ===
     /// Shadow offset in logical pixels (x, y)
@@ -131,20 +116,15 @@ pub struct ShapeInstance {
     pub shadow_blur: f32,
     /// Shadow spread in logical pixels
     pub shadow_spread: f32,
-    /// Shadow color RGBA
-    pub shadow_color: [f32; 4],
 
-    // === Transform (2x3 affine matrix) ===
-    /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3)
-    /// Note: Transform origin is baked into the matrix via center_at() on CPU
+    // === Placement ===
+    /// Transform matrix: [a, b, tx, c, d, ty] (row-major 2x3).
+    /// Transform origin is baked into the matrix via `center_at()` on CPU.
     pub transform: [f32; 6],
-    /// The clip inverse's last two coefficients, `[d, ty]`.
-    ///
-    /// Next to a different matrix because there was room next to a different
-    /// matrix — see [`clip_inverse_0`](Self::clip_inverse_0).
-    pub clip_inverse_1: [f32; 2],
+    /// Where `clip_rect` begins, because a `vec4` may not start at 120.
+    pub _pad_transform: [f32; 2],
 
-    // === Clip Region ===
+    // === Clip ===
     /// Clip rect in the clip's own space, logical pixels [x, y, width, height].
     /// Negative width/height = no clipping. Zero width/height = clip everything.
     ///
@@ -152,51 +132,51 @@ pub struct ShapeInstance {
     /// struct. Scaling it here and folding the scale into the inverse as well
     /// would apply the surface scale twice.
     pub clip_rect: [f32; 4],
-    /// World (physical pixels) to clip space: `[a, b, tx, c]`, the first four
-    /// coefficients of a row-major 2×3 affine map. The last two are in
-    /// [`clip_inverse_1`](Self::clip_inverse_1).
+    /// [top_left, top_right, bottom_right, bottom_left], in the clip's own
+    /// space and the logical units it was declared in — like `clip_rect`, and
+    /// unlike everything else here. The surface scale reaches them through
+    /// `clip_inverse`, which carries the fragment back to meet them.
+    pub clip_radii: [f32; 4],
+    /// World (physical pixels) to clip space: `[a, b, tx, c, d, ty]`, a
+    /// row-major 2×3 affine map, identity for a clip already in world
+    /// coordinates — which is most of them.
     ///
-    /// **Six floats in two places, because there was no third attribute to
-    /// have.** `wgpu`'s `max_vertex_attributes` is 16 on every backend worth
-    /// the name and this layout declares 16, so a seventeenth is a pipeline
-    /// validation error rather than a cost. What it did have was padding: this
-    /// block, once its curvature moved next to the border's, and two floats
-    /// beside `transform`. The matrix is read back whole in the shader, which
-    /// is the only place it means anything.
-    ///
-    /// The layout is now full — every attribute used, every byte assigned — so
-    /// the next per-instance value has nowhere to go. #398 is the way out:
-    /// deliver the instance as a storage buffer indexed by `instance_index`,
-    /// where the count ceiling does not exist.
-    ///
-    /// Identity for a clip already in world coordinates, which is most of them.
-    /// The fragment is carried into the clip's own space and tested there, so a
-    /// clip that has been turned cuts the turned shape rather than the box
+    /// The fragment is carried into the clip's own space and tested there, so
+    /// a clip that has been turned cuts the turned shape rather than the box
     /// around it.
-    pub clip_inverse_0: [f32; 4],
+    ///
+    /// **One field, since #398.** Until the instance moved to a storage
+    /// buffer these six floats lived in two homes — four here and two beside
+    /// the shape's own `transform` — because a vertex layout may declare
+    /// sixteen attributes and this one declared sixteen. There was no
+    /// seventeenth to have, only padding to mine.
+    pub clip_inverse: [f32; 6],
+    /// The clip's superellipse curvature, which used to sit in the *border*
+    /// block for the same reason: evicting it freed a whole 16-byte attribute
+    /// for the matrix above.
+    pub clip_curvature: f32,
+    /// Where `gradient_start` begins.
+    pub _pad_clip: f32,
 
     // === Gradient ===
     /// Gradient start color [r, g, b, a]
     pub gradient_start: [f32; 4],
     /// Gradient end color [r, g, b, a]
     pub gradient_end: [f32; 4],
+
+    // === Scalars ===
+    //
+    // Gathered rather than scattered. Each of these used to sit beside a
+    // block it had nothing to do with, padded out to the next sixteen bytes;
+    // together they fill one tail block and the struct is the size it was.
+    /// Border width in logical pixels
+    pub border_width: f32,
+    /// Superellipse curvature (K-value: 1.0=circle, 2.0=squircle)
+    pub shape_curvature: f32,
     /// Gradient type: 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
     pub gradient_type: u32,
-    /// Padding for 16-byte alignment
-    pub _pad4: [u32; 3],
-
-    // === Clip corner radii ===
-    /// [top_left, top_right, bottom_right, bottom_left], in the clip's own
-    /// space and the logical units it was declared in — like `clip_rect`, and
-    /// unlike everything else here. The surface scale reaches them through
-    /// `clip_inverse_0`, which carries the fragment back to meet them.
-    ///
-    /// Its own 16-byte slot: a `Float32x4` attribute needs four contiguous
-    /// floats, and the padding scattered through the struct — two floats here,
-    /// one there, three u32 at the end — cannot supply them without moving the
-    /// gradient block into a differently-typed attribute. Sixteen bytes per
-    /// instance is what a per-corner clip costs.
-    pub clip_radii: [f32; 4],
+    /// Rounds the struct out to its 16-byte alignment.
+    pub _pad_tail: u32,
 }
 
 impl Default for ShapeInstance {
@@ -206,23 +186,23 @@ impl Default for ShapeInstance {
             corner_radii: [0.0; 4],
             fill_color: [0.0, 0.0, 0.0, 0.0],
             border_color: [0.0, 0.0, 0.0, 0.0],
-            border_width: 0.0,
-            shape_curvature: 1.0,
-            clip_curvature: 1.0,
-            _pad1: 0.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.0],
             shadow_offset: [0.0, 0.0],
             shadow_blur: 0.0,
             shadow_spread: 0.0,
-            shadow_color: [0.0, 0.0, 0.0, 0.0],
             transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
-            clip_inverse_1: [1.0, 0.0],                // identity's [d, ty]
+            _pad_transform: [0.0, 0.0],
             clip_rect: NO_CLIP_RECT,
-            clip_inverse_0: [1.0, 0.0, 0.0, 0.0], // identity's [a, b, tx, c]
+            clip_radii: [0.0; 4],
+            clip_inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
+            clip_curvature: 1.0,
+            _pad_clip: 0.0,
             gradient_start: [0.0, 0.0, 0.0, 0.0],
             gradient_end: [0.0, 0.0, 0.0, 0.0],
+            border_width: 0.0,
+            shape_curvature: 1.0,
             gradient_type: 0, // No gradient
-            _pad4: [0, 0, 0],
-            clip_radii: [0.0; 4],
+            _pad_tail: 0,
         }
     }
 }
@@ -275,19 +255,8 @@ impl ShapeInstance {
         self.clip_rect = [clip.rect.x, clip.rect.y, clip.rect.width, clip.rect.height];
         self.clip_radii = clip.radii.to_array();
         self.clip_curvature = clip.curvature;
-        self.set_clip_inverse(to_clip);
+        self.clip_inverse = to_clip.data;
         self
-    }
-
-    /// The clip's matrix, into the two homes it has.
-    ///
-    /// One place that knows the split, because the reason for it is a hardware
-    /// limit nobody will re-derive at a second site — see
-    /// [`clip_inverse_0`](Self::clip_inverse_0).
-    fn set_clip_inverse(&mut self, to_clip: Transform) {
-        let [a, b, tx, c, d, ty] = to_clip.data;
-        self.clip_inverse_0 = [a, b, tx, c];
-        self.clip_inverse_1 = [d, ty];
     }
 
     /// Set border properties.
@@ -338,106 +307,6 @@ impl ShapeInstance {
             super::types::GradientDir::DiagonalReverse => 4,
         };
         self
-    }
-
-    /// Vertex buffer layout for instance data.
-    pub fn desc() -> VertexBufferLayout<'static> {
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<ShapeInstance>() as u64,
-            step_mode: VertexStepMode::Instance,
-            attributes: &[
-                // rect: [x, y, width, height]
-                VertexAttribute {
-                    offset: 0,
-                    shader_location: 1,
-                    format: VertexFormat::Float32x4,
-                },
-                // corner_radii: [top_left, top_right, bottom_right, bottom_left]
-                VertexAttribute {
-                    offset: 16,
-                    shader_location: 2,
-                    format: VertexFormat::Float32x4,
-                },
-                // fill_color
-                VertexAttribute {
-                    offset: 32,
-                    shader_location: 3,
-                    format: VertexFormat::Float32x4,
-                },
-                // border_color
-                VertexAttribute {
-                    offset: 48,
-                    shader_location: 4,
-                    format: VertexFormat::Float32x4,
-                },
-                // border_width, shape_curvature, clip_curvature, _pad1
-                VertexAttribute {
-                    offset: 64,
-                    shader_location: 5,
-                    format: VertexFormat::Float32x4,
-                },
-                // shadow_offset, shadow_blur, shadow_spread
-                VertexAttribute {
-                    offset: 80,
-                    shader_location: 6,
-                    format: VertexFormat::Float32x4,
-                },
-                // shadow_color
-                VertexAttribute {
-                    offset: 96,
-                    shader_location: 7,
-                    format: VertexFormat::Float32x4,
-                },
-                // transform[0..4] (a, b, tx, c)
-                VertexAttribute {
-                    offset: 112,
-                    shader_location: 8,
-                    format: VertexFormat::Float32x4,
-                },
-                // transform[4..6], clip_inverse_1 (d, ty, clip d, clip ty)
-                VertexAttribute {
-                    offset: 128,
-                    shader_location: 9,
-                    format: VertexFormat::Float32x4,
-                },
-                // clip_rect: [x, y, width, height]
-                VertexAttribute {
-                    offset: 144,
-                    shader_location: 10,
-                    format: VertexFormat::Float32x4,
-                },
-                // clip_inverse_0 (a, b, tx, c)
-                VertexAttribute {
-                    offset: 160,
-                    shader_location: 11,
-                    format: VertexFormat::Float32x4,
-                },
-                // gradient_start
-                VertexAttribute {
-                    offset: 176,
-                    shader_location: 12,
-                    format: VertexFormat::Float32x4,
-                },
-                // gradient_end
-                VertexAttribute {
-                    offset: 192,
-                    shader_location: 13,
-                    format: VertexFormat::Float32x4,
-                },
-                // gradient_type, _pad4[0], _pad4[1], _pad4[2]
-                VertexAttribute {
-                    offset: 208,
-                    shader_location: 14,
-                    format: VertexFormat::Uint32x4,
-                },
-                // clip_radii
-                VertexAttribute {
-                    offset: 224,
-                    shader_location: 15,
-                    format: VertexFormat::Float32x4,
-                },
-            ],
-        }
     }
 }
 
@@ -494,5 +363,151 @@ mod tests {
         let instance = ShapeInstance::default();
         assert_eq!(instance.transform, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
         assert_eq!(instance.shape_curvature, 1.0);
+    }
+}
+
+/// `ShapeInstance` is one layout written twice, and the two have to agree.
+///
+/// The shape pipeline's per-instance data is declared in Rust
+/// (`ShapeInstance`, `src/renderer/gpu.rs`) and again in WGSL (`InstanceInput`,
+/// `src/renderer/shader.wgsl`). Nothing in the compiler connects them: the
+/// bytes are written by `bytemuck` from the Rust struct and read back by
+/// offset from the WGSL one, so a field inserted, reordered or resized on one
+/// side is read as its neighbour on the other. Every colour after it shifts,
+/// and the picture is wrong in a way no type checks.
+///
+/// **This could not be written before #398.** The instance arrived as sixteen
+/// vertex attributes — the whole allowance a vertex layout has — and the map
+/// from struct field to attribute was a hand-written table of offsets in
+/// `desc()` that agreed with the struct by arithmetic and with the shader by
+/// comment. Two of the fields were not even in their own homes: the clip's
+/// curvature sat in the border block and two of the six floats of its matrix
+/// sat beside the shape's own transform, because those were the only sixteen
+/// bytes left. There was nothing to compare a struct against.
+///
+/// Delivered as a storage buffer indexed by `@builtin(instance_index)`, the
+/// WGSL side is a struct with named members and a layout the specification
+/// fixes — so it can be computed here and checked against the Rust one, field
+/// by field.
+///
+/// The Rust struct carries explicit `_pad` members where WGSL pads implicitly
+/// by its alignment rules, so they have no counterpart to be checked against
+/// and do not appear in the list below. Everything else must line up, and the
+/// two must agree on the total size.
+#[cfg(test)]
+mod instance_layout {
+    use super::*;
+    use std::mem::offset_of;
+
+    /// What WGSL says a type occupies, as (align, size).
+    ///
+    /// Only the types this struct uses. A type appearing in the shader that is
+    /// not here fails the test rather than being guessed at.
+    fn layout_of(ty: &str) -> Option<(usize, usize)> {
+        match ty {
+            "f32" | "u32" | "i32" => Some((4, 4)),
+            "vec2<f32>" => Some((8, 8)),
+            "vec3<f32>" => Some((16, 12)),
+            "vec4<f32>" | "vec4<u32>" => Some((16, 16)),
+            // Fixed-size arrays in the storage address space take their element's
+            // alignment as their stride, so `array<f32, 6>` is 24 tightly packed
+            // bytes — which is what `[f32; 6]` is in Rust.
+            _ => ty
+                .strip_prefix("array<f32,")
+                .and_then(|rest| rest.strip_suffix('>'))
+                .and_then(|n| n.trim().parse::<usize>().ok())
+                .map(|n| (4, 4 * n)),
+        }
+    }
+
+    /// The shader's struct, as (field name, offset), in declaration order,
+    /// and the size of the whole.
+    fn wgsl_fields() -> (Vec<(String, usize)>, usize) {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/renderer/shader.wgsl"),
+        )
+        .expect("shader.wgsl");
+
+        let start = source
+            .find("struct InstanceInput {")
+            .expect("shader.wgsl declares no `InstanceInput` — the shape pipeline reads one");
+        let body = &source[start..];
+        let body = &body[..body.find('}').expect("`InstanceInput` is never closed")];
+
+        let mut offset = 0usize;
+        let mut align = 1usize;
+        let mut fields = Vec::new();
+        for line in body.lines().skip(1) {
+            let line = line.trim();
+            let Some(line) = line.strip_suffix(',') else {
+                continue; // a comment, or the blank line before one
+            };
+            if line.starts_with("//") {
+                continue;
+            }
+            let (name, ty) = line
+                .split_once(':')
+                .unwrap_or_else(|| panic!("cannot read `{line}` as a WGSL struct member"));
+            let (name, ty) = (name.trim(), ty.trim());
+            let (a, size) =
+                layout_of(ty).unwrap_or_else(|| panic!("no WGSL layout recorded for type `{ty}`"));
+            offset = offset.next_multiple_of(a);
+            fields.push((name.to_owned(), offset));
+            offset += size;
+            align = align.max(a);
+        }
+        (fields, offset.next_multiple_of(align))
+    }
+
+    #[test]
+    fn the_shader_and_the_struct_agree_field_for_field() {
+        let rust: Vec<(&str, usize)> = vec![
+            ("rect", offset_of!(ShapeInstance, rect)),
+            ("corner_radii", offset_of!(ShapeInstance, corner_radii)),
+            ("fill_color", offset_of!(ShapeInstance, fill_color)),
+            ("border_color", offset_of!(ShapeInstance, border_color)),
+            ("shadow_color", offset_of!(ShapeInstance, shadow_color)),
+            ("shadow_offset", offset_of!(ShapeInstance, shadow_offset)),
+            ("shadow_blur", offset_of!(ShapeInstance, shadow_blur)),
+            ("shadow_spread", offset_of!(ShapeInstance, shadow_spread)),
+            ("transform", offset_of!(ShapeInstance, transform)),
+            ("clip_rect", offset_of!(ShapeInstance, clip_rect)),
+            ("clip_radii", offset_of!(ShapeInstance, clip_radii)),
+            ("clip_inverse", offset_of!(ShapeInstance, clip_inverse)),
+            ("clip_curvature", offset_of!(ShapeInstance, clip_curvature)),
+            ("gradient_start", offset_of!(ShapeInstance, gradient_start)),
+            ("gradient_end", offset_of!(ShapeInstance, gradient_end)),
+            ("border_width", offset_of!(ShapeInstance, border_width)),
+            (
+                "shape_curvature",
+                offset_of!(ShapeInstance, shape_curvature),
+            ),
+            ("gradient_type", offset_of!(ShapeInstance, gradient_type)),
+        ];
+
+        let (wgsl, wgsl_size) = wgsl_fields();
+
+        assert_eq!(
+            wgsl.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            rust.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            "`InstanceInput` and `ShapeInstance` do not declare the same fields in \
+             the same order. Every field after the first difference is read as its \
+             neighbour."
+        );
+
+        for ((name, shader), (_, host)) in wgsl.iter().zip(&rust) {
+            assert_eq!(
+                shader, host,
+                "`{name}` is at {host} in `ShapeInstance` and {shader} in \
+                 `InstanceInput` — the shader reads it from the wrong bytes"
+            );
+        }
+
+        assert_eq!(
+            wgsl_size,
+            size_of::<ShapeInstance>(),
+            "the two structs are different sizes, so every instance after the \
+             first is read from the wrong offset"
+        );
     }
 }
