@@ -57,8 +57,10 @@ fn push_event(events: &mut Vec<(Instant, Event)>, at: Instant, event: Event) {
     }
 }
 
-/// The finger is gone: release the synthesized press, and clear hover, because
-/// unlike a real pointer nothing hovers after a lift.
+/// The finger was *lifted*: release the synthesized press, and clear hover,
+/// because unlike a real pointer nothing hovers after a lift. A release inside
+/// the widget is what makes a tap a click, which is why a cancelled gesture
+/// must not come through here — see the `Cancel` arm of `translate_touch`.
 fn push_release(
     events: &mut Vec<(SurfaceId, Instant, Event)>,
     surface: SurfaceId,
@@ -381,9 +383,11 @@ enum TouchEvent {
         id: i32,
         at: Instant,
     },
-    /// `wl_touch.cancel` carries neither a serial nor a time, so the handler
-    /// answers `untimed()` — the same answer the pointer's `enter` and `leave`
-    /// get, and for the same reason.
+    /// The gesture stopped being ours. Two things say so and neither carries a
+    /// time — `wl_touch.cancel` has no serial and no timestamp, and a seat
+    /// losing its touch capability is not a message about a finger at all — so
+    /// the handler answers `untimed()`, as the pointer's `enter` and `leave`
+    /// are answered.
     Cancel {
         at: Instant,
     },
@@ -455,12 +459,21 @@ fn translate_touch(
             }
         }
         TouchEvent::Cancel { at } => {
-            // The compositor took over the gesture: release the synthesized
-            // press and clear hover so no widget is stuck pressed.
+            // The gesture is not ours any more, so the press has to end — but
+            // it was not a click, and `MouseUp` is how a click is spelled. A
+            // cancelled finger is still inside the widget it pressed, so a
+            // release would land inside the hit and `on_click` would fire:
+            // the compositor takes the gesture away and guido presses the
+            // button. `MouseLeave` alone is what ending a press without
+            // activating anything already means here — `pointer_left` in
+            // `container/interaction.rs` drops `PRESSED` and cancels the
+            // ripple rather than completing it — and because the `MouseUp`
+            // arm there is guarded by `is_pressed`, a real release arriving
+            // later does nothing.
             if let Some(id) = primary.take()
-                && let Some((surface, x, y)) = fingers.get(&id).copied()
+                && let Some((surface, _, _)) = fingers.get(&id).copied()
             {
-                push_release(&mut events, surface, at, Point::new(x, y));
+                events.push((surface, at, Event::MouseLeave));
             }
             fingers.clear();
         }
@@ -1550,31 +1563,40 @@ mod tests {
         );
     }
 
-    /// The compositor has taken the gesture for itself. Every finger is gone
-    /// as far as this client is concerned, and the synthesized press has to be
-    /// released or the widget under it stays pressed forever.
+    /// The gesture is not ours any more. The press has to end, and it must end
+    /// *without* being a click: a cancelled finger is still inside the widget
+    /// it pressed, so a synthesized `MouseUp` would land inside the hit and
+    /// `interaction.rs` would call `on_click` — the compositor takes the
+    /// gesture away and guido activates the button. `MouseLeave` alone is how
+    /// this codebase already spells a press that ended without activating
+    /// anything.
     ///
-    /// Two callers reach this: `wl_touch.cancel`, and the seat losing its touch
-    /// capability, where the device itself is what went away and no finger is
-    /// ever lifting again. Both leave state a later gesture can be built on,
-    /// which is the last thing this asserts.
+    /// Two callers reach it: `wl_touch.cancel`, and the seat losing its touch
+    /// capability, where the device is what went away and no finger is ever
+    /// lifting again. Neither activated anything, and both leave state a later
+    /// gesture can be built on — the last thing this asserts.
     #[test]
-    fn a_cancel_releases_the_press_and_forgets_every_finger() {
+    fn a_cancel_ends_the_press_without_clicking_and_forgets_every_finger() {
         let surface = SurfaceId::next();
         let mut touch = Touch::default();
         touch.send(down(0, surface, PX, PY));
         touch.send(down(1, surface, 100.0, 200.0));
 
         let cancelled = touch.send(cancel());
-        assert_eq!(
-            release(&cancelled),
-            (surface, Some(Point::new(PX, PY))),
-            "the primary finger's press is released where it was"
+        assert!(
+            matches!(cancelled.as_slice(), [(left, Event::MouseLeave)] if *left == surface),
+            "a cancel is a leave and nothing else, got {cancelled:?}"
+        );
+        assert!(
+            !cancelled
+                .iter()
+                .any(|(_, event)| matches!(event, Event::MouseUp { .. })),
+            "and never a release, which is what a click is made of"
         );
         assert_eq!(touch.primary, None);
         assert!(
             touch.fingers.is_empty(),
-            "and every finger goes, not only the primary"
+            "every finger goes, not only the primary"
         );
 
         // Nothing is left over to make the next finger a second one: after a
