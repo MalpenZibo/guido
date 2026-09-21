@@ -189,7 +189,12 @@ pub struct Run {
     pub frames_skipped: u64,
     /// And the ones where nothing woke the loop to ask at all.
     pub frames_idle: u64,
-    /// The damage those frames reported, which is none.
+    /// The damage those frames reported, which is none. It moves with them,
+    /// and for the same reason: `end_frame` is handed `DamageRegion::None` on
+    /// the path that skips a paint and is not called at all on the path that
+    /// was never woken, so this is the skipped count under another name. It is
+    /// printed beside them rather than in the table of counts, which would be
+    /// claiming for it a repeatability it does not have.
     pub damage_none: u64,
     /// One snapshot per painted frame, in order. The phases are read off these
     /// rather than accumulated four times over.
@@ -308,11 +313,13 @@ pub fn report(run: &Run, rows: usize) -> String {
     let counts = &run.counts;
 
     out.push_str(&format!(
-        "rows={rows} frames={} painted={} | skipped={} idle={} (these two do not repeat)\n",
+        "rows={rows} frames={} painted={} | skipped={} idle={} damage_none={} \
+         (these three do not repeat)\n",
         counts.frames_painted + counts.frames_not_painted,
         counts.frames_painted,
         run.frames_skipped,
         run.frames_idle,
+        run.damage_none,
     ));
 
     if counts.frames_pinned > 0 {
@@ -340,7 +347,6 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("paint.declined_children", counts.window_declined_children),
         ("flatten.nodes_cached", counts.flatten_nodes_cached),
         ("flatten.nodes_flattened", counts.flatten_nodes_flattened),
-        ("damage.none", run.damage_none),
         ("damage.partial", counts.damage_partial),
         ("damage.full", counts.damage_full),
         ("script.deltas_pinned", counts.frames_pinned),

@@ -9,7 +9,8 @@
 //! benchmark can claim about itself — it is an assertion, and this is where it
 //! is made.
 //!
-//! What is asked. That two runs of one script agree on every count. That the
+//! What is asked. That two runs of one script agree on every count, and that
+//! the table which says so about itself holds to it. That the
 //! script's deltas reach the scroller at all. That a workload which differs is
 //! *reported* as differing, because a number that never moves proves nothing by
 //! repeating. That a gesture longer than the list says so rather than quietly
@@ -108,6 +109,35 @@ fn a_longer_list_is_reported_as_more_work() {
         long.counts.window_children_total,
         short.counts.window_children_total
     );
+}
+
+/// The table headed *"identical on every run of this revision"* makes a claim
+/// about itself, and a number printed under it that nothing covers is the one a
+/// reader would trust wrongly. So the section is compared as text rather than
+/// field by field: a column added to it tomorrow is covered the day it is
+/// added, without anybody remembering to say so here.
+#[test]
+fn the_table_that_says_it_repeats_repeats() {
+    let Some(first) = play(ROWS) else {
+        return;
+    };
+    let second = play(ROWS).expect("the first run had an adapter");
+
+    assert_eq!(
+        counts_table(&scripted::report(&first, ROWS)),
+        counts_table(&scripted::report(&second, ROWS)),
+        "a column under the header that promises to repeat did not"
+    );
+}
+
+/// The lines of the report between the counts header and the phases that
+/// follow it.
+fn counts_table(report: &str) -> Vec<&str> {
+    report
+        .lines()
+        .skip_while(|line| !line.starts_with("counts ("))
+        .take_while(|line| !line.starts_with("cpu phases"))
+        .collect()
 }
 
 /// A gesture longer than the list is a gesture that spends most of itself
