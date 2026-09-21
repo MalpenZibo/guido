@@ -353,8 +353,9 @@ impl SeatHandler for WaylandState {
             if let Some(touch) = self.input.touch.take() {
                 touch.release();
             }
-            self.input.touch_fingers.clear();
-            self.input.primary_finger = None;
+            // The device went away mid-gesture, so no finger is ever lifting
+            // again: the same teardown `cancel` does, and for the same reason.
+            self.touch_event(TouchEvent::Cancel { at: untimed() });
         }
     }
 
@@ -1552,6 +1553,11 @@ mod tests {
     /// The compositor has taken the gesture for itself. Every finger is gone
     /// as far as this client is concerned, and the synthesized press has to be
     /// released or the widget under it stays pressed forever.
+    ///
+    /// Two callers reach this: `wl_touch.cancel`, and the seat losing its touch
+    /// capability, where the device itself is what went away and no finger is
+    /// ever lifting again. Both leave state a later gesture can be built on,
+    /// which is the last thing this asserts.
     #[test]
     fn a_cancel_releases_the_press_and_forgets_every_finger() {
         let surface = SurfaceId::next();
@@ -1570,6 +1576,16 @@ mod tests {
             touch.fingers.is_empty(),
             "and every finger goes, not only the primary"
         );
+
+        // Nothing is left over to make the next finger a second one: after a
+        // touchscreen is unplugged and plugged back in, the first tap is a tap.
+        let landed = touch.send(down(0, surface, PX, PY));
+        assert_eq!(
+            press(&landed),
+            (surface, Some(Point::new(PX, PY))),
+            "the next finger down drives the pointer again"
+        );
+        assert_eq!(touch.primary, Some(0));
     }
 
     /// A cancel can arrive with nothing pressed — the state
