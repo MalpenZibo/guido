@@ -354,21 +354,44 @@ places it, and cuts bands out of the outline. The outline is four straight edges
 and four corners, each transformed; where a horizontal line meets it is where
 the shape starts and stops on that line. A corner is an arc only when it is a
 circle, which is the one curvature the scanline solve has a closed form for — a
-bevel and a scoop are a chord, and every other curvature is a polyline sampled
-along the superellipse, whose chords lie inside it. A rotation is not a case — it is
+bevel is a chord, and every other convex curvature is a polyline sampled along
+the superellipse, whose chords lie inside it. A rotation is not a case — it is
 whatever the matrix holds — so the upright answer falls out of the same
 arithmetic rather than beside it.
+
+**A scoop is subtracted rather than traced.** It curves inward, so chords of it
+fall *outside* the shape and sampling cannot be used; it used to be cut by the
+chord tangent to the bite, which never over-claimed and gave up 17% of the
+whole shape (#410). What the shader draws is the plain box minus a disc on each
+outer corner, and that is now what is built: the sides run corner to corner,
+nothing is traced around the curve, and `Outline::take_bites_from` removes
+the four discs from a span. Exact, through the
+same closed-form circle solve every other arc uses. The scoop's published area
+went from 83% of the shape to 98.6–99.2%, which is where every other curvature
+already sat.
 
 Bands are one pixel — finer than that cannot produce a row the output can tell
 apart — and adjacent bands that round to the same span merge back into one
 rectangle. That is what keeps an upright panel at a handful of
 rects instead of one per band.
 
-**The clip is a shape here too**, and the only consumer where it is. Both are
-convex, so at any scanline the overlap is the overlap of the two spans — exact,
-turned clip or not, and it gets the corners right for free: a card filling a
-rounded scroller is cornered by the scroller, where a box intersection would
-publish the scroller's square corners.
+**The clip is a shape here too**, and the only consumer where it is. At any
+scanline the overlap is the overlap of the two shapes' spans — exact, turned
+clip or not, and it gets the corners right for free: a card filling a rounded
+scroller is cornered by the scroller, where a box intersection would publish
+the scroller's square corners.
+
+**A span is a list, and the scoop is why.** Every other curvature bounds a
+convex region, which a horizontal line meets in one interval. A scoop does not:
+once something turns it, a line can enter the shape, cross into a bite and come
+out into the shape again. Claiming the gap between the two halves sends clicks
+to a surface that did not draw there — the promise that is zero and not a
+tolerance — and keeping only the wider half gives up 5.5% of the shape at 45
+degrees, most of the budget the whole tessellation has. So `bounds_at` answers
+the convex part and `take_bites_from` removes what each disc covers. A band is claimed only where the shape covers it at
+*every* height in it, so each disc is taken at its widest across the band: the
+widest part of a bite can sit strictly between two scanlines, which is not
+something a convex boundary can do.
 
 **One clip, though.** What arrives is `effective_clip`, which `intersect_clips`
 has already collapsed. That collapse is exact when the two spaces differ by a

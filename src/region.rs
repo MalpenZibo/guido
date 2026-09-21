@@ -8,7 +8,8 @@
 //! way to describe. That translation lives here so there is one of it.
 
 use crate::renderer::{CornerRadii, DrawCommand, FlattenedCommand};
-use crate::shape::PlacedShape;
+use crate::shape::{Outline, PlacedShape, Spans};
+use smallvec::SmallVec;
 
 use crate::widgets::Rect;
 
@@ -62,13 +63,21 @@ impl RegionRect {
 /// not. The merging is what keeps an upright panel at a handful of rectangles
 /// instead of one per band.
 ///
-/// **The clip is a shape too.** Both are convex, so at any scanline the
-/// overlap is the overlap of the two spans — which is exact, turned clip or
-/// not, and gets the corners right for free. A card filling a rounded scroller
-/// is cornered by the scroller: publishing the scroller's square box instead
-/// blurs the desktop in the four corners where the panel is not drawn, and
-/// squaring off the card's own corners along a cut edge is the same mistake
-/// the other way.
+/// **The clip is a shape too.** At any scanline the overlap is the overlap of
+/// the two shapes' spans — which is exact, turned clip or not, and gets the
+/// corners right for free. A card filling a rounded scroller is cornered by
+/// the scroller: publishing the scroller's square box instead blurs the
+/// desktop in the four corners where the panel is not drawn, and squaring off
+/// the card's own corners along a cut edge is the same mistake the other way.
+///
+/// **A span is a list, because a scoop is not convex.** Every other curvature
+/// bounds a convex region, and a horizontal line meets one of those in a
+/// single interval. A scoop is the box minus a disc at each corner, so once
+/// something turns it a line can enter the shape, cross into a bite and come
+/// out into the shape again. Both promises below turn on that: claiming the
+/// gap between the two halves sends clicks to a surface that did not draw
+/// there, and claiming only the wider half gives up 5.5% of the shape at 45
+/// degrees — past the budget the whole tessellation is held to (#410).
 ///
 /// The coordinates are logical surface pixels, which is what `wl_region`
 /// expects.
@@ -110,12 +119,19 @@ pub(crate) fn placed_shape_to_rects(
 
     let outline = shape.outline();
     let clip_outline = clip.map(|clip| clip.outline());
+    // Whether anything is subtracted from a span, which only a scoop does.
+    // Asked once, because the answer decides the shape of every band below:
+    // an unbitten shape puts out one rectangle per band, and the band above
+    // it is therefore the last one out. A bitten one can split, and then it
+    // is not.
+    let bitten = outline.is_bitten() || clip_outline.as_ref().is_some_and(Outline::is_bitten);
 
-    // At a scanline: where the shape is, narrowed to where the clip is.
-    let span = |y: f32| -> Option<(f32, f32)> {
-        let (mut left, mut right) = outline.span_at(y)?;
+    // The outer bounds at a scanline: where the shape is before any bite is
+    // taken out, narrowed to where the clip is. Convex, so one interval.
+    let bounds = |y: f32| -> Option<(f32, f32)> {
+        let (mut left, mut right) = outline.bounds_at(y)?;
         if let Some(ref clip) = clip_outline {
-            let (clip_left, clip_right) = clip.span_at(y)?;
+            let (clip_left, clip_right) = clip.bounds_at(y)?;
             left = left.max(clip_left);
             right = right.min(clip_right);
         }
@@ -131,41 +147,107 @@ pub(crate) fn placed_shape_to_rects(
     let band_h = height / bands as f32;
 
     let mut out: Vec<RegionRect> = Vec::new();
+    // Where the previous band put its rectangles, so this one can grow them
+    // rather than stack another row on top. A band emits more than one only
+    // where a bite has split it, so this is one entry almost always — and
+    // inline, because a heap allocation per band is one per output pixel row
+    // and this runs per input region per frame.
+    let mut previous: SmallVec<[usize; 2]> = SmallVec::new();
     // Every interior boundary is shared by the band above and the band below,
-    // so each span is computed once and carried forward.
-    let mut upper = span(top);
+    // so each is computed once and carried forward.
+    let mut upper = bounds(top);
     for i in 0..bands {
         let y0 = top + i as f32 * band_h;
-        let lower = span(y0 + band_h);
+        let y1 = y0 + band_h;
+        let lower = bounds(y1);
         let (Some((a0, b0)), Some((a1, b1))) = (upper, lower) else {
             upper = lower;
+            previous.clear();
             continue;
         };
         upper = lower;
         // The tighter of the band's two edges keeps the slab inside the curve:
-        // both shapes are convex, so between them neither is narrower.
-        let (left, right) = (a0.max(a1), b0.min(b1));
-        if right <= left {
+        // the outer boundary is convex, so between them neither is narrower.
+        let band = (a0.max(a1), b0.min(b1));
+        // The two boundaries may not overlap at all, and everything below
+        // takes a band that is a real interval: `subtract` keeps whatever it
+        // is given in order, so an inverted seed would travel as far as the
+        // rounding before anything noticed.
+        if band.0 >= band.1 {
+            previous.clear();
             continue;
         }
-        let Some(rect) = to_region_rect(Rect::new(left, y0, right - left, band_h)) else {
+        // Then each shape takes its bites out, at their widest across the
+        // band. A bite is a disc, whose widest chord can sit strictly between
+        // two scanlines, so this cannot be read off the two edges the way the
+        // convex part can.
+        if !bitten {
+            // Every curvature but the scoop, which is almost every region
+            // there is. One span, and the rectangle it grows is the last one
+            // out — the path this loop had before a span became a list, kept
+            // because the list costs about a third again per band and these
+            // shapes have nothing to spend it on.
+            place(&mut out, band, y0, band_h, None);
             continue;
-        };
-        // Bands that rounded to the same span are one rectangle — which is the
-        // whole straight middle of an upright shape, and nothing at all of a
-        // turned one.
-        match out.last_mut() {
-            Some(prev)
-                if prev.x == rect.x
-                    && prev.width == rect.width
-                    && prev.y + prev.height == rect.y =>
-            {
-                prev.height += rect.height;
-            }
-            _ => out.push(rect),
         }
+
+        let mut spans = Spans::new();
+        spans.push(band);
+        outline.take_bites_from(&mut spans, y0, y1);
+        if let Some(ref clip) = clip_outline {
+            clip.take_bites_from(&mut spans, y0, y1);
+        }
+
+        let mut current: SmallVec<[usize; 2]> = SmallVec::new();
+        for span in spans {
+            current.extend(place(&mut out, span, y0, band_h, Some(&previous)));
+        }
+        previous = current;
     }
     out
+}
+
+/// Put one band's span out as a rectangle, growing the one above it where the
+/// two line up rather than stacking a second row on it. That merging is what
+/// keeps the straight middle of an upright shape at one rectangle instead of
+/// one per band.
+///
+/// `above` is where the previous band put *its* rectangles, and `None` says
+/// there is only ever one of them — so the one to grow, if any, is the last
+/// one out. Only a bitten shape needs the list, and only because a bite can
+/// split a band in two.
+///
+/// Returns where the span ended up, which is what the next band needs and
+/// only a bitten one keeps, or `None` where the rounding leaves no rectangle
+/// at all. Every span reaching here is a real interval — the band loop drops
+/// an empty band before it splits one, and `subtract` cannot make an empty
+/// span out of a real one.
+#[inline]
+fn place(
+    out: &mut Vec<RegionRect>,
+    (left, right): (f32, f32),
+    y0: f32,
+    band_h: f32,
+    above: Option<&SmallVec<[usize; 2]>>,
+) -> Option<usize> {
+    let rect = to_region_rect(Rect::new(left, y0, right - left, band_h))?;
+    let grows = |prev: &RegionRect| {
+        prev.x == rect.x && prev.width == rect.width && prev.y + prev.height == rect.y
+    };
+    let existing = match above {
+        Some(above) => above.iter().copied().find(|&i| grows(&out[i])),
+        None => out.last().is_some_and(grows).then(|| out.len() - 1),
+    };
+    Some(match existing {
+        Some(i) => {
+            out[i].height += rect.height;
+            i
+        }
+        None => {
+            out.push(rect);
+            out.len() - 1
+        }
+    })
 }
 
 /// The overlap of two rects, or `None` where there is none.
@@ -733,18 +815,46 @@ mod tests {
     /// every curvature the public API names, one between them, and two above
     /// the ledge where the norm used to overflow — the region and the shape
     /// disagreeing is exactly what #411 would have looked like from here, and
-    /// nothing was asking. Upright and turned. #400 was the second promise broken at k > 1: the corner was
-    /// published as the circle inscribed in the squircle, 14% of each corner
-    /// box short. A scoop still breaks it, by more — that is #410, and this
-    /// test holds it to the first promise in the meantime.
+    /// nothing was asking.
+    ///
+    /// #400 was the second promise broken at k > 1: the corner was published
+    /// as the circle inscribed in the squircle, 14% of each corner box short.
+    /// #410 was the scoop breaking it by more: its corner was cut by a chord
+    /// tangent to the bite rather than by the bite, which gave up 17% of the
+    /// whole shape. Every curvature is held to both promises now, at 45
+    /// degrees as well as 20 — the angle where a bite is most likely to split
+    /// a scanline in two, and where keeping only the wider half of a split
+    /// gives up 512 of the shape's 9392 pixels, 5.5%.
+    ///
+    /// And sheared, which is not the same as turned: a rotation maps a disc to
+    /// a disc, and a rotation with a non-uniform scale after it maps one to a
+    /// tilted ellipse. Nothing else here can tell those apart, and the bite
+    /// arithmetic is the one thing that has to.
     #[test]
     fn a_region_is_inside_its_shape_and_almost_all_of_it() {
         use crate::widgets::Corners;
 
         let size = 120.0;
+        // A turn, and a turn with a non-uniform scale after it — which is
+        // what `container().rotate(20.0).scale(Scale::new(2.0, 1.0))`
+        // composes. The second is not a rotation: it shears, and a sheared
+        // circle is a tilted ellipse whose horizontal chord *slides* sideways
+        // as it grows. Nothing else here can tell the two apart.
+        let placements = [
+            ("turned", Transform::rotate_degrees(0.0)),
+            ("turned", Transform::rotate_degrees(20.0)),
+            ("turned", Transform::rotate_degrees(45.0)),
+            (
+                "sheared",
+                Transform::rotate_degrees(20.0).then(&Transform::scale_xy(2.0, 1.0)),
+            ),
+            (
+                "sheared",
+                Transform::rotate_degrees(45.0).then(&Transform::scale_xy(4.0, 1.0)),
+            ),
+        ];
         for k in [0.0_f32, 0.5, 1.0, 2.0, 5.0, 8.0, -1.0] {
-            for degrees in [0.0_f32, 20.0] {
-                let placement = Transform::rotate_degrees(degrees);
+            for (degrees, placement) in placements {
                 let shape =
                     PlacedShape::placed(Rect::new(0.0, 0.0, size, size), round(40.0), k, placement);
                 let rects = placed_shape_to_rects(shape, None);
@@ -788,18 +898,121 @@ mod tests {
                     "k={k} at {degrees}°: {claimed_outside} of {covered} published \
                      pixels are outside the shape, which has {drawn}"
                 );
-                // A scoop is the exception, and #410 is why: its corner is
-                // cut by a chord tangent to the bite rather than by the bite,
-                // which never over-claims and gives up about a sixth of the
-                // shape. Held to the first promise only until that is fixed.
-                if k >= 0.0 {
-                    assert!(
-                        covered * 100 >= drawn * 97,
-                        "k={k} at {degrees}°: the region covers {covered} of \
-                         the shape's {drawn} pixels, and has given up too many"
-                    );
+                assert!(
+                    covered * 100 >= drawn * 97,
+                    "k={k} at {degrees}°: the region covers {covered} of \
+                     the shape's {drawn} pixels, and has given up too many"
+                );
+            }
+        }
+    }
+
+    /// A scoop's bite is clamped the way the *shader* clamps it, which is not
+    /// the way the sides are.
+    ///
+    /// `clamp_radii` shrinks all four corners by one factor so that no two
+    /// sharing an edge can overlap — the rule CSS `border-radius` uses, and
+    /// the right one for an outline whose corners are traced. The shader
+    /// clamps each corner on its own, `min(radius, min(half_w, half_h))`. The
+    /// two agree whenever the four radii agree, which is every other test
+    /// here, and diverge as soon as they do not.
+    ///
+    /// A bite is the one thing that can simply match the shader, because it is
+    /// *subtracted*: two bites overlapping on one side is a column removed
+    /// twice, which is what the proportional rule exists to prevent and what
+    /// nothing here needs prevented. Taking the proportional radius instead
+    /// carved a disc where the shader carved none — `top(50.0)` on a 120x60
+    /// box covered 55.7% of the shape, against 99.6% for the same shape here.
+    ///
+    /// The round-corner half of the same divergence is untouched and still
+    /// there: at `tl = 100, tr = 40` on a 120x120 box the proportional rule
+    /// scales `tr` to 34.3 where the shader keeps 40, and the region claims 74
+    /// pixels the shape does not cover. That is #417, and it is not this: a
+    /// traced corner cannot simply take the shader's number, because two of
+    /// them on one side would then cross.
+    #[test]
+    fn a_scooped_bite_is_the_one_the_shader_carves() {
+        use crate::widgets::{Corners, Rect as WRect};
+
+        for (w, h, radii) in [
+            (
+                120.0_f32,
+                60.0_f32,
+                CornerRadii {
+                    top_left: 50.0,
+                    top_right: 50.0,
+                    bottom_right: 0.0,
+                    bottom_left: 0.0,
+                },
+            ),
+            (
+                120.0,
+                120.0,
+                CornerRadii {
+                    top_left: 100.0,
+                    top_right: 40.0,
+                    bottom_right: 0.0,
+                    bottom_left: 0.0,
+                },
+            ),
+            // The same shape on its side. The shader's clamp is
+            // `min(r, min(half_w, half_h))`, and a box that is only ever
+            // limited by its height leaves the width half of that untested —
+            // both shapes above are, so mutating `width * 0.5` changed
+            // nothing and nothing objected.
+            (
+                60.0,
+                120.0,
+                CornerRadii {
+                    top_left: 50.0,
+                    top_right: 0.0,
+                    bottom_right: 0.0,
+                    bottom_left: 50.0,
+                },
+            ),
+        ] {
+            let k = -1.0;
+            let shape =
+                PlacedShape::placed(WRect::new(0.0, 0.0, w, h), radii, k, Transform::IDENTITY);
+            let rects = placed_shape_to_rects(shape, None);
+            let local = WRect::new(0.0, 0.0, w, h);
+            let corners = Corners {
+                radii,
+                curvature: k,
+            };
+            let inside =
+                |x: i32, y: i32| local.contains_shape(x as f32 + 0.5, y as f32 + 0.5, corners);
+
+            let (mut covered, mut outside) = (0, 0);
+            for r in &rects {
+                for y in r.y..r.y + r.height {
+                    for x in r.x..r.x + r.width {
+                        covered += 1;
+                        if !inside(x, y) {
+                            outside += 1;
+                        }
+                    }
                 }
             }
+            let mut drawn = 0;
+            for y in -50..250 {
+                for x in -50..250 {
+                    if inside(x, y) {
+                        drawn += 1;
+                    }
+                }
+            }
+
+            assert_eq!(
+                outside, 0,
+                "{w}x{h} {radii:?}: {outside} of {covered} published pixels are \
+                 outside a shape with {drawn}"
+            );
+            assert!(
+                covered * 100 >= drawn * 97,
+                "{w}x{h} {radii:?}: the region covers {covered} of the shape's \
+                 {drawn} pixels — the bite is not the one the shader carves"
+            );
         }
     }
 

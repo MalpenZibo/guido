@@ -159,31 +159,6 @@ impl PlacedShape {
         clamp_radii(self.radii, self.rect.width, self.rect.height)
     }
 
-    /// How far each corner eats into its sides, for the purpose of cutting an
-    /// outline that stays *inside* the shape.
-    ///
-    /// The declared radius, except where the corner is concave. A negative
-    /// curvature is a **scoop**: the shader takes a disc of radius `r` out of
-    /// the square corner, so the shape reaches almost to the corner along each
-    /// edge and is bitten away around the diagonal. A chord between the two
-    /// points at distance `r` passes within `r/√2` of the corner — straight
-    /// through the bite — so it publishes a crescent nothing drew, which is
-    /// the same over-claim the chord exists to prevent for a bevel.
-    ///
-    /// A line tangent to that disc never enters it, and tangency is `r·√2`
-    /// along each axis. Clamped by the same proportional rule, so two chords
-    /// on one side still cannot cross.
-    fn outline_radii(&self) -> CornerRadii {
-        if self.curvature >= 0.0 {
-            return self.clamped_radii();
-        }
-        clamp_radii(
-            self.radii.scaled(std::f32::consts::SQRT_2),
-            self.rect.width,
-            self.rect.height,
-        )
-    }
-
     /// Where the shape starts and stops, vertically, on the surface.
     #[inline]
     pub(crate) fn y_bounds(&self) -> (f32, f32) {
@@ -207,7 +182,7 @@ impl PlacedShape {
     /// transform does to a radius.
     fn largest_corner_on_surface(&self) -> f32 {
         let (sx, sy) = self.placement.extract_scale_components();
-        self.outline_radii().max() * sx.max(sy)
+        self.clamped_radii().max() * sx.max(sy)
     }
 
     /// How many points to sample a corner's curve at, when there is no closed
@@ -251,12 +226,26 @@ impl PlacedShape {
     /// corner box — a 7.6 pixel dead band along the diagonal of a 40 pixel
     /// corner, where a click fell through to whatever was behind (#400).
     ///
-    /// A scoop is the one still approximated: it curves inward, so chords of it
-    /// fall *outside* the shape and sampling cannot be used. `outline_radii`
-    /// gives it the tangent chord instead, which never over-claims and gives up
-    /// about a sixth — #410.
+    /// **A scoop is not traced, it is taken away.** It curves inward, so
+    /// chords of it fall *outside* the shape and sampling cannot be used —
+    /// which is why it used to be cut by a chord tangent to the bite, never
+    /// over-claiming and giving up 17% of the shape (#410). What the shader
+    /// actually draws is the plain box minus a disc sitting on each outer
+    /// corner, and that is what is built here: the sides run corner to
+    /// corner, no arc is traced, and the four discs go in `bites` for
+    /// [`Outline::take_bites_from`] to remove from a span. Exact,
+    /// through the same closed-form circle solve every other curvature's arc
+    /// uses.
     pub(crate) fn outline(&self) -> Outline {
-        let r = self.outline_radii();
+        let declared = self.clamped_radii();
+        // A scoop's sides reach the corners — the curve comes out of the shape
+        // afterwards rather than being traced along it — so the outline is
+        // built as the plain box and the radii travel in `bites` instead.
+        let r = if self.curvature < 0.0 {
+            CornerRadii::uniform(0.0)
+        } else {
+            declared
+        };
         let (x0, y0) = (self.rect.x, self.rect.y);
         let (x1, y1) = (x0 + self.rect.width, y0 + self.rect.height);
 
@@ -310,12 +299,9 @@ impl PlacedShape {
             let k = self.curvature;
             if k == 1.0 {
                 arcs.push(Arc::placed(corner, &self.placement));
-            } else if k <= 0.0 {
+            } else if k == 0.0 {
                 // A bevel is a straight cut, and the chord between the arc's
-                // ends is not an approximation of it — it is the shape. A scoop
-                // curves the other way, so chords of it fall *outside*;
-                // `outline_radii` has already replaced its radius with the
-                // tangent chord's, and that chord is what cuts here (#410).
+                // ends is not an approximation of it — it is the shape.
                 edges.push(Edge::placed(
                     corner.on_x_side(),
                     corner.on_y_side(),
@@ -331,16 +317,47 @@ impl PlacedShape {
             }
         }
 
-        Outline { edges, arcs }
+        // With `r` zeroed above, every corner's centre already sits on the
+        // box's outer corner, which is where a scoop's disc is centred. Only
+        // the radius has to be put back — and put back the way the *shader*
+        // clamps it, which is `min(radius, min(half_w, half_h))` per corner
+        // rather than the proportional rule `clamp_radii` applies. The two
+        // agree for uniform radii and not otherwise, and this is the one
+        // consumer that can simply match: a bite is subtracted, so two of them
+        // overlapping on one side is no more than a column removed twice,
+        // which is what the proportional rule exists to prevent and what
+        // nothing here needs prevented.
+        let half = (self.rect.width * 0.5).min(self.rect.height * 0.5);
+        let bites = if self.curvature < 0.0 {
+            corners
+                .iter()
+                .zip(self.radii.to_array().map(|r| r.max(0.0).min(half)))
+                .filter(|(_, radius)| *radius > 0.0)
+                .map(|(corner, radius)| Arc::placed(&Corner { radius, ..*corner }, &self.placement))
+                .collect()
+        } else {
+            SmallVec::new()
+        };
+
+        Outline { edges, arcs, bites }
     }
 
-    /// The exact horizontal extent of the shape at surface scanline `y`.
+    /// The exact horizontal extent of the shape at surface scanline `y`,
+    /// where the shape has only one.
     ///
     /// A convenience over [`Outline::span_at`] for a caller asking once; the
-    /// band loop places the outline itself and keeps it.
+    /// band loop places the outline itself and keeps it. Panics on a scanline
+    /// a scoop has split in two, which is the one case with no single answer
+    /// to give — [`Outline::span_at`] is what asks about that.
     #[cfg(test)]
     pub(crate) fn span_at(&self, y: f32) -> Option<(f32, f32)> {
-        self.outline().span_at(y)
+        let spans = self.outline().span_at(y);
+        assert!(
+            spans.len() <= 1,
+            "scanline {y} meets this shape in {} intervals, not one",
+            spans.len()
+        );
+        spans.first().copied()
     }
 }
 
@@ -349,20 +366,64 @@ impl PlacedShape {
 pub(crate) struct Outline {
     edges: SmallVec<[Edge; 8]>,
     arcs: SmallVec<[Arc; 4]>,
+    /// The discs a scoop takes *out* of the shape, empty for every other
+    /// curvature. Kept apart from `arcs` because they are not boundary the
+    /// span runs to — they are boundary the span stops at and starts again
+    /// past, which is the one place this shape is not convex.
+    bites: SmallVec<[Arc; 4]>,
+}
+
+/// Where a shape is on one scanline: ascending, disjoint, and usually one.
+///
+/// One interval is the whole story for every convex shape, which is every
+/// curvature but the scoop. A scoop is the box minus a disc at each corner,
+/// and once something turns it a horizontal line can enter the shape, cross
+/// into a bite and come out into the shape again — two intervals on that
+/// line, with a gap that belongs to nobody. Claiming the gap sends clicks to
+/// a surface that did not draw there; claiming only the wider half gives up
+/// 5.5% of a shape at 45 degrees, which is well past the budget the whole
+/// tessellation has. So the answer is a list.
+pub(crate) type Spans = SmallVec<[(f32, f32); 2]>;
+
+/// `spans` with `(lo, hi)` removed from it.
+///
+/// Each interval survives whole, is trimmed at one end, is split in two, or
+/// disappears. The input is ascending and disjoint, and so is the output.
+pub(crate) fn subtract(spans: &Spans, (lo, hi): (f32, f32)) -> Spans {
+    let mut out = Spans::new();
+    for &(a, b) in spans {
+        if hi <= a || lo >= b {
+            out.push((a, b));
+            continue;
+        }
+        if a < lo {
+            out.push((a, lo));
+        }
+        if hi < b {
+            out.push((hi, b));
+        }
+    }
+    out
 }
 
 impl Outline {
-    /// The exact horizontal extent of the shape at surface scanline `y`.
+    /// The outer bounds of the shape at surface scanline `y`, before any bite
+    /// is taken out of them.
     ///
-    /// **The boundary, piece by piece.** The shape is convex and its outline is
-    /// straight edges and corner arcs; where a horizontal line meets the
-    /// outline is where the shape begins and ends on that line. Every piece is
-    /// already transformed, so nothing here cares whether the shape is turned —
-    /// a rotation is not a case, it is what the matrix happened to hold. An
+    /// **The boundary, piece by piece.** The straight edges and the corner arcs
+    /// bound a convex region, and where a horizontal line meets them is where
+    /// that region begins and ends on the line. Every piece is already
+    /// transformed, so nothing here cares whether the shape is turned — a
+    /// rotation is not a case, it is what the matrix happened to hold. An
     /// axis-aligned shape falls out of the same arithmetic, which is why there
     /// is no separate corner inset: that was this, solved in advance for the
     /// one transform that keeps the axes.
-    pub(crate) fn span_at(&self, y: f32) -> Option<(f32, f32)> {
+    ///
+    /// For every curvature but the scoop this *is* the shape's extent, and
+    /// [`Outline::span_at`] just hands it back. A scoop's outline is the plain
+    /// box, so this is the box, and the discs it takes out of it are
+    /// [`Outline::without_its_bites`].
+    pub(crate) fn bounds_at(&self, y: f32) -> Option<(f32, f32)> {
         let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
         let mut hit = |x: f32| {
             lo = lo.min(x);
@@ -397,6 +458,52 @@ impl Outline {
         }
 
         (lo <= hi).then_some((lo, hi))
+    }
+
+    /// Where the shape is on scanline `y`.
+    ///
+    /// The band loop does not go through this — it asks `bounds_at` once per
+    /// boundary and carries the answer to the band below, then takes the
+    /// bites out over the whole band. This is the same thing for a caller
+    /// asking about one line, which is what a test does.
+    #[cfg(test)]
+    pub(crate) fn span_at(&self, y: f32) -> Spans {
+        let mut spans = Spans::new();
+        let Some(bounds) = self.bounds_at(y) else {
+            return spans;
+        };
+        spans.push(bounds);
+        self.take_bites_from(&mut spans, y, y);
+        spans
+    }
+
+    /// Whether anything comes out of this outline's spans at all.
+    ///
+    /// False for every curvature but the scoop, and the band loop asks it once
+    /// per region so that the shapes with nothing to subtract do not pay for
+    /// the shape of the answer — see `placed_shape_to_rects`.
+    pub(crate) fn is_bitten(&self) -> bool {
+        !self.bites.is_empty()
+    }
+
+    /// Take this shape's scoops out of `spans`. Does nothing at all for every
+    /// curvature but a scoop, which is the point: the band loop calls it once
+    /// per band per shape, and a shape with no bites must not pay for the
+    /// possibility of having some.
+    ///
+    /// A band is claimed only where the shape covers it at *every* height in
+    /// it, so what comes out is the union of the disc across the band — see
+    /// [`Arc::removed_between`]. Reading it off the two edges is what a convex
+    /// boundary allows and a bite does not: the widest part of a bite can sit
+    /// strictly between two scanlines.
+    ///
+    /// `y0 == y1` asks about a single scanline, which is what `span_at` does.
+    pub(crate) fn take_bites_from(&self, spans: &mut Spans, y0: f32, y1: f32) {
+        for bite in &self.bites {
+            if let Some(cut) = bite.removed_between(y0, y1) {
+                *spans = subtract(spans, cut);
+            }
+        }
     }
 }
 
@@ -472,6 +579,11 @@ struct Arc {
     centre_y: f32,
     solve: Solve,
     placement: Transform,
+    /// The parameter where the *placed* circle reaches furthest in x, as
+    /// `(cos t, sin t)`. Surface x is `a·x + b·y`, so it turns where
+    /// `-a·sin t + b·cos t` is zero — a property of the placement, not of any
+    /// scanline, and [`Arc::removed_between`] asks for it once per band.
+    widest_x: (f32, f32),
 }
 
 /// How to get from a scanline to a point on the arc.
@@ -491,6 +603,8 @@ impl Arc {
         // That is one square root where the general case is an `atan2`, an
         // `acos` and two more trig calls — per corner, per scanline, on every
         // painted frame, for shapes that are almost all of them.
+        let t = placement.b().atan2(placement.a());
+        let widest_x = (t.cos(), t.sin());
         if placement.keeps_axes() {
             return Self {
                 corner: *corner,
@@ -499,6 +613,7 @@ impl Arc {
                     half_height: placement.d() * corner.radius,
                 },
                 placement: *placement,
+                widest_x,
             };
         }
         // `c` and `d`, the matrix's *second row*: the layout is
@@ -516,32 +631,100 @@ impl Arc {
                 phase: q.atan2(p),
             },
             placement: *placement,
+            widest_x,
         }
+    }
+
+    /// The two points of the circle at height `target` above its centre, in
+    /// the circle's own frame, or `None` where the scanline misses it.
+    ///
+    /// Both solves answer the same question — the height of `centre + A·r·(cos
+    /// t, sin t)` above the centre is `target` — and differ only in what the
+    /// placement lets them assume about it.
+    fn at_height(&self, target: f32) -> Option<[(f32, f32); 2]> {
+        match self.solve {
+            Solve::Upright { half_height } => {
+                if half_height.abs() < f32::EPSILON || target.abs() > half_height.abs() {
+                    return None;
+                }
+                let st = target / half_height;
+                let ct = (1.0 - st * st).max(0.0).sqrt();
+                Some([(ct, st), (-ct, st)])
+            }
+            Solve::Turned { amplitude, phase } => {
+                if amplitude < f32::EPSILON || target.abs() > amplitude {
+                    return None;
+                }
+                let base = (target / amplitude).clamp(-1.0, 1.0).acos();
+                let (a, b) = (phase + base, phase - base);
+                Some([(a.cos(), a.sin()), (b.cos(), b.sin())])
+            }
+        }
+    }
+
+    /// Where a point of the circle lands on the surface.
+    fn point_of(&self, ct: f32, st: f32) -> (f32, f32) {
+        let (cx, cy) = self.corner.centre;
+        let r = self.corner.radius;
+        self.placement.transform_point(cx + r * ct, cy + r * st)
+    }
+
+    /// Everything the circle takes out of the band `y0..=y1`, as one interval.
+    ///
+    /// Used where the circle is a **bite**: the disc a scoop takes out of its
+    /// corner. No quadrant filter — the disc removes every point of the shape
+    /// inside it, not just the part of it the boundary runs along.
+    ///
+    /// **The union across the band, not the chord at any one height.** A band
+    /// is claimed only where the shape covers it at *every* height in it, so a
+    /// column has to come out if the disc reaches it anywhere in the band.
+    /// Asking at the widest single height is enough only while the placed disc
+    /// is still a disc: a rotation maps one to another, so the chord nearest
+    /// its centre contains every other. A rotation composed with a
+    /// non-uniform scale does not — `container().rotate(20.0).scale(Scale::new(2.0,
+    /// 1.0))` places a *tilted ellipse*, whose horizontal chord slides
+    /// sideways as it grows, and a column the widest chord misses is one the
+    /// disc still covers half a band away. That claimed pixels nothing drew,
+    /// which is the promise here that is zero and not a tolerance.
+    ///
+    /// The band cuts the ellipse into a convex region, so its horizontal
+    /// extent is reached on the boundary: either at an end of one of the two
+    /// edge chords, or where the ellipse itself reaches furthest in x. Six
+    /// candidates, and the extremes are among them. A band holding the whole
+    /// disc has no edge chord at all and is bounded by the second pair alone.
+    fn removed_between(&self, y0: f32, y1: f32) -> Option<(f32, f32)> {
+        let (lo, hi) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+        let (mut left, mut right) = (f32::INFINITY, f32::NEG_INFINITY);
+        let mut take = |x: f32| {
+            left = left.min(x);
+            right = right.max(x);
+        };
+
+        for edge in [lo, hi] {
+            if let Some(pair) = self.at_height(edge - self.centre_y) {
+                for (ct, st) in pair {
+                    take(self.point_of(ct, st).0);
+                }
+            }
+        }
+
+        // And where the placed circle reaches furthest in x, from either side.
+        let (ct, st) = self.widest_x;
+        for (ct, st) in [(ct, st), (-ct, -st)] {
+            let (x, y) = self.point_of(ct, st);
+            if (lo..=hi).contains(&y) {
+                take(x);
+            }
+        }
+
+        (left <= right).then_some((left, right))
     }
 
     /// Where this arc crosses scanline `y`, if it does — at most twice.
     fn hits(&self, y: f32, hit: &mut impl FnMut(f32)) {
         let target = y - self.centre_y;
-        let (cx, cy) = self.corner.centre;
-        let r = self.corner.radius;
-
-        let pair = match self.solve {
-            Solve::Upright { half_height } => {
-                if half_height.abs() < f32::EPSILON || target.abs() > half_height.abs() {
-                    return;
-                }
-                let st = target / half_height;
-                let ct = (1.0 - st * st).max(0.0).sqrt();
-                [(ct, st), (-ct, st)]
-            }
-            Solve::Turned { amplitude, phase } => {
-                if amplitude < f32::EPSILON || target.abs() > amplitude {
-                    return;
-                }
-                let base = (target / amplitude).clamp(-1.0, 1.0).acos();
-                let (a, b) = (phase + base, phase - base);
-                [(a.cos(), a.sin()), (b.cos(), b.sin())]
-            }
+        let Some(pair) = self.at_height(target) else {
+            return;
         };
 
         for (ct, st) in pair {
@@ -551,8 +734,7 @@ impl Arc {
             if ct * self.corner.quadrant.0 < -1e-6 || st * self.corner.quadrant.1 < -1e-6 {
                 continue;
             }
-            let (wx, _) = self.placement.transform_point(cx + r * ct, cy + r * st);
-            hit(wx);
+            hit(self.point_of(ct, st).0);
         }
     }
 }
@@ -578,4 +760,348 @@ fn clamp_radii(radii: CornerRadii, w: f32, h: f32) -> CornerRadii {
         .min(ratio(h, r.top_left + r.bottom_left))
         .min(ratio(h, r.top_right + r.bottom_right));
     r.scaled(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::CornerRadii;
+    use crate::widgets::Rect;
+
+    fn scooped(placement: Transform) -> PlacedShape {
+        PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 120.0),
+            CornerRadii::uniform(40.0),
+            -1.0,
+            placement,
+        )
+    }
+
+    fn sheared() -> Transform {
+        Transform::rotate_degrees(25.0).then(&Transform::scale_xy(3.0, 1.0))
+    }
+
+    /// A scanline the circle does not reach has no answer, and one it does
+    /// reach is answered on the circle.
+    ///
+    /// Both of `at_height`'s branches open with a guard, and both guards are
+    /// invisible to everything downstream. Past them the arithmetic does not
+    /// blow up — it quietly lands somewhere real: the upright branch takes
+    /// `sqrt` of a clamped negative and gets `cos t = 0`, the turned branch
+    /// `acos` of a clamped ratio and gets the circle's own vertical extreme.
+    /// Either way the point's x is the corner circle's centre, which lies
+    /// inside the shape at every scanline that reaches it — so `bounds_at`'s
+    /// min/max never moves and no published pixel changes. Ten mutants of
+    /// these two lines survived the whole suite on that.
+    ///
+    /// Harmless is not the same as right. A solution returned for a height
+    /// the circle does not cross is a wrong answer that happens not to be
+    /// used, and the next caller to trust `at_height` — `removed_between`
+    /// already does, without a quadrant filter to hide behind — has no reason
+    /// to expect one. So the guard is asked directly.
+    #[test]
+    fn a_circle_answers_only_the_scanlines_it_crosses() {
+        let corner = Corner {
+            centre: (40.0, 40.0),
+            radius: 40.0,
+            quadrant: (-1.0, -1.0),
+        };
+        // A circle with no height left answers nothing at all. Without that
+        // guard the solve divides zero by zero, and `NaN` is a point on no
+        // circle — the other side of the same line, and the only case that
+        // separates `< EPSILON` from `== EPSILON`.
+        //
+        // One flattened case per branch, because they guard separately. A
+        // radius of zero leaves an upright placement upright; scaling y to
+        // nothing costs the placement its `keeps_axes` and sends it the other
+        // way. Note that a *rotated* flat circle is not this: it is a slanted
+        // segment, and it crosses scanlines perfectly well.
+        for flat in [
+            Arc::placed(
+                &Corner {
+                    radius: 0.0,
+                    ..corner
+                },
+                &Transform::IDENTITY,
+            ),
+            Arc::placed(&corner, &Transform::scale_xy(1.0, 0.0)),
+        ] {
+            for target in [0.0_f32, 1.0, -1.0] {
+                assert!(
+                    flat.at_height(target).is_none(),
+                    "a circle with no height crosses no scanline, and answering \
+                     one means answering with NaN"
+                );
+            }
+        }
+
+        for placement in [
+            Transform::IDENTITY,
+            Transform::rotate_degrees(30.0),
+            sheared(),
+            Transform::scale_xy(2.0, 3.0),
+        ] {
+            let arc = Arc::placed(&corner, &placement);
+
+            // The circle's own reach, whatever the placement did to it.
+            let reach = match arc.solve {
+                Solve::Upright { half_height } => half_height.abs(),
+                Solve::Turned { amplitude, .. } => amplitude,
+            };
+            assert!(reach > 1.0, "the placed circle has to have some height");
+
+            for (target, crosses) in [
+                (0.0, true),
+                (reach * 0.5, true),
+                (-reach * 0.5, true),
+                // Exactly tangent, at both extremes. The scanline grazes the
+                // circle at one point, so there *is* an answer — and it is
+                // the only height where `>` and `>=` disagree.
+                (reach, true),
+                (-reach, true),
+                (reach * 1.01, false),
+                (-reach * 1.01, false),
+                (reach * 4.0, false),
+            ] {
+                let answer = arc.at_height(target);
+                assert_eq!(
+                    answer.is_some(),
+                    crosses,
+                    "a height of {target} against a reach of {reach}"
+                );
+                // And what comes back is on the circle, at the height asked.
+                for (ct, st) in answer.into_iter().flatten() {
+                    assert!(
+                        (ct * ct + st * st - 1.0).abs() < 1e-3,
+                        "({ct}, {st}) is not on the unit circle"
+                    );
+                    let (_, y) = arc.point_of(ct, st);
+                    assert!(
+                        (y - arc.centre_y - target).abs() < 1e-2,
+                        "asked for height {target} and got a point at {}",
+                        y - arc.centre_y
+                    );
+                }
+            }
+        }
+    }
+
+    /// `subtract` keeps its promise: what it returns is what was in the span
+    /// and not in the cut, and every span it returns is a real interval.
+    ///
+    /// The second half is the one nothing else can see. A degenerate span
+    /// rounds to no rectangle, so letting one out changes no published pixel
+    /// — and the band loop was rewritten on the claim that `subtract` cannot
+    /// make an empty span out of a real one, which is exactly the kind of
+    /// claim that stops being true without a word. Trimming at `a <= lo`
+    /// instead of `a < lo` breaks it and nothing downstream objects.
+    ///
+    /// Membership is checked against the definition rather than against
+    /// expected output, so the cases are free: a cut that misses, that
+    /// touches at either end, that trims one side, that splits, and that
+    /// swallows the span whole.
+    #[test]
+    fn subtract_removes_exactly_the_cut_and_leaves_real_intervals() {
+        let spans: Spans = [(0.0_f32, 10.0), (20.0, 30.0)].into_iter().collect();
+
+        for cut in [
+            (-5.0_f32, -1.0), // entirely before
+            (40.0, 50.0),     // entirely after
+            (-5.0, 0.0),      // touching the first span's left edge
+            (10.0, 15.0),     // touching the first span's right edge
+            (-5.0, 4.0),      // trimming the left
+            (6.0, 15.0),      // trimming the right
+            (3.0, 7.0),       // splitting it
+            (-5.0, 35.0),     // swallowing both
+            (0.0, 10.0),      // exactly one span
+            (5.0, 5.0),       // degenerate cut
+        ] {
+            let out = subtract(&spans, cut);
+
+            for &(left, right) in &out {
+                assert!(
+                    left < right,
+                    "cut {cut:?} left a span {left}..{right} that is not an interval"
+                );
+            }
+            for pair in out.windows(2) {
+                assert!(
+                    pair[0].1 <= pair[1].0,
+                    "cut {cut:?} returned {out:?}, which is not ascending and disjoint"
+                );
+            }
+
+            // Every point, against the definition.
+            let mut x = -10.0_f32;
+            while x < 40.0 {
+                let was_in = spans.iter().any(|&(a, b)| x >= a && x < b);
+                let cut_out = x >= cut.0 && x < cut.1;
+                let is_in = out.iter().any(|&(a, b)| x >= a && x < b);
+                assert_eq!(
+                    is_in,
+                    was_in && !cut_out,
+                    "cut {cut:?} on {spans:?} gave {out:?}, which disagrees at x={x}"
+                );
+                x += 0.25;
+            }
+        }
+    }
+
+    /// A band claims only what the shape covers at *every* height inside it.
+    ///
+    /// This is the promise the whole band loop rests on, and for the convex
+    /// part of a shape it is free: the left boundary is a convex function of
+    /// `y` and the right a concave one, so the intersection of the two edge
+    /// scanlines is inside the shape everywhere between them.
+    ///
+    /// A bite is where it has to be earned. Asked through
+    /// `placed_shape_to_rects` this is nearly untestable — bands are about a
+    /// pixel tall, the chord half a pixel from an ellipse's widest point is
+    /// shorter by a fraction of one, and whole-pixel rounding swallows the
+    /// difference. Three mutants of `removed_between` survived the entire
+    /// suite for exactly that reason: swap its two arguments, or take the
+    /// wrong reflection of the widest point, and every published rectangle
+    /// came back identical.
+    ///
+    /// So this asks the geometry rather than the pixels: sample the claim
+    /// across the band, and every sampled column must be inside the shape at
+    /// twenty-one heights spanning it. A bite subtracted at one height rather
+    /// than across the band fails it, because the ellipse a shear places has a
+    /// chord that *slides* as it grows.
+    #[test]
+    fn a_band_claims_nothing_the_shape_misses_anywhere_in_it() {
+        for placement in [
+            Transform::IDENTITY,
+            Transform::rotate_degrees(30.0),
+            sheared(),
+        ] {
+            let shape = scooped(placement);
+            let outline = shape.outline();
+            let (top, bottom) = shape.y_bounds();
+            // Deliberately coarser than the band loop's one-per-pixel: a
+            // taller band is where a bite's widest point is furthest from
+            // either edge, and it is the case the arithmetic exists for.
+            let bands = 24;
+            let step = (bottom - top) / bands as f32;
+
+            let mut checked = 0;
+            for i in 0..bands {
+                let (y0, y1) = (top + i as f32 * step, top + (i + 1) as f32 * step);
+                let (Some(a), Some(b)) = (outline.bounds_at(y0), outline.bounds_at(y1)) else {
+                    continue;
+                };
+                let band = (a.0.max(b.0), a.1.min(b.1));
+                let mut claimed = Spans::new();
+                if band.0 < band.1 {
+                    claimed.push(band);
+                }
+                outline.take_bites_from(&mut claimed, y0, y1);
+
+                for &(lo, hi) in &claimed {
+                    for t in 0..=8 {
+                        let x = lo + (hi - lo) * t as f32 / 8.0;
+                        for s in 0..=20 {
+                            let y = y0 + (y1 - y0) * s as f32 / 20.0;
+                            let there = outline.span_at(y);
+                            let covered = there
+                                .iter()
+                                .any(|&(left, right)| x >= left - 1e-3 && x <= right + 1e-3);
+                            assert!(
+                                covered,
+                                "the band {y0}..{y1} claims x={x}, which the shape does not \
+                                 cover at y={y}: it is {there:?} there"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert!(
+                checked > 2000,
+                "the bands have to actually claim something to be worth checking: {checked}"
+            );
+        }
+    }
+
+    /// A corner with no radius is not a bite.
+    ///
+    /// The filter that says so is invisible to anything counting pixels. A
+    /// zero-radius bite answers no scanline — `at_height` refuses it — but its
+    /// widest point is the corner itself, so it removes a zero-width interval,
+    /// and `subtract` splits the span it lands in *into two that abut*. The
+    /// published pixels are identical; there are simply twice as many
+    /// rectangles covering them, and a `wl_region` is a list the compositor
+    /// has to receive.
+    ///
+    /// So this counts bites rather than pixels. `top(50.0)` scoops two corners
+    /// and leaves two at zero, which is the shape the filter exists for.
+    #[test]
+    fn a_corner_with_no_radius_is_not_a_bite() {
+        let shape = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 60.0),
+            CornerRadii {
+                top_left: 50.0,
+                top_right: 50.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            -1.0,
+            Transform::IDENTITY,
+        );
+        assert_eq!(
+            shape.outline().bites.len(),
+            2,
+            "two corners are scooped and two have no radius at all"
+        );
+
+        // And a convex curvature has none of them whatever its radii.
+        let round = PlacedShape::placed(
+            Rect::new(0.0, 0.0, 120.0, 60.0),
+            CornerRadii::uniform(20.0),
+            1.0,
+            Transform::IDENTITY,
+        );
+        assert!(round.outline().bites.is_empty(), "only a scoop bites");
+    }
+
+    /// A band is the same band whichever end it is named from.
+    ///
+    /// `removed_between` normalises its two arguments, and nothing reaches it
+    /// backwards today — the band loop counts upward and `span_at` passes the
+    /// same height twice. That makes the normalisation exactly the kind of
+    /// line a test never reaches and a later caller relies on, so it is asked
+    /// here directly rather than left to be discovered.
+    #[test]
+    fn a_bite_does_not_care_which_end_of_the_band_it_is_given() {
+        let outline = scooped(sheared()).outline();
+        let (top, bottom) = scooped(sheared()).y_bounds();
+
+        let mut agreed = 0;
+        for i in 0..24 {
+            let (y0, y1) = (
+                top + (bottom - top) * i as f32 / 24.0,
+                top + (bottom - top) * (i + 1) as f32 / 24.0,
+            );
+            let mut forward = Spans::new();
+            forward.push((-1e4, 1e4));
+            outline.take_bites_from(&mut forward, y0, y1);
+
+            let mut backward = Spans::new();
+            backward.push((-1e4, 1e4));
+            outline.take_bites_from(&mut backward, y1, y0);
+
+            assert_eq!(
+                forward, backward,
+                "the band {y0}..{y1} lost a different bite when named backwards"
+            );
+            if forward.len() > 1 {
+                agreed += 1;
+            }
+        }
+        assert!(
+            agreed > 0,
+            "no band here actually had a bite taken out of it, so the two \
+             orders agreed on nothing"
+        );
+    }
 }
