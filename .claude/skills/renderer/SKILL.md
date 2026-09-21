@@ -155,3 +155,23 @@ build a target is how the two drift.
 Claims about performance need a measurement, not a story. `render-stats` is a
 cargo feature; `GUIDO_LAYOUT_STATS=1` reports layout work; tracy captures are
 available. Measure before and after, and put both numbers in the pull request.
+
+A scrolling claim has somewhere to come from. `benches/scroll_list` plays a
+scripted gesture over the rows `examples/bench_list` shows — no compositor and
+no hand on a wheel — and prints what each phase cost:
+
+```bash
+cargo bench --bench scroll_list --features testing,render-stats -- 5000
+```
+
+Run it on the revision before and the revision after, and diff the two tables.
+The counts repeat exactly, which is what makes the diff readable at all: a
+hand-scrolled run of the same example polled 136714 frames one time and 83209
+the next, and neither average described the other's workload.
+
+Two things it will not tell you. The microseconds are the machine's as much as
+the code's, so a loaded machine has nothing to say — and nothing asserts them,
+so no CI job can fail on them. And the **GPU phase is printed apart, under the
+adapter that drew it**: headless takes whatever adapter is present, lavapipe
+included, and a frame's cost there is a fact about lavapipe. The CPU phases —
+paint, flatten, cache — are the comparable ones.

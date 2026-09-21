@@ -84,6 +84,10 @@ cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo run --example status_bar     # a real surface, on a real compositor
 
+# A scrolling workload that runs the same way twice — by hand, on a quiet
+# machine. The `renderer` skill says what repeats and what does not.
+cargo bench --bench scroll_list --features testing,render-stats -- 5000
+
 mdbook build book                  # the user documentation
 mdbook serve book                  # ... with live reload
 
@@ -132,6 +136,7 @@ every run for months.
 | the name the `main` ruleset requires, which lives outside the repository | `.github/required-context.sh`, a step of the `check` job: it asks GitHub what the branch requires and compares. `.github/required-context.test.sh` is its table, and a read that does not happen is a notice rather than a red check |
 | new per-thread state — a `thread_local!` or a `static` `GlobalSignal` | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
 | the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
+| a performance claim about a frame | `benches/scroll_list` — a scripted scroll, run by hand; `tests/scroll_benchmark_is_repeatable.rs` is what says its counts repeat. The `renderer` skill has the rest |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is what is left of the hole. Until #264 it was the whole of it:
