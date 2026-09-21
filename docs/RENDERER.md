@@ -551,6 +551,15 @@ fetches that went away. Isolating the GPU's own share would need timestamp
 queries, which nothing here has yet. What the numbers support is the direction
 and nothing finer.
 
+`ShapeInstance` and `InstanceInput` in `shader.wgsl` are one layout written
+twice, field for field and in the same order. The unit test beside the struct
+computes the shader's offsets from WGSL's layout rules and checks them against
+`offset_of!` on the Rust side, so a field inserted, reordered or resized on
+either side fails rather than being read as its neighbour. Nothing could check
+the attribute layout that way: the map from field to attribute was a
+hand-written offset table that agreed with the struct by arithmetic and with
+the shader by comment.
+
 ### HiDPI Scaling
 
 Coordinates are scaled to physical pixels during instance creation:

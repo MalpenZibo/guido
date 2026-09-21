@@ -365,3 +365,149 @@ mod tests {
         assert_eq!(instance.shape_curvature, 1.0);
     }
 }
+
+/// `ShapeInstance` is one layout written twice, and the two have to agree.
+///
+/// The shape pipeline's per-instance data is declared in Rust
+/// (`ShapeInstance`, `src/renderer/gpu.rs`) and again in WGSL (`InstanceInput`,
+/// `src/renderer/shader.wgsl`). Nothing in the compiler connects them: the
+/// bytes are written by `bytemuck` from the Rust struct and read back by
+/// offset from the WGSL one, so a field inserted, reordered or resized on one
+/// side is read as its neighbour on the other. Every colour after it shifts,
+/// and the picture is wrong in a way no type checks.
+///
+/// **This could not be written before #398.** The instance arrived as sixteen
+/// vertex attributes — the whole allowance a vertex layout has — and the map
+/// from struct field to attribute was a hand-written table of offsets in
+/// `desc()` that agreed with the struct by arithmetic and with the shader by
+/// comment. Two of the fields were not even in their own homes: the clip's
+/// curvature sat in the border block and two of the six floats of its matrix
+/// sat beside the shape's own transform, because those were the only sixteen
+/// bytes left. There was nothing to compare a struct against.
+///
+/// Delivered as a storage buffer indexed by `@builtin(instance_index)`, the
+/// WGSL side is a struct with named members and a layout the specification
+/// fixes — so it can be computed here and checked against the Rust one, field
+/// by field.
+///
+/// The Rust struct carries explicit `_pad` members where WGSL pads implicitly
+/// by its alignment rules, so they have no counterpart to be checked against
+/// and do not appear in the list below. Everything else must line up, and the
+/// two must agree on the total size.
+#[cfg(test)]
+mod instance_layout {
+    use super::*;
+    use std::mem::offset_of;
+
+    /// What WGSL says a type occupies, as (align, size).
+    ///
+    /// Only the types this struct uses. A type appearing in the shader that is
+    /// not here fails the test rather than being guessed at.
+    fn layout_of(ty: &str) -> Option<(usize, usize)> {
+        match ty {
+            "f32" | "u32" | "i32" => Some((4, 4)),
+            "vec2<f32>" => Some((8, 8)),
+            "vec3<f32>" => Some((16, 12)),
+            "vec4<f32>" | "vec4<u32>" => Some((16, 16)),
+            // Fixed-size arrays in the storage address space take their element's
+            // alignment as their stride, so `array<f32, 6>` is 24 tightly packed
+            // bytes — which is what `[f32; 6]` is in Rust.
+            _ => ty
+                .strip_prefix("array<f32,")
+                .and_then(|rest| rest.strip_suffix('>'))
+                .and_then(|n| n.trim().parse::<usize>().ok())
+                .map(|n| (4, 4 * n)),
+        }
+    }
+
+    /// The shader's struct, as (field name, offset), in declaration order,
+    /// and the size of the whole.
+    fn wgsl_fields() -> (Vec<(String, usize)>, usize) {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/renderer/shader.wgsl"),
+        )
+        .expect("shader.wgsl");
+
+        let start = source
+            .find("struct InstanceInput {")
+            .expect("shader.wgsl declares no `InstanceInput` — the shape pipeline reads one");
+        let body = &source[start..];
+        let body = &body[..body.find('}').expect("`InstanceInput` is never closed")];
+
+        let mut offset = 0usize;
+        let mut align = 1usize;
+        let mut fields = Vec::new();
+        for line in body.lines().skip(1) {
+            let line = line.trim();
+            let Some(line) = line.strip_suffix(',') else {
+                continue; // a comment, or the blank line before one
+            };
+            if line.starts_with("//") {
+                continue;
+            }
+            let (name, ty) = line
+                .split_once(':')
+                .unwrap_or_else(|| panic!("cannot read `{line}` as a WGSL struct member"));
+            let (name, ty) = (name.trim(), ty.trim());
+            let (a, size) =
+                layout_of(ty).unwrap_or_else(|| panic!("no WGSL layout recorded for type `{ty}`"));
+            offset = offset.next_multiple_of(a);
+            fields.push((name.to_owned(), offset));
+            offset += size;
+            align = align.max(a);
+        }
+        (fields, offset.next_multiple_of(align))
+    }
+
+    #[test]
+    fn the_shader_and_the_struct_agree_field_for_field() {
+        let rust: Vec<(&str, usize)> = vec![
+            ("rect", offset_of!(ShapeInstance, rect)),
+            ("corner_radii", offset_of!(ShapeInstance, corner_radii)),
+            ("fill_color", offset_of!(ShapeInstance, fill_color)),
+            ("border_color", offset_of!(ShapeInstance, border_color)),
+            ("shadow_color", offset_of!(ShapeInstance, shadow_color)),
+            ("shadow_offset", offset_of!(ShapeInstance, shadow_offset)),
+            ("shadow_blur", offset_of!(ShapeInstance, shadow_blur)),
+            ("shadow_spread", offset_of!(ShapeInstance, shadow_spread)),
+            ("transform", offset_of!(ShapeInstance, transform)),
+            ("clip_rect", offset_of!(ShapeInstance, clip_rect)),
+            ("clip_radii", offset_of!(ShapeInstance, clip_radii)),
+            ("clip_inverse", offset_of!(ShapeInstance, clip_inverse)),
+            ("clip_curvature", offset_of!(ShapeInstance, clip_curvature)),
+            ("gradient_start", offset_of!(ShapeInstance, gradient_start)),
+            ("gradient_end", offset_of!(ShapeInstance, gradient_end)),
+            ("border_width", offset_of!(ShapeInstance, border_width)),
+            (
+                "shape_curvature",
+                offset_of!(ShapeInstance, shape_curvature),
+            ),
+            ("gradient_type", offset_of!(ShapeInstance, gradient_type)),
+        ];
+
+        let (wgsl, wgsl_size) = wgsl_fields();
+
+        assert_eq!(
+            wgsl.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            rust.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            "`InstanceInput` and `ShapeInstance` do not declare the same fields in \
+             the same order. Every field after the first difference is read as its \
+             neighbour."
+        );
+
+        for ((name, shader), (_, host)) in wgsl.iter().zip(&rust) {
+            assert_eq!(
+                shader, host,
+                "`{name}` is at {host} in `ShapeInstance` and {shader} in \
+                 `InstanceInput` — the shader reads it from the wrong bytes"
+            );
+        }
+
+        assert_eq!(
+            wgsl_size,
+            size_of::<ShapeInstance>(),
+            "the two structs are different sizes, so every instance after the \
+             first is read from the wrong offset"
+        );
+    }
+}
