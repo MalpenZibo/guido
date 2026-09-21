@@ -6,7 +6,8 @@ The `#[component]` macro creates reusable widgets from functions. Function param
 
 ## Basic Component
 
-```rust,ignore
+```rust
+# extern crate guido;
 use guido::prelude::*;
 
 #[component]
@@ -19,6 +20,7 @@ pub fn button(label: String) -> impl Widget {
         .when_pressed(|s| s.ripple())
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 Use the component with the auto-generated builder:
@@ -28,7 +30,13 @@ Use the component with the auto-generated builder:
 # use guido::prelude::*;
 # #[component]
 # pub fn button(label: String) -> impl Widget {
-#     container().child(text(label))
+#     container()
+#         .padding(12.0)
+#         .background(Color::rgb(0.3, 0.5, 0.8))
+#         .corners(6.0)
+#         .when_hovered(|s| s.lighter(0.1))
+#         .when_pressed(|s| s.ripple())
+#         .child(container().child(text(label).color(Color::WHITE)))
 # }
 # fn main() {
 button().label("Click me")
@@ -46,11 +54,14 @@ All function parameters are props. Use `#[prop(...)]` attributes for special beh
 
 Parameters without attributes become standard props with `Default::default()`:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn button(label: String) -> impl Widget {
     container().child(text(label))
 }
+# fn main() {}
 ```
 
 ```rust
@@ -68,7 +79,9 @@ button().label("Required")
 
 ### Props with Defaults
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn button(
     label: String,
@@ -82,15 +95,27 @@ pub fn button(
         .background(background)
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 Optional — uses default if not specified:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[component]
-# pub fn button(label: String) -> impl Widget { container().child(text(label)) }
+# pub fn button(
+#     label: String,
+#     #[prop(default = Color::rgb(0.3, 0.3, 0.4))]
+#     background: Color,
+#     #[prop(default = Padding::all(8.0))]
+#     padding: Padding,
+# ) -> impl Widget {
+#     container()
+#         .padding(padding)
+#         .background(background)
+#         .child(container().child(text(label).color(Color::WHITE)))
+# }
 # fn main() {
 button().label("Uses defaults");
 button().label("Custom").background(Color::RED).padding(16.0)
@@ -100,7 +125,9 @@ button().label("Custom").background(Color::RED).padding(16.0)
 
 ### Callback Props
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn button(
     label: String,
@@ -110,16 +137,22 @@ pub fn button(
         .on_click(on_click)
         .child(text(label))
 }
+# fn main() {}
 ```
 
 Provide closures for events:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[component]
-# pub fn button(label: String) -> impl Widget {
-#     container().child(text(label))
+# pub fn button(
+#     label: String,
+#     #[prop(callback)] on_click: (),
+# ) -> impl Widget {
+#     container()
+#         .on_click(on_click)
+#         .child(text(label))
 # }
 # fn main() {
 button()
@@ -134,7 +167,9 @@ Inside the body a callback prop is an `Option<Callback<..>>`. A
 so it goes into as many closures as needed without being cloned, and is called
 with `run`:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
     container()
@@ -147,13 +182,16 @@ pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
             if let Some(cb) = on_change { cb.run(1) }
         }))
 }
+# fn main() {}
 ```
 
 ## Accessing Props
 
 In the function body, each prop is a read-only `Signal<T>` (which is `Copy`). Pass the signal directly to widget methods — this preserves reactivity so props update automatically when the caller provides reactive values (both `RwSignal<T>` and `Signal<T>` work as prop values via `IntoSignal`):
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn button(
     label: String,
@@ -167,6 +205,7 @@ pub fn button(
         .on_click(on_click)         // Copy handle, no clone
         .child(text(label))
 }
+# fn main() {}
 ```
 
 ## The Body Runs Once
@@ -176,7 +215,9 @@ its own ownership scope — that is what lets the signals and effects it creates
 die with the component. Reactivity comes from the closures it leaves behind,
 not from re-running the body:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn status_chip(label: String, active: bool) -> impl Widget {
     container()
@@ -185,20 +226,23 @@ pub fn status_chip(label: String, active: bool) -> impl Widget {
         // Reactive: the signal is passed through untouched
         .child(text(label))
 }
+# fn main() {}
 ```
 
 Reading a prop **outside** a closure takes a snapshot of it, and the component
 will never update:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn plain_row() -> Container { container() }
 # fn selected_row() -> Container { container() }
 # fn main() {
 # let active = create_signal(false);
+# let _snapshot =
 // Wrong: the branch is decided once, for good
 if active.get() { selected_row() } else { plain_row() }
+# ;
 
 // Right: the choice itself lives in a closure
 container().child(move || {
@@ -214,7 +258,9 @@ deliberate, `get_untracked()` says so and silences the warning.
 
 ## Components with Children
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn card(
     title: String,
@@ -228,6 +274,7 @@ pub fn card(
         .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
         .children(children)
 }
+# fn main() {}
 ```
 
 `children` is the same method the caller uses, and the rows land where the call
@@ -237,10 +284,22 @@ handed.
 
 Use with child/children methods:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
-# fn card(_label: &str) -> Container { container() }
+# #[component]
+# pub fn card(
+#     title: String,
+#     #[prop(children)] children: (),
+# ) -> impl Widget {
+#     container()
+#         .padding(16.0)
+#         .background(Color::rgb(0.18, 0.18, 0.22))
+#         .corners(8.0)
+#         .layout(Flex::column().spacing(8.0))
+#         .child(container().child(text(title).font_size(18.0).color(Color::WHITE)))
+#         .children(children)
+# }
 # fn main() {
 card()
     .title("My Card")
@@ -255,7 +314,9 @@ card()
 Slots let a component accept named widget positions — useful for layout components
 like headers, sidebars, or multi-region containers:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[component]
 pub fn center_box(
     #[prop(slot)] left: (),
@@ -270,14 +331,24 @@ pub fn center_box(
             right,
         ].into_iter().flatten())
 }
+# fn main() {}
 ```
 
 Use with the auto-generated builder methods:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
-# fn center_box() -> Container { container() }
+# #[component]
+# pub fn center_box(
+#     #[prop(slot)] left: (),
+#     #[prop(slot)] center: (),
+#     #[prop(slot)] right: (),
+# ) -> impl Widget {
+#     container()
+#         .layout(Flex::row())
+#         .children(vec![left, center, right].into_iter().flatten())
+# }
 # fn main() {
 center_box()
     .left(text("Left"))
@@ -294,12 +365,15 @@ directly — it's an `Option<Box<dyn Widget>>` that was automatically consumed f
 
 Props accept signals and closures:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # #[component]
-# pub fn button(label: String) -> impl Widget {
-#     container().child(text(label))
+# pub fn button(
+#     label: String,
+#     #[prop(default = Color::rgb(0.3, 0.3, 0.4))] background: Color,
+# ) -> impl Widget {
+#     container().background(background).child(text(label))
 # }
 # fn main() {
 let count = create_signal(0);
