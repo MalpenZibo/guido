@@ -5,7 +5,12 @@
 //! cargo run --example render_stats_test --features render-stats
 //! ```
 //!
-//! Stats are printed every second when enabled, showing:
+//! Every pass accumulates into a thread-local; `report_if_due` is what prints
+//! and clears, once a second, and only the driver calls it — `App::run` does,
+//! a harness stepping the same loop does not. A consumer that wants one
+//! frame's numbers scopes them with `reset_stats` and reads `get_stats`.
+//!
+//! The report shows:
 //! - Frame counts (painted vs skipped)
 //! - Layout calls, skip rate, and execution reasons
 //! - Paint child cache hits/misses
@@ -137,10 +142,6 @@ mod inner {
                 max_us: self.max.as_micros() as f64,
             }
         }
-
-        fn reset(&mut self) {
-            *self = Self::new();
-        }
     }
 
     struct RenderStats {
@@ -208,31 +209,12 @@ mod inner {
             }
         }
 
+        /// Every counter back to nothing and the second back to now, which is
+        /// what `new` already says. Spelled this way rather than field by
+        /// field so a counter added above cannot be forgotten here and leak
+        /// across the report that was supposed to clear it.
         fn reset(&mut self) {
-            self.layout_total_calls = 0;
-            self.layout_skipped = 0;
-            self.layout_executed = 0;
-            self.layout_primary_constraints = 0;
-            self.layout_primary_reactive = 0;
-            self.frames_painted = 0;
-            self.frames_skipped = 0;
-            self.paint_children_cached = 0;
-            self.paint_children_painted = 0;
-            self.paint_children_culled = 0;
-            self.flatten_nodes_cached = 0;
-            self.flatten_nodes_flattened = 0;
-            self.damage_none = 0;
-            self.damage_partial = 0;
-            self.damage_full = 0;
-            self.paint_phase.reset();
-            self.flatten_phase.reset();
-            self.gpu_render_phase.reset();
-            self.cache_paint_phase.reset();
-            self.window_children_total = 0;
-            self.window_children_iterated = 0;
-            self.window_declined_children = 0;
-            self.window_declined_containers = 0;
-            self.last_print = Instant::now();
+            *self = Self::new();
         }
     }
 
@@ -389,15 +371,25 @@ mod inner {
         })
     }
 
-    /// Reset all stats to zero (for test isolation).
+    /// Reset all stats to zero, and start the second over (for test
+    /// isolation, and for a consumer that wants one frame's numbers).
     pub fn reset_stats() {
         STATS.with(|s| {
             s.borrow_mut().reset();
         });
     }
 
-    /// Called at the end of each frame to potentially print stats.
-    /// Accepts the damage region for this frame.
+    /// Move the report clock back, so a test can stand where a second's worth
+    /// of frames would have put it without spending the second.
+    #[cfg(test)]
+    pub fn backdate_report_clock(by: Duration) {
+        STATS.with(|s| {
+            s.borrow_mut().last_print -= by;
+        });
+    }
+
+    /// Record what a frame damaged. Accumulation only: whether any of this is
+    /// ever printed is [`report_if_due`]'s question, and the driver's.
     pub fn end_frame(damage: &DamageRegion) {
         STATS.with(|s| {
             let mut stats = s.borrow_mut();
@@ -407,96 +399,108 @@ mod inner {
                 DamageRegion::Partial(_) => stats.damage_partial += 1,
                 DamageRegion::Full => stats.damage_full += 1,
             }
+        });
+    }
 
-            let elapsed = stats.last_print.elapsed();
-            if elapsed.as_secs() >= 1 {
-                let total_frames = stats.frames_painted + stats.frames_skipped;
+    /// Print the accumulated stats and clear them, once a second.
+    ///
+    /// The driver calls this, not the frame path: `App::run` wants the running
+    /// commentary, and a harness or a benchmark stepping the same loop wants
+    /// its counters left where it can read them.
+    pub fn report_if_due() {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
 
-                let layout_skip_rate = if stats.layout_total_calls > 0 {
-                    (stats.layout_skipped as f64 / stats.layout_total_calls as f64) * 100.0
-                } else {
-                    0.0
-                };
-
-                let paint_total = stats.paint_children_cached
-                    + stats.paint_children_painted
-                    + stats.paint_children_culled;
-                let paint_cache_rate = if paint_total > 0 {
-                    (stats.paint_children_cached as f64 / paint_total as f64) * 100.0
-                } else {
-                    0.0
-                };
-
-                let flatten_total = stats.flatten_nodes_cached + stats.flatten_nodes_flattened;
-                let flatten_cache_rate = if flatten_total > 0 {
-                    (stats.flatten_nodes_cached as f64 / flatten_total as f64) * 100.0
-                } else {
-                    0.0
-                };
-
-                eprintln!(
-                    "[Render Stats] frames={} painted={} skipped={}",
-                    total_frames, stats.frames_painted, stats.frames_skipped
-                );
-                eprintln!(
-                    "  layout: calls={} skipped={} executed={} skip_rate={:.1}%",
-                    stats.layout_total_calls,
-                    stats.layout_skipped,
-                    stats.layout_executed,
-                    layout_skip_rate
-                );
-                if stats.layout_executed > 0 {
-                    eprintln!(
-                        "    primary: constraints={} reactive={}",
-                        stats.layout_primary_constraints, stats.layout_primary_reactive
-                    );
-                }
-                eprintln!(
-                    "  paint: children={} cached={} painted={} culled={} cache_rate={:.1}%",
-                    paint_total,
-                    stats.paint_children_cached,
-                    stats.paint_children_painted,
-                    stats.paint_children_culled,
-                    paint_cache_rate
-                );
-                eprintln!(
-                    "  flatten: nodes={} cached={} flattened={} cache_rate={:.1}%",
-                    flatten_total,
-                    stats.flatten_nodes_cached,
-                    stats.flatten_nodes_flattened,
-                    flatten_cache_rate
-                );
-                eprintln!(
-                    "  damage: none={} partial={} full={}",
-                    stats.damage_none, stats.damage_partial, stats.damage_full
-                );
-
-                // Timing output
-                let pt = stats.paint_phase.to_timing();
-                let ft = stats.flatten_phase.to_timing();
-                let gt = stats.gpu_render_phase.to_timing();
-                let ct = stats.cache_paint_phase.to_timing();
-                eprintln!(
-                    "  timing (avg/min/max us): paint={:.0}/{:.0}/{:.0} flatten={:.0}/{:.0}/{:.0} gpu={:.0}/{:.0}/{:.0} cache={:.0}/{:.0}/{:.0}",
-                    pt.avg_us, pt.min_us, pt.max_us,
-                    ft.avg_us, ft.min_us, ft.max_us,
-                    gt.avg_us, gt.min_us, gt.max_us,
-                    ct.avg_us, ct.min_us, ct.max_us,
-                );
-
-                // The paint window, and what it could not narrow.
-                if stats.window_children_total > 0 || stats.window_declined_children > 0 {
-                    eprintln!(
-                        "  window: offered={} narrowed_to={} | declined={} children in {} containers",
-                        stats.window_children_total,
-                        stats.window_children_iterated,
-                        stats.window_declined_children,
-                        stats.window_declined_containers
-                    );
-                }
-
-                stats.reset();
+            if stats.last_print.elapsed().as_secs() < 1 {
+                return;
             }
+
+            let total_frames = stats.frames_painted + stats.frames_skipped;
+
+            let layout_skip_rate = if stats.layout_total_calls > 0 {
+                (stats.layout_skipped as f64 / stats.layout_total_calls as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let paint_total = stats.paint_children_cached
+                + stats.paint_children_painted
+                + stats.paint_children_culled;
+            let paint_cache_rate = if paint_total > 0 {
+                (stats.paint_children_cached as f64 / paint_total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let flatten_total = stats.flatten_nodes_cached + stats.flatten_nodes_flattened;
+            let flatten_cache_rate = if flatten_total > 0 {
+                (stats.flatten_nodes_cached as f64 / flatten_total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            eprintln!(
+                "[Render Stats] frames={} painted={} skipped={}",
+                total_frames, stats.frames_painted, stats.frames_skipped
+            );
+            eprintln!(
+                "  layout: calls={} skipped={} executed={} skip_rate={:.1}%",
+                stats.layout_total_calls,
+                stats.layout_skipped,
+                stats.layout_executed,
+                layout_skip_rate
+            );
+            if stats.layout_executed > 0 {
+                eprintln!(
+                    "    primary: constraints={} reactive={}",
+                    stats.layout_primary_constraints, stats.layout_primary_reactive
+                );
+            }
+            eprintln!(
+                "  paint: children={} cached={} painted={} culled={} cache_rate={:.1}%",
+                paint_total,
+                stats.paint_children_cached,
+                stats.paint_children_painted,
+                stats.paint_children_culled,
+                paint_cache_rate
+            );
+            eprintln!(
+                "  flatten: nodes={} cached={} flattened={} cache_rate={:.1}%",
+                flatten_total,
+                stats.flatten_nodes_cached,
+                stats.flatten_nodes_flattened,
+                flatten_cache_rate
+            );
+            eprintln!(
+                "  damage: none={} partial={} full={}",
+                stats.damage_none, stats.damage_partial, stats.damage_full
+            );
+
+            // Timing output
+            let pt = stats.paint_phase.to_timing();
+            let ft = stats.flatten_phase.to_timing();
+            let gt = stats.gpu_render_phase.to_timing();
+            let ct = stats.cache_paint_phase.to_timing();
+            eprintln!(
+                "  timing (avg/min/max us): paint={:.0}/{:.0}/{:.0} flatten={:.0}/{:.0}/{:.0} gpu={:.0}/{:.0}/{:.0} cache={:.0}/{:.0}/{:.0}",
+                pt.avg_us, pt.min_us, pt.max_us,
+                ft.avg_us, ft.min_us, ft.max_us,
+                gt.avg_us, gt.min_us, gt.max_us,
+                ct.avg_us, ct.min_us, ct.max_us,
+            );
+
+            // The paint window, and what it could not narrow.
+            if stats.window_children_total > 0 || stats.window_declined_children > 0 {
+                eprintln!(
+                    "  window: offered={} narrowed_to={} | declined={} children in {} containers",
+                    stats.window_children_total,
+                    stats.window_children_iterated,
+                    stats.window_declined_children,
+                    stats.window_declined_containers
+                );
+            }
+
+            stats.reset();
         });
     }
 }
@@ -568,12 +572,17 @@ pub fn record_paint_window_declined(_total_children: u64) {}
 #[inline(always)]
 pub fn end_frame(_damage: &crate::tree::DamageRegion) {}
 
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn report_if_due() {}
+
 #[cfg(test)]
 #[cfg(feature = "render-stats")]
 mod tests {
     use super::*;
     use crate::tree::DamageRegion;
     use crate::widgets::Rect;
+    use std::time::Duration;
 
     /// Reset stats before each test to ensure isolation
     /// (tests share the thread-local when run on the same thread).
@@ -755,7 +764,6 @@ mod tests {
     #[test]
     fn test_phase_duration_recording() {
         setup();
-        use std::time::Duration;
 
         record_phase_duration(Phase::Paint, Duration::from_micros(100));
         record_phase_duration(Phase::Paint, Duration::from_micros(200));
@@ -778,6 +786,45 @@ mod tests {
         let s = get_stats();
         assert_eq!(s.window_children_total, 20000);
         assert_eq!(s.window_children_iterated, 100);
+    }
+
+    /// `end_frame` accumulates and returns. It used to ask a clock nobody
+    /// else had started whether a second was up, and clear the counters where
+    /// it stood — so a consumer reading one frame's numbers raced it.
+    #[test]
+    fn end_frame_keeps_the_counters_a_second_later() {
+        setup();
+        record_frame_painted();
+        backdate_report_clock(Duration::from_secs(1));
+
+        end_frame(&DamageRegion::Full);
+
+        let s = get_stats();
+        assert_eq!(s.frames_painted, 1, "end_frame cleared a counter");
+        assert_eq!(s.damage_full, 1, "end_frame did not record the damage");
+    }
+
+    /// The cadence is `report_if_due`'s now, and so is the clearing: it keeps
+    /// what it has not printed yet, and clears what it has.
+    #[test]
+    fn report_if_due_clears_once_the_second_is_up() {
+        setup();
+        record_frame_painted();
+
+        report_if_due();
+        assert_eq!(
+            get_stats().frames_painted,
+            1,
+            "reported before the second was up"
+        );
+
+        backdate_report_clock(Duration::from_secs(1));
+        report_if_due();
+        assert_eq!(
+            get_stats(),
+            StatsSnapshot::default(),
+            "the second was up and the counters were not cleared"
+        );
     }
 
     /// A container that could not narrow is counted apart from one whose

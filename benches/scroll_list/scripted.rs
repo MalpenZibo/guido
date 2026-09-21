@@ -25,9 +25,6 @@ const FRAME: Duration = Duration::from_millis(16);
 /// down the right edge.
 const POINTER: (f32, f32) = (280.0, 400.0);
 
-/// How long `render_stats` goes before printing its counters and clearing them.
-const RESET_WINDOW: Duration = Duration::from_secs(1);
-
 /// The gesture, as one pixel delta per frame.
 ///
 /// Four phases and the pauses between them: a slow drag down, a flick down, the
@@ -236,10 +233,6 @@ where
     );
     app.configure(id, width, height, 1.0);
 
-    // Before the warm-up, not only before each scripted frame: `render_stats`
-    // counts its second from the last reset, and the warm-up is the longest
-    // frame in the run — it lays out and paints every row there is.
-    render_stats::reset_stats();
     let start = Instant::now();
     app.step_at(start);
 
@@ -251,12 +244,9 @@ where
     for (frame, delta) in script.iter().enumerate() {
         let at = start + FRAME * (frame as u32 + 1);
 
-        // Two things at once, and both are wanted. It scopes the counters to
-        // this one frame — and it restarts the second `render_stats` counts
-        // down to its own report, so the benchmark's output is the table below
-        // and not a page of the once-a-second dump.
+        // The counters are scoped to this one frame, which is what the table
+        // below is made of.
         render_stats::reset_stats();
-        let opened = Instant::now();
 
         if *delta != 0.0 {
             app.event_at(
@@ -266,19 +256,6 @@ where
             );
         }
         app.step_at(at);
-
-        // The other half of that reset, and an assertion rather than a comment
-        // because it fails silently otherwise: a frame that outlived the window
-        // has had its counters printed and cleared inside `step_at`, and hands
-        // back an empty snapshot that reads exactly like an idle frame. Timed
-        // from the reset rather than from the step, so the interval measured
-        // contains the one at risk instead of merely abutting it.
-        let cost = opened.elapsed();
-        assert!(
-            cost < RESET_WINDOW,
-            "frame {frame} took {cost:?} and `render_stats` clears itself after \
-             {RESET_WINDOW:?}: this machine is too busy to measure on"
-        );
 
         let snapshot = render_stats::get_stats();
         assert!(
