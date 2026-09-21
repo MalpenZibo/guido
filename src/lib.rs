@@ -1487,9 +1487,8 @@ fn open_frame<P: Platform>(ctx: &mut FrameContext<P>) -> Option<Frame> {
 fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Geometry {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
-    let scale = frame.scale_factor as u32;
-    let physical_width = frame.width * scale;
-    let physical_height = frame.height * scale;
+    let (physical_width, physical_height) =
+        surface::buffer_size((frame.width, frame.height), frame.scale_factor);
 
     let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
     let needs_resize =
@@ -1502,7 +1501,7 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
             id,
             physical_width,
             physical_height,
-            scale
+            frame.scale_factor
         );
         wgpu_surface.resize(physical_width, physical_height);
     }

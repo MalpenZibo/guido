@@ -395,6 +395,27 @@ pub(crate) fn honour_owned_axes(anchor: Anchor, width: u32, height: u32) -> (u32
     )
 }
 
+/// The buffer a logical size is drawn into at `scale`, in physical pixels.
+///
+/// **Rounded halfway away from zero**, which fractional-scale-v1 requires of
+/// the buffer a viewport declares a destination for, and which swaybg — a layer
+/// shell client, so the same shell guido uses — spells `(size * numerator +
+/// 60) / 120` and calls round half up in a comment beside it. `f64::round` is
+/// that rule for a positive product, and the multiply is in `f64` so a scale
+/// that is not a binary fraction cannot land the product on the wrong side of a
+/// half at 4K.
+///
+/// The clamp is the one `init_gpu` has always carried: a scale below 1 would
+/// ask for a buffer smaller than the surface, which is a decision nobody has
+/// taken here, and a scale of zero would ask for no buffer at all.
+pub(crate) fn buffer_size((width, height): (u32, u32), scale: f32) -> (u32, u32) {
+    let scale = f64::from(scale.max(1.0));
+    (
+        (f64::from(width) * scale).round() as u32,
+        (f64::from(height) * scale).round() as u32,
+    )
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).
@@ -1359,5 +1380,48 @@ mod tests {
                 .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())),
             "and the close is queued"
         );
+    }
+
+    /// The buffer is the logical size times the scale, rounded halfway away
+    /// from zero — and the two casts this replaced are both wrong at 1.5.
+    ///
+    /// The scale reached the render target through `scale_factor as u32`,
+    /// which is 1 for every scale below 2: a 2560x33 bar on a 1.5-scaled
+    /// output drew 2560x33 pixels and the compositor stretched them over
+    /// 3840x50. Rounding the product instead, but with a cast, still loses the
+    /// half pixel the protocol rounds up — and half a pixel short of the
+    /// destination a viewport declares is `wp_viewport: error 2`, which is
+    /// fatal.
+    #[test]
+    fn a_buffer_is_the_logical_size_scaled_and_rounded_half_away_from_zero() {
+        // 2560 x 33 at 1.5 is 3840 x 49.5, and the half goes up.
+        assert_eq!(buffer_size((2560, 33), 1.5), (3840, 50));
+
+        // Held against both casts this replaced, so that a `buffer_size` that
+        // went back to either of them fails here rather than passing the line
+        // above by accident. Truncating the scale gives the bar's own size, at
+        // 1:1; truncating the product gives half a pixel short.
+        let truncated_scale = 1.5_f32 as u32;
+        assert_ne!(
+            (2560 * truncated_scale, 33 * truncated_scale),
+            buffer_size((2560, 33), 1.5)
+        );
+        assert_ne!(
+            ((2560.0 * 1.5) as u32, (33.0 * 1.5) as u32),
+            buffer_size((2560, 33), 1.5)
+        );
+
+        // The session lock surface from the report, which asked for 5120x2880
+        // on a 3840x2160 screen.
+        assert_eq!(buffer_size((3840, 2160), 1.5), (5760, 3240));
+
+        // Integer scales are unmoved — what every compositor without the
+        // protocol still gets.
+        assert_eq!(buffer_size((2560, 32), 1.0), (2560, 32));
+        assert_eq!(buffer_size((2560, 32), 2.0), (5120, 64));
+
+        // A scale that is not a binary fraction: 125/120 of 2560 is
+        // 2666.66..., and 1.0416666 in f32 is not that number.
+        assert_eq!(buffer_size((2560, 33), 125.0 / 120.0), (2667, 34));
     }
 }

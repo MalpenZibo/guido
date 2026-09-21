@@ -110,9 +110,8 @@ impl ManagedSurface {
             return true; // Already initialized
         }
 
-        let initial_scale = scale_factor.max(1.0) as u32;
-        let physical_width = width * initial_scale;
-        let physical_height = height * initial_scale;
+        let (physical_width, physical_height) =
+            crate::surface::buffer_size((width, height), scale_factor);
 
         log::info!(
             "Creating render target for {:?}: logical {}x{}, physical {}x{}, scale {}",
@@ -121,7 +120,7 @@ impl ManagedSurface {
             height,
             physical_width,
             physical_height,
-            initial_scale
+            scale_factor
         );
 
         let Some(target) =
