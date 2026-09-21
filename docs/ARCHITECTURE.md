@@ -586,6 +586,21 @@ Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)
 - Ignore and let parent continue (`EventResponse::Ignored`)
 
+A `Container` that scrolls does two things around that dispatch rather than
+one. Going down, a finger's press arms the watch that a drag needs — before a
+child takes the press, because the press is still the child's until the slop is
+crossed. Coming back up, the move that crosses it claims the gesture, which is
+where a list inside a page beats the page, exactly as the innermost scroller
+already takes the wheel. That claim is asked whether or not a child answered
+`Handled`, because a child taking a move is not a *scroller* taking it; what
+says a scroller did is a flag on the `Tree`, beside the one a widget uses to
+say a press landed on the focus it draws.
+
+Once the gesture has been claimed it is answered on the way down again, with
+the children not asked at all: nothing below can take a drag back, and a
+scroller that kept asking would walk the subtree it is scrolling once a frame
+for the length of the gesture.
+
 ## State Layer System
 
 Declarative style overrides for interaction states:

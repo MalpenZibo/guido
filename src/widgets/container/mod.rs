@@ -1591,16 +1591,31 @@ impl Widget for Container {
 
         let at = tree.event_instant();
 
-        // Asked once for both, because the answer is the same one and every
-        // container that does not scroll pays for it on every pointer event.
+        // Asked once for the three that run before the children, because the
+        // answer is the same one and a container that does not scroll must not
+        // pay for it three times on every pointer event. The fourth, after
+        // them, asks `watched_content_drag` instead, which answers the same
+        // question and the next one in one read.
         if self.scroll_axis != ScrollAxis::None {
             if let Some(response) = self.handle_scrollbar_event(tree, id, &hit, &local_event) {
                 return response;
             }
-            // Before the children, because taking the gesture from them is
-            // what it does; after the scrollbar, because a press the scrollbar
-            // took is not a press on the content.
-            if let Some(response) = self.handle_content_drag(tree, id, &hit, &local_event, at) {
+            // Before the children, because a press has to be watched before
+            // one of them takes it; after the scrollbar, because a press the
+            // scrollbar took is not a press on the content.
+            if let Some(response) = self.watch_for_a_content_drag(id, &hit, &local_event, at) {
+                return response;
+            }
+            // And a gesture this scroller has already won is answered here
+            // rather than below: nothing under it can take it back, so there
+            // is nothing to ask. The move that has *not* been won yet goes the
+            // long way round, after the children — see below.
+            if self
+                .watched_content_drag()
+                .is_some_and(|drag| drag.scrolling)
+                && let Some(response) =
+                    self.claim_the_content_drag(tree, id, &hit, &local_event, at)
+            {
                 return response;
             }
         }
@@ -1634,15 +1649,31 @@ impl Widget for Container {
                 .coords()
                 .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
 
+        let mut a_child_took_it = false;
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {
                 if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
                     child.event(tree, child_id, &child_event)
                 }) && response == EventResponse::Handled
                 {
-                    return EventResponse::Handled;
+                    a_child_took_it = true;
+                    break;
                 }
             }
+        }
+
+        // After the children, so that a scroller inside this one claims the
+        // finger first — and whether or not one of them took the move, because
+        // a child taking it is not a *scroller* taking it. Only the second is
+        // a reason to leave the gesture alone, and `Tree` is what says which
+        // happened.
+        if self.watched_content_drag().is_some()
+            && let Some(response) = self.claim_the_content_drag(tree, id, &hit, &local_event, at)
+        {
+            return response;
+        }
+        if a_child_took_it {
+            return EventResponse::Handled;
         }
 
         self.handle_own_event(tree, id, &hit, event, &local_event, at)
