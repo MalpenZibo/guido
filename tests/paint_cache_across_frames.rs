@@ -791,3 +791,77 @@ fn a_subtree_whose_clip_changed_shape_is_not_reused() {
          where the rounded ones do not"
     );
 }
+
+/// A subtree whose ancestor turned is flattened again, not shifted.
+///
+/// `replay_offset` refuses unless **both** transforms are pure translations,
+/// and the second of those two is the one with no obvious way to fail: the
+/// entry was made when the subtree was upright, and what turned it is an
+/// ancestor, which repaints itself and leaves the subtree below perfectly
+/// clean. Replay would then hand the renderer the commands it recorded upright,
+/// nudged sideways by the difference between two translations that no longer
+/// describe where anything is.
+///
+/// Nothing is clipped here, which is deliberate: above a clip the entry is made
+/// whatever the subtree did, so this is the one place the translation-only test
+/// is all that stands between a turned subtree and a replay of its old self.
+#[test]
+fn a_subtree_whose_ancestor_turned_is_not_reused() {
+    let angle = create_signal(0.0f32);
+    let mut s = Surface::new(
+        container()
+            .layout(Flex::column().spacing(GAP))
+            .padding(PAD)
+            .child(
+                container().rotate(angle).child(
+                    container()
+                        .width(PUSHED_WIDTH)
+                        .height(BOX_HEIGHT)
+                        .background(CLIPPED_FILL),
+                ),
+            )
+            .child(container().width(POKER).height(POKER)),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+
+    s.frame();
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (turner, poker) = (children[0], children[1]);
+    let turned = s.surface.tree.get_children(turner)[0];
+    s.frames(poker, FRAMES_TO_SETTLE);
+    let first = s.node_of(turned).cached_flatten.borrow().clone();
+    assert!(
+        first.is_some(),
+        "nothing is clipped here, so the box is cached from its first flatten \
+         — without an entry there is nothing for the next frame to refuse"
+    );
+    assert!(
+        s.command_of(CLIPPED_FILL)
+            .world_transform
+            .is_translation_only(),
+        "the box starts upright, which is what makes the next frame a test of \
+         anything"
+    );
+
+    angle.set(std::f32::consts::FRAC_PI_4);
+    s.surface.tree.mark_needs_paint(turner);
+    s.frame();
+
+    assert!(
+        s.node_of(turned).cached_flatten.borrow().is_none(),
+        "the box still holds the entry it was cached with. Replay leaves it \
+         untouched and a full flatten under a turn clears it, because a turned \
+         subtree can be replayed by no offset at all — so the entry surviving \
+         says its old self was handed back"
+    );
+    drop(first);
+    assert!(
+        !s.command_of(CLIPPED_FILL)
+            .world_transform
+            .is_translation_only(),
+        "the box was drawn by a transform that only translates, so it was \
+         replayed as the upright thing it used to be rather than flattened \
+         under the turn"
+    );
+}
