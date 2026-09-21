@@ -362,15 +362,10 @@ impl Platform for Recorder {
             return false;
         }
         self.created.push(id);
-        // Born without a size, as a lock surface is: the compositor's
-        // configure is what gives it one.
-        self.surfaces.insert(
-            id,
-            RecordedSurface {
-                scale: 1.0,
-                ..Default::default()
-            },
-        );
+        // Born with nothing, as a lock surface is: its size and its scale both
+        // arrive with the compositor's configure, and until one does there is
+        // no frame for either to be wrong in.
+        self.surfaces.insert(id, RecordedSurface::default());
         true
     }
 
@@ -728,6 +723,54 @@ impl Headless {
             RenderTarget::Offscreen(offscreen) => offscreen.read_pixel(x, y),
             RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
         }
+    }
+}
+
+#[cfg(test)]
+mod the_two_refusals_the_loop_cannot_reach {
+    use super::*;
+
+    /// A cover is refused without a grant to hang it on, and refused for a
+    /// monitor that is not there.
+    ///
+    /// Beside the recorder rather than in `tests/headless_app.rs` because the
+    /// loop reaches neither: it asks for a cover only while the lock is
+    /// granted, and only for an output the list holds. What makes them
+    /// load-bearing anyway is the case where the list and the registry
+    /// disagree — the second refusal is what #422's phantom ran into, sixty
+    /// times a second.
+    #[test]
+    fn a_cover_is_refused_without_a_grant_and_for_a_monitor_that_is_not_there() {
+        let mut recorder = Recorder::default();
+        let screen = recorder.connect_output("eDP-1");
+        let phantom = OutputId::from_raw(9);
+
+        assert!(
+            !recorder.create_lock_surface(SurfaceId::next(), screen),
+            "no lock has been asked for yet"
+        );
+
+        assert!(recorder.start_session_lock());
+        assert!(
+            !recorder.create_lock_surface(SurfaceId::next(), phantom),
+            "an output the registry never gave that id to"
+        );
+        assert!(
+            recorder.create_lock_surface(SurfaceId::next(), screen),
+            "and the monitor that is really there is covered"
+        );
+
+        let granted: Vec<bool> = recorder
+            .lock
+            .requests
+            .iter()
+            .map(|(_, _, granted)| *granted)
+            .collect();
+        assert_eq!(
+            granted,
+            [false, false, true],
+            "every ask is kept, refused or not"
+        );
     }
 }
 
