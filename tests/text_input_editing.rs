@@ -907,3 +907,90 @@ fn a_read_only_field_still_moves_its_caret() {
     );
     assert_eq!(field.key(Key::Home), EventResponse::Handled);
 }
+
+/// Press at 4, drag to 40, optionally leave the surface, optionally move on to
+/// `then_move_to`, then type over whatever is selected. What the field holds
+/// afterwards is how far the selection had got, without pinning a number that
+/// belongs to the font.
+fn after_a_drag(leave: bool, then_move_to: Option<f32>) -> String {
+    let value = create_signal(SENTENCE.to_owned());
+    let mut field = Field::focused_around(value, text_input(value));
+
+    field.now += Duration::from_millis(1);
+    field
+        .harness
+        .send_at(Event::mouse_down(4.0, 5.0, MouseButton::Left), field.now);
+    field.now += Duration::from_millis(1);
+    field
+        .harness
+        .send_at(Event::mouse_move(40.0, 5.0), field.now);
+
+    if leave {
+        field.now += Duration::from_millis(1);
+        field.harness.send_at(Event::MouseLeave, field.now);
+    }
+    if let Some(x) = then_move_to {
+        field.now += Duration::from_millis(1);
+        field.harness.send_at(Event::mouse_move(x, 5.0), field.now);
+    }
+
+    field.key(Key::Char('X'));
+    field.text()
+}
+
+/// A selection drag has to survive the pointer leaving the *field* — that is
+/// how you select past its edge — but not the pointer leaving the *surface*.
+/// Nothing out there will deliver the release that ends the drag, so the field
+/// would extend the selection on the next move that carried a position, with no
+/// button held.
+///
+/// The pointer cannot normally reach that state: `wl_pointer`'s implicit grab
+/// keeps a `leave` from arriving mid-drag. A touch gesture can, since #425 made
+/// `wl_touch.cancel` deliver `MouseLeave` alone rather than synthesizing a
+/// release that would have clicked whatever was under the finger.
+#[test]
+fn a_drag_does_not_outlive_the_pointer_leaving_the_surface() {
+    let value = create_signal(SENTENCE.to_owned());
+    let mut field = Field::focused_around(value, text_input(value));
+
+    field.now += Duration::from_millis(1);
+    field
+        .harness
+        .send_at(Event::mouse_down(4.0, 5.0, MouseButton::Left), field.now);
+    field.now += Duration::from_millis(1);
+    assert_eq!(
+        field
+            .harness
+            .send_at(Event::mouse_move(40.0, 5.0), field.now),
+        EventResponse::Handled,
+        "the drag is live and extending the selection"
+    );
+
+    field.now += Duration::from_millis(1);
+    field.harness.send_at(Event::MouseLeave, field.now);
+    field.now += Duration::from_millis(1);
+    assert_eq!(
+        field
+            .harness
+            .send_at(Event::mouse_move(150.0, 5.0), field.now),
+        EventResponse::Ignored,
+        "the leave ended the drag, so a later move is not the field's — and \
+         150 is inside the field, so only a live drag could have claimed it"
+    );
+
+    // The same thing said in the text rather than the response, and it has to
+    // be said by comparison: how far a drag to x=40 reaches is the font's
+    // business, so the assertion is that the move after the leave changed
+    // nothing — while the identical move without the leave changes plenty.
+    let left_then_moved = after_a_drag(true, Some(150.0));
+    assert_eq!(
+        left_then_moved,
+        after_a_drag(true, None),
+        "the move after the leave selected nothing further"
+    );
+    assert_ne!(
+        left_then_moved,
+        after_a_drag(false, Some(150.0)),
+        "and it would have, had the drag still been live"
+    );
+}
