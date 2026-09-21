@@ -206,7 +206,7 @@ pub struct WaylandState {
     pub current_keyboard_surface: Option<SurfaceId>,
 
     /// Stable identity for the compositor's outputs — see [`super::outputs`].
-    pub(super) outputs: OutputRegistry,
+    pub(super) outputs: OutputRegistry<ObjectId>,
 
     /// Compositor-side backdrop blur — see [`super::backdrop`].
     pub(super) backdrop: Backdrop,
@@ -839,7 +839,7 @@ impl CompositorHandler for WaylandState {
         output: &wl_output::WlOutput,
     ) {
         if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied() {
-            let output_id = self.ensure_output_id(output);
+            let output_id = self.outputs.add(output.id());
             log::debug!("Surface {:?} entered output {:?}", surface_id, output_id);
             outputs::surface_entered_output(surface_id, output_id);
         }
@@ -853,7 +853,7 @@ impl CompositorHandler for WaylandState {
         output: &wl_output::WlOutput,
     ) {
         if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied()
-            && let Some(output_id) = self.outputs.output_ids.get(&output.id()).copied()
+            && let Some(output_id) = self.outputs.id_for(&output.id())
         {
             log::debug!("Surface {:?} left output {:?}", surface_id, output_id);
             outputs::surface_left_output(surface_id, output_id);
