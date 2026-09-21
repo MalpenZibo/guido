@@ -13,6 +13,7 @@
 //! adapter skips, unless `GUIDO_GPU_REQUIRED` says a skip is a failure.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -1410,5 +1411,123 @@ fn a_restarted_layout_root_keeps_the_constraints_it_was_placed_under() {
     assert_eq!(
         restarted.width, 100.0,
         "and at its own constraints: the surface's would leave it at 150"
+    );
+}
+
+/// One bar per monitor, the shape `examples/multi_output.rs` has and the one
+/// `outputs()`'s own documentation shows: an effect over the reactive list
+/// that spawns a surface pinned to every output it has not seen, and closes
+/// the handle of one that has gone.
+///
+/// The map is what the effect keeps between runs, and the test reads it to
+/// learn which surface belongs to which monitor.
+fn a_bar_per_output() -> Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> {
+    let bars: Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> = Rc::new(RefCell::new(HashMap::new()));
+    let kept = bars.clone();
+    create_effect(move || {
+        let current = outputs().get();
+        let mut bars = kept.borrow_mut();
+        bars.retain(|id, handle| {
+            let alive = current.iter().any(|o| o.id == *id);
+            if !alive {
+                handle.close();
+            }
+            alive
+        });
+        for info in current {
+            bars.entry(info.id)
+                .or_insert_with(|| spawn_surface(fixed_bar().output(info.id), measuring_24));
+        }
+    });
+    bars
+}
+
+/// A monitor is plugged in and its bar arrives; it is unplugged and the bar
+/// goes with it.
+///
+/// Nothing above the output seam had a sensor before: every scenario here ran
+/// with an empty output list, so the effect that spawns a surface per monitor,
+/// and the teardown when one leaves, were watched by a person with a spare
+/// screen.
+#[test]
+fn a_surface_spawned_per_output_goes_when_its_output_goes() {
+    let Some(mut app) = headless() else { return };
+    let bars = a_bar_per_output();
+
+    let laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+    app.step();
+
+    assert_eq!(
+        app.surfaces_created().len(),
+        2,
+        "one surface for each connected monitor"
+    );
+    let going = bars.borrow()[&external].id();
+    app.enter_output(going, external);
+    assert_eq!(
+        surface_output(going),
+        Some(external),
+        "the compositor put it on the monitor it was pinned to"
+    );
+
+    app.disconnect_output(external);
+    app.step();
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [going],
+        "the bar of the monitor that left, and only it"
+    );
+    assert_eq!(
+        surface_output(going),
+        None,
+        "and nothing is still saying which screen it was on"
+    );
+    let left = outputs().get();
+    assert_eq!(
+        left.iter().map(|o| o.id).collect::<Vec<_>>(),
+        [laptop],
+        "and the list holds what is still plugged in"
+    );
+}
+
+/// The bar of a monitor that left is torn down on both sides — the compositor
+/// is told to destroy it, and the application stops holding it — and it is
+/// told once.
+///
+/// Abandoning it is the failure this watches: a surface the compositor has
+/// destroyed but the `SurfaceManager` still holds is one the loop goes on
+/// laying out and drawing into every frame. Re-spawning it is the other, and
+/// the effect re-runs often enough for that to be a real way to be wrong.
+#[test]
+fn a_departed_outputs_surface_is_torn_down_rather_than_abandoned() {
+    let Some(mut app) = headless() else { return };
+    let bars = a_bar_per_output();
+
+    let laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+    app.step();
+
+    let (kept, going) = (bars.borrow()[&laptop].id(), bars.borrow()[&external].id());
+    app.configure(kept, 200, 50, 1.0);
+    app.configure(going, 300, 50, 1.0);
+    app.step();
+
+    app.disconnect_output(external);
+    app.step();
+    for _ in 0..5 {
+        app.step();
+    }
+
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [going],
+        "destroyed once, and never asked for again"
+    );
+    assert_eq!(
+        app.surfaces_live(),
+        [kept],
+        "the application holds the one monitor that is left, and nothing else"
     );
 }

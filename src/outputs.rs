@@ -67,6 +67,24 @@ pub struct OutputInfo {
     pub logical_position: Option<(i32, i32)>,
 }
 
+impl OutputInfo {
+    /// A monitor the compositor has said nothing about but its connector
+    /// name, which is what a test needs and all it needs: the id says which
+    /// monitor, the name says which one a failing assertion means.
+    pub(crate) fn named(id: OutputId, name: &str) -> Self {
+        Self {
+            id,
+            name: Some(name.to_string()),
+            description: None,
+            make: String::new(),
+            model: String::new(),
+            scale_factor: 1,
+            logical_size: None,
+            logical_position: None,
+        }
+    }
+}
+
 /// Reactive list of connected outputs.
 static OUTPUTS: GlobalSignal<Vec<OutputInfo>> = GlobalSignal::new(Vec::new);
 /// Which output each surface is currently shown on (latest entered).

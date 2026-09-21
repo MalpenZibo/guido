@@ -35,17 +35,25 @@ pub struct OutputRegistry<K> {
     next_output_id: u32,
 }
 
-impl<K: Eq + Hash> OutputRegistry<K> {
-    pub(super) fn new() -> Self {
+/// By hand rather than derived: a registry with no monitors in it yet needs
+/// nothing of `K`, and a derived bound would ask for `K: Default`.
+impl<K> Default for OutputRegistry<K> {
+    fn default() -> Self {
         Self {
             output_ids: HashMap::new(),
             next_output_id: 0,
         }
     }
+}
+
+impl<K: Eq + Hash> OutputRegistry<K> {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
     /// Mint the id for a global the compositor has just advertised. The only
     /// place an id is allocated.
-    pub(super) fn add(&mut self, key: K) -> OutputId {
+    pub(crate) fn add(&mut self, key: K) -> OutputId {
         let id = OutputId::from_raw(self.next_output_id);
         self.next_output_id += 1;
         self.output_ids.insert(key, id);
@@ -53,12 +61,12 @@ impl<K: Eq + Hash> OutputRegistry<K> {
     }
 
     /// The id of a global, or `None` if it has none.
-    pub(super) fn id_for(&self, key: &K) -> Option<OutputId> {
+    pub(crate) fn id_for(&self, key: &K) -> Option<OutputId> {
         self.output_ids.get(key).copied()
     }
 
     /// Forget a global the compositor has destroyed, reporting the id it held.
-    pub(super) fn remove(&mut self, key: &K) -> Option<OutputId> {
+    pub(crate) fn remove(&mut self, key: &K) -> Option<OutputId> {
         self.output_ids.remove(key)
     }
 
@@ -71,7 +79,7 @@ impl<K: Eq + Hash> OutputRegistry<K> {
     /// `describe` turns each global into an [`OutputInfo`] under the id the
     /// registry holds for it, and returns `None` for one the compositor has
     /// not finished describing.
-    pub(super) fn connected<D>(
+    pub(crate) fn connected<D>(
         &self,
         live: impl IntoIterator<Item = (K, D)>,
         describe: impl Fn(D, OutputId) -> Option<OutputInfo>,
@@ -169,14 +177,8 @@ mod tests {
 
     fn info(id: OutputId, name: &str) -> OutputInfo {
         OutputInfo {
-            id,
-            name: Some(name.to_string()),
-            description: None,
-            make: String::new(),
             model: "LG HDR 4K".to_string(),
-            scale_factor: 1,
-            logical_size: None,
-            logical_position: None,
+            ..OutputInfo::named(id, name)
         }
     }
 

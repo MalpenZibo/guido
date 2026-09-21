@@ -12,6 +12,11 @@
 //! never talks to anything. A test says what the compositor said and then reads
 //! both halves — what the widgets became, and what each surface asked for.
 //!
+//! The connection has a half of its own, and the recorder answers for that
+//! too: [`Headless::connect_output`] plugs a monitor in,
+//! [`disconnect_output`](Headless::disconnect_output) takes it away. That was
+//! watched by a person with a spare screen until #424.
+//!
 //! Surfaces declared before the loop runs come from [`Headless::surface`], the
 //! way `App::add_surface` declares them. After it is running they come from
 //! guido's own `spawn_surface` and go away through `surface_handle(id).close()`,
@@ -25,6 +30,8 @@
 
 use std::time::Instant;
 
+use crate::outputs::{self, OutputId, OutputInfo};
+use crate::platform::outputs::OutputRegistry;
 use crate::reactive;
 use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
@@ -71,8 +78,9 @@ struct RecordedSurface {
     frame_callbacks: u32,
 }
 
-/// The compositor's half of a *connection*: every surface it holds, and the
-/// order it was told to build and tear them down in.
+/// The compositor's half of a *connection*: every surface it holds, the
+/// monitors it is advertising, and the order it was told to build and tear
+/// them down in.
 ///
 /// Lists rather than counts, because the order is what is asserted.
 #[derive(Default)]
@@ -80,6 +88,14 @@ struct Recorder {
     surfaces: rustc_hash::FxHashMap<SurfaceId, RecordedSurface>,
     created: Vec<SurfaceId>,
     destroyed: Vec<SurfaceId>,
+    /// The connectors the compositor is advertising, in the order they were
+    /// plugged in — the globals, in `OutputRegistry`'s terms.
+    connectors: Vec<String>,
+    /// Which of them has which id, and the only place one is minted. The same
+    /// registry `WaylandState` keys by `ObjectId`, keyed here by connector
+    /// name: the id policy has one definition, so a harness cannot go on
+    /// agreeing with itself after the real one has changed.
+    outputs: OutputRegistry<String>,
 }
 
 impl Recorder {
@@ -89,6 +105,43 @@ impl Recorder {
 
     fn get_mut(&mut self, id: SurfaceId) -> &mut RecordedSurface {
         self.surfaces.get_mut(&id).unwrap_or_else(|| missing(id))
+    }
+
+    /// Advertise a monitor, as `new_output` does: mint it an id, then publish
+    /// the list.
+    fn connect_output(&mut self, name: &str) -> OutputId {
+        self.connectors.push(name.to_string());
+        let id = self.outputs.add(name.to_string());
+        self.publish_outputs();
+        id
+    }
+
+    /// Take one away, as `output_destroyed` does: forget the global, drop what
+    /// pointed at it, publish what is left.
+    fn disconnect_output(&mut self, id: OutputId) {
+        let Some(at) = self
+            .connectors
+            .iter()
+            .position(|name| self.outputs.id_for(name) == Some(id))
+        else {
+            return;
+        };
+        let name = self.connectors.remove(at);
+        self.outputs.remove(&name);
+        outputs::output_removed(id);
+        self.publish_outputs();
+    }
+
+    /// Rebuild the reactive list from the registry, as `sync_outputs` does.
+    ///
+    /// Through `outputs::sync_outputs`, which is the Wayland handler's own way
+    /// in — outputs never reach `Platform`, so a recorder that writes the
+    /// signal plays the same part rather than a new one.
+    fn publish_outputs(&self) {
+        outputs::sync_outputs(self.outputs.connected(
+            self.connectors.iter().map(|name| (name.clone(), name)),
+            |name, id| Some(OutputInfo::named(id, name)),
+        ));
     }
 }
 
@@ -332,6 +385,33 @@ impl Headless {
         id
     }
 
+    /// Plug a monitor in, under the connector name it would report. Returns
+    /// the id it was minted, which is what
+    /// [`SurfaceConfig::output`](crate::surface::SurfaceConfig::output) pins a
+    /// surface to and what [`disconnect_output`](Self::disconnect_output)
+    /// takes back.
+    ///
+    /// The id is the compositor's to hand out rather than the caller's, which
+    /// is why this takes a name and not the whole [`OutputInfo`]: ids are
+    /// minted once and never reused, and an application that could choose one
+    /// could choose one that has already been a monitor.
+    pub fn connect_output(&mut self, name: &str) -> OutputId {
+        self.host.connect_output(name)
+    }
+
+    /// Unplug one. The reactive list loses it, and so does everything that
+    /// said which output a surface was on.
+    pub fn disconnect_output(&mut self, id: OutputId) {
+        self.host.disconnect_output(id)
+    }
+
+    /// Say the compositor mapped a surface onto an output, which is what a
+    /// `wl_surface` enter event says and what
+    /// [`surface_output`](crate::outputs::surface_output) reports afterwards.
+    pub fn enter_output(&mut self, surface: SurfaceId, output: OutputId) {
+        outputs::surface_entered_output(surface, output);
+    }
+
     /// Say what the compositor confirmed for one surface. Until this is called
     /// there is no size to draw at and [`step`](Self::step) does nothing for it
     /// — which is what an unconfigured surface does in the real loop.
@@ -508,6 +588,19 @@ impl Headless {
     /// told.
     pub fn surfaces_destroyed(&self) -> &[SurfaceId] {
         &self.host.destroyed
+    }
+
+    /// The surfaces the application itself still holds, in the order the ids
+    /// were handed out — what the next frame would draw on.
+    ///
+    /// The other half of [`surfaces_destroyed`](Self::surfaces_destroyed): a
+    /// surface the compositor was told to destroy and the application goes on
+    /// holding is abandoned rather than torn down, and only these two
+    /// together can say so.
+    pub fn surfaces_live(&self) -> Vec<SurfaceId> {
+        let mut ids: Vec<SurfaceId> = self.surfaces.ids().collect();
+        ids.sort_by_key(SurfaceId::raw);
+        ids
     }
 
     /// The colour at one pixel of a surface's last frame, in physical
