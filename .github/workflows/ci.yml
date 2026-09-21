@@ -279,10 +279,15 @@ jobs:
 
   golden-guard:
     name: Golden re-bless needs a label
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    # There is no pull request to guard on a push to `main`, and this job used
+    # to say so with an `if:` of its own — which skips the job, and a gating job
+    # may not skip; see `ci` at the bottom of this file. So it runs on every
+    # event and the condition sits on its steps, where a skipped step still
+    # leaves the job green.
     steps:
       - uses: actions/checkout@v6
+        if: github.event_name == 'pull_request'
         with:
           fetch-depth: 0
       # Re-blessing a golden is the one edit that makes a failing pixel test
@@ -294,6 +299,7 @@ jobs:
       # label there too would put it on most pull requests, and a label
       # everybody applies is a label nobody reads.
       - name: Refuse an unlabelled re-bless
+        if: github.event_name == 'pull_request'
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
           BASE: ${{ github.event.pull_request.base.sha }}
