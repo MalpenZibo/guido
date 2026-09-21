@@ -140,8 +140,15 @@ impl Recorder {
         id
     }
 
-    /// Take one away, as `output_destroyed` does: forget the global, drop what
-    /// pointed at it, publish what is left.
+    /// Take one away, as `output_destroyed` does: forget the mapping, drop
+    /// what pointed at it, publish what is left.
+    ///
+    /// The mapping goes before the global, and the list is published in
+    /// between, because that is the order a compositor does it in: when
+    /// `output_destroyed` drops the mapping, sctk's `outputs()` still holds
+    /// the dying `wl_output` for one more round. That gap is where #422's
+    /// phantom was minted, so a recorder that closed it by hand would be
+    /// publishing a list nothing had to filter.
     fn disconnect_output(&mut self, id: OutputId) {
         let Some(at) = self
             .connectors
@@ -150,10 +157,10 @@ impl Recorder {
         else {
             return;
         };
-        let name = self.connectors.remove(at);
-        self.outputs.remove(&name);
+        self.outputs.remove(&self.connectors[at]);
         outputs::output_removed(id);
         self.publish_outputs();
+        self.connectors.remove(at);
     }
 
     /// Rebuild the reactive list from the registry, as `sync_outputs` does.
