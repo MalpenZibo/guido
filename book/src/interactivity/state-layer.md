@@ -220,4 +220,10 @@ pub struct StateStyle {
 }
 ```
 
+`RippleConfig` is in the prelude, because `ripple_config` takes one.
+`BackgroundOverride` and `BorderOverride` are not: nothing asks you to build
+either — `background`, `lighter`, `darker` and `border` take a colour and a
+number and build them for you — so they stay in `guido::widgets`, for the rare
+caller that reads a `StateStyle` back.
+
 When the container paints, it checks the current state and applies overrides accordingly, blending with animations when configured.
