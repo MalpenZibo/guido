@@ -128,6 +128,7 @@ every run for months.
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
 | API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 15% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
+| what gates a merge — the jobs a pull request has to get past | `tests/ci_gate_waits_on_every_job.rs` — every job in `.github/workflows/ci.yml` is in the `CI` job's `needs:` or on the opt-out list beside it |
 | new per-thread state — a `thread_local!` or a `static` `GlobalSignal` | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
 | the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
@@ -197,7 +198,9 @@ feature on and lavapipe as its adapter, as the rasterizer job does, so
 feature-gated code and the tests that need a GPU are watched there too, and it
 is split across four runners that wait for the rasterizer job's green instead of
 each running the unmutated suite again. That job reports; it does not block, until somebody decides the
-ratchet is worth the friction.
+ratchet is worth the friction — so it is the job the merge gate does not wait
+for, and its name is on the opt-out list
+`tests/ci_gate_waits_on_every_job.rs` keeps.
 
 ## Where the rest of it is
 
