@@ -33,12 +33,12 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 
 ## Quick Reference
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let end = 1.0f32;
-# let start = 0.0f32;
+# let start = Color::rgb(0.2, 0.2, 0.3);
+# let end = Color::rgb(0.3, 0.3, 0.4);
 # container()
 // Background
 .background(Color::rgb(0.2, 0.2, 0.3))

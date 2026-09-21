@@ -42,7 +42,7 @@ container()
 
 Use a loop in `main()` to support restart:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # fn build_ui() -> Container { container() }
 use guido::prelude::*;
@@ -64,6 +64,10 @@ fn main() {
         match reason {
             ExitReason::Quit => break,
             ExitReason::Restart => continue,
+            ExitReason::Error(e) => {
+                eprintln!("guido could not run: {e}");
+                break;
+            }
         }
     }
 }
@@ -76,6 +80,8 @@ This is useful for reloading configuration, switching themes, or resetting appli
 Both `quit_app()` and `restart_app()` are `Send` — they work from any thread, including background services:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -102,17 +108,23 @@ create_task(move |ctx| async move {
 ### ExitReason
 
 ```rust,ignore
+# // not compiled: a listing of a type the crate owns — a copy of it declared
+# // here would compile without checking the original.
 pub enum ExitReason {
     /// Normal exit (compositor closed, all surfaces destroyed, etc.)
     Quit,
     /// Restart requested. The caller should re-create `App` and run again.
     Restart,
+    /// The platform layer failed: no Wayland session, a compositor without
+    /// layer shell, or a lost connection.
+    Error(PlatformError),
 }
 ```
 
 ### Functions
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 /// Request a clean application quit.
 /// App::run() will return ExitReason::Quit.
 pub fn quit_app();
@@ -126,6 +138,7 @@ pub fn restart_app();
 ### App::run
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl App {
     /// Run the application. Returns the reason the loop exited.
     pub fn run(self, setup: impl FnOnce(&mut Self)) -> ExitReason;

@@ -192,7 +192,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn animated_transforms_demo() -> impl Widget {
     let rotation = create_signal(0.0f32);
     let scale = create_signal(1.0f32);
@@ -232,11 +234,13 @@ fn animated_transforms_demo() -> impl Widget {
                 .child(container().child(text("Scale").font_size(12.0).color(Color::WHITE))),
         ])
 }
+# fn main() {}
 ```
 
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 // The three components each take a value that may carry its own motion.
 impl Container {
     pub fn translate<M>(self, t: impl IntoAnimated<Translate, M>) -> Self;

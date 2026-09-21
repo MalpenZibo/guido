@@ -5,13 +5,14 @@ easing curve. It is declared on the value itself, with `.transition(..)`.
 
 ## Declaring one
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 # let value = Color::WHITE;
 # let timing = TimingFunction::EaseOut;
 # let duration_ms = 200.0;
+# let _: Animated<Color> =
 value.transition(Transition::new(duration_ms, timing))
 # ;
 # }
@@ -108,12 +109,18 @@ Writing a timing on the override does not compile — it would be a declaration
 that is legal and does nothing:
 
 ```rust,ignore
+# // not compiled: the line is the mistake the paragraph above names.
 .when_hovered(|s| s.background(HOT.transition(900.0)))   // error
 ```
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
+# const HIGH: Shadow = Shadow::simple((0.0, 6.0), 10.0, Color::rgba(0.0, 0.0, 0.0, 0.22));
 fn animated_card() -> Container {
     container()
         .padding(20.0)
@@ -138,6 +145,7 @@ fn animated_card() -> Container {
 
         .child(container().child(text("Hover me!").color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 ## API Reference

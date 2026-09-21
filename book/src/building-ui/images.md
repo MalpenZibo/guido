@@ -6,7 +6,7 @@ Guido supports displaying both raster images (PNG, JPEG, GIF, WebP) and SVG vect
 
 The `image()` function creates an image widget from a file path:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # fn main() {
 use guido::prelude::*;
@@ -14,8 +14,8 @@ use guido::prelude::*;
 // Load a PNG image
 container()
     .width(32.0)
-    .height(32.0);
-    .child(image("./icon.png"))
+    .height(32.0)
+    .child(image("./icon.png"));
 
 // Load an SVG (auto-detected by extension)
 container()
@@ -116,15 +116,16 @@ image("./photo.jpg").content_fit(move || {
 # }
 ```
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+# let wallpaper = "./wallpaper.jpg";
 // Cover a 200x150 box, cropping what does not fit
 container()
     .width(200.0)
-    .height(150.0);
-    .child(image("./photo.jpg").content_fit(ContentFit::Cover))
+    .height(150.0)
+    .child(image("./photo.jpg").content_fit(ContentFit::Cover));
 
 // A wallpaper: cover the whole surface
 container()
@@ -139,7 +140,7 @@ container()
 
 Images inherit transforms from parent containers, just like text:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -150,8 +151,8 @@ container()
         container()
             .width(32.0)
             .height(32.0)
-            .child(image("./badge.svg"));
-    )
+            .child(image("./badge.svg"))
+    );
 
 // Scaled image
 container()
@@ -160,8 +161,8 @@ container()
         container()
             .width(24.0)
             .height(24.0)
-            .child(image("./icon.png"));
-    )
+            .child(image("./icon.png"))
+    );
 
 // Combined transforms
 container()
@@ -212,7 +213,7 @@ that box.
 
 Image sources can be reactive, allowing dynamic image changes:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -221,8 +222,8 @@ let icon_source = create_signal(ImageSource::Path("./play.png".into()));
 // The image updates when the signal changes
 container()
     .width(32.0)
-    .height(32.0);
-    .child(image(icon_source))
+    .height(32.0)
+    .child(image(icon_source));
 
 // Change the image on click
 container()

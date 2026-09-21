@@ -114,7 +114,18 @@ container()
 
 ## A card, end to end
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# mod elevation {
+#     use guido::prelude::{Color, Shadow};
+#     const fn step(offset_y: f32, blur: f32, alpha: f32) -> Shadow {
+#         Shadow::new((0.0, offset_y), blur, 0.0, Color::rgba(0.0, 0.0, 0.0, alpha))
+#     }
+#     pub const LOW: Shadow = step(1.0, 3.0, 0.12);
+#     pub const RAISED: Shadow = step(3.0, 6.0, 0.19);
+#     pub const HIGH: Shadow = step(6.0, 10.0, 0.22);
+# }
 fn card(title: &str, body: &str) -> Container {
     container()
         .width(200.0)
@@ -130,6 +141,7 @@ fn card(title: &str, body: &str) -> Container {
             container().child(text(body).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
+# fn main() {}
 ```
 
 `cargo run --example shadow_example` shows a ladder beside the three things one

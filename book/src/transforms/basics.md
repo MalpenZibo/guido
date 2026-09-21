@@ -136,7 +136,9 @@ neither does anything around it.
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn transform_demo() -> impl Widget {
     let rotation = create_signal(0.0f32);
     let scale_factor = create_signal(1.0f32);
@@ -179,6 +181,7 @@ fn transform_demo() -> impl Widget {
                 .child(container().child(text("Scale").color(Color::WHITE))),
         ])
 }
+# fn main() {}
 ```
 
 ## API Reference
@@ -188,6 +191,7 @@ fn transform_demo() -> impl Widget {
 All transform properties accept static values, signals, or closures. Integers also work (e.g., `.rotate(45)`, `.scale(2)`).
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl Container {
     pub fn translate<M>(self, t: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;

@@ -65,16 +65,12 @@ container().corners(12.0)  // Custom
 
 ## Borders
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-container();
-    .border(2.0, Color::WHITE)  // Width and color
-
-// Or separately
 container()
-    .border(2.0, Color::WHITE)
+    .border(2.0, Color::WHITE)  // Width and color
 # ;
 # }
 ```
@@ -192,7 +188,7 @@ Every property that survives to paint takes a signal, a closure, or a plain
 value — the same `IntoSignal` shape everywhere, so which spelling you use is
 never the API's decision:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # const COOL: Color = Color::rgb(0.2, 0.4, 0.9);
@@ -204,8 +200,15 @@ never the API's decision:
 # let collapsed = create_signal(false);
 # let frosted = create_signal(false);
 # let hot = create_signal(false);
-# let palette = [Color::WHITE, Color::BLACK];
-# let surface_color = Color::rgb(0.1, 0.1, 0.15);
+# #[derive(Clone, PartialEq)]
+# struct Palette;
+# impl Palette {
+#     fn header(&self) -> LinearGradient {
+#         LinearGradient::horizontal(Color::WHITE, Color::BLACK)
+#     }
+# }
+# let palette = create_signal(Palette);
+# let surface_color = create_signal(Color::rgb(0.1, 0.1, 0.15));
 # let theme = Theme::default();
 container()
     .background(theme.surface)                       // a constant
@@ -234,7 +237,9 @@ widget, so declare it in the closure that builds the widget instead. The
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn styled_card(title: &str, content: &str) -> Container {
     container()
         // Size and padding
@@ -268,4 +273,5 @@ fn styled_card(title: &str, content: &str) -> Container {
             container().child(text(content).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75))),
         ])
 }
+# fn main() {}
 ```

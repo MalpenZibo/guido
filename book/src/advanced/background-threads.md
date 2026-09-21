@@ -9,6 +9,8 @@ Guido signals (`RwSignal<T>` and `Signal<T>`) live on the main thread and are `!
 For services that only push data to signals (no commands from UI):
 
 ```rust,ignore
+# // not compiled: the task body is written against tokio and the reader's
+# // own crates, which the book is not compiled against.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -35,6 +37,8 @@ create_task(move |ctx| async move {
 For services that also receive commands from the UI, use `tokio::select!` for efficient async multiplexing:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 enum Cmd {
     Refresh,
     SetInterval(u64),
@@ -75,6 +79,8 @@ container()
 ## Complete Example: System Monitor
 
 ```rust,ignore
+# // not compiled: the task body is written against tokio and the reader's
+# // own crates, which the book is not compiled against.
 # extern crate guido;
 use guido::prelude::*;
 use std::time::Duration;
@@ -129,6 +135,8 @@ fn main() {
 You can create multiple independent services:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -162,6 +170,8 @@ create_task(move |ctx| async move {
 Handle errors from background services:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 enum DataState {
     Loading,
     Success(String),
@@ -194,6 +204,8 @@ text(move || match status.get() {
 Simple clock using a service:
 
 ```rust,ignore
+# // not compiled: the task body is written against tokio and the reader's
+# // own crates, which the book is not compiled against.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -223,6 +235,8 @@ returns a `tokio::sync::watch::Receiver<T>`: `Send`, always holding the current
 value, and awaitable.
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -263,6 +277,8 @@ instead of polling for it.
 ### Use `tokio::select!` for Responsive Shutdown
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -293,6 +309,8 @@ while ctx.is_running() {
 If multiple signals update together, update them in sequence:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -322,6 +340,8 @@ create_task(move |ctx| async move {
 callbacks as you like without a clone:
 
 ```rust,ignore
+# // not compiled: `create_service(...)` is elided — the service itself is the
+# // subject of the block above.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {

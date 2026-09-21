@@ -200,6 +200,8 @@ See [Spring Physics](springs.md) for more on spring animations.
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a listing of a type the crate owns — a copy of it declared
+# // here would compile without checking the original.
 pub enum TimingFunction {
     Linear,
     EaseIn,

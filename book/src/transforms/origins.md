@@ -147,7 +147,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn origin_demo() -> impl Widget {
     container()
         .layout(Flex::row().spacing(40.0))
@@ -181,11 +183,13 @@ fn create_rotating_box(origin: Pivot, label: &'static str) -> Container {
             container().child(text(label).font_size(12.0).color(Color::WHITE)),
         ])
 }
+# fn main() {}
 ```
 
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl Container {
     pub fn pivot(
         self,

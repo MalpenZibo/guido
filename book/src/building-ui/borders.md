@@ -209,7 +209,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn card_with_border() -> Container {
     container()
         .padding(16.0)
@@ -226,4 +228,5 @@ fn card_with_border() -> Container {
         )
         .child(container().child(text("Hover to see border change").color(Color::WHITE)))
 }
+# fn main() {}
 ```

@@ -400,7 +400,9 @@ container()
 
 A login form with username and password fields:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn login_form() -> Container {
     let username = create_signal(String::new());
     let password = create_signal(String::new());
@@ -456,6 +458,7 @@ fn login_form() -> Container {
                 ),
         ])
 }
+# fn main() {}
 ```
 
 ## Features
@@ -480,6 +483,7 @@ fn login_form() -> Container {
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 text_input(signal: Signal<String>) -> TextInput
 
 impl TextInput {

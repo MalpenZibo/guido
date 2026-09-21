@@ -164,12 +164,15 @@ Writing a timing on the override does not compile. It would be a declaration
 that is legal and does nothing:
 
 ```rust,ignore
+# // not compiled: the line is the mistake the paragraph above names.
 .when_hovered(|s| s.background(HOT.transition(900.0)))   // error
 ```
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn interactive_button(label: &str) -> Container {
     container()
         .padding(16.0)
@@ -192,6 +195,7 @@ fn interactive_button(label: &str) -> Container {
 
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 ## How It Works
@@ -199,6 +203,8 @@ fn interactive_button(label: &str) -> Container {
 Internally, `StateStyle` holds all possible overrides:
 
 ```rust,ignore
+# // not compiled: a field listing of the real struct, whose halves
+# // (`BackgroundOverride`, `BorderOverride`) are named without being built.
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.

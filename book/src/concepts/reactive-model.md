@@ -39,12 +39,13 @@ so republishing unchanged data costs nothing. `set_always` fires a
 **trigger**: every write notifies, no comparison, no `PartialEq` bound —
 the natural write for "something happened" values like an OSD flash:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
-# fn osd() -> Container { container() }
 # fn main() {
-# let volume = create_signal(0.5f32);
+# let volume = create_signal(0u32);
+# let osd = create_signal(String::new());
+# let info = String::from("volume 50%");
 volume.set(50);          // state: setting 50 twice notifies once
 osd.set_always(info);    // trigger: every flash notifies
 # ;
@@ -226,7 +227,9 @@ You don't need to create signals manually for widget properties — just pass va
 
 When multiple widgets depend on different fields of the same struct, `#[derive(SignalFields)]` generates per-field signals so each widget only re-renders when its specific field changes:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[derive(Clone, PartialEq, SignalFields)]
 pub struct AppState {
     pub cpu: f64,
@@ -234,20 +237,24 @@ pub struct AppState {
     pub title: String,
 }
 
+# fn main() {
 // Creates individual Signal<T> for each field
 let state = AppStateSignals::new(AppState {
     cpu: 0.0, memory: 0.0, title: "App".into(),
 });
 
 // Each widget subscribes to only the field it reads
-text(move || format!("CPU: {:.0}%", state.cpu.get()))
-text(move || format!("MEM: {:.0}%", state.memory.get()))
-text(move || state.title.get())
+text(move || format!("CPU: {:.0}%", state.cpu.get()));
+text(move || format!("MEM: {:.0}%", state.memory.get()));
+text(move || state.title.get());
+# }
 ```
 
 Use `.writers()` to get `Send` handles for background task updates:
 
 ```rust,ignore
+# // not compiled: the task body is tokio's, and the book's samples are
+# // compiled without it.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -271,14 +278,19 @@ create_task(move |ctx| async move {
 
 Generic structs are supported — the generated types carry the same generic parameters:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 #[derive(Clone, PartialEq, SignalFields)]
 pub struct Pair<A: Clone + PartialEq + Send + 'static, B: Clone + PartialEq + Send + 'static> {
     pub first: A,
     pub second: B,
 }
 
+# fn main() {
 let pair = PairSignals::new(Pair { first: 1i32, second: "hello".to_string() });
+# let _ = pair;
+# }
 ```
 
 ## Untracked Reads
@@ -306,13 +318,11 @@ This is useful in effects where you want to read initial values without re-runni
 
 Signals and effects created inside dynamic children are automatically cleaned up when the child is removed. Use `on_cleanup` to register custom cleanup logic:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
-# #[derive(Clone, PartialEq)]
-# struct Item { id: u32, label: String }
 # fn main() {
-# let items = create_signal(vec![Item { id: 1, label: String::from("one") }]);
+# let items = create_signal(vec![1u32, 2, 3]);
 container().children(keyed(
     move || items.get(),
     |id| *id,
@@ -456,6 +466,7 @@ warning goes away. Release builds contain none of this.
 ### Signal Creation
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 pub fn create_signal<T: Clone + PartialEq + Send + 'static>(value: T) -> RwSignal<T>;
 pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T>;
 pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T>;
@@ -466,6 +477,7 @@ pub fn create_effect(f: impl Fn() + 'static);
 ### RwSignal Methods
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl<T: Clone> RwSignal<T> {
     pub fn get(&self) -> T;           // Read with tracking
     pub fn get_untracked(&self) -> T; // Read without tracking
@@ -479,6 +491,7 @@ impl<T: Clone> RwSignal<T> {
 ### Signal Methods
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl<T: Clone> Signal<T> {
     pub fn get(&self) -> T;           // Read with tracking
     pub fn get_untracked(&self) -> T; // Read without tracking
@@ -491,6 +504,7 @@ impl<T: Clone> Signal<T> {
 ### Memo Methods
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl<T: Clone + PartialEq> Memo<T> {
     pub fn get(&self) -> T;           // Read with tracking
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R; // Borrow with tracking
@@ -500,6 +514,7 @@ impl<T: Clone + PartialEq> Memo<T> {
 ### Cleanup
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 // Register cleanup callback (for use in dynamic children)
 pub fn on_cleanup(f: impl FnOnce() + 'static);
 ```
@@ -507,6 +522,7 @@ pub fn on_cleanup(f: impl FnOnce() + 'static);
 ### Background Services
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 // Create an async background service with automatic cleanup
 pub fn create_service<Cmd, F, Fut>(f: F) -> Service<Cmd>
 where

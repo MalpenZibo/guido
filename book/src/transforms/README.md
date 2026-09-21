@@ -12,7 +12,7 @@ Guido provides a complete 2D transform system for translating, rotating, and sca
 
 ## Quick Example
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -20,13 +20,13 @@ Guido provides a complete 2D transform system for translating, rotating, and sca
 // translate, then rotate, then scale.
 container()
     .translate((20.0, 10.0))
-    .rotate(45.0);
+    .rotate(45.0)
     .scale(1.5);
 
 // Or one on its own.
 container().translate((20.0, 10.0));  // move 20px right, 10px down
-container().rotate(45.0)             // turn 45 degrees clockwise
-container().scale(1.5)               // 150% size
+container().rotate(45.0);             // turn 45 degrees clockwise
+container().scale(1.5)                // 150% size
 # ;
 # }
 ```
