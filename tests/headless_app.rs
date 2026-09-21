@@ -1414,10 +1414,10 @@ fn a_restarted_layout_root_keeps_the_constraints_it_was_placed_under() {
     );
 }
 
-/// One bar per monitor, the shape `examples/multi_output.rs` has and the one
-/// `outputs()`'s own documentation shows: an effect over the reactive list
-/// that spawns a surface pinned to every output it has not seen, and closes
-/// the handle of one that has gone.
+/// One bar per monitor, the shape `examples/multi_output.rs` and `outputs()`'s
+/// own documentation both show: an effect over the reactive list that spawns a
+/// surface pinned to every output it has not seen, and closes the handle of one
+/// that has gone.
 ///
 /// The map is what the effect keeps between runs, and the test reads it to
 /// learn which surface belongs to which monitor.

@@ -4,19 +4,44 @@
 //! tracked closure (effects, dynamic children, reactive properties) and the
 //! closure re-runs when monitors are added, removed, or reconfigured.
 //!
+//! One bar per monitor, reacting to hotplug. The effect re-runs on every
+//! change to the list, so what it has already built has to be remembered:
+//! spawning for each output it finds would hand a monitor a second bar the
+//! first time any other one is plugged in.
+//!
 //! ```no_run
 //! # use guido::prelude::*;
+//! # use std::cell::RefCell;
+//! # use std::collections::HashMap;
+//! # use std::rc::Rc;
 //! # let bar_widget = || text("bar");
-//! // One bar per monitor, reacting to hotplug:
+//! let bars: Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> = Rc::default();
 //! create_effect(move || {
-//!     for info in outputs().get() {
-//!         spawn_surface(
-//!             SurfaceConfig::new().height(32).output(info.id),
-//!             move || bar_widget(),
-//!         );
+//!     let current = outputs().get();
+//!     let mut bars = bars.borrow_mut();
+//!
+//!     // A monitor that has gone takes its bar with it.
+//!     bars.retain(|id, bar| {
+//!         let alive = current.iter().any(|o| o.id == *id);
+//!         if !alive {
+//!             bar.close();
+//!         }
+//!         alive
+//!     });
+//!
+//!     // And one that has arrived gets one, once.
+//!     for info in current {
+//!         bars.entry(info.id).or_insert_with(|| {
+//!             spawn_surface(
+//!                 SurfaceConfig::new().height(32).output(info.id),
+//!                 move || bar_widget(),
+//!             )
+//!         });
 //!     }
 //! });
 //! ```
+//!
+//! `examples/multi_output.rs` is this with something in the bar.
 //!
 //! `surface_output(id)` reports which output a surface is currently shown on
 //! (tracked read — reactive when called inside a tracked closure).
