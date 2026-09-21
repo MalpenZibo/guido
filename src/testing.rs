@@ -63,6 +63,11 @@ struct RecordedSurface {
     /// a withdrawal, and is kept.
     blur_regions: Vec<Vec<Rect>>,
     sizes_asked: Vec<(u32, u32)>,
+    /// Every logical size the surface declared its buffer stands for, oldest
+    /// first. A list, because what is asserted is that one was declared for
+    /// each buffer the frame path resolved and never for a frame that resolved
+    /// the same one again.
+    viewport_destinations: Vec<(u32, u32)>,
     frame_callbacks: u32,
 }
 
@@ -123,6 +128,12 @@ impl Surface for &mut RecordedSurface {
 
     fn set_exclusive_zone(&mut self, zone: i32) {
         self.exclusive_zones.push(zone);
+    }
+
+    /// A compositor with `wp_viewporter`: without one the loop's declaration
+    /// goes nowhere and the recorder would be keeping an empty list.
+    fn set_viewport_destination(&mut self, width: u32, height: u32) {
+        self.viewport_destinations.push((width, height));
     }
 
     fn set_input_region(&mut self, rects: Option<&[Rect]>) {
@@ -471,6 +482,15 @@ impl Headless {
     /// The sizes a surface has asked for, oldest first.
     pub fn sizes_asked(&self, id: SurfaceId) -> &[(u32, u32)] {
         &self.host.get(id).sizes_asked
+    }
+
+    /// Every logical size a surface has declared its buffer stands for, oldest
+    /// first — what a `wp_viewport` destination says, beside the buffer
+    /// [`physical_size`](Self::physical_size) reports. The two are what a
+    /// compositor reads together, and a test that reads only one of them
+    /// cannot see them disagree.
+    pub fn viewport_destinations(&self, id: SurfaceId) -> &[(u32, u32)] {
+        &self.host.get(id).viewport_destinations
     }
 
     /// How many frames a surface has presented and had its callback re-armed.

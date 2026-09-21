@@ -49,6 +49,13 @@ pub struct ManagedSurface {
     /// same rule: once, when it changes, and never for a surface whose tree has
     /// said nothing about input.
     pub input_region: Option<crate::region::InputRegionRequest>,
+    /// The logical size this surface last declared its buffer stands for, or
+    /// `None` while it has declared none.
+    ///
+    /// Here beside the reservation and the input region because it is the same
+    /// kind of thing: a double-buffered request the compositor already holds,
+    /// which a frame with nothing new to say must not send again.
+    pub viewport_destination: Option<(u32, u32)>,
     /// The reservation this surface last asked the compositor for, starting
     /// with the one a layer surface is created with, so a number the compositor
     /// already has is not sent again. Popups and lock surfaces carry one too and
@@ -89,6 +96,7 @@ impl ManagedSurface {
             command_layers: Vec::new(),
             input_base: config_input_region,
             input_region: None,
+            viewport_destination: None,
             exclusive_zone,
         }
     }
