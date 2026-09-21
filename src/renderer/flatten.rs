@@ -403,14 +403,10 @@ fn flatten_node(
     } else {
         None
     };
-    if parent_clip.is_none()
-        && node.clip.is_none()
+    if node.clip.is_none()
         && let Some(cached) = cached_flatten
-        && cached.world_transform.is_translation_only()
-        && world_transform.is_translation_only()
+        && let Some((dx, dy)) = cached.replay_offset(world_transform, parent_clip)
     {
-        let dx = world_transform.tx() - cached.world_transform.tx();
-        let dy = world_transform.ty() - cached.world_transform.ty();
         for cmd in &cached.commands {
             let mut adjusted = cmd.clone();
             adjusted.world_transform = cmd.world_transform.translated(dx, dy);
@@ -430,8 +426,12 @@ fn flatten_node(
     // Track if we should cache this node's flatten output. The mark captures
     // how much has been pushed so far, so everything this subtree adds
     // (including children) can be collected for caching.
-    let should_cache =
-        node.clip.is_none() && parent_clip.is_none() && world_transform.is_translation_only();
+    //
+    // A node that sets a clip of its own still caches nothing: replaying it
+    // would also have to place that clip, which is #441's half of the problem
+    // and not this one's. What it inherits from above is another matter, and
+    // `replay_offset` is what decides whether the entry is any use.
+    let should_cache = node.clip.is_none() && world_transform.is_translation_only();
     let mark = if should_cache { Some(out.mark()) } else { None };
 
     // Compute world transform origin (for shapes that need it)
@@ -531,6 +531,7 @@ fn flatten_node(
         Rc::new(CachedFlatten {
             commands: out.commands_since(mark),
             world_transform,
+            parent_clip: parent_clip.copied(),
         })
     });
     crate::render_stats::record_flatten_full();

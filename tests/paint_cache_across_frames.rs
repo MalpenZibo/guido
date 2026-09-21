@@ -19,14 +19,23 @@
 //! widget to ask for the frame the first one is then served stale into; and a
 //! row whose first box grows, because a child served at a *changed* one needs
 //! something to move it while leaving it clean.
+//!
+//! Two more for the flatten cache under a clip, which is the same question one
+//! phase later: whether a subtree that did not move is re-flattened anyway, and
+//! whether one that moved out from under its clip is reused when it must not
+//! be.
 
 use guido::layout::Flex;
 
 mod common;
 use common::Harness;
 use guido::prelude::*;
-use guido::renderer::{CommandLayer, DrawCommand, FlattenedCommand, RenderNode, flatten_root_into};
+use guido::renderer::{
+    CommandLayer, CornerRadii, DrawCommand, FlattenedCommand, NodeId, RenderNode, flatten_root_into,
+};
+use guido::shape::PlacedShape;
 use guido::tree::WidgetId;
+use guido::widgets::Corners;
 use guido::widgets::Rect;
 use std::rc::Rc;
 
@@ -70,6 +79,45 @@ const PUSHED_FILL: Color = Color::rgb(0.9, 0.4, 0.1);
 /// out to the identity, and the recomposition could be dropped entirely with
 /// this test still green.
 const PUSHED_NUDGE: (f32, f32) = (5.0, 3.0);
+
+// The clipped scenarios. Both put a subtree under a clip and ask what flatten
+// does with it on the next frame; what separates them is whether the clip and
+// the content moved together.
+/// The box under the static clip, which is how its command is picked out.
+const CLIPPED_FILL: Color = Color::rgb(0.2, 0.7, 0.5);
+/// The scrolling row the second one follows, for the same reason.
+const SCROLLED_FILL: Color = Color::rgb(0.7, 0.2, 0.5);
+/// Tall enough that three of them overflow the viewport — and that the third
+/// is still partly inside it, so the visible-range search culls nothing and
+/// every paint stays complete. A culled paint is partial, a partial paint is
+/// never cached, and a list that repaints is never asked whether its flatten
+/// could be reused.
+const TALL_ROW: f32 = 80.0;
+const TALL_ROWS: usize = 3;
+/// Short enough that every row is still partly in view afterwards.
+const SHORT_SCROLL: f32 = 40.0;
+/// The box next to the static clip, whose whole job is to be marked dirty.
+const POKER: f32 = 50.0;
+/// The clip's corners, before and after they are rounded. A shape change that
+/// no layout notices, so the box under it stays clean across the two frames.
+const SQUARE_CORNERS: Corners = Corners {
+    radii: CornerRadii {
+        top_left: 0.0,
+        top_right: 0.0,
+        bottom_right: 0.0,
+        bottom_left: 0.0,
+    },
+    curvature: 1.0,
+};
+const ROUNDED_CORNERS: Corners = Corners {
+    radii: CornerRadii {
+        top_left: 24.0,
+        top_right: 24.0,
+        bottom_right: 24.0,
+        bottom_left: 24.0,
+    },
+    curvature: 1.0,
+};
 
 /// A caption and a vertical scroller over `ROWS` rows — one column of
 /// `examples/scroll_example.rs`.
@@ -136,6 +184,67 @@ fn pushed_row(grower: RwSignal<f32>) -> Container {
                 .translate(PUSHED_NUDGE)
                 .background(PUSHED_FILL),
         )
+}
+
+/// A static `Overflow::Hidden` box over one child, above a box with nothing to
+/// do but ask for the next frame.
+///
+/// The corners are the caller's because they are the one thing that changes
+/// the clip's *shape* without changing anything a layout would notice — so
+/// what is underneath stays clean, which is the only state in which flatten is
+/// asked whether it may replay it.
+///
+/// Nothing here scrolls and nothing moves. The clip and what it cuts are in
+/// the same place frame after frame, which is the case the flatten guard used
+/// to refuse along with the one it exists for.
+fn hidden_box_over_a_poker<M>(corners: impl IntoAnimated<Corners, M>) -> Container {
+    container()
+        .layout(Flex::column().spacing(GAP))
+        .padding(PAD)
+        .child(
+            container()
+                .width(VIEWPORT)
+                .height(VIEWPORT)
+                .corners(corners)
+                .overflow(Overflow::Hidden)
+                .child(
+                    container()
+                        .width(VIEWPORT)
+                        .height(TALL_ROW)
+                        .background(CLIPPED_FILL),
+                ),
+        )
+        .child(container().width(POKER).height(POKER))
+}
+
+/// A vertical scroller over rows tall enough that every one of them is at
+/// least partly in view.
+///
+/// The list itself repaints when the offset moves — it is the scrollable's
+/// own child and carries the offset — so the rows are what stays clean, and
+/// the first of them is filled distinctly so its command can be picked out of
+/// the frame.
+fn scroller_of_tall_rows() -> Container {
+    container().padding(PAD).child(
+        container()
+            .width(VIEWPORT)
+            .height(VIEWPORT)
+            .scroll(Scroll::vertical())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .children((0..TALL_ROWS).map(|row| {
+                        container()
+                            .width(VIEWPORT)
+                            .height(TALL_ROW)
+                            .background(if row == 0 {
+                                SCROLLED_FILL
+                            } else {
+                                Color::rgb(0.25, 0.25, 0.35)
+                            })
+                    })),
+            ),
+    )
 }
 
 /// A surface that renders frame after frame into one retained root node.
@@ -215,16 +324,28 @@ impl Surface {
     /// rebuilds the node header, so the node cannot answer here — but the
     /// commands stay shared through it and through flatten, so they can.
     fn box_drawn(&self, fill: Color) -> (Rc<DrawCommand>, (f32, f32)) {
-        let mut matches = self.commands.iter().filter_map(|cmd| match &*cmd.command {
-            DrawCommand::RoundedRect { rect, color, .. } if *color == fill => Some((
-                Rc::clone(&cmd.command),
-                (
-                    cmd.world_transform.tx() + rect.x,
-                    cmd.world_transform.ty() + rect.y,
-                ),
-            )),
-            _ => None,
-        });
+        let cmd = self.command_of(fill);
+        let DrawCommand::RoundedRect { rect, .. } = &*cmd.command else {
+            unreachable!("`command_of` matched on this variant")
+        };
+        (
+            Rc::clone(&cmd.command),
+            (
+                cmd.world_transform.tx() + rect.x,
+                cmd.world_transform.ty() + rect.y,
+            ),
+        )
+    }
+
+    /// The command the box filled with `fill` contributed to the last frame.
+    ///
+    /// One lookup, and it insists the fill names exactly one box: a second
+    /// scheme could drift onto a second box, and then what is returned and what
+    /// is asserted of it are about different boxes.
+    fn command_of(&self, fill: Color) -> &FlattenedCommand {
+        let mut matches = self.commands.iter().filter(
+            |cmd| matches!(&*cmd.command, DrawCommand::RoundedRect { color, .. } if *color == fill),
+        );
         let found = matches.next().expect("the box contributed a command");
         assert!(
             matches.next().is_none(),
@@ -234,31 +355,53 @@ impl Surface {
         found
     }
 
-    /// Scroll the nth column's list, the way the loop does it: the event moves
-    /// the offset, and the `JobRequest::Paint` it asks for arrives as
-    /// `mark_needs_paint` when the job queue is drained (`jobs.rs`).
+    /// Scroll the nth column's list.
     fn scroll(&mut self, column: usize, delta: f32) {
-        let root = self.surface.root;
         let x = if column == 0 {
             COLUMN_A_X + VIEWPORT / 2.0
         } else {
             COLUMN_B_X + VIEWPORT / 2.0
         };
-        self.surface.tree.with_widget_mut(root, |w, id, t| {
-            w.event(
-                t,
-                id,
-                &Event::scroll(
-                    x,
-                    SCROLLER_TOP + VIEWPORT / 2.0,
-                    0.0,
-                    delta,
-                    ScrollSource::Wheel,
-                ),
-            )
-        });
         let scroller = self.scroller(column);
+        self.scroll_at(x, SCROLLER_TOP + VIEWPORT / 2.0, delta, scroller);
+    }
+
+    /// Scroll whatever sits under `(x, y)`, the way the loop does it: the event
+    /// moves the offset, and the `JobRequest::Paint` it asks for arrives as
+    /// `mark_needs_paint` when the job queue is drained (`jobs.rs`).
+    fn scroll_at(&mut self, x: f32, y: f32, delta: f32, scroller: WidgetId) {
+        let root = self.surface.root;
+        self.surface.tree.with_widget_mut(root, |w, id, t| {
+            w.event(t, id, &Event::scroll(x, y, 0.0, delta, ScrollSource::Wheel))
+        });
         self.surface.tree.mark_needs_paint(scroller);
+    }
+
+    /// The node a widget contributed to this frame's render tree, found by the
+    /// id the two share.
+    ///
+    /// Indices would not do it: a scroller culls what left the viewport, so the
+    /// nth child of a render node is not the nth child of the widget.
+    fn node_of(&self, widget: WidgetId) -> &RenderNode {
+        fn find(node: &RenderNode, id: NodeId) -> Option<&RenderNode> {
+            if node.id == id {
+                return Some(node);
+            }
+            node.children.iter().find_map(|child| find(child, id))
+        }
+        find(&self.root_node, widget.as_u64()).expect("the widget contributed a node to this frame")
+    }
+
+    /// The clip the box filled with `fill` was drawn under.
+    ///
+    /// This is the effective clip the GPU is handed — already intersected with
+    /// every ancestor's — so it says where the cut actually falls, and with
+    /// what corners, whether the command was flattened this frame or replayed
+    /// from the cache.
+    fn clip_shape(&self, fill: Color) -> PlacedShape {
+        self.command_of(fill)
+            .clip
+            .expect("the box was drawn under a clip")
     }
 
     /// The top of what the nth column's scroller draws, in surface
@@ -406,5 +549,218 @@ fn a_cached_child_is_drawn_where_it_moved_to() {
         "the box was repainted rather than re-parented out of the paint \
          cache — the moved branch of `reuse_cached` was never reached, so \
          this test would go green however broken it is"
+    );
+}
+
+/// A subtree under a clip that did not move is reused rather than flattened
+/// again.
+///
+/// The guard used to refuse every subtree with a clip anywhere above it, and
+/// the hazard it was written for is narrower than that: each command carries
+/// its clip already intersected with every ancestor's and in world
+/// coordinates, so replaying one shifts the clip along with the content. That
+/// is wrong only when the clip did *not* undergo the same shift. Here it
+/// underwent the same shift as the content, which was none.
+///
+/// The `Overflow::Hidden` box itself is not what is under test and cannot be:
+/// a node that sets a clip still caches nothing, so flatten always walks into
+/// it and always reaches the child. The poker is there because a frame with
+/// nothing dirty is skipped, and a skipped frame asks nothing.
+#[test]
+fn a_subtree_under_a_static_clip_is_reused() {
+    let mut s = Surface::new(
+        hidden_box_over_a_poker(SQUARE_CORNERS),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + GAP + POKER + PAD,
+    );
+
+    s.frame();
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (hidden, poker) = (children[0], children[1]);
+    let clipped = s.surface.tree.get_children(hidden)[0];
+    let viewport = Rect::new(PAD, PAD, VIEWPORT, VIEWPORT);
+    assert_eq!(
+        s.clip_shape(CLIPPED_FILL).world_aabb(),
+        viewport,
+        "the box is drawn under the box that hides its overflow"
+    );
+    let first = s
+        .node_of(clipped)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("a subtree under a static clip has nothing to re-flatten for, so flatten should have kept its commands");
+
+    // The pointer moves onto the box next door: that one repaints, the clipped
+    // one is untouched and clean.
+    s.surface.tree.mark_needs_paint(poker);
+    s.frame();
+
+    let second = s
+        .node_of(clipped)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("still cached after the second frame");
+    assert!(
+        Rc::ptr_eq(&first, &second),
+        "the clipped box was flattened again although neither it nor the clip \
+         above it had moved: reuse writes nothing back, so a fresh entry here \
+         means the guard refused"
+    );
+    assert_eq!(
+        s.clip_shape(CLIPPED_FILL).world_aabb(),
+        viewport,
+        "the replayed commands lost the clip they were cached with"
+    );
+}
+
+/// A subtree that scrolled out from under its clip is flattened again, and the
+/// clip stays on the viewport.
+///
+/// This is the other half of the same question and the reason the guard exists.
+/// The row moves by the scroll offset; the viewport that clips it does not.
+/// Replaying the row's cached commands would shift their baked-in clip by the
+/// same offset as their content, so the clip would follow the row up the screen
+/// and stop cutting anything — the list would paint straight through its
+/// scroller, on the first scrolled frame.
+///
+/// The rows are tall enough that none is ever culled, which is what keeps their
+/// paints complete and so cacheable. The list above them is not the subject: it
+/// is the scrollable's own child and carries the offset, so it repaints and is
+/// never asked the question at all.
+#[test]
+fn a_subtree_that_scrolled_out_from_under_its_clip_is_not_reused() {
+    let mut s = Surface::new(
+        scroller_of_tall_rows(),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+
+    s.frame();
+    let scroller = s.surface.tree.get_children(s.surface.root)[0];
+    let list = s.surface.tree.get_children(scroller)[0];
+    let row = s.surface.tree.get_children(list)[0];
+    let viewport = Rect::new(PAD, PAD, VIEWPORT, VIEWPORT);
+    let (painted, at_rest) = s.box_drawn(SCROLLED_FILL);
+    assert_eq!(
+        at_rest,
+        (PAD, PAD),
+        "the row starts at the top of the viewport"
+    );
+    assert_eq!(
+        s.clip_shape(SCROLLED_FILL).world_aabb(),
+        viewport,
+        "the row is drawn under the scroller's viewport"
+    );
+    let first = s
+        .node_of(row)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("nothing has moved yet, so the row's flatten is cached");
+
+    s.scroll_at(
+        PAD + VIEWPORT / 2.0,
+        PAD + VIEWPORT / 2.0,
+        SHORT_SCROLL,
+        scroller,
+    );
+    s.frame();
+
+    let (reused, moved_to) = s.box_drawn(SCROLLED_FILL);
+    assert!(
+        Rc::ptr_eq(&painted, &reused),
+        "the row repainted instead of coming out of the paint cache, so flatten \
+         was never asked whether its commands could be replayed — this test is \
+         about the answer, not about the question never being put"
+    );
+    assert_eq!(
+        moved_to,
+        (PAD, PAD - SHORT_SCROLL),
+        "the row did not scroll"
+    );
+    let second = s
+        .node_of(row)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("cached again after the second frame");
+    assert!(
+        !Rc::ptr_eq(&first, &second),
+        "the row's flatten was reused although the row moved by {SHORT_SCROLL} \
+         and the viewport clipping it did not"
+    );
+    assert_eq!(
+        s.clip_shape(SCROLLED_FILL).world_aabb(),
+        viewport,
+        "the clip travelled with the scrolled row instead of staying on the \
+         viewport, so it now cuts nothing"
+    );
+}
+
+/// A subtree whose clip changed shape under it is flattened again.
+///
+/// The row of #442's table that neither of the other two reaches, and the
+/// reason `replay_offset` compares the whole `PlacedShape` rather than only
+/// where it sits. The clip does not move at all here — `dx = dy = 0` — so an
+/// offset comparison calls it a match and replays commands cut by corners the
+/// clip no longer has.
+///
+/// The corners are what changes because nothing about them reaches layout: the
+/// box under the clip keeps its constraints, its position and its paint, which
+/// is the one state in which flatten is asked the question at all.
+#[test]
+fn a_subtree_whose_clip_changed_shape_is_not_reused() {
+    let corners = create_signal(SQUARE_CORNERS);
+    let mut s = Surface::new(
+        hidden_box_over_a_poker(corners),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + GAP + POKER + PAD,
+    );
+
+    s.frame();
+    let hidden = s.surface.tree.get_children(s.surface.root)[0];
+    let clipped = s.surface.tree.get_children(hidden)[0];
+    let (painted, _) = s.box_drawn(CLIPPED_FILL);
+    assert_eq!(
+        s.clip_shape(CLIPPED_FILL).radii,
+        SQUARE_CORNERS.radii,
+        "the box starts under a clip with square corners"
+    );
+    let first = s
+        .node_of(clipped)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("a subtree under a static clip is cached");
+
+    corners.set(ROUNDED_CORNERS);
+    s.surface.tree.mark_needs_paint(hidden);
+    s.frame();
+
+    let (reused, _) = s.box_drawn(CLIPPED_FILL);
+    assert!(
+        Rc::ptr_eq(&painted, &reused),
+        "the box repainted when the clip around it changed, so flatten was \
+         never asked whether its commands could be replayed — this test is \
+         about the answer, not about the question never being put"
+    );
+    let second = s
+        .node_of(clipped)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("cached again after the second frame");
+    assert!(
+        !Rc::ptr_eq(&first, &second),
+        "the box's flatten was reused although the clip above it is no longer \
+         the shape it was cached under"
+    );
+    assert_eq!(
+        s.clip_shape(CLIPPED_FILL).radii,
+        ROUNDED_CORNERS.radii,
+        "the box kept the clip it was cached with, whose square corners cut \
+         where the rounded ones do not"
     );
 }

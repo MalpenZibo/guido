@@ -486,6 +486,7 @@ The flattener caches results per node to avoid re-flattening clean subtrees:
 pub struct CachedFlatten {
     pub commands: Vec<FlattenedCommand>,  // Flattened output from this subtree
     pub world_transform: Transform,       // World transform at time of caching
+    pub parent_clip: Option<PlacedShape>, // Clip inherited from above, back then
 }
 ```
 
@@ -493,6 +494,18 @@ When a `RenderNode` has `repainted == false` (reused from paint cache) and both 
 cached and current world transforms are translation-only, the flattener reuses cached
 commands with a (dx, dy) offset instead of recursing into children. After a full flatten,
 results are cached back onto the node for next frame.
+
+`parent_clip` is what makes that safe under a clip, and
+`CachedFlatten::replay_offset` is where the rule lives: the entry may be
+replayed only when the clip it was cached under, translated by `(dx, dy)`,
+equals the one inherited this frame — the whole `PlacedShape` and not just
+where it sits, so a resized viewport is refused along with a moved one. A
+static `Overflow::Hidden` box passes with `dx = dy = 0`; a scrolling one does
+not, because the rows move and the viewport does not.
+
+A node that sets a clip of *its own* still caches nothing. Replaying it would
+have to place that clip too, and reaching the cache from inside a scroller
+needs the clip to stop being baked into each command in the first place (#441).
 
 The cache lives in `RefCell<Option<Rc<CachedFlatten>>>` on the node, so flatten
 only needs `&RenderNode` and shallow node clones share the cached output.
