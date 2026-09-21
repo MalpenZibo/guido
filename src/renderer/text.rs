@@ -71,6 +71,22 @@ pub struct TextRenderState {
     frame_keys: Vec<u64>,
 }
 
+/// Whether a text lies entirely off one side of its clip, and so is not drawn
+/// at all.
+///
+/// A whole side, not a corner: two boxes that overlap on neither axis are
+/// still both here, and this only says yes when one interval is wholly past
+/// the other. The tolerance is for the boundary, where a text ending exactly
+/// where its clip does should be kept rather than lost to the last bit of a
+/// float.
+fn falls_outside(text: Rect, clip: Rect) -> bool {
+    const EPSILON: f32 = 0.1;
+    text.x + text.width < clip.x - EPSILON
+        || text.x > clip.x + clip.width + EPSILON
+        || text.y + text.height < clip.y - EPSILON
+        || text.y > clip.y + clip.height + EPSILON
+}
+
 /// A text's layout box, in world pixels.
 ///
 /// What the culling check has always compared against a clip, lifted out so
@@ -195,28 +211,13 @@ impl TextRenderState {
             // Skip text that is completely outside its clip region (culling optimization)
             // Check this FIRST so culled texts don't get rendered via texture path either
             let laid_out = laid_out_in(entry);
-            if let Some(clip) = &entry.clip.map(|c| c.world_aabb()) {
-                let text_left = laid_out.x;
-                let text_top = laid_out.y;
-                let text_right = laid_out.x + laid_out.width;
-                let text_bottom = laid_out.y + laid_out.height;
-
-                let clip_right = clip.x + clip.width;
-                let clip_bottom = clip.y + clip.height;
-
-                // Check if text is completely outside clip region
-                // Use small epsilon to avoid floating point precision issues at boundaries
-                let epsilon = 0.1;
-                let outside = text_right < clip.x - epsilon
-                    || text_left > clip_right + epsilon
-                    || text_bottom < clip.y - epsilon
-                    || text_top > clip_bottom + epsilon;
-
-                if outside {
-                    // Text is completely outside clip - skip it entirely
-                    culled_indices.insert(idx);
-                    continue;
-                }
+            if entry
+                .clip
+                .is_some_and(|clip| falls_outside(laid_out, clip.world_aabb()))
+            {
+                // Text is completely outside clip - skip it entirely
+                culled_indices.insert(idx);
+                continue;
             }
 
             // Route all non-translation transforms (rotation, scale) to TextQuadRenderer.
@@ -391,6 +392,124 @@ impl TextRenderState {
                 .render(&self.atlas, &self.viewport, pass)
                 .expect("Failed to render text");
         }
+    }
+}
+
+#[cfg(test)]
+mod laid_out_tests {
+    use super::laid_out_in;
+    use crate::renderer::types::TextEntry;
+    use crate::transform::Transform;
+    use crate::widgets::font::FontWeight;
+    use crate::widgets::{Color, FontFamily, Rect};
+
+    fn entry(rect: Rect, transform: Transform) -> TextEntry {
+        TextEntry {
+            text: "x".into(),
+            rect,
+            color: Color::WHITE,
+            font_size: 16.0,
+            font_family: FontFamily::default(),
+            font_weight: FontWeight::default(),
+            clip: None,
+            transform,
+            transform_origin: None,
+        }
+    }
+
+    /// The box a text was laid out in, carried through its placement.
+    ///
+    /// Two callers read it — what gets culled against its clip, and what gets
+    /// routed away from glyphon — so every term here decides whether a text is
+    /// drawn at all or drawn through the wrong pipeline. It is four
+    /// arithmetic operations and each of them can be written backwards without
+    /// the picture obviously changing.
+    /// A text is dropped only when it is wholly past one side of its clip.
+    ///
+    /// The cheapest thing the text path does and the easiest to get backwards:
+    /// too eager and a visible text is never drawn, with nothing to say why.
+    #[test]
+    fn a_text_is_dropped_only_when_it_is_wholly_outside_its_clip() {
+        use super::falls_outside;
+        let clip = Rect::new(100.0, 100.0, 200.0, 100.0);
+
+        assert!(
+            !falls_outside(Rect::new(150.0, 120.0, 40.0, 20.0), clip),
+            "inside"
+        );
+        assert!(
+            !falls_outside(Rect::new(0.0, 0.0, 400.0, 400.0), clip),
+            "over all of it"
+        );
+
+        // A whole side past, on each of the four.
+        assert!(
+            falls_outside(Rect::new(10.0, 120.0, 80.0, 20.0), clip),
+            "left of it"
+        );
+        assert!(
+            falls_outside(Rect::new(310.0, 120.0, 80.0, 20.0), clip),
+            "right of it"
+        );
+        assert!(
+            falls_outside(Rect::new(150.0, 10.0, 40.0, 80.0), clip),
+            "above it"
+        );
+        assert!(
+            falls_outside(Rect::new(150.0, 210.0, 40.0, 80.0), clip),
+            "below it"
+        );
+
+        // Just reaching in on each side is not outside — the far edge is what
+        // decides, and reading the near one instead keeps a text that has
+        // gone and drops one that is still here.
+        assert!(
+            !falls_outside(Rect::new(20.0, 120.0, 81.0, 20.0), clip),
+            "reaching in from the left"
+        );
+        assert!(
+            !falls_outside(Rect::new(299.0, 120.0, 80.0, 20.0), clip),
+            "reaching in from the right"
+        );
+        assert!(
+            !falls_outside(Rect::new(150.0, 20.0, 40.0, 81.0), clip),
+            "reaching in from above"
+        );
+        assert!(
+            !falls_outside(Rect::new(150.0, 199.0, 40.0, 80.0), clip),
+            "reaching in from below"
+        );
+
+        // Overlapping on neither axis is still two boxes in the same frame,
+        // and a corner-to-corner pair is outside by both.
+        assert!(
+            falls_outside(Rect::new(0.0, 0.0, 50.0, 50.0), clip),
+            "off the top-left corner"
+        );
+    }
+
+    #[test]
+    fn a_text_is_laid_out_where_its_placement_puts_it() {
+        let r = Rect::new(10.0, 20.0, 100.0, 40.0);
+
+        let plain = laid_out_in(&entry(r, Transform::IDENTITY));
+        assert_eq!((plain.x, plain.y), (10.0, 20.0));
+        assert_eq!((plain.width, plain.height), (100.0, 40.0));
+
+        let moved = laid_out_in(&entry(r, Transform::translate(5.0, -7.0)));
+        assert_eq!((moved.x, moved.y), (15.0, 13.0));
+        assert_eq!((moved.width, moved.height), (100.0, 40.0));
+
+        let scaled = laid_out_in(&entry(r, Transform::scale_xy(2.0, 3.0)));
+        assert_eq!((scaled.x, scaled.y), (20.0, 60.0));
+        assert_eq!((scaled.width, scaled.height), (200.0, 120.0));
+
+        // A mirror puts the far corner first, and the box is still a box with
+        // a positive extent — which is why the corners are taken as a min and
+        // an absolute difference rather than as first and second.
+        let mirrored = laid_out_in(&entry(r, Transform::scale_xy(-1.0, 1.0)));
+        assert_eq!((mirrored.x, mirrored.y), (-110.0, 20.0));
+        assert_eq!((mirrored.width, mirrored.height), (100.0, 40.0));
     }
 }
 

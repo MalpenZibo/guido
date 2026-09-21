@@ -1003,6 +1003,114 @@ mod tests {
         }
     }
 
+    /// Where it says the box is exact, no pixel disagrees.
+    ///
+    /// The hand-picked cases below say what the predicate is *for*; this says
+    /// it is not wrong. `box_cuts_like_the_shape` may answer `false` as often
+    /// as it likes — that only sends a text down the quad path it did not
+    /// need — but an answer of `true` is a promise that cutting the ink to
+    /// four integers cuts it the way the shape would, and a broken one leaves
+    /// glyphs outside their clip with nothing to catch it.
+    ///
+    /// So the promise is checked against the pixels: wherever it says `true`,
+    /// walk the ink and find a point the box keeps and the shape does not.
+    /// There must be none. Asymmetric radii, both oblong shapes, scales that
+    /// differ per axis and a mirror, because the wedges are placed by sign and
+    /// sized by scale and every one of those is a term that can be written
+    /// backwards.
+    #[test]
+    fn where_the_box_is_called_exact_no_pixel_disagrees() {
+        use crate::widgets::Corners;
+
+        // Two sets, because a corner with no radius has no wedge and so
+        // cannot say whether the wedge would have been put in the right
+        // place. The first gives all four a different size; the second
+        // returns the zeros, which is the ordinary shape of a card whose top
+        // is rounded and whose bottom is not.
+        let radii = [
+            CornerRadii {
+                top_left: 30.0,
+                top_right: 12.0,
+                bottom_right: 40.0,
+                bottom_left: 22.0,
+            },
+            CornerRadii {
+                top_left: 26.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 18.0,
+            },
+        ];
+        let placements = [
+            Transform::IDENTITY,
+            Transform::scale_xy(2.0, 3.0),
+            Transform::scale_xy(0.5, 1.5),
+            Transform::scale_xy(-1.0, 1.0),
+            Transform::rotate_degrees(20.0),
+        ];
+
+        let mut exact = 0;
+        for (w, h) in [(200.0_f32, 100.0_f32), (90.0, 240.0)] {
+            for radii in radii {
+                for placement in placements {
+                    let shape =
+                        PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, placement);
+                    let Some(to_local) = placement.inverse() else {
+                        continue;
+                    };
+                    let corners = Corners {
+                        radii: shape.clamped_radii(),
+                        curvature: 1.0,
+                    };
+                    let local = Rect::new(0.0, 0.0, w, h);
+                    let b = shape.world_aabb();
+
+                    // Ink boxes all over the shape and past every edge of it.
+                    let step = 24.0;
+                    let mut y = b.y - step;
+                    while y < b.y + b.height + step {
+                        let mut x = b.x - step;
+                        while x < b.x + b.width + step {
+                            let ink = Rect::new(x, y, step, step);
+                            if shape.box_cuts_like_the_shape(ink) {
+                                exact += 1;
+                                // Every point the box would keep, the shape keeps.
+                                let mut py = ink.y;
+                                while py < ink.y + ink.height {
+                                    let mut px = ink.x;
+                                    while px < ink.x + ink.width {
+                                        let in_box = px >= b.x
+                                            && px < b.x + b.width
+                                            && py >= b.y
+                                            && py < b.y + b.height;
+                                        if in_box {
+                                            let (lx, ly) = to_local.transform_point(px, py);
+                                            assert!(
+                                                local.contains_shape(lx, ly, corners),
+                                                "{w}x{h} under {placement:?}: the box is called \
+                                             exact for {ink:?}, and ({px}, {py}) is inside the \
+                                             box and outside the shape"
+                                            );
+                                        }
+                                        px += 1.0;
+                                    }
+                                    py += 1.0;
+                                }
+                            }
+                            x += step;
+                        }
+                        y += step;
+                    }
+                }
+            }
+        }
+        assert!(
+            exact > 100,
+            "the predicate said the box was exact {exact} times, which is too \
+             few for this to have checked anything"
+        );
+    }
+
     /// The box is exact where the shape has no corner to differ in, and not
     /// where it has.
     ///
