@@ -9,10 +9,12 @@
 //! benchmark can claim about itself — it is an assertion, and this is where it
 //! is made.
 //!
-//! Three things are asked. That two runs of one script agree on every count.
-//! That a workload which differs is *reported* as differing, because a number
-//! that never moves proves nothing by repeating. And that the GPU line names
-//! the adapter that produced it.
+//! What is asked. That two runs of one script agree on every count. That the
+//! script's deltas reach the scroller at all. That a workload which differs is
+//! *reported* as differing, because a number that never moves proves nothing by
+//! repeating. That a gesture longer than the list says so rather than quietly
+//! averaging a stationary one. And that the GPU line names the adapter that
+//! produced it.
 //!
 //! Only counts, never microseconds — `scripted::Counts` says which is which.
 //!
@@ -27,8 +29,8 @@ mod list;
 mod scripted;
 
 /// Enough rows that the scroller has far more content than viewport and the
-/// paint window has something to narrow, and few enough that five plays of the
-/// script fit inside a test run.
+/// paint window has something to narrow, and few enough that several plays of
+/// the script fit inside a test run.
 const ROWS: usize = 200;
 
 /// Short, because the property is the script's determinism and not its length.
@@ -105,6 +107,34 @@ fn a_longer_list_is_reported_as_more_work() {
         "four times the rows offered the paint window {} children against {}",
         long.counts.window_children_total,
         short.counts.window_children_total
+    );
+}
+
+/// A gesture longer than the list is a gesture that spends most of itself
+/// against the bottom, measuring a stationary list — repeatable, and not the
+/// workload anybody asked for. The report has to say so, because the frames it
+/// averages over are the only other sign and a person comparing two tables
+/// would not see it.
+#[test]
+fn a_gesture_that_runs_off_the_end_of_the_list_says_so() {
+    let Some(inside) = play(ROWS) else {
+        return;
+    };
+    assert_eq!(
+        inside.counts.frames_pinned, 0,
+        "the script was supposed to stay inside a list this long"
+    );
+    assert!(!scripted::report(&inside, ROWS).contains("moved nothing"));
+
+    // Four rows against a gesture that travels thousands of pixels.
+    let pinned = play(4).expect("the first run had an adapter");
+    assert!(
+        pinned.counts.frames_pinned > 0,
+        "a four-row list absorbed the whole gesture"
+    );
+    assert!(
+        scripted::report(&pinned, 4).contains("moved nothing"),
+        "the report never mentions the deltas that moved nothing"
     );
 }
 

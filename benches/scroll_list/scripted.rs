@@ -32,9 +32,16 @@ const RESET_WINDOW: Duration = Duration::from_secs(1);
 ///
 /// Four phases and the pauses between them: a slow drag down, a flick down, the
 /// flick undone, the drag undone. It is symmetric, so the list ends where it
-/// started, and at any row count worth benchmarking it reaches neither end —
-/// nothing in the numbers depends on where the scroller stops, which is the one
-/// thing that would differ between a short list and a long one.
+/// started.
+///
+/// It travels `frames_per_phase * 624` pixels before it turns round — 37440 at
+/// the benchmark's sixty — and a list shorter than that pins at the bottom for
+/// the rest of the flick. Nothing then moves, so nothing paints, and the phase
+/// costs are taken over the frames that did: at 200 rows and sixty frames a
+/// phase, 82 of 248 frames. It stays repeatable, which is why no assertion here
+/// catches it; [`Counts::frames_pinned`] counts those frames and [`report`]
+/// says so, rather than leaving a person to read an average of a stationary
+/// list.
 ///
 /// The zero-delta frames are not padding. A frame with nothing to do is not
 /// painted, and a script with none of them would never once exercise the path
@@ -88,6 +95,10 @@ pub struct Counts {
     /// worth watching, and a list that scrolls is where it would show.
     pub window_declined_containers: u64,
     pub window_declined_children: u64,
+    /// Scripted deltas that moved nothing: the scroller had reached an end and
+    /// stood still. Zero is a gesture that stayed inside the list, which is the
+    /// workload the benchmark is for — see [`script`].
+    pub frames_pinned: u64,
 }
 
 impl Counts {
@@ -110,6 +121,11 @@ impl Counts {
         self.window_children_iterated += snapshot.window_children_iterated;
         self.window_declined_containers += snapshot.window_declined_containers;
         self.window_declined_children += snapshot.window_declined_children;
+    }
+
+    /// A delta was asked for and nothing moved.
+    fn pinned(&mut self) {
+        self.frames_pinned += 1;
     }
 }
 
@@ -266,6 +282,12 @@ where
         );
 
         run.counts.add(&snapshot);
+        // A delta that painted nothing is a delta the scroller refused: it had
+        // reached an end, and `apply_scroll` returns false rather than asking
+        // for a frame.
+        if *delta != 0.0 && snapshot.frames_painted == 0 {
+            run.counts.pinned();
+        }
         run.frames_skipped += snapshot.frames_skipped;
         run.frames_idle += 1 - snapshot.frames_painted - snapshot.frames_skipped;
         run.damage_none += snapshot.damage_none;
@@ -286,12 +308,21 @@ pub fn report(run: &Run, rows: usize) -> String {
     let counts = &run.counts;
 
     out.push_str(&format!(
-        "rows={rows} frames={} painted={} skipped={} idle={}\n",
+        "rows={rows} frames={} painted={} | skipped={} idle={} (these two do not repeat)\n",
         counts.frames_painted + counts.frames_not_painted,
         counts.frames_painted,
         run.frames_skipped,
         run.frames_idle,
     ));
+
+    if counts.frames_pinned > 0 {
+        out.push_str(&format!(
+            "\n{} of the scripted deltas moved nothing: the list reached an end \
+             and stood still for them, and the phase costs below are taken over \
+             the frames that did move. More rows, or fewer frames per phase.\n",
+            counts.frames_pinned
+        ));
+    }
 
     out.push_str("\ncounts (identical on every run of this revision)\n");
     for (name, value) in [
@@ -312,6 +343,7 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("damage.none", run.damage_none),
         ("damage.partial", counts.damage_partial),
         ("damage.full", counts.damage_full),
+        ("script.deltas_pinned", counts.frames_pinned),
     ] {
         out.push_str(&format!("  {name:<26} {value}\n"));
     }
