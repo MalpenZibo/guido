@@ -343,12 +343,12 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
 /// than as a box — so a card inside a rounded scroller is cornered by the
 /// scroller, and a turned clip cuts what it actually covers.
 ///
-/// One clip, though. `cmd.clip` is `effective_clip`, which `intersect_clips`
-/// has already collapsed. Since #397 that collapse is exact whenever the two
-/// spaces are a quarter turn or a mirror apart as well as a scale; what still
-/// arrives as the box around both is a pair turned by some other angle. What is
-/// escaped here is the *shape against clip* box intersection, not the chain's
-/// own.
+/// One clip, though. `cmd.clip()` resolves to one shape, which
+/// `intersect_clips` has already collapsed from the chain above it. Since #397
+/// that collapse is exact whenever the two spaces are a quarter turn or a
+/// mirror apart as well as a scale; what still arrives as the box around both
+/// is a pair turned by some other angle. What is escaped here is the *shape
+/// against clip* box intersection, not the chain's own.
 pub(crate) fn shape_of(
     cmd: &FlattenedCommand,
     rect: Rect,
@@ -357,7 +357,7 @@ pub(crate) fn shape_of(
 ) -> Vec<RegionRect> {
     placed_shape_to_rects(
         PlacedShape::placed(rect, corner_radii, curvature, cmd.world_transform),
-        cmd.clip,
+        cmd.clip(),
     )
 }
 

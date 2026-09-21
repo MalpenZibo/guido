@@ -8,8 +8,9 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
+use super::clip::{ClipIndex, ClipRef, ClipTree, Under};
 use super::commands::{CornerRadii, DrawCommand};
-use super::tree::{CachedFlatten, FlattenPlace, RenderNode};
+use super::tree::{CachedFlatten, RenderNode};
 use crate::shape::PlacedShape;
 
 /// Render layer for draw command ordering.
@@ -47,9 +48,21 @@ pub struct FlattenedCommand {
     pub world_transform_origin: Option<(f32, f32)>,
     /// Render layer for ordering
     pub layer: RenderLayer,
-    /// The clip this command is cut to, if any — in its own space, with the
-    /// transform that places it.
-    pub clip: Option<PlacedShape>,
+    /// The clip this command is cut to, if any — named rather than copied, so
+    /// that a subtree replayed somewhere else does not drag it along. Read it
+    /// with [`clip`](Self::clip).
+    pub clip: Option<ClipRef>,
+}
+
+impl FlattenedCommand {
+    /// The shape this command is cut to, where it is this frame.
+    ///
+    /// The one step between a command and every pipeline that draws one: the
+    /// clip arrives here as a [`PlacedShape`] exactly as it did when each
+    /// command carried its own copy.
+    pub fn clip(&self) -> Option<PlacedShape> {
+        self.clip.as_ref().map(ClipRef::shape)
+    }
 }
 
 /// Draw commands grouped so that batching never reorders drawing.
@@ -73,6 +86,8 @@ pub struct FlattenedCommand {
 /// column of buttons stays one group; a tint over a photo gets two.
 struct LayeredCommands {
     groups: Vec<LayerBuckets>,
+    /// The clips this frame has placed, which the commands above name.
+    clips: ClipTree,
     /// What this frame carries for the compositor, counted while the commands
     /// go past — because the alternative is walking them all again afterwards
     /// to find out, on every painted frame, for the large majority of surfaces
@@ -181,6 +196,7 @@ impl LayeredCommands {
     fn new() -> Self {
         Self {
             groups: vec![LayerBuckets::default()],
+            clips: ClipTree::default(),
             carried: RegionsCarried::default(),
         }
     }
@@ -254,8 +270,22 @@ impl LayeredCommands {
     /// feeding them back in the order they will be drawn reproduces the same
     /// group boundaries next frame.
     ///
+    /// The clip each command names is rewritten on the way out: one the
+    /// subtree placed itself is kept, since the same reference is written
+    /// through when the subtree is replayed, and the one it inherited becomes
+    /// `None` — "whatever is above me when I am put back", which is the whole
+    /// of what stops a replayed row carrying its viewport away with it.
+    ///
+    /// [`CachedParent::Inherited`] is that same sentence about a cached
+    /// *clip*, and the two are read by the two halves of one replay: this one
+    /// by the loop that pushes the commands, that one by
+    /// [`ClipTree::replay`](super::clip::ClipTree::replay). They mean the same
+    /// thing and have to keep meaning it.
+    ///
+    /// [`CachedParent::Inherited`]: super::clip::CachedParent::Inherited
+    ///
     /// [`push`]: Self::push
-    fn commands_since(&self, mark: Mark) -> Vec<FlattenedCommand> {
+    fn commands_since(&self, mark: Mark, inherited: Option<&ClipRef>) -> Vec<FlattenedCommand> {
         let mut result = Vec::new();
         for (index, group) in self.groups.iter().enumerate().skip(mark.groups - 1) {
             let buckets = [
@@ -273,7 +303,17 @@ impl LayeredCommands {
                 } else {
                     0
                 };
-                result.extend_from_slice(&bucket[from..]);
+                result.extend(bucket[from..].iter().map(|cmd| {
+                    let mut kept = cmd.clone();
+                    if kept
+                        .clip
+                        .as_ref()
+                        .is_some_and(|clip| inherited.is_some_and(|base| base.is(clip)))
+                    {
+                        kept.clip = None;
+                    }
+                    kept
+                }));
             }
         }
         result
@@ -382,7 +422,7 @@ fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
-    parent_clip: Option<&PlacedShape>,
+    parent_clip: Option<ClipIndex>,
     out: &mut LayeredCommands,
 ) {
     // Compute this node's world transform
@@ -396,15 +436,10 @@ fn flatten_node(
     };
     let world_transform = parent_world_transform.then(&local_centered);
 
-    // Where this node was the last two times it was flattened, brought up to
-    // date on the way past because both paths below leave it current.
-    let was = node.last_flatten.get();
-    let again = was.is_some_and(|place| place.at == world_transform);
-    node.last_flatten.set(Some(FlattenPlace {
-        at: world_transform,
-        again,
-    }));
-    let standing_still = again && was.is_some_and(|place| place.again);
+    // What this node is cut by before it says anything of its own — read once,
+    // because three things want it: a replay, the commands of a node that sets
+    // no clip, and the entry left for next frame.
+    let inherited = parent_clip.map(|index| out.clips.reference(index));
 
     // Try cached flatten for clean subtrees (translation-only optimization).
     // Clone the Rc out of the RefCell so the borrow isn't held while pushing.
@@ -413,47 +448,36 @@ fn flatten_node(
     } else {
         None
     };
-    if node.clip.is_none()
-        && let Some(cached) = cached_flatten
-        && let Some((dx, dy)) = cached.replay_offset(world_transform, parent_clip)
+    if let Some(cached) = cached_flatten
+        && let Some((dx, dy)) = cached.replay_offset(world_transform)
     {
+        // The clips this subtree placed for itself move with it; the one it
+        // inherits is the one it finds here, wherever that has got to. Placed
+        // first, because the commands below read what they name.
+        out.clips.replay(&cached.clips, dx, dy, parent_clip);
         for cmd in &cached.commands {
-            let mut adjusted = cmd.clone();
-            adjusted.world_transform = cmd.world_transform.translated(dx, dy);
-            // One shift for every clip — a clip in the command's own space used
-            // to be exempt here because its rect was not in world coordinates to
-            // begin with, and now none of them are.
-            if let Some(clip) = &mut adjusted.clip {
-                *clip = clip.translated(dx, dy);
+            let mut replayed = cmd.clone();
+            replayed.world_transform = cmd.world_transform.translated(dx, dy);
+            // A command that named no clip named the one its subtree inherited,
+            // which is this frame's and not the one it was cached under.
+            if replayed.clip.is_none() {
+                replayed.clip = inherited.clone();
             }
-            out.push(adjusted);
+            out.push(replayed);
         }
         crate::render_stats::record_flatten_cached();
         return;
     }
 
     // Full flatten — existing logic
-    // Track if we should cache this node's flatten output. The mark captures
-    // how much has been pushed so far, so everything this subtree adds
-    // (including children) can be collected for caching.
-    //
-    // A node that sets a clip of its own still caches nothing: replaying it
-    // would also have to place that clip, which is #441's half of the problem
-    // and not this one's. What it inherits from above is another matter, and
-    // `replay_offset` is what decides whether the entry is any use.
-    //
-    // `standing_still` decides whether it is worth *making*. Collecting an entry
-    // copies everything this subtree pushed, and under a clip that copy is
-    // repaid only where the subtree already is — `replay_offset` takes a delta
-    // of zero there and nothing else. So only a subtree that has been where it
-    // is for two frames running is worth collecting; `FlattenPlace` says why
-    // one frame is not evidence, and what believing it cost. Above every clip
-    // any delta is taken, so the entry survives the subtree moving and is made
-    // whatever it did, which is what this has always done there.
-    let should_cache = node.clip.is_none()
-        && world_transform.is_translation_only()
-        && (parent_clip.is_none() || standing_still);
-    let mark = if should_cache { Some(out.mark()) } else { None };
+    // Where this subtree's own output starts, so that everything it adds
+    // (including its children, and including the clip it is about to place)
+    // can be picked out again and kept. A subtree that did anything but
+    // translate can be put back by no offset at all, so there is nothing to
+    // mark for it.
+    let marks = world_transform
+        .is_translation_only()
+        .then(|| (out.mark(), out.clips.mark()));
 
     // Compute world transform origin (for shapes that need it)
     let world_origin = if !node.local_transform.is_identity() {
@@ -463,18 +487,17 @@ fn flatten_node(
         parent_world_origin
     };
 
-    // Compute this node's world clip (if any)
-    let node_world_clip = node
-        .clip
-        .as_ref()
-        .map(|clip| PlacedShape::from_clip(clip, world_transform));
-
-    // Effective clip = intersection of parent clip and node clip
-    let effective_clip: Option<PlacedShape> = match (parent_clip, &node_world_clip) {
-        (Some(parent), Some(node_clip)) => Some(intersect_clips(parent, node_clip)),
-        (Some(parent), None) => Some(*parent),
-        (None, Some(node_clip)) => Some(*node_clip),
-        (None, None) => None,
+    // This node's clip, placed under the one it inherits. The intersection is
+    // still computed here and once — what changed is where it is written: into
+    // the frame's clip tree, which every command below names, instead of into
+    // each of those commands.
+    let (clip_index, effective_clip) = match &node.clip {
+        Some(clip) => {
+            let own = PlacedShape::from_clip(clip, world_transform);
+            let index = out.clips.place(own, Under::Inherited(parent_clip));
+            (Some(index), Some(out.clips.reference(index)))
+        }
+        None => (parent_clip, inherited.clone()),
     };
 
     // Add main commands with appropriate layers and clip
@@ -509,50 +532,58 @@ fn flatten_node(
             world_transform,
             world_transform_origin: world_origin,
             layer,
-            clip: effective_clip,
+            clip: effective_clip.clone(),
         });
     }
 
     // Recurse to children with effective clip
     for child in &node.children {
-        flatten_node(
-            child,
-            world_transform,
-            world_origin,
-            effective_clip.as_ref(),
-            out,
-        );
+        flatten_node(child, world_transform, world_origin, clip_index, out);
     }
 
+    // Add overlay commands (layer = Overlay) with overlay-specific clip.
+    //
     // An overlay's own clip, if it declared one — a ripple is cut to the shape
     // it belongs to, which is this node's, so it is placed by this node's
     // transform like any other clip. It used to need a flag of its own saying
     // "test this one in local coordinates"; now every clip says where its
     // coordinates are and the flag has nothing left to distinguish.
-    let overlay_clip: Option<PlacedShape> = match node.overlay_clip {
-        Some(ref clip) => Some(PlacedShape::from_clip(clip, world_transform)),
-        None => effective_clip,
-    };
-
-    // Add overlay commands (layer = Overlay) with overlay-specific clip
-    for cmd in &node.overlay_commands {
-        out.push(FlattenedCommand {
-            command: Rc::clone(cmd),
-            world_transform,
-            world_transform_origin: world_origin,
-            layer: RenderLayer::Overlay,
-            clip: overlay_clip,
-        });
+    //
+    // It narrows nothing, which is why it is placed under no parent: what a
+    // replay must do with it is carry it, not cut it again by an ancestor it
+    // never answered to.
+    if !node.overlay_commands.is_empty() {
+        let overlay_clip = match node.overlay_clip {
+            Some(ref clip) => {
+                let own = PlacedShape::from_clip(clip, world_transform);
+                let index = out.clips.place(own, Under::Nothing);
+                Some(out.clips.reference(index))
+            }
+            None => effective_clip,
+        };
+        for cmd in &node.overlay_commands {
+            out.push(FlattenedCommand {
+                command: Rc::clone(cmd),
+                world_transform,
+                world_transform_origin: world_origin,
+                layer: RenderLayer::Overlay,
+                clip: overlay_clip.clone(),
+            });
+        }
     }
 
     // Cache flatten results for next frame, but only when reuse is possible.
-    // The mark captures everything added since the start of this node
-    // (including all children).
-    *node.cached_flatten.borrow_mut() = mark.map(|mark| {
+    // A replay shifts everything the entry kept by one offset, so a subtree
+    // that did anything but translate cannot be put back by one — and that is
+    // the whole of the rule now. A clip is no longer part of it: the clips a
+    // subtree places travel with it and the one it inherits is looked up where
+    // it now is, so a row under a scroller is as replayable as a card on a
+    // desktop.
+    *node.cached_flatten.borrow_mut() = marks.map(|(mark, clip_mark)| {
         Rc::new(CachedFlatten {
-            commands: out.commands_since(mark),
+            commands: out.commands_since(mark, inherited.as_ref()),
+            clips: out.clips.since(clip_mark),
             world_transform,
-            parent_clip: parent_clip.copied(),
         })
     });
     crate::render_stats::record_flatten_full();
@@ -660,7 +691,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
 /// through a translation or an axis-aligned scale and refuses anything else,
 /// leaving its caller to rasterise a mask. There is no mask here; there is the
 /// box.
-fn intersect_clips(a: &PlacedShape, b: &PlacedShape) -> PlacedShape {
+pub(super) fn intersect_clips(a: &PlacedShape, b: &PlacedShape) -> PlacedShape {
     match rebase(b, a) {
         Some(b) => tighten(a, &b),
         None => tighten(&a.flattened(), &b.flattened()),
@@ -928,10 +959,13 @@ mod tests {
         for layer in sequence {
             original.push(command(layer));
         }
-        let cached = original.commands_since(Mark {
-            groups: 1,
-            buckets: [0; LAYER_COUNT],
-        });
+        let cached = original.commands_since(
+            Mark {
+                groups: 1,
+                buckets: [0; LAYER_COUNT],
+            },
+            None,
+        );
 
         let mut replayed = LayeredCommands::new();
         for cmd in cached {
@@ -1024,7 +1058,7 @@ mod tests {
         layered.push(command_at(Shapes, Rect::new(500.0, 0.0, 50.0, 20.0)));
         layered.push(command_at(Text, Rect::new(500.0, 0.0, 50.0, 20.0)));
 
-        let captured = layered.commands_since(mark);
+        let captured = layered.commands_since(mark, None);
         assert_eq!(
             captured.len(),
             2,
@@ -1307,7 +1341,7 @@ mod world_geometry_tests {
             .iter()
             .find(|c| c.layer == RenderLayer::Overlay)
             .expect("the ripple is in the frame");
-        let clip = overlay.clip.as_ref().expect("and it is clipped");
+        let clip = overlay.clip().expect("and it is clipped");
 
         assert_eq!(
             clip.rect,
@@ -1373,7 +1407,7 @@ mod world_geometry_tests {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
             flatten_root_into(node, &mut commands, &mut layers);
             let cmd = commands.first().expect("the child draws");
-            let clip = cmd.clip.as_ref().expect("the child clips");
+            let clip = cmd.clip().expect("the child clips");
             (
                 (clip.placement.tx(), clip.placement.ty()),
                 (cmd.world_transform.tx(), cmd.world_transform.ty()),
@@ -1396,6 +1430,193 @@ mod world_geometry_tests {
             ((35.0, 65.0), (35.0, 65.0)),
             "the clip and the command are both where the subtree now is, on \
              each axis independently"
+        );
+    }
+
+    /// A replayed subtree puts its clips back under each other, not under
+    /// whatever the arithmetic happens to land on.
+    ///
+    /// Everything above watches one clip inside a cached subtree. The links
+    /// *between* several of them are a different thing: an entry writes them
+    /// down as offsets into its own run, a replay reads them back as indices
+    /// into this frame's tree, and the two pieces of arithmetic have to be
+    /// inverses. A scene with one clip above the subtree, two side by side
+    /// inside it and a third under the second is the smallest one where every
+    /// way of getting that wrong lands somewhere different: the offset is not
+    /// zero, the run does not start at zero, and the three candidate parents
+    /// cut in three visibly different places.
+    ///
+    /// The oracle is a full flatten of the same scene at the same place. What a
+    /// replay produces and what flattening produces are the same frame or one
+    /// of them is a bug — which is the whole promise of the cache, stated once
+    /// rather than as a list of coordinates.
+    #[test]
+    fn a_replayed_subtree_puts_its_clips_back_under_each_other() {
+        fn clipped(id: u64, rect: Rect, children: Vec<Rc<RenderNode>>) -> RenderNode {
+            let mut node = RenderNode::new(id);
+            node.bounds = Rect::new(0.0, 0.0, 100.0, 100.0);
+            node.clip = Some(ClipRegion {
+                rect,
+                corner_radius: CornerRadii::uniform(0.0),
+                curvature: 1.0,
+            });
+            node.children = children;
+            node
+        }
+
+        // root, clipped -> the subtree that is replayed -> [a clip of its own,
+        // and a clip under a clip]. The last one draws.
+        let scene = |dx: f32, dy: f32| {
+            let mut drawn = RenderNode::new(5);
+            drawn.bounds = Rect::new(0.0, 0.0, 100.0, 100.0);
+            drawn.commands.push(Rc::new(DrawCommand::rounded_rect(
+                Rect::new(0.0, 0.0, 100.0, 100.0),
+                Color::WHITE,
+                0.0,
+            )));
+
+            let inner = clipped(4, Rect::new(0.0, 20.0, 100.0, 60.0), vec![Rc::new(drawn)]);
+            let outer = clipped(3, Rect::new(0.0, 0.0, 100.0, 60.0), vec![Rc::new(inner)]);
+            // Beside the other two rather than above them, so the run holds
+            // three clips and the link that matters points at the middle one.
+            let beside = clipped(2, Rect::new(50.0, 0.0, 50.0, 100.0), Vec::new());
+
+            let mut subtree = RenderNode::new(1);
+            subtree.bounds = Rect::new(0.0, 0.0, 100.0, 100.0);
+            subtree.children = vec![Rc::new(beside), Rc::new(outer)];
+
+            let mut root = clipped(0, Rect::new(0.0, 0.0, 100.0, 100.0), vec![Rc::new(subtree)]);
+            root.local_transform = Transform::translate(dx, dy);
+            root
+        };
+
+        let cut = |node: &RenderNode| {
+            let (mut commands, mut layers) = (Vec::new(), Vec::new());
+            flatten_root_into(node, &mut commands, &mut layers);
+            commands
+                .iter()
+                .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { .. }))
+                .expect("the box draws")
+                .clip()
+                .expect("under three clips")
+        };
+
+        let mut replayed = scene(10.0, 20.0);
+        let at_rest = cut(&replayed);
+        assert_eq!(
+            at_rest.rect,
+            Rect::new(0.0, 20.0, 100.0, 40.0),
+            "the box is cut by the two clips over it and not by the one beside \
+             them"
+        );
+
+        // The subtree below the root is clean; the root is not, so it places
+        // its own clip afresh and the subtree comes back out of the cache.
+        replayed.local_transform = Transform::translate(35.0, 65.0);
+        fn mark_clean(node: &RenderNode) {
+            node.repainted.set(false);
+            for child in &node.children {
+                mark_clean(child);
+            }
+        }
+        for child in &replayed.children {
+            mark_clean(child);
+        }
+
+        let moved = cut(&replayed);
+        assert_ne!(
+            moved.placement, at_rest.placement,
+            "the subtree was replayed where it already was, so this says \
+             nothing about putting it back somewhere else"
+        );
+        assert_eq!(
+            moved,
+            cut(&scene(35.0, 65.0)),
+            "the replayed subtree's clips came back under the wrong ones: a \
+             replay and a flatten of the same scene in the same place are the \
+             same frame, or the cache is not a cache"
+        );
+    }
+
+    /// A replayed overlay is cut to the shape it belongs to and to nothing
+    /// above it.
+    ///
+    /// The other half of what a replay has to know about a clip, and the one
+    /// with no second witness anywhere else. A cached clip that recorded no
+    /// parent means one of two things, and they differ only a frame later:
+    /// *nothing was above me then*, which a replay must ask again because
+    /// something may be above the subtree now, and *nothing is ever above me*,
+    /// which is what an overlay's clip is — a ripple is cut to the shape it
+    /// belongs to, and the full-flatten path has always replaced the inherited
+    /// clip with it rather than narrowing it. `Under::Nothing` is the second,
+    /// and reading it as the first would narrow a replayed ripple by a
+    /// scroller it never answered to.
+    ///
+    /// So the overlay sits under a clip that would cut it in half, in a subtree
+    /// that is replayed rather than flattened, and comes out whole.
+    #[test]
+    fn a_replayed_overlay_answers_to_no_clip_above_it() {
+        let mut child = RenderNode::new(3);
+        child.bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
+        child.overlay_clip = Some(ClipRegion {
+            rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+            corner_radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+        });
+        child
+            .overlay_commands
+            .push(Rc::new(DrawCommand::rounded_rect(
+                Rect::new(0.0, 0.0, 40.0, 40.0),
+                Color::WHITE,
+                0.0,
+            )));
+
+        let mut middle = RenderNode::new(2);
+        middle.bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
+        middle.children.push(Rc::new(child));
+
+        let mut root = RenderNode::new(1);
+        root.bounds = Rect::new(0.0, 0.0, 200.0, 200.0);
+        // Half the overlay's height: if the overlay ever answered to it, the
+        // rect below would be 20 tall rather than 40.
+        root.clip = Some(ClipRegion {
+            rect: Rect::new(0.0, 0.0, 40.0, 20.0),
+            corner_radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+        });
+        root.children.push(Rc::new(middle));
+
+        let overlay_clip = |node: &RenderNode| {
+            let (mut commands, mut layers) = (Vec::new(), Vec::new());
+            flatten_root_into(node, &mut commands, &mut layers);
+            commands
+                .iter()
+                .find(|c| c.layer == RenderLayer::Overlay)
+                .expect("the ripple is in the frame")
+                .clip()
+                .expect("and it is clipped")
+                .rect
+        };
+
+        assert_eq!(
+            overlay_clip(&root),
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+            "flattened in full, the overlay takes its own clip and not the \
+             one above it"
+        );
+
+        // The subtree below the clip is clean and the clip's own node is not,
+        // so the middle node is replayed while the clip above it is placed
+        // afresh — which is the arrangement that asks the question.
+        for c in &root.children {
+            c.repainted.set(false);
+        }
+
+        assert_eq!(
+            overlay_clip(&root),
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+            "replayed, the overlay came back cut by the clip above it, which \
+             it never answered to when it was flattened"
         );
     }
 

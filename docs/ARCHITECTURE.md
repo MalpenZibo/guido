@@ -742,6 +742,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/paint_context.rs` | PaintContext API for building render tree |
 | `src/renderer/tree.rs` | RenderNode structure and paint-cache sharing |
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
+| `src/renderer/clip.rs` | The frame's clip tree, which draw commands name rather than copy |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |

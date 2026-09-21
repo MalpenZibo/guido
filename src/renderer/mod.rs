@@ -11,6 +11,7 @@
 //! - Overlays (like ripples) naturally render after children
 
 mod backdrop_pass;
+pub(crate) mod clip;
 mod commands;
 mod constants;
 mod flatten;
@@ -28,6 +29,7 @@ mod textured_vertex;
 pub(crate) mod tree;
 mod types;
 
+pub use clip::ClipRef;
 pub use commands::{Border, CornerRadii, DrawCommand};
 pub use flatten::{CommandLayer, FlattenedCommand, RegionsCarried, flatten_root_into};
 #[cfg(any(test, feature = "testing"))]
