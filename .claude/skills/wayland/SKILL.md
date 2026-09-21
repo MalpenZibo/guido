@@ -57,8 +57,9 @@ compositor would be: a recorder implementing `Platform` and `Surface` that
 answers for as many surfaces as the loop will carry and keeps what each was
 asked. So a surface configuring, a frame opening, input routing, layout, paint,
 *what the surface asks the compositor for*, a second surface, `spawn_surface`
-and `close` at runtime, and the order a popup chain is torn down in all have a
-sensor. It needs the `testing` feature and a GPU adapter.
+and `close` at runtime, the order a popup chain is torn down in, a monitor
+arriving or leaving, and a session locking all have a sensor. It needs the
+`testing` feature and a GPU adapter.
 
 What has none: what goes out on the wire, and what a compositor does with it.
 The recorder proves guido asks for an exclusive zone of 50; it cannot prove niri
@@ -68,10 +69,15 @@ implementations answer `popup_descendants_bottom_up` from one
 compositor is given. What `src/platform/popups.rs` still answers alone is which
 surfaces are popups and whose children they are.
 
-Still verified by running an example and looking: **the session lock and output
-hotplug**. They type-check against the same trait and need no redesign, but each
-needs something built: the recorder leaves `Platform`'s four lock methods at
-their defaults, and `outputs::sync_outputs` is `pub(crate)`.
+**The session lock and output hotplug** are on this side of the line now.
+`Headless::connect_output` and `disconnect_output` hold an `OutputRegistry` and
+write the reactive list through `outputs::sync_outputs` and
+`outputs::output_removed`, which is how the Wayland handler writes it — outputs
+never reach `Platform` — and the recorder answers the four lock methods, with
+`Headless::grant_lock` where the compositor's `locked` would be. What is still
+only watched by running an example is what a `WaylandState` does with a
+`wl_output`: nothing can reach the handler methods around the registry without
+a connection.
 
 When you change this layer:
 
