@@ -9,7 +9,7 @@ use crate::transform::Transform;
 use crate::widgets::Rect;
 
 use super::commands::{CornerRadii, DrawCommand};
-use super::tree::{CachedFlatten, RenderNode};
+use super::tree::{CachedFlatten, FlattenPlace, RenderNode};
 use crate::shape::PlacedShape;
 
 /// Render layer for draw command ordering.
@@ -396,6 +396,16 @@ fn flatten_node(
     };
     let world_transform = parent_world_transform.then(&local_centered);
 
+    // Where this node was the last two times it was flattened, brought up to
+    // date on the way past because both paths below leave it current.
+    let was = node.last_flatten.get();
+    let again = was.is_some_and(|place| place.at == world_transform);
+    node.last_flatten.set(Some(FlattenPlace {
+        at: world_transform,
+        again,
+    }));
+    let standing_still = again && was.is_some_and(|place| place.again);
+
     // Try cached flatten for clean subtrees (translation-only optimization).
     // Clone the Rc out of the RefCell so the borrow isn't held while pushing.
     let cached_flatten = if !node.repainted.get() {
@@ -431,7 +441,18 @@ fn flatten_node(
     // would also have to place that clip, which is #441's half of the problem
     // and not this one's. What it inherits from above is another matter, and
     // `replay_offset` is what decides whether the entry is any use.
-    let should_cache = node.clip.is_none() && world_transform.is_translation_only();
+    //
+    // `standing_still` decides whether it is worth *making*. Collecting an entry
+    // copies everything this subtree pushed, and under a clip that copy is
+    // repaid only where the subtree already is — `replay_offset` takes a delta
+    // of zero there and nothing else. So only a subtree that has been where it
+    // is for two frames running is worth collecting; `FlattenPlace` says why
+    // one frame is not evidence, and what believing it cost. Above every clip
+    // any delta is taken, so the entry survives the subtree moving and is made
+    // whatever it did, which is what this has always done there.
+    let should_cache = node.clip.is_none()
+        && world_transform.is_translation_only()
+        && (parent_clip.is_none() || standing_still);
     let mark = if should_cache { Some(out.mark()) } else { None };
 
     // Compute world transform origin (for shapes that need it)

@@ -98,6 +98,11 @@ const TALL_ROWS: usize = 3;
 const SHORT_SCROLL: f32 = 40.0;
 /// The box next to the static clip, whose whole job is to be marked dirty.
 const POKER: f32 = 50.0;
+/// How many frames a subtree spends in one place before flatten keeps its
+/// commands: one to be painted, and two more to be twice where it was. One
+/// frame of stillness is not evidence of stillness — `FlattenPlace` says why,
+/// and what believing it cost.
+const FRAMES_TO_SETTLE: usize = 3;
 /// The clip's corners, before and after they are rounded. A shape change that
 /// no layout notices, so the box under it stays clean across the two frames.
 const SQUARE_CORNERS: Corners = Corners {
@@ -313,6 +318,15 @@ impl Surface {
             guido::cache_paint_results(tree, child);
         }
         tree.clear_needs_paint(*root);
+    }
+
+    /// `count` frames, with `poke` marked dirty before each so that none of
+    /// them is skipped for having nothing to do.
+    fn frames(&mut self, poke: WidgetId, count: usize) {
+        for _ in 0..count {
+            self.surface.tree.mark_needs_paint(poke);
+            self.frame();
+        }
     }
 
     /// The command the box filled with `fill` contributed to the last frame:
@@ -584,24 +598,36 @@ fn a_subtree_under_a_static_clip_is_reused() {
         viewport,
         "the box is drawn under the box that hides its overflow"
     );
+
+    s.frames(poker, 1);
+    assert!(
+        s.node_of(clipped).cached_flatten.borrow().is_none(),
+        "the box has been in one place for one frame and flatten has already \
+         copied it down. One frame is not evidence of standing still: on \
+         `benches/scroll_list` 18% of the nodes under the scroller's clip are \
+         where they were the frame before and not one is still there the frame \
+         after, and believing that frame cost the flatten phase twice what not \
+         caching at all costs"
+    );
+
+    s.frames(poker, FRAMES_TO_SETTLE - 2);
     let first = s
         .node_of(clipped)
         .cached_flatten
         .borrow()
         .clone()
-        .expect("a subtree under a static clip has nothing to re-flatten for, so flatten should have kept its commands");
+        .expect("a subtree that has stood still under a static clip has nothing to re-flatten for, so flatten should have kept its commands");
 
-    // The pointer moves onto the box next door: that one repaints, the clipped
-    // one is untouched and clean.
-    s.surface.tree.mark_needs_paint(poker);
-    s.frame();
+    // The pointer moves onto the box next door again: that one repaints, the
+    // clipped one is untouched and clean.
+    s.frames(poker, 1);
 
     let second = s
         .node_of(clipped)
         .cached_flatten
         .borrow()
         .clone()
-        .expect("still cached after the second frame");
+        .expect("still cached after the next frame");
     assert!(
         Rc::ptr_eq(&first, &second),
         "the clipped box was flattened again although neither it nor the clip \
@@ -615,15 +641,17 @@ fn a_subtree_under_a_static_clip_is_reused() {
     );
 }
 
-/// A subtree that scrolled out from under its clip is flattened again, and the
-/// clip stays on the viewport.
+/// A subtree that scrolled out from under its clip is flattened again, the
+/// clip stays on the viewport, and nothing is written down for next time.
 ///
-/// This is the other half of the same question and the reason the guard exists.
-/// The row moves by the scroll offset; the viewport that clips it does not.
-/// Replaying the row's cached commands would shift their baked-in clip by the
-/// same offset as their content, so the clip would follow the row up the screen
-/// and stop cutting anything — the list would paint straight through its
-/// scroller, on the first scrolled frame.
+/// Two halves, and both are load-bearing. Replaying the row's cached commands
+/// would shift their baked-in clip by the same offset as their content, so the
+/// clip would follow the row up the screen and stop cutting anything — the list
+/// would paint straight through its scroller, on the first scrolled frame. And
+/// *collecting* a fresh entry for the row is a copy of everything it drew, made
+/// for a replay that the next frame will refuse for exactly the same reason:
+/// measured on `benches/scroll_list`, doing it anyway cost the flatten phase
+/// twice what not caching at all costs.
 ///
 /// The rows are tall enough that none is ever culled, which is what keeps their
 /// paints complete and so cacheable. The list above them is not the subject: it
@@ -653,12 +681,13 @@ fn a_subtree_that_scrolled_out_from_under_its_clip_is_not_reused() {
         viewport,
         "the row is drawn under the scroller's viewport"
     );
-    let first = s
-        .node_of(row)
-        .cached_flatten
-        .borrow()
-        .clone()
-        .expect("nothing has moved yet, so the row's flatten is cached");
+
+    s.frames(scroller, FRAMES_TO_SETTLE - 1);
+    assert!(
+        s.node_of(row).cached_flatten.borrow().is_some(),
+        "the row has stood still long enough to be worth keeping, and this test \
+         is about what happens to that entry when it stops standing still"
+    );
 
     s.scroll_at(
         PAD + VIEWPORT / 2.0,
@@ -680,22 +709,17 @@ fn a_subtree_that_scrolled_out_from_under_its_clip_is_not_reused() {
         (PAD, PAD - SHORT_SCROLL),
         "the row did not scroll"
     );
-    let second = s
-        .node_of(row)
-        .cached_flatten
-        .borrow()
-        .clone()
-        .expect("cached again after the second frame");
-    assert!(
-        !Rc::ptr_eq(&first, &second),
-        "the row's flatten was reused although the row moved by {SHORT_SCROLL} \
-         and the viewport clipping it did not"
-    );
     assert_eq!(
         s.clip_shape(SCROLLED_FILL).world_aabb(),
         viewport,
         "the clip travelled with the scrolled row instead of staying on the \
          viewport, so it now cuts nothing"
+    );
+    assert!(
+        s.node_of(row).cached_flatten.borrow().is_none(),
+        "the row moved out from under a clip that did not follow it, so nothing \
+         it drew can be replayed where it now is — and flatten copied it all \
+         down anyway, for a frame that will refuse it again"
     );
 }
 
@@ -720,7 +744,8 @@ fn a_subtree_whose_clip_changed_shape_is_not_reused() {
     );
 
     s.frame();
-    let hidden = s.surface.tree.get_children(s.surface.root)[0];
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (hidden, poker) = (children[0], children[1]);
     let clipped = s.surface.tree.get_children(hidden)[0];
     let (painted, _) = s.box_drawn(CLIPPED_FILL);
     assert_eq!(
@@ -728,12 +753,14 @@ fn a_subtree_whose_clip_changed_shape_is_not_reused() {
         SQUARE_CORNERS.radii,
         "the box starts under a clip with square corners"
     );
+
+    s.frames(poker, FRAMES_TO_SETTLE - 1);
     let first = s
         .node_of(clipped)
         .cached_flatten
         .borrow()
         .clone()
-        .expect("a subtree under a static clip is cached");
+        .expect("a subtree that has stood still under a static clip is cached");
 
     corners.set(ROUNDED_CORNERS);
     s.surface.tree.mark_needs_paint(hidden);
@@ -751,7 +778,7 @@ fn a_subtree_whose_clip_changed_shape_is_not_reused() {
         .cached_flatten
         .borrow()
         .clone()
-        .expect("cached again after the second frame");
+        .expect("cached again after the next frame");
     assert!(
         !Rc::ptr_eq(&first, &second),
         "the box's flatten was reused although the clip above it is no longer \

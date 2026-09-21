@@ -86,6 +86,30 @@ impl CachedFlatten {
     }
 }
 
+/// Where a node was when it was last flattened, and whether it had already
+/// been there.
+///
+/// Under a clip a cached subtree is only ever replayed where it already is —
+/// [`CachedFlatten::replay_offset`] takes a delta of zero there and nothing
+/// else — so collecting its commands repays the copy only for a subtree that
+/// is standing still. **One frame of stillness is not that.** Measured on
+/// `benches/scroll_list` at 5000 rows: 18% of the nodes under the scroller's
+/// clip are where they were the frame before, and not one of them is still
+/// there the frame after. Acting on the first frame buys 945 replays across
+/// the run and pays 21501 entries for them, which is how the flatten phase
+/// came to cost twice what not caching at all costs (#445).
+///
+/// So the entry waits for two agreements rather than one, and is collected on
+/// the **third** flatten in one place: the first one to find the node where
+/// the two before it did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlattenPlace {
+    /// The world transform the last flatten saw.
+    pub at: Transform,
+    /// Whether the flatten before that one saw the same.
+    pub again: bool,
+}
+
 /// A node in the render tree representing a widget's visual output.
 ///
 /// Each node contains:
@@ -170,6 +194,15 @@ pub struct RenderNode {
     /// so shallow node clones inherit it for free. Interior-mutable because
     /// flatten writes it while the tree is Rc-shared.
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>,
+
+    /// Where this node was when it was last flattened, and whether it had
+    /// already been there.
+    ///
+    /// Two frames of memory, kept whether or not either flatten was worth
+    /// caching, because it is what decides whether the next one is. A transform
+    /// and a flag, and no allocation, which is what makes it affordable for
+    /// every node on every frame; the entry it decides against is not.
+    pub last_flatten: Cell<Option<FlattenPlace>>,
 }
 
 impl RenderNode {
@@ -189,6 +222,7 @@ impl RenderNode {
             repainted: Cell::new(true),
             partial: false,
             cached_flatten: RefCell::new(None),
+            last_flatten: Cell::new(None),
         }
     }
 
@@ -213,5 +247,6 @@ impl RenderNode {
         self.repainted.set(true);
         self.partial = false;
         *self.cached_flatten.borrow_mut() = None;
+        self.last_flatten.set(None);
     }
 }
