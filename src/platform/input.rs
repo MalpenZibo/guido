@@ -38,18 +38,20 @@ use crate::widgets::{Event, Key, Modifiers, MouseButton, Point, ScrollSource};
 /// Pixels per line for discrete scroll (mouse wheel)
 const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
-/// Queue a move, replacing the last one if it was also a move.
+/// Queue an event, replacing the last one when a move follows a move. Every
+/// queued `MouseMove` goes through here, whoever synthesized it.
 ///
 /// Only the latest position matters for hover state, and every queued move
 /// costs a full event-dispatch walk of the widget tree. The coalesced one keeps
 /// the newest instant: it stands for where the pointer is now, not for where it
 /// was when the run began.
-fn push_move(events: &mut Vec<(Instant, Event)>, at: Instant, pointer: Point) {
-    let moved = (at, Event::MouseMove { at: Some(pointer) });
-    if let Some(last @ (_, Event::MouseMove { .. })) = events.last_mut() {
-        *last = moved;
+fn push_event(events: &mut Vec<(Instant, Event)>, at: Instant, event: Event) {
+    if matches!(event, Event::MouseMove { .. })
+        && let Some(last @ (_, Event::MouseMove { .. })) = events.last_mut()
+    {
+        *last = (at, event);
     } else {
-        events.push(moved);
+        events.push((at, event));
     }
 }
 
@@ -423,7 +425,13 @@ impl TouchHandler for WaylandState {
         if self.input.primary_finger == Some(id)
             && let Some(surface_state) = self.surfaces.get_mut(&surface_id)
         {
-            push_move(&mut surface_state.pending_events, at, Point::new(x, y));
+            push_event(
+                &mut surface_state.pending_events,
+                at,
+                Event::MouseMove {
+                    at: Some(Point::new(x, y)),
+                },
+            );
         }
     }
 
@@ -514,12 +522,13 @@ impl PointerHandler for WaylandState {
                                 at: Some(self.input.pointer_at),
                             },
                         ));
-                        events.push((
+                        push_event(
+                            events,
                             at,
                             Event::MouseMove {
                                 at: Some(self.input.pointer_at),
                             },
-                        ));
+                        );
                     }
                 }
                 PointerEventKind::Leave { .. } => {
@@ -540,7 +549,13 @@ impl PointerHandler for WaylandState {
                     self.input.pointer_at =
                         Point::new(event.position.0 as f32, event.position.1 as f32);
                     if let Some(events) = target_events {
-                        push_move(events, at, self.input.pointer_at);
+                        push_event(
+                            events,
+                            at,
+                            Event::MouseMove {
+                                at: Some(self.input.pointer_at),
+                            },
+                        );
                     }
                 }
                 PointerEventKind::Press { button, serial, .. } => {
@@ -1000,6 +1015,50 @@ mod tests {
     /// from a delta.
     const PX: f32 = 10.0;
     const PY: f32 = 20.0;
+
+    fn at(pointer: Point) -> Event {
+        Event::MouseMove { at: Some(pointer) }
+    }
+
+    /// The rule `push_event` took off its call sites. A queued move stands for
+    /// where the pointer is now, so the next one replaces it — and an event
+    /// that is not a move is appended, because a press queued behind a move
+    /// that then swallowed it is a click the widget never sees.
+    #[test]
+    fn a_queued_move_gives_way_to_the_next_move_and_to_nothing_else() {
+        let t0 = Instant::now();
+        let later = t0 + Duration::from_millis(16);
+        let mut events = Vec::new();
+
+        push_event(&mut events, t0, at(Point::new(1.0, 1.0)));
+        push_event(&mut events, later, at(Point::new(2.0, 2.0)));
+        let [(when, Event::MouseMove { at: Some(pointer) })] = events.as_slice() else {
+            panic!("two moves are one move, got {events:?}");
+        };
+        assert_eq!(*pointer, Point::new(2.0, 2.0), "the newest position wins");
+        assert_eq!(*when, later, "and brings its instant with it");
+
+        push_event(
+            &mut events,
+            later,
+            Event::MouseDown {
+                at: Some(Point::new(2.0, 2.0)),
+                button: MouseButton::Left,
+            },
+        );
+        push_event(&mut events, later, at(Point::new(3.0, 3.0)));
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    (_, Event::MouseMove { .. }),
+                    (_, Event::MouseDown { .. }),
+                    (_, Event::MouseMove { .. }),
+                ]
+            ),
+            "the press survives, and the move after it starts a new run, got {events:?}"
+        );
+    }
 
     fn axis(
         source: Option<wl_pointer::AxisSource>,
