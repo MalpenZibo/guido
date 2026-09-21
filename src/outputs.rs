@@ -92,6 +92,10 @@ pub struct OutputInfo {
     pub logical_position: Option<(i32, i32)>,
 }
 
+/// Behind the test cfgs because both callers are tests — the registry's own
+/// and the recorder's. Without them a compositor describes every output it
+/// advertises, and there is nothing for this to build.
+#[cfg(any(test, feature = "testing"))]
 impl OutputInfo {
     /// A monitor the compositor has said nothing about but its connector
     /// name, which is what a test needs and all it needs: the id says which
