@@ -783,6 +783,32 @@ mod the_two_refusals_the_loop_cannot_reach {
     }
 }
 
+/// An application forgets what it left on its thread, so the next one there
+/// starts clean — `reset_thread_state`, the same sequence `App::drop` runs and
+/// in the same place.
+///
+/// `App` has done this since it existed; `Headless` never did, because every
+/// test in `tests/` builds one application and cargo gives each test a thread
+/// of its own, so no second application ever ran on a thread that had already
+/// held one. `benches/scroll_list` is the first caller that does, and the worst
+/// of what it inherited was the `Unregister` jobs a dropped tree queues: the
+/// next application's widgets are handed the same ids, and answer to them. Its
+/// list of two hundred rows painted two children a frame.
+///
+/// What it does *not* do is clear the process-wide half — the wake flag, the
+/// ingress sender. `App::drop` may, because a program has one application; this
+/// must not, because a test binary runs several at once and clearing them
+/// reaches into somebody else's.
+impl Drop for Headless {
+    fn drop(&mut self) {
+        // The surfaces first. Each disposes its reactive owner as it goes, and
+        // an owner disposed after the arena is wiped names somebody else's
+        // signals.
+        drop(std::mem::take(&mut self.surfaces));
+        crate::reset_thread_state(&mut self.tree);
+    }
+}
+
 #[cfg(test)]
 mod one_device_for_the_binary {
     use super::*;
@@ -806,5 +832,66 @@ mod one_device_for_the_binary {
             std::ptr::eq(first.gpu, second.gpu),
             "a second application built a context of its own"
         );
+    }
+}
+
+#[cfg(test)]
+mod the_next_application_on_this_thread {
+    use super::*;
+    use crate::layout::Flex;
+    use crate::widgets::{Color, container};
+
+    /// The list two applications in a row each put on a surface, white on a
+    /// black surface so that a row which is there and a row which is not are
+    /// one pixel apart.
+    fn rows() -> impl Widget + 'static {
+        container()
+            .layout(Flex::column())
+            .children((0..200).map(|_| {
+                container()
+                    .width(40.0)
+                    .height(10.0)
+                    .background(Color::WHITE)
+            }))
+    }
+
+    /// A second application does not inherit the first one's teardown.
+    ///
+    /// Dropping a tree queues an `Unregister` job per widget, and the next
+    /// application's widgets are handed the same ids: without the reset, the
+    /// second application's rows were unregistered by the first's departure
+    /// before they had drawn once, and its surface came up black. Every test in
+    /// `tests/` builds one application, and cargo gives each test a thread of
+    /// its own, so nothing asked this until a benchmark played one script
+    /// twice.
+    #[test]
+    fn does_not_inherit_the_last_one_tearing_its_widgets_down() {
+        let Some(mut first) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let white = drew_a_row(&mut first);
+        assert_eq!(white, [255, 255, 255, 255], "the first application's row");
+        drop(first);
+
+        let mut second = Headless::new().expect("the first one had an adapter");
+        assert_eq!(
+            drew_a_row(&mut second),
+            white,
+            "the second application's row is not the one the first one drew"
+        );
+    }
+
+    /// One surface, one frame, and the colour where the third row should be.
+    fn drew_a_row(app: &mut Headless) -> [u8; 4] {
+        let id = app.surface(
+            SurfaceConfig::new()
+                .width(100)
+                .height(200)
+                .background_color(Color::BLACK),
+            rows,
+        );
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        app.read_pixel(id, 20, 25)
     }
 }
