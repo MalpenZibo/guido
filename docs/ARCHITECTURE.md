@@ -194,6 +194,8 @@ Layer shell protocol implementation for desktop widgets.
   `surface_output()` (see `src/outputs.rs`)
 - Event loop via calloop
 - Dynamic surface property modification via `SurfaceHandle`
+- Fractional scaling via `wp_fractional_scale_v1` and `wp_viewporter`, with the
+  integer `wl_surface.set_buffer_scale` path as the fallback
 
 **Module layout.** `wayland.rs` holds the connection, the surface registry and
 the layer shell; everything else is one file per concern, each owning its own
@@ -210,6 +212,7 @@ live beside their state rather than all in one file.
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
 | `platform/lock.rs` | `ext-session-lock-v1` grant and lifecycle events |
 | `platform/backdrop.rs` | `ext-background-effect-v1` compositor-side blur |
+| `platform/scaling.rs` | `wp_fractional_scale_v1` and `wp_viewporter`: the real output scale, and the logical size a buffer stands for |
 
 ### `surface.rs` - Surface Management
 

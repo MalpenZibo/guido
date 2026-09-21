@@ -91,6 +91,61 @@ fn a_configured_surface_lays_out_at_the_size_it_was_given() {
     );
 }
 
+/// The buffer and the viewport destination that says what it stands for are
+/// never committed out of step.
+///
+/// A viewport is how a fractionally-scaled surface declares its logical size,
+/// and the compositor reads the buffer through it: a destination the buffer
+/// does not match is the surface drawn at the wrong size, and with a source
+/// rectangle it is `wp_viewport: error 2, source rectangle out of buffer
+/// bounds` — fatal, the compositor drops the client (libsdl-org/SDL#9283).
+///
+/// The sequence is built so neither half can be inferred from the other. The
+/// second configure moves the buffer while the logical size stays; the fourth
+/// moves the logical size while the buffer stays — 2560x32 at 1.5 and 3840x48
+/// at 1.0 are the same 3840x48 buffer. A destination published only when the
+/// swapchain resizes survives the first three and declares 3840x48 over a
+/// 2560x32 surface on the fourth.
+#[test]
+fn a_buffer_and_the_destination_that_declares_it_never_disagree() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+
+    // The logical size and scale the compositor confirms, the buffer the
+    // protocol's rounding asks for, and every destination declared by then —
+    // written out rather than derived, so the expectation is a statement and
+    // not a second copy of the rule under test.
+    let configures = [
+        ((2560, 32), 1.5, (3840, 48), &[(2560, 32)][..]),
+        ((2560, 32), 2.0, (5120, 64), &[(2560, 32)][..]),
+        ((3840, 48), 1.0, (3840, 48), &[(2560, 32), (3840, 48)][..]),
+        (
+            (2560, 32),
+            1.5,
+            (3840, 48),
+            &[(2560, 32), (3840, 48), (2560, 32)][..],
+        ),
+    ];
+
+    for ((width, height), scale, buffer, declared) in configures {
+        app.configure(surface, width, height, scale);
+        app.step();
+        // A second frame with nothing new to say must not re-declare anything.
+        app.step();
+
+        assert_eq!(
+            app.physical_size(surface),
+            buffer,
+            "the buffer for {width}x{height} at {scale}"
+        );
+        assert_eq!(
+            app.viewport_destinations(surface),
+            declared,
+            "every destination declared, after {width}x{height} at {scale}"
+        );
+    }
+}
+
 /// The event reached the widget under it, and only that one.
 #[test]
 fn a_click_inside_runs_the_handler_and_one_outside_does_not() {

@@ -113,9 +113,11 @@ impl WaylandState {
         let wl_surface = self.compositor_state.create_surface(qh);
         let lock_surface = lock.create_lock_surface(wl_surface.clone(), &wl_output, qh);
 
+        let scaling = self.create_surface_scaling(id, &wl_surface);
+
         self.surface_lookup.insert(wl_surface.id(), id);
         let surface_state =
-            WaylandSurfaceState::new(SurfaceRole::Lock(lock_surface), wl_surface, 0, 0);
+            WaylandSurfaceState::new(SurfaceRole::Lock(lock_surface), wl_surface, 0, 0, scaling);
         self.surfaces.insert(id, surface_state);
 
         log::info!("Created lock surface {:?} on output {:?}", id, output);

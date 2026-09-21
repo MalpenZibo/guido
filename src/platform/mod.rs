@@ -3,6 +3,7 @@ pub mod input;
 pub mod lock;
 pub mod outputs;
 pub mod popups;
+pub mod scaling;
 pub mod selections;
 pub mod wayland;
 

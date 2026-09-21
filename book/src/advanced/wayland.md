@@ -456,6 +456,19 @@ Each `OutputInfo` carries a stable `OutputId` plus the connector name
 and logical size/position when the compositor reports them. Ids are never
 reused: a monitor that is unplugged and reconnected gets a fresh id.
 
+### Display Scale
+
+Scaling is automatic and there is nothing to configure. Widgets are laid
+out in logical pixels and the surface is drawn at whatever scale its
+output is set to — 1.5 and 1.25 included, where the compositor offers
+`wp_fractional_scale_v1` and `wp_viewporter`. Where it does not, the
+surface falls back to the whole-number scale the compositor asks for.
+
+`OutputInfo::scale_factor` is not that number. It is the integer
+`wl_output` scale, which is what a compositor reports for a monitor and
+is rounded up on a fractionally-scaled one — a 1.5 output reports 2. It
+is there to describe the monitor, not to size anything.
+
 ### Pinning a Surface to an Output
 
 By default the compositor picks the output a surface appears on. Pass an

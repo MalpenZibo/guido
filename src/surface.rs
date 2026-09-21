@@ -395,6 +395,50 @@ pub(crate) fn honour_owned_axes(anchor: Anchor, width: u32, height: u32) -> (u32
     )
 }
 
+/// The buffer a logical size is drawn into at `scale`, in physical pixels.
+///
+/// **Rounded halfway away from zero**, which fractional-scale-v1 requires of
+/// the buffer a viewport declares a destination for, and which swaybg — a layer
+/// shell client, so the same shell guido uses — spells `(size * numerator +
+/// 60) / 120` and calls round half up in a comment beside it. `f64::round` is
+/// that rule for a positive product, and the multiply is in `f64` so a scale
+/// that is not a binary fraction cannot land the product on the wrong side of a
+/// half at 4K.
+///
+/// Nothing else: a scale is floored to 1 by [`adopted_scale`] before a surface
+/// ever holds one, so that every reader of it gets the same number rather than
+/// the buffer path alone.
+pub(crate) fn buffer_size((width, height): (u32, u32), scale: f32) -> (u32, u32) {
+    let scale = f64::from(scale);
+    (
+        (f64::from(width) * scale).round() as u32,
+        (f64::from(height) * scale).round() as u32,
+    )
+}
+
+/// The scale a surface takes from a compositor that has just named one, and
+/// whether that moved it. `held` is what it had, or `None` if it has been told
+/// nothing yet.
+///
+/// **The floor is here** rather than at the buffer arithmetic, so the
+/// invariant is "a surface's scale is never below 1" rather than "the one path
+/// that happens to floor it" — the renderer and the damage rectangles read the
+/// same number. A scale below 1 asks for a buffer smaller than the surface,
+/// which is a decision nobody has taken here; zero asks for no buffer at all.
+///
+/// A first answer always moves, even when it is the 1.0 the surface started
+/// at, because "believed by default" and "confirmed by the compositor" are
+/// different states and only the second lets a surface stop repainting in
+/// full. A compositor repeating a number it has already sent moves nothing.
+///
+/// A free function, and not a method on the surface state, because that state
+/// holds a `wl_surface` and a shell role and so cannot be built by a test —
+/// which is the whole of what is worth checking here.
+pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
+    let named = named.max(1.0);
+    (named, held != Some(named))
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).
@@ -1359,5 +1403,72 @@ mod tests {
                 .any(|c| matches!(c, SurfaceCommand::Close(id) if *id == popup.id())),
             "and the close is queued"
         );
+    }
+
+    /// A surface never holds a scale below 1, a first answer always counts as
+    /// a change, and a repeat never does.
+    ///
+    /// The floor used to live inside `buffer_size`, where only the buffer got
+    /// it; the renderer and the damage rectangles read the same number and did
+    /// not. The first-answer rule is what lets a surface stop repainting in
+    /// full — a compositor that confirms the 1.0 a surface already believed
+    /// has still told it something.
+    #[test]
+    fn a_scale_is_floored_at_one_and_a_repeat_of_it_is_not_a_change() {
+        assert_eq!(adopted_scale(None, 1.5), (1.5, true));
+        assert_eq!(adopted_scale(Some(1.5), 1.5), (1.5, false));
+        assert_eq!(adopted_scale(Some(1.5), 2.0), (2.0, true));
+
+        // A compositor confirming what the surface already believed is still
+        // the first thing it has been told.
+        assert_eq!(adopted_scale(None, 1.0), (1.0, true));
+
+        // Below 1 is floored, and the floor is what the repeat compares
+        // against — so 0.5 twice is one change, not two.
+        assert_eq!(adopted_scale(None, 0.5), (1.0, true));
+        assert_eq!(adopted_scale(Some(1.0), 0.5), (1.0, false));
+    }
+
+    /// The buffer is the logical size times the scale, rounded halfway away
+    /// from zero — and the two casts this replaced are both wrong at 1.5.
+    ///
+    /// The scale reached the render target through `scale_factor as u32`,
+    /// which is 1 for every scale below 2: a 2560x33 bar on a 1.5-scaled
+    /// output drew 2560x33 pixels and the compositor stretched them over
+    /// 3840x50. Rounding the product instead, but with a cast, still loses the
+    /// half pixel the protocol rounds up — and half a pixel short of the
+    /// destination a viewport declares is `wp_viewport: error 2`, which is
+    /// fatal.
+    #[test]
+    fn a_buffer_is_the_logical_size_scaled_and_rounded_half_away_from_zero() {
+        // 2560 x 33 at 1.5 is 3840 x 49.5, and the half goes up.
+        assert_eq!(buffer_size((2560, 33), 1.5), (3840, 50));
+
+        // Held against both casts this replaced, so that a `buffer_size` that
+        // went back to either of them fails here rather than passing the line
+        // above by accident. Truncating the scale gives the bar's own size, at
+        // 1:1; truncating the product gives half a pixel short.
+        let truncated_scale = 1.5_f32 as u32;
+        assert_ne!(
+            (2560 * truncated_scale, 33 * truncated_scale),
+            buffer_size((2560, 33), 1.5)
+        );
+        assert_ne!(
+            ((2560.0 * 1.5) as u32, (33.0 * 1.5) as u32),
+            buffer_size((2560, 33), 1.5)
+        );
+
+        // The session lock surface from the report, which asked for 5120x2880
+        // on a 3840x2160 screen.
+        assert_eq!(buffer_size((3840, 2160), 1.5), (5760, 3240));
+
+        // Integer scales are unmoved — what every compositor without the
+        // protocol still gets.
+        assert_eq!(buffer_size((2560, 32), 1.0), (2560, 32));
+        assert_eq!(buffer_size((2560, 32), 2.0), (5120, 64));
+
+        // A scale that is not a binary fraction: 125/120 of 2560 is
+        // 2666.66..., and 1.0416666 in f32 is not that number.
+        assert_eq!(buffer_size((2560, 33), 125.0 / 120.0), (2667, 34));
     }
 }

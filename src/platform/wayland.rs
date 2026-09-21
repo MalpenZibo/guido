@@ -41,6 +41,7 @@ use super::input::InputState;
 use super::lock::Lock;
 use super::outputs::OutputRegistry;
 use super::popups::Popups;
+use super::scaling::{Scaling, SurfaceScaling};
 use super::selections::Selections;
 use crate::outputs::{self};
 use crate::region::RegionRect;
@@ -119,6 +120,10 @@ pub struct WaylandSurfaceState {
     /// Height sent in an in-flight popup reposition (cleared by the popup
     /// configure), so repeated content measurements don't re-send it.
     pub(super) pending_popup_height: Option<u32>,
+    /// Fractional scale and viewport, where the compositor offers both — see
+    /// [`super::scaling`]. `None` is a compositor that does not, and the
+    /// integer `set_buffer_scale` path.
+    pub(super) scaling: Option<SurfaceScaling>,
 }
 
 impl WaylandSurfaceState {
@@ -128,6 +133,7 @@ impl WaylandSurfaceState {
         wl_surface: wl_surface::WlSurface,
         width: u32,
         height: u32,
+        scaling: Option<SurfaceScaling>,
     ) -> Self {
         Self {
             role,
@@ -144,12 +150,31 @@ impl WaylandSurfaceState {
             blur_region: None,
             blur_resync_owed: false,
             pending_popup_height: None,
+            scaling,
         }
     }
 
     /// Take all pending events (drains the queue)
     pub fn take_events(&mut self) -> Vec<(std::time::Instant, Event)> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Record the scale this surface renders at, and answer whether it moved.
+    ///
+    /// One writer for two fields that have to stay in step, because the scale
+    /// now arrives through two events — `preferred_buffer_scale` for a surface
+    /// without a viewport and `wp_fractional_scale_v1.preferred_scale` for one
+    /// with — and `scale_factor_received` gates startup. Two spellings of it
+    /// would be two chances for a surface to be believed ready before it is.
+    ///
+    /// The rule itself is [`crate::surface::adopted_scale`], where a test can
+    /// reach it; what is here is the pair of fields it writes.
+    pub(super) fn adopt_scale(&mut self, scale: f32) -> bool {
+        let held = self.scale_factor_received.then_some(self.scale_factor);
+        let (scale, moved) = crate::surface::adopted_scale(held, scale);
+        self.scale_factor = scale;
+        self.scale_factor_received = true;
+        moved
     }
 }
 
@@ -216,6 +241,10 @@ pub struct WaylandState {
 
     /// Session lock grant and events — see [`super::lock`].
     pub(super) lock: Lock,
+
+    /// Fractional scaling and viewports, where the compositor offers both
+    /// globals — see [`super::scaling`].
+    pub(super) scaling: Option<Scaling>,
 
     /// Pointer, touch and keyboard — see [`super::input`].
     pub(super) input: InputState,
@@ -335,6 +364,7 @@ pub fn create_wayland_app(
         backdrop: Backdrop::new(bg_effect_manager),
         popups: Popups::new(xdg_shell),
         lock: Lock::new(session_lock_state),
+        scaling: Scaling::bind(&globals, &qh),
         input: InputState::new(cursor_shape_manager, loop_handle),
         selections: Selections::new(data_device_manager, primary_selection_manager),
     };
@@ -563,6 +593,10 @@ impl WaylandState {
             self.apply_input_region(&wl_surface, Some(rects));
         }
 
+        // Before the commit, so the compositor can answer with a scale on the
+        // same round trip as the first configure.
+        let scaling = self.create_surface_scaling(id, &wl_surface);
+
         wl_surface.commit();
 
         // Register in lookup table
@@ -575,6 +609,7 @@ impl WaylandState {
             wl_surface,
             initial_width,
             initial_height,
+            scaling,
         );
         self.surfaces.insert(id, surface_state);
 
@@ -599,6 +634,11 @@ impl WaylandState {
             // Destroy the blur proxy before its wl_surface goes away
             if let Some(effect) = surface_state.bg_effect_surface {
                 effect.destroy();
+            }
+
+            // And the fractional scale and viewport, for the same reason.
+            if let Some(scaling) = surface_state.scaling {
+                scaling.destroy();
             }
 
             // Clear pointer/keyboard focus if this surface had it
@@ -813,9 +853,22 @@ impl CompositorHandler for WaylandState {
         if let Some(id) = self.surface_lookup.get(&surface.id()).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            log::info!("Surface {:?} scale factor changed to: {}", id, new_factor);
-            surface_state.scale_factor = new_factor as f32;
-            surface_state.scale_factor_received = true;
+            // `preferred_buffer_scale` is the compositor rounding its real
+            // preference up to an integer, because this event has no way to
+            // say 1.5. A surface with a fractional scale has already been told
+            // the number itself, and its buffer scale must stay 1: the
+            // protocol requires it, and a buffer the viewport has already
+            // sized would otherwise be multiplied a second time.
+            if surface_state.scaling.is_some() {
+                log::debug!(
+                    "Surface {id:?} ignoring preferred buffer scale {new_factor}: \
+                     it is scaled fractionally"
+                );
+                return;
+            }
+            if surface_state.adopt_scale(new_factor as f32) {
+                log::info!("Surface {:?} scale factor changed to: {}", id, new_factor);
+            }
         }
 
         // Set the buffer scale on the surface for proper HiDPI rendering

@@ -826,6 +826,17 @@ pub(crate) trait Surface {
         let _ = zone;
     }
 
+    /// Declare the logical size the buffer about to be attached stands for.
+    ///
+    /// Only a surface with a `wp_viewport` has one to declare; the rest scale
+    /// their buffer with `wl_surface.set_buffer_scale`, which takes an integer
+    /// and so cannot say 1.5 at all. Called from
+    /// [`resolve_geometry`] — beside the resize, from the same numbers, so the
+    /// destination and the buffer it describes cannot be resolved apart.
+    fn set_viewport_destination(&mut self, width: u32, height: u32) {
+        let _ = (width, height);
+    }
+
     /// Run `f` and let its requests reach the compositor as one commit, so a
     /// group of them never shows an intermediate surface on the way.
     fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, f: F) {
@@ -1306,6 +1317,10 @@ impl Surface for WaylandSurface<'_> {
         self.state.set_surface_exclusive_zone(self.id, zone)
     }
 
+    fn set_viewport_destination(&mut self, width: u32, height: u32) {
+        self.state.set_viewport_destination(self.id, width, height)
+    }
+
     fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, f: F) {
         let id = self.id;
         // The batching is the state's — one commit for the group — and what the
@@ -1467,6 +1482,10 @@ struct Geometry {
     physical_height: u32,
     needs_resize: bool,
     scale_changed: bool,
+    /// The logical size this frame owes its viewport, or `None` when the one
+    /// the compositor holds is still right. Resolved beside the buffer and
+    /// sent beside the commit — see [`resolve_geometry`].
+    declare_destination: Option<(u32, u32)>,
 }
 
 /// Read the surface's state and take its queued input, or give up on this
@@ -1479,17 +1498,28 @@ fn open_frame<P: Platform>(ctx: &mut FrameContext<P>) -> Option<Frame> {
     ctx.surface.is_gpu_ready().then_some(frame)
 }
 
-/// Resolve the physical size and bring the swapchain in line with it.
+/// Resolve the physical size, bring the swapchain in line with it, and work
+/// out what that buffer will have to be declared as.
 ///
 /// Runs after input rather than with the rest of the snapshot: dispatching
 /// events cannot change the surface size, but resizing the swapchain before
 /// the widgets have been told anything would reorder the frame for no gain.
+///
+/// The buffer and the viewport destination are **resolved together**, from one
+/// frame's numbers, because a compositor reading the buffer through a
+/// destination it does not match shows the surface at the wrong size — and,
+/// where a source rectangle is in play, is handed `wp_viewport: error 2` and
+/// drops the client. Resolved here; *sent* by `paint_and_present`, beside the
+/// damage and the frame callback, because that is where this file keeps the
+/// requests that have to ride the buffer's own commit. Sending it from here
+/// would leave it pending across a `batch_layer_requests` group — which a
+/// content-sized surface opens in `layout_pass`, in between — and that group's
+/// commit would latch the new destination over the previous frame's buffer.
 fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Geometry {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
-    let scale = frame.scale_factor as u32;
-    let physical_width = frame.width * scale;
-    let physical_height = frame.height * scale;
+    let (physical_width, physical_height) =
+        surface::buffer_size((frame.width, frame.height), frame.scale_factor);
 
     let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
     let needs_resize =
@@ -1502,7 +1532,7 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
             id,
             physical_width,
             physical_height,
-            scale
+            frame.scale_factor
         );
         wgpu_surface.resize(physical_width, physical_height);
     }
@@ -1517,11 +1547,21 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
         surface.previous_scale_factor = frame.scale_factor;
     }
 
+    // Driven by the logical size and not by the resize: 2560x32 at 1.5 and
+    // 3840x48 at 1.0 are the same buffer, and only one of them is 2560x32.
+    // Compared here rather than in a platform for the reason the input region
+    // is — a frame that has nothing new to declare declares nothing, once, for
+    // every surface there is.
+    let destination = (frame.width, frame.height);
+    let declare_destination =
+        (surface.viewport_destination != Some(destination)).then_some(destination);
+
     Geometry {
         physical_width,
         physical_height,
         needs_resize,
         scale_changed,
+        declare_destination,
     }
 }
 
@@ -1835,6 +1875,19 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
             // every frame after it.
             surface.input_region = carried.input_region.then_some(request);
         }
+    }
+
+    // The logical size the buffer about to be attached stands for, on that
+    // buffer's own commit: a destination latched against any other buffer is
+    // the surface drawn at the wrong size. `resolve_geometry` decided it; this
+    // is the first place after it that nothing else can commit the surface,
+    // and the memo is written here rather than there so a frame that never
+    // reached this line has not recorded a declaration it did not make.
+    if let Some((width, height)) = geometry.declare_destination {
+        surface.viewport_destination = Some((width, height));
+        with_surface(wayland_state, id, |s| {
+            s.set_viewport_destination(width, height)
+        });
     }
 
     // Here, above `present`, because both of these have to ride its commit —
@@ -3413,6 +3466,7 @@ mod a_frame_is_a_description_not_a_connection {
             physical_height: 50,
             needs_resize,
             scale_changed,
+            declare_destination: None,
         }
     }
 

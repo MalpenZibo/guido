@@ -154,6 +154,9 @@ impl WaylandState {
                 .grab(&seat, self.input.latest_input_serial);
         }
 
+        // Before the commit, as a layer surface's is.
+        let scaling = self.create_surface_scaling(id, &wl_surface);
+
         wl_surface.commit();
 
         self.surface_lookup.insert(wl_surface.id(), id);
@@ -166,6 +169,7 @@ impl WaylandState {
             wl_surface,
             size.0,
             size.1,
+            scaling,
         );
         self.surfaces.insert(id, surface_state);
 
