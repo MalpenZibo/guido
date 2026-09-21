@@ -551,16 +551,19 @@ impl Transform {
         self.data[5]
     }
 
-    /// Set the X translation component
+    /// The same transform, moved by `(dx, dy)` in the space it maps *into*.
+    ///
+    /// Not [`then_translate`](Self::then_translate), which is the other side:
+    /// that one translates in the transform's own space, so under a rotation it
+    /// moves along the rotated axes. This one adds to the translation the
+    /// matrix already carries, which is the displacement applied last — what a
+    /// caller shifting something across the surface means.
     #[inline]
-    pub(crate) fn set_tx(&mut self, val: f32) {
-        self.data[2] = val;
-    }
-
-    /// Set the Y translation component
-    #[inline]
-    pub(crate) fn set_ty(&mut self, val: f32) {
-        self.data[5] = val;
+    pub fn translated(self, dx: f32, dy: f32) -> Self {
+        let [a, b, tx, c, d, ty] = self.data;
+        Self {
+            data: [a, b, tx + dx, c, d, ty + dy],
+        }
     }
 
     /// How far the image of a unit circle reaches horizontally and vertically

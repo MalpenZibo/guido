@@ -91,6 +91,20 @@ impl PlacedShape {
         }
     }
 
+    /// The same shape, moved across the surface by `(dx, dy)`.
+    ///
+    /// The declaration does not change — the rect and the radii are in the
+    /// shape's own space, and that space has not moved relative to whatever
+    /// declared it. What moves is where that space sits, which is the
+    /// placement.
+    #[inline]
+    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            placement: self.placement.translated(dx, dy),
+            ..*self
+        }
+    }
+
     /// The axis-aligned world box containing the shape.
     ///
     /// What a clip used to be, and still is for the consumers that cannot take

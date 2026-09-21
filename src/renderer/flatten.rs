@@ -413,20 +413,12 @@ fn flatten_node(
         let dy = world_transform.ty() - cached.world_transform.ty();
         for cmd in &cached.commands {
             let mut adjusted = cmd.clone();
-            adjusted
-                .world_transform
-                .set_tx(cmd.world_transform.tx() + dx);
-            adjusted
-                .world_transform
-                .set_ty(cmd.world_transform.ty() + dy);
-            if let Some(ref mut clip) = adjusted.clip {
-                // The clip's rect is in its owner's coordinates, which have not
-                // moved relative to the owner; what moved is where that space
-                // sits. One shift for every clip — a clip in the command's own
-                // space used to be exempt here because its rect was not in
-                // world coordinates to begin with, and now none of them are.
-                clip.placement.set_tx(clip.placement.tx() + dx);
-                clip.placement.set_ty(clip.placement.ty() + dy);
+            adjusted.world_transform = cmd.world_transform.translated(dx, dy);
+            // One shift for every clip — a clip in the command's own space used
+            // to be exempt here because its rect was not in world coordinates to
+            // begin with, and now none of them are.
+            if let Some(clip) = &mut adjusted.clip {
+                *clip = clip.translated(dx, dy);
             }
             out.push(adjusted);
         }
