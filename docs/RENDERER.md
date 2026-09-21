@@ -399,11 +399,16 @@ scale, a quarter turn or a mirror, and is the box around both for any other
 angle. What this consumer escapes is the *shape against clip* box intersection,
 not the clip chain's own.
 
-**`clamp_radii` and the shader disagree** for per-corner radii: this uses the
-proportional CSS `border-radius` rule and the shader clamps each corner
-independently. They agree for a uniform radius and diverge only where two
-corners on one side would overlap — a shape already at its limit — where the
-region can reach slightly outside the drawn shape.
+**`clamp_radii` is the shader's clamp**, each corner cut to at most half the
+smaller side. It used to be the proportional CSS `border-radius` rule instead,
+which agrees for a uniform radius and diverges the moment the four differ — so
+a container with unequal corners published a region for a shape nobody drew,
+claiming 74 pixels outside it at `tl = 100, tr = 40` on a 120x120 box (#417).
+
+Two clamped corners cannot cross, which is the whole of what the proportional
+rule was there to prevent: each is at most half the smaller side, so two on one
+edge sum to at most that edge and the straight run between them shrinks to
+nothing rather than running backwards.
 
 ### FlattenedCommand
 

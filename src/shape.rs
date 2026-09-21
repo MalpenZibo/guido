@@ -319,19 +319,14 @@ impl PlacedShape {
 
         // With `r` zeroed above, every corner's centre already sits on the
         // box's outer corner, which is where a scoop's disc is centred. Only
-        // the radius has to be put back — and put back the way the *shader*
-        // clamps it, which is `min(radius, min(half_w, half_h))` per corner
-        // rather than the proportional rule `clamp_radii` applies. The two
-        // agree for uniform radii and not otherwise, and this is the one
-        // consumer that can simply match: a bite is subtracted, so two of them
-        // overlapping on one side is no more than a column removed twice,
-        // which is what the proportional rule exists to prevent and what
-        // nothing here needs prevented.
-        let half = (self.rect.width * 0.5).min(self.rect.height * 0.5);
+        // the radius has to be put back, and it is the same clamped radius
+        // every other curvature traces — #410 gave the bite the shader's rule
+        // ahead of the rest, and #417 brought the rest onto it, so there is
+        // one of them again.
         let bites = if self.curvature < 0.0 {
             corners
                 .iter()
-                .zip(self.radii.to_array().map(|r| r.max(0.0).min(half)))
+                .zip(declared.to_array())
                 .filter(|(_, radius)| *radius > 0.0)
                 .map(|(corner, radius)| Arc::placed(&Corner { radius, ..*corner }, &self.placement))
                 .collect()
@@ -739,27 +734,37 @@ impl Arc {
     }
 }
 
-/// Shrink radii until no two sharing an edge can overlap, all by one factor so
-/// the shape keeps its proportions — the rule CSS `border-radius` uses.
+/// Each corner at most half the smaller side — the clamp the *shader* applies,
+/// and `Rect::shape_distance` with it.
 ///
-/// The shader clamps each corner independently, so the two disagree for
-/// per-corner radii and a region could reach slightly outside the drawn shape.
-/// Noted at the end of #198 and still true; the difference is bounded by the
-/// radius and only appears where two corners on one side would overlap, which
-/// is a shape already at its limit.
+/// There were two rules here and they were not the same one. This one used to
+/// shrink all four corners by a single factor so no two sharing an edge could
+/// overlap, which is what CSS `border-radius` does and what a *layout* wants;
+/// the shader has always clamped each corner on its own. The two agree
+/// whenever the four radii agree and diverge the moment they do not, so a
+/// container with unequal corners published a region for a shape nobody drew:
+/// 74 pixels claimed outside it at `tl = 100, tr = 40` on a 120x120 box, and
+/// 89.2% of it covered where every other configuration holds above 97% (#417).
+///
+/// **Two clamped corners cannot cross**, which is the whole of what the
+/// proportional rule prevented. Each is at most half the *smaller* side, so
+/// two on one edge sum to at most the whole of that edge: they meet exactly
+/// in the limit, leaving a straight run of zero length between them, and the
+/// outline stays a simple closed curve. `outline` needs nothing else from the
+/// rule it used to apply.
+///
+/// This is where the region agrees with the pixels. It is not a statement
+/// about what CSS would draw, and nothing here decides that — the shader does,
+/// and this follows it.
 fn clamp_radii(radii: CornerRadii, w: f32, h: f32) -> CornerRadii {
-    let r = CornerRadii {
-        top_left: radii.top_left.max(0.0),
-        top_right: radii.top_right.max(0.0),
-        bottom_right: radii.bottom_right.max(0.0),
-        bottom_left: radii.bottom_left.max(0.0),
-    };
-    let ratio = |extent: f32, sum: f32| if sum > extent { extent / sum } else { 1.0 };
-    let f = ratio(w, r.top_left + r.top_right)
-        .min(ratio(w, r.bottom_left + r.bottom_right))
-        .min(ratio(h, r.top_left + r.bottom_left))
-        .min(ratio(h, r.top_right + r.bottom_right));
-    r.scaled(f)
+    let half = (w * 0.5).min(h * 0.5);
+    let clamp = |r: f32| r.max(0.0).min(half);
+    CornerRadii {
+        top_left: clamp(radii.top_left),
+        top_right: clamp(radii.top_right),
+        bottom_right: clamp(radii.bottom_right),
+        bottom_left: clamp(radii.bottom_left),
+    }
 }
 
 #[cfg(test)]

@@ -471,6 +471,60 @@ mod tests {
         assert!(!covers(&rects, 0, 0), "the corner is not");
     }
 
+    /// Two corners on one edge meet and do not cross, however large they are
+    /// asked to be.
+    ///
+    /// This is what lets the tessellator take the shader's per-corner clamp
+    /// instead of the proportional factor it used to (#417). Each clamped
+    /// radius is at most half the *smaller* side, so two sharing an edge sum
+    /// to at most the whole of that edge — the straight run between them
+    /// shrinks to nothing and never runs backwards. An edge that ran
+    /// backwards would put the outline's own points out of order, and
+    /// `span_at` takes a min and a max over them, so it would answer with a
+    /// span reaching past the shape rather than failing.
+    ///
+    /// Asked here at the limit and well past it, on a square and on both
+    /// oblong shapes, because the clamp is by the smaller side and the wrong
+    /// one is easy to write.
+    #[test]
+    fn two_corners_on_one_edge_meet_rather_than_cross() {
+        use crate::widgets::Corners;
+
+        for (w, h) in [(40.0_f32, 40.0_f32), (120.0, 40.0), (40.0, 120.0)] {
+            for r in [(w.min(h)) / 2.0, w.min(h), 500.0] {
+                let shape = PlacedShape::placed(
+                    Rect::new(0.0, 0.0, w, h),
+                    round(r),
+                    1.0,
+                    Transform::IDENTITY,
+                );
+                let rects = placed_shape_to_rects(shape, None);
+                assert!(
+                    !rects.is_empty(),
+                    "{w}x{h} r={r}: the shape has an area and the region has none"
+                );
+
+                // Nothing published may be outside what the shader draws —
+                // the promise a crossed edge would break silently.
+                let corners = Corners {
+                    radii: round(r),
+                    curvature: 1.0,
+                };
+                let local = Rect::new(0.0, 0.0, w, h);
+                for rect in &rects {
+                    for y in rect.y..rect.y + rect.height {
+                        for x in rect.x..rect.x + rect.width {
+                            assert!(
+                                local.contains_shape(x as f32 + 0.5, y as f32 + 0.5, corners),
+                                "{w}x{h} r={r}: ({x}, {y}) is published and not drawn"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A square corner is square. This is the seam the region used to be lost
     /// at: a clip squared off two corners, the caller collapsed the four radii
     /// with `.max()`, and the shape arrived here as though all four were round —
@@ -547,7 +601,7 @@ mod tests {
     /// is least uniform.
     #[test]
     fn slabs_stay_inside_a_shape_with_four_different_corners() {
-        let radii = CornerRadii {
+        let declared = CornerRadii {
             top_left: 30.0,
             top_right: 10.0,
             bottom_right: 0.0,
@@ -555,10 +609,23 @@ mod tests {
         };
         let (sx, sy) = (1.2f32, 2.0f32);
         let (w, h) = (100.0f32, 50.0f32);
+        // What the *shader* draws, which is what the region has to stay
+        // inside: each corner at most half the smaller side, so the 30 is cut
+        // to 25 on a box this shape. The expectations below used the declared
+        // 30 and passed only because the tessellator used to clamp by a
+        // proportional factor, which for these four radii is 1 — it agreed
+        // with the old region rather than with the pixels (#417).
+        let half = (w * 0.5).min(h * 0.5);
+        let radii = CornerRadii {
+            top_left: declared.top_left.min(half),
+            top_right: declared.top_right.min(half),
+            bottom_right: declared.bottom_right.min(half),
+            bottom_left: declared.bottom_left.min(half),
+        };
         let rects = placed_shape_to_rects(
             PlacedShape::placed(
                 Rect::new(0.0, 0.0, w, h),
-                radii,
+                declared,
                 1.0,
                 Transform::scale_xy(sx, sy),
             ),
@@ -907,31 +974,33 @@ mod tests {
         }
     }
 
-    /// A scoop's bite is clamped the way the *shader* clamps it, which is not
-    /// the way the sides are.
+    /// An unequal pair of corners is clamped the way the *shader* clamps it.
     ///
-    /// `clamp_radii` shrinks all four corners by one factor so that no two
-    /// sharing an edge can overlap — the rule CSS `border-radius` uses, and
-    /// the right one for an outline whose corners are traced. The shader
-    /// clamps each corner on its own, `min(radius, min(half_w, half_h))`. The
-    /// two agree whenever the four radii agree, which is every other test
-    /// here, and diverge as soon as they do not.
+    /// There are two rules and they are not the same one. `clamp_radii`
+    /// shrinks all four corners by a single factor so no two sharing an edge
+    /// can overlap — the rule CSS `border-radius` uses. The shader, and
+    /// `Rect::shape_distance` with it, clamps each corner on its own:
+    /// `min(radius, min(half_w, half_h))`. They agree whenever the four radii
+    /// agree, which is every other test here, and diverge as soon as they do
+    /// not — so the region was a claim about a shape nobody drew.
     ///
-    /// A bite is the one thing that can simply match the shader, because it is
-    /// *subtracted*: two bites overlapping on one side is a column removed
-    /// twice, which is what the proportional rule exists to prevent and what
-    /// nothing here needs prevented. Taking the proportional radius instead
-    /// carved a disc where the shader carved none — `top(50.0)` on a 120x60
-    /// box covered 55.7% of the shape, against 99.6% for the same shape here.
+    /// Measured before the tessellator moved onto the shader's rule: at
+    /// `tl = 100, tr = 40` on a 120x120 box the proportional factor scaled
+    /// `tr` down to 34.3 where the shader keeps 40, and the region claimed 74
+    /// pixels the shape does not cover. `top(50.0)` on a 120x60 box was the
+    /// same divergence the other way — 89.2% covered for a round corner, and
+    /// 55.7% for a scoop.
     ///
-    /// The round-corner half of the same divergence is untouched and still
-    /// there: at `tl = 100, tr = 40` on a 120x120 box the proportional rule
-    /// scales `tr` to 34.3 where the shader keeps 40, and the region claims 74
-    /// pixels the shape does not cover. That is #417, and it is not this: a
-    /// traced corner cannot simply take the shader's number, because two of
-    /// them on one side would then cross.
+    /// **Two of them cannot cross, which is the whole of what the
+    /// proportional rule was there to prevent.** Each clamped radius is at
+    /// most half the *smaller* side, so two on one edge sum to at most the
+    /// whole of it: they can meet exactly, leaving a straight run of zero
+    /// length, and never overlap. A scoop reached this first in #410, where
+    /// it was easier to argue because a bite is subtracted and two
+    /// overlapping bites would have been harmless anyway. The traced corners
+    /// are #417 and needed the argument above.
     #[test]
-    fn a_scooped_bite_is_the_one_the_shader_carves() {
+    fn an_unequal_pair_of_corners_is_clamped_the_way_the_shader_clamps_it() {
         use crate::widgets::{Corners, Rect as WRect};
 
         for (w, h, radii) in [
@@ -971,48 +1040,49 @@ mod tests {
                 },
             ),
         ] {
-            let k = -1.0;
-            let shape =
-                PlacedShape::placed(WRect::new(0.0, 0.0, w, h), radii, k, Transform::IDENTITY);
-            let rects = placed_shape_to_rects(shape, None);
-            let local = WRect::new(0.0, 0.0, w, h);
-            let corners = Corners {
-                radii,
-                curvature: k,
-            };
-            let inside =
-                |x: i32, y: i32| local.contains_shape(x as f32 + 0.5, y as f32 + 0.5, corners);
+            for k in [-1.0_f32, 0.0, 0.5, 1.0, 2.0] {
+                let shape =
+                    PlacedShape::placed(WRect::new(0.0, 0.0, w, h), radii, k, Transform::IDENTITY);
+                let rects = placed_shape_to_rects(shape, None);
+                let local = WRect::new(0.0, 0.0, w, h);
+                let corners = Corners {
+                    radii,
+                    curvature: k,
+                };
+                let inside =
+                    |x: i32, y: i32| local.contains_shape(x as f32 + 0.5, y as f32 + 0.5, corners);
 
-            let (mut covered, mut outside) = (0, 0);
-            for r in &rects {
-                for y in r.y..r.y + r.height {
-                    for x in r.x..r.x + r.width {
-                        covered += 1;
-                        if !inside(x, y) {
-                            outside += 1;
+                let (mut covered, mut outside) = (0, 0);
+                for r in &rects {
+                    for y in r.y..r.y + r.height {
+                        for x in r.x..r.x + r.width {
+                            covered += 1;
+                            if !inside(x, y) {
+                                outside += 1;
+                            }
                         }
                     }
                 }
-            }
-            let mut drawn = 0;
-            for y in -50..250 {
-                for x in -50..250 {
-                    if inside(x, y) {
-                        drawn += 1;
+                let mut drawn = 0;
+                for y in -50..250 {
+                    for x in -50..250 {
+                        if inside(x, y) {
+                            drawn += 1;
+                        }
                     }
                 }
-            }
 
-            assert_eq!(
-                outside, 0,
-                "{w}x{h} {radii:?}: {outside} of {covered} published pixels are \
-                 outside a shape with {drawn}"
-            );
-            assert!(
-                covered * 100 >= drawn * 97,
-                "{w}x{h} {radii:?}: the region covers {covered} of the shape's \
-                 {drawn} pixels — the bite is not the one the shader carves"
-            );
+                assert_eq!(
+                    outside, 0,
+                    "k={k} {w}x{h} {radii:?}: {outside} of {covered} published \
+                 pixels are outside a shape with {drawn}"
+                );
+                assert!(
+                    covered * 100 >= drawn * 97,
+                    "k={k} {w}x{h} {radii:?}: the region covers {covered} of the shape's \
+                 {drawn} pixels — the corner is not the one the shader cuts"
+                );
+            }
         }
     }
 
@@ -1249,20 +1319,20 @@ mod tests {
         );
     }
 
-    /// Two corners on one side cannot eat more than the side has, and the
-    /// shrink is one factor so the shape keeps its proportions.
+    /// A corner asked for more than the shape has is cut to half the *smaller*
+    /// side, and the silhouette moves the way that implies.
     ///
-    /// The CSS `border-radius` rule, and it is four sums: the two horizontal
-    /// pairs against the width, the two vertical pairs against the height.
-    /// Every other test here uses radii that fit, or uniform ones where all
-    /// four sums agree — so any one of them could be read off the wrong pair
-    /// and nothing would move.
+    /// Each case puts a radius of 60 on a side of 60, so it halves to 30 —
+    /// which the proportional rule and the shader's per-corner one both give,
+    /// and that is why these four cases survived #417 unchanged. What they
+    /// pin is the direction: which side is the smaller one decides how far
+    /// the curve reaches, and reading the wrong extent turns the silhouette
+    /// inside out.
     ///
-    /// One pair over budget at a time, therefore, with the other three well
-    /// inside it. A pill is the everyday shape this protects: `corners(999)` on
-    /// a bar is exactly the case where the rule decides the whole silhouette.
+    /// A pill is the everyday shape this protects: `corners(999)` on a bar is
+    /// exactly the case where the clamp decides the whole outline.
     #[test]
-    fn each_pair_of_corners_is_shrunk_by_its_own_side() {
+    fn a_corner_over_budget_is_cut_to_half_the_smaller_side() {
         let cut = |w: f32, h: f32, radii: CornerRadii| {
             placed_shape_to_rects(
                 PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, Transform::IDENTITY),
@@ -1276,12 +1346,12 @@ mod tests {
             bottom_left: d,
         };
 
-        // Each case puts 60 + 60 across a side of 60, so that pair must halve
-        // to 30. Which way the silhouette moves when it does not depends on
-        // which side the pair spans: two corners sharing the *short* side pull
-        // their curves inward and the shape narrows, two sharing the long one
-        // let them reach further along it and the shape swells. So each case
-        // names a pixel and whether the shape should hold it.
+        // Each case puts 60 on a side of 60, so the radius is cut to 30.
+        // Which way the silhouette moves depends on which side is the smaller
+        // one: corners on the *short* side pull their curves inward and the
+        // shape narrows, corners on the long one reach further along it and
+        // the shape swells. So each case names a pixel and whether the shape
+        // should hold it.
         for (label, rects, (x, y), inside) in [
             (
                 "top pair, across the width",
@@ -1311,7 +1381,7 @@ mod tests {
             assert_eq!(
                 covers(&rects, x, y),
                 inside,
-                "{label}: the pair halves to 30, and ({x}, {y}) is on the \
+                "{label}: the radius is cut to 30, and ({x}, {y}) is on the \
                  {} of the curve that leaves",
                 if inside { "inside" } else { "outside" }
             );
