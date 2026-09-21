@@ -838,8 +838,9 @@ impl CompositorHandler for WaylandState {
         surface: &wl_surface::WlSurface,
         output: &wl_output::WlOutput,
     ) {
-        if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied() {
-            let output_id = self.outputs.add(output.id());
+        if let Some(surface_id) = self.surface_lookup.get(&surface.id()).copied()
+            && let Some(output_id) = self.outputs.id_for(&output.id())
+        {
             log::debug!("Surface {:?} entered output {:?}", surface_id, output_id);
             outputs::surface_entered_output(surface_id, output_id);
         }

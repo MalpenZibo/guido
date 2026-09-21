@@ -5,7 +5,9 @@
 //! This registry hands each one a `OutputId` that stays put for as long as the
 //! global lives, and never reuses it afterwards: a monitor that comes back is
 //! a new output, so a surface pinned to the old one does not silently land on
-//! it.
+//! it. A monitor that has left is no output at all: the mapping is what says
+//! a global is real, and only a global the compositor has just advertised is
+//! given one.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -41,11 +43,9 @@ impl<K: Eq + Hash> OutputRegistry<K> {
         }
     }
 
-    /// Mint the id for a global the compositor has just advertised.
+    /// Mint the id for a global the compositor has just advertised. The only
+    /// place an id is allocated.
     pub(super) fn add(&mut self, key: K) -> OutputId {
-        if let Some(id) = self.output_ids.get(&key) {
-            return *id;
-        }
         let id = OutputId::from_raw(self.next_output_id);
         self.next_output_id += 1;
         self.output_ids.insert(key, id);
@@ -62,20 +62,24 @@ impl<K: Eq + Hash> OutputRegistry<K> {
         self.output_ids.remove(key)
     }
 
-    /// The compositor's globals, described and ordered by id.
+    /// The globals that still have a mapping, described and ordered by id.
+    ///
+    /// `live` is what the compositor reports, which lags the truth: a global
+    /// [`Self::remove`] has already let go of is still in it while the destroy
+    /// is being processed. Such a global has no id and gets none here.
     ///
     /// `describe` turns each global into an [`OutputInfo`] under the id the
     /// registry holds for it, and returns `None` for one the compositor has
     /// not finished describing.
     pub(super) fn connected<D>(
-        &mut self,
+        &self,
         live: impl IntoIterator<Item = (K, D)>,
         describe: impl Fn(D, OutputId) -> Option<OutputInfo>,
     ) -> Vec<OutputInfo> {
         let mut list: Vec<OutputInfo> = live
             .into_iter()
             .filter_map(|(key, global)| {
-                let id = self.add(key);
+                let id = self.id_for(&key)?;
                 describe(global, id)
             })
             .collect();
@@ -94,12 +98,10 @@ impl WaylandState {
 
     /// Rebuild the reactive output list from current compositor state.
     fn sync_outputs(&mut self) {
-        let wl_outputs: Vec<wl_output::WlOutput> = self.output_state.outputs().collect();
-        let output_state = &self.output_state;
-        let list = self
-            .outputs
-            .connected(wl_outputs.iter().map(|o| (o.id(), o)), |global, id| {
-                let info = output_state.info(global)?;
+        let list = self.outputs.connected(
+            self.output_state.outputs().map(|o| (o.id(), o)),
+            |global, id| {
+                let info = self.output_state.info(&global)?;
                 Some(OutputInfo {
                     id,
                     name: info.name,
@@ -110,7 +112,8 @@ impl WaylandState {
                     logical_size: info.logical_size,
                     logical_position: info.logical_position,
                 })
-            });
+            },
+        );
         outputs::sync_outputs(list);
     }
 }
@@ -159,3 +162,44 @@ impl OutputHandler for WaylandState {
 }
 
 delegate_output!(WaylandState);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn info(id: OutputId, name: &str) -> OutputInfo {
+        OutputInfo {
+            id,
+            name: Some(name.to_string()),
+            description: None,
+            make: String::new(),
+            model: "LG HDR 4K".to_string(),
+            scale_factor: 1,
+            logical_size: None,
+            logical_position: None,
+        }
+    }
+
+    /// The compositor goes on listing a global for one more round: when
+    /// `output_destroyed` drops the mapping, sctk's `outputs()` still holds
+    /// the dying `wl_output`. The rebuild has to leave it out rather than mint
+    /// it a fresh id, which would put a phantom output in the list under the
+    /// unplugged monitor's name.
+    #[test]
+    fn an_unplugged_monitor_leaves_no_phantom_behind() {
+        let mut registry = OutputRegistry::new();
+        let laptop = registry.add("eDP-1");
+        let external = registry.add("DP-2");
+        assert_eq!(registry.remove(&"DP-2"), Some(external));
+
+        let list = registry.connected([("eDP-1", "eDP-1"), ("DP-2", "DP-2")], |name, id| {
+            Some(info(id, name))
+        });
+
+        assert_eq!(list, vec![info(laptop, "eDP-1")]);
+        assert_eq!(
+            registry.next_output_id, 2,
+            "rebuilding the list minted an id; only a new global may do that"
+        );
+    }
+}
