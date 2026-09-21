@@ -101,19 +101,9 @@ jobs:
         run: env -u WAYLAND_DISPLAY -u DISPLAY mdbook test book -L target/book/debug/deps
 
   # Keyed `golden` because the goldens are why this job has a rasterizer, and
-  # named for what it does because it runs the whole suite.
-  #
-  # This string and the `main` ruleset's required status check are one edit
-  # apart: change either and change both, or every pull request waits on a
-  # check that can no longer appear, which is #288. The ruleset is invisible
-  # from here — `repos/.../branches/main/protection` answers 404 and reads as
-  # "nothing is required"; it is `repos/.../rules/branches/main` that answers.
-  #
-  # The order is not the intuitive one. Adding the new name *beside* the old
-  # blocks just as hard, because a required check that never reports stays
-  # pending for ever: the old name has to come out of the ruleset first, then
-  # the rename merges, then the new name goes in. Removing the coupling
-  # altogether is #290.
+  # named for what it does because it runs the whole suite. Renaming it costs
+  # nothing once the `main` ruleset requires the `ci` job at the bottom of this
+  # file and nothing else: what gates a merge is that job's `needs:`.
   golden:
     name: Everything, on a rasterizer
     runs-on: ubuntu-latest
@@ -320,3 +310,51 @@ jobs:
           the golden-update label. A changed golden is a changed pixel on \
           someone's screen: look at the diff, then add the label to say you did."
           exit 1
+
+  # The one check the `main` ruleset is to require, in place of the five display
+  # strings it holds today — a repository setting nothing here can read, which
+  # is what left #288 green and unmergeable when one of the five was renamed.
+  # Everything above gates a merge by being in this `needs:`, a list in this
+  # file. Which of the two the ruleset is on at any moment is the last thing
+  # about this arrangement nothing here can tell you; #434 is that.
+  #
+  # It is still a list somebody has to remember, so it is read instead of
+  # remembered: `tests/ci_gate_waits_on_every_job.rs` refuses a job that is in
+  # neither this list nor the opt-out list it keeps, and refuses a gating job
+  # that can skip.
+  #
+  # `name:` is the last string this repository shares with that setting.
+  # Renaming it is the sequence #289 had to work out by hand: the old name comes
+  # out of the ruleset first, then the rename merges, then the new name goes in.
+  # Adding the new beside the old blocks just as hard, because a required check
+  # that never reports stays pending for ever.
+  ci:
+    name: CI
+    needs: [check, test, golden, book, golden-guard]
+    # Without `always()` this job skips the moment a need fails — and GitHub
+    # counts a skipped required check as a passing one, so the check the ruleset
+    # waits for would report green exactly when CI is red. Running is not gating
+    # either, which is what the step below is for.
+    if: always()
+    runs-on: ubuntu-latest
+    # One `jq` and nothing else. The required check is the one that must never
+    # hang: at the default of six hours a wedged runner leaves a pull request
+    # pending rather than refused, which looks the same as #288 from outside.
+    timeout-minutes: 5
+    steps:
+      - name: Every job this one waits on has to have succeeded
+        env:
+          RESULTS: ${{ toJson(needs) }}
+        run: |
+          echo "$RESULTS"
+          # `success`, and nothing else. `skipped` fails here too: no gating job
+          # is allowed a condition of its own, so a skip means a need did not
+          # run when it should have.
+          did_not=$(echo "$RESULTS" | jq -r 'to_entries[]
+            | select(.value.result != "success") | "\(.key): \(.value.result)"')
+          if [ -n "$did_not" ]; then
+            echo "::error::These jobs did not succeed, so this pull request does not merge:"
+            echo "$did_not"
+            exit 1
+          fi
+          echo "Every gating job succeeded."
