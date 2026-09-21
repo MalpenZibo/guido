@@ -60,7 +60,10 @@ something layout already tracks — a size, a font — publish it from `layout`,
 which is what the built-in text widgets do for their stroke and shadow. If it
 moves with a paint-only property such as a transform, publish it here.
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use guido::widget_prelude::*;
 struct Bar {
     extent: Signal<f32>,
     measured: f32,
@@ -82,6 +85,7 @@ impl Widget for Bar {
         );
     }
 }
+# fn main() {}
 ```
 
 Three things are worth spelling out.
@@ -119,7 +123,10 @@ never has to ask.
 `Layout` has one method: given the children and the constraints, place them and
 report the size the parent should use.
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use guido::widget_prelude::*;
 struct Stagger {
     step: f32,
 }
@@ -127,20 +134,18 @@ struct Stagger {
 impl Layout for Stagger {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
         let mut size = Size::zero();
         for (i, &child_id) in children.iter().enumerate() {
-            let child = tree
-                .with_widget_mut(child_id, |w, id, t| w.layout(t, id, constraints))
-                .unwrap_or_default();
+            let child = ctx.layout_child(child_id, constraints).unwrap_or_default();
 
             let x = origin.0 + i as f32 * self.step;
             let y = origin.1 + i as f32 * self.step;
-            tree.set_origin(child_id, x, y);
+            ctx.tree().set_origin(child_id, x, y);
 
             size.width = size.width.max(x + child.width - origin.0);
             size.height = size.height.max(y + child.height - origin.1);
@@ -148,14 +153,39 @@ impl Layout for Stagger {
         constraints.constrain(size)
     }
 }
+# fn main() {}
 ```
 
 It plugs into any container:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
+# use guido::widget_prelude::*;
 # fn card(_label: &str) -> Container { container() }
+# struct Stagger {
+#     step: f32,
+# }
+# impl Layout for Stagger {
+#     fn layout(
+#         &mut self,
+#         ctx: &mut LayoutCtx,
+#         children: &[WidgetId],
+#         constraints: Constraints,
+#         origin: (f32, f32),
+#     ) -> Size {
+#         let mut size = Size::zero();
+#         for (i, &child_id) in children.iter().enumerate() {
+#             let child = ctx.layout_child(child_id, constraints).unwrap_or_default();
+#             let x = origin.0 + i as f32 * self.step;
+#             let y = origin.1 + i as f32 * self.step;
+#             ctx.tree().set_origin(child_id, x, y);
+#             size.width = size.width.max(x + child.width - origin.0);
+#             size.height = size.height.max(y + child.height - origin.1);
+#         }
+#         constraints.constrain(size)
+#     }
+# }
 # fn main() {
 container()
     .layout(Stagger { step: 8.0 })
@@ -172,7 +202,7 @@ follows a setting), read them straight from `layout`: the container runs it
 inside its own tracking scope, so those reads are attributed correctly without
 you opening one.
 
-`tree.with_widget(child_id, |w| w.layout_hints())` reports whether a child
+`ctx.tree_ref().with_widget(child_id, |w| w.layout_hints())` reports whether a child
 wants to fill an axis, which is what lets a layout give the remaining space to
 the children that asked for it — `ZStack` in the guido source is the short
 example to read.

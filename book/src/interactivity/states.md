@@ -463,6 +463,8 @@ container()
 ### Card with Lift
 
 ```rust,ignore
+# // not compiled: `[...]` stands in for the children; this block is about
+# // the shadows above them.
 # extern crate guido;
 # use guido::prelude::*;
 # const FLAT: Shadow = Shadow::none();
@@ -486,6 +488,7 @@ container()
 ### StateStyle Builder
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl StateStyleBuilder {
     // Background
     pub fn background(self, color: Color) -> Self;

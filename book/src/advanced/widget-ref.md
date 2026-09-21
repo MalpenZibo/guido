@@ -61,12 +61,12 @@ The `Rect` contains surface-relative coordinates:
 
 A common use case is positioning a popup centered under a clickable module:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
-# const BAR_HEIGHT: u32 = 32;
-# const POPUP_WIDTH: u32 = 200;
-# const SCREEN_WIDTH: u32 = 1920;
+# const BAR_HEIGHT: f32 = 32.0;
+# const POPUP_WIDTH: f32 = 200.0;
+# const SCREEN_WIDTH: f32 = 1920.0;
 # fn popup_content() -> Container { container() }
 # fn main() {
 # let show_popup = create_signal(false);

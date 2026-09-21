@@ -7,6 +7,7 @@ Widgets are the building blocks of Guido UIs. Every visual element is a widget, 
 All widgets implement the `Widget` trait:
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 pub trait Widget {
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
@@ -142,7 +143,9 @@ container()
 
 Functions often return `impl Widget` instead of concrete types:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn my_button(label: &str) -> impl Widget {
     container()
         .padding(12.0)
@@ -150,6 +153,7 @@ fn my_button(label: &str) -> impl Widget {
         .corners(8.0)
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 This allows returning any widget type without exposing implementation details.
@@ -159,6 +163,8 @@ This allows returning any widget type without exposing implementation details.
 During layout, parent widgets pass constraints to children:
 
 ```rust,ignore
+# // not compiled: a listing of a type the crate owns — a copy of it declared
+# // here would compile without checking the original.
 pub struct Constraints {
     pub min_width: f32,
     pub max_width: f32,

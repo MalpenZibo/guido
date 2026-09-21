@@ -220,7 +220,11 @@ for a `Signal<T>` finds nothing: a different type is a different key.
 For config structs with many fields, use `#[derive(SignalFields)]` with context
 so each widget only repaints when the specific field it reads changes:
 
-```rust,ignore
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn build_ui() -> Container { container() }
+# fn current_cpu() -> f64 { 0.0 }
 #[derive(Clone, PartialEq, SignalFields)]
 pub struct AppConfig {
     pub cpu_warn: f64,
@@ -228,6 +232,8 @@ pub struct AppConfig {
     pub title: String,
 }
 
+# fn main() {
+# let surface_config = SurfaceConfig::new();
 App::new().run(|app| {
     let config = AppConfigSignals::new(AppConfig {
         cpu_warn: 80.0,
@@ -238,6 +244,7 @@ App::new().run(|app| {
 
     app.add_surface(surface_config, || build_ui());
 });
+# }
 
 // In a widget — only repaints when cpu_warn changes
 fn cpu_indicator() -> Container {

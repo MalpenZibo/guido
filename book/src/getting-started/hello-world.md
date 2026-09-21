@@ -79,7 +79,7 @@ The prelude imports everything you need: widgets, colors, layout types, and reac
 
 ### Surface Configuration
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -89,7 +89,7 @@ App::new().run(|app| {
             .height(32)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || { /* widget tree */ },
+        || container(),
     );
 });
 # ;

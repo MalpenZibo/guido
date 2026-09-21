@@ -130,6 +130,8 @@ See [Wayland Layer Shell — Backdrop Blur](../advanced/wayland.md#backdrop-blur
 Control how children are arranged:
 
 ```rust,ignore
+# // not compiled: `[...]` stands in for the children; this block is about
+# // the layout above them.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -311,7 +313,9 @@ container()
 
 Here's a fully-styled interactive button:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
     container()
         // Layout
@@ -332,6 +336,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         // Content
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 ## Builder Methods Reference

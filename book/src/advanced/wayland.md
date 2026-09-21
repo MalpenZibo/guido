@@ -6,7 +6,7 @@ Guido uses the Wayland layer shell protocol for positioning widgets on the deskt
 
 Each surface is configured using `SurfaceConfig`:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn view() -> Container { container() }
@@ -21,7 +21,7 @@ App::new().run(|app| {
             .keyboard_interactivity(KeyboardInteractivity::OnDemand)
             .namespace("my-status-bar")
             .background_color(Color::rgb(0.1, 0.1, 0.15)),
-        || view,
+        || view(),
     );
 });
 # ;
@@ -174,14 +174,14 @@ Size depends on anchoring:
 - **Unanchored dimension**: Uses specified size
 - **No anchors**: Uses exact size, centered on screen
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 // Width fills screen, height is 32px
 SurfaceConfig::new()
-    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
-    .height(32)
+    .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+    .height(32);
 
 // Both dimensions specified, widget is 200x100
 SurfaceConfig::new()
@@ -374,6 +374,7 @@ fn main() {
 The `SurfaceHandle` allows controlling a surface after creation:
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl SurfaceHandle {
     /// Close and destroy the surface
     pub fn close(&self);
@@ -406,7 +407,7 @@ impl SurfaceHandle {
 
 Use `surface_handle()` to get a handle for any surface by its ID:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -414,15 +415,13 @@ Use `surface_handle()` to get a handle for any surface by its ID:
 App::new().run(|app| {
     // Store the ID when adding the surface
     let status_bar_id = app.add_surface(config, move || {
-        container()
-            .on_click(move || {
-                // Get handle and modify properties dynamically
-                let handle = surface_handle(status_bar_id);
-                handle.set_layer(Layer::Overlay);
-                handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
-            })
-            .child(text("Click to promote to overlay"))
+        container().child(text("Status bar"))
     });
+
+    // Get a handle and modify properties dynamically, from anywhere
+    let handle = surface_handle(status_bar_id);
+    handle.set_layer(Layer::Overlay);
+    handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 });
 # ;
 # }
@@ -462,11 +461,12 @@ reused: a monitor that is unplugged and reconnected gets a fresh id.
 By default the compositor picks the output a surface appears on. Pass an
 `OutputId` to pin it:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn bar_widget() -> Container { container() }
 # fn main() {
+# for info in outputs().get() {
 spawn_surface(
     SurfaceConfig::new()
         .height(32)
@@ -474,7 +474,7 @@ spawn_surface(
         .output(info.id),
     move || bar_widget(),
 );
-# ;
+# }
 # }
 ```
 
@@ -488,9 +488,12 @@ An app can start with **zero surfaces** and spawn one per output from an
 effect — the classic multi-monitor status bar. See
 `examples/multi_output.rs` for the full version:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
+# use std::cell::RefCell;
+# use std::collections::HashMap;
+# use std::rc::Rc;
 # fn bar_widget() -> Container { container() }
 # fn main() {
 App::new().run(|_app| {
@@ -537,10 +540,11 @@ app.
 shown on (`None` until the compositor maps it). It is a tracked read —
 reactive inside any tracked closure:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+# let my_surface_id = SurfaceId::next();
 text(move || match surface_output(my_surface_id) {
     Some(out) => format!("shown on output {}", out.raw()),
     None => "not mapped yet".to_string(),
@@ -561,7 +565,7 @@ region lets clicks reach the windows below.
 The surface declares the baseline and a container declares the exception. An
 overlay that lets everything past, with one pill that does not:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -579,7 +583,7 @@ container()
 
 And the other way round, a bar that takes input with a notch the desktop gets:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -608,7 +612,7 @@ drawn *outside* its parent — `overflow` is `Visible` by default, so a transfor
 or a size larger than the parent does it — is outside the region as well, and on
 a click-through surface a handler on that child never runs:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -636,10 +640,12 @@ disabled button should do.
 For a region that belongs to no widget, the surface still takes rectangles
 directly:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+# let id = SurfaceId::next();
+# let rect = Rect::new(16.0, 20.0, 200.0, 40.0);
 SurfaceConfig::new().input_region([Rect::new(16.0, 20.0, 200.0, 40.0)]);
 surface_handle(id).set_input_region(Some(vec![rect]));
 surface_handle(id).set_input_region(None);
@@ -765,11 +771,13 @@ screen (flipping/sliding at screen edges), and — with `.grab()` —
 dismisses it when the user clicks outside. Real menu semantics, no
 fullscreen overlay:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn menu_widget() -> Container { container() }
 # fn main() {
+# let bar_id = SurfaceId::next();
+# let button_ref = create_widget_ref();
 let popup = spawn_popup(
     bar_id,
     PopupConfig::new(250)                      // width; height sizes to content
@@ -786,11 +794,12 @@ let popup = spawn_popup(
 Dismissal is reactive — reset your open/closed state when the
 compositor closes the popup:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 # let menu_open = create_signal(false);
+# let popup = spawn_popup(SurfaceId::next(), PopupConfig::new(250), container);
 create_effect(move || {
     if popup.dismissed() {
         menu_open.set(false);
@@ -819,9 +828,10 @@ per output using your widget factory — the compositor blanks every
 output, shows the lock surfaces, and routes all input to them, so a
 `text_input` password field works out of the box:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
+# fn verify_password(_attempt: &str) -> bool { true }
 # fn main() {
 lock_session(|output: OutputInfo| {
     let attempt = create_signal(String::new());
@@ -973,6 +983,7 @@ fn main() {
 ### SurfaceConfig
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl SurfaceConfig {
     pub fn new() -> Self;
     pub fn width(self, width: impl Into<SurfaceExtent>) -> Self;
@@ -993,6 +1004,7 @@ impl SurfaceConfig {
 ### Outputs
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 /// Reactive list of connected outputs, sorted by id
 pub fn outputs() -> Signal<Vec<OutputInfo>>;
 
@@ -1014,6 +1026,7 @@ pub struct OutputInfo {
 ### App
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl App {
     pub fn new() -> Self;
     pub fn run(self, setup: impl FnOnce(&mut Self)) -> ExitReason;
@@ -1027,6 +1040,7 @@ impl App {
 ### Dynamic Surface Creation
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 /// Spawn a new surface at runtime
 pub fn spawn_surface<W, F>(config: SurfaceConfig, widget_fn: F) -> SurfaceHandle
 where
@@ -1040,6 +1054,7 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle;
 ### SurfaceHandle
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl SurfaceHandle {
     pub fn id(&self) -> SurfaceId;
     pub fn close(&self);

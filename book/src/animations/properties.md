@@ -318,6 +318,7 @@ container()
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 /// On everything a property setter accepts — a value, a signal, a closure.
 pub trait Animate<T, M>: IntoSignal<T, M> + Sized {
     fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T>;

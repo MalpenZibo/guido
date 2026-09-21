@@ -107,6 +107,8 @@ container()
 Each container has its own transform that doesn't affect siblings:
 
 ```rust,ignore
+# // not compiled: `...` stands in for each child; this block is about the
+# // transforms beside them.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -124,7 +126,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn nested_transforms_demo() -> impl Widget {
     container()
         .padding(40.0)
@@ -156,6 +160,7 @@ fn nested_transforms_demo() -> impl Widget {
                 ])
         )
 }
+# fn main() {}
 ```
 
 ## Caveats
@@ -190,6 +195,8 @@ Deep nesting with many transforms is fine for typical UIs. The transform matrice
 3. **Independent animations** - Each level can have its own animated transform
 
 ```rust,ignore
+# // not compiled: `...` stands in for each child; this block is about the
+# // animations beside them.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {

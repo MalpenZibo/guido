@@ -183,7 +183,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn spring_button() -> Container {
     let pressed = create_signal(false);
 
@@ -207,6 +209,7 @@ fn spring_button() -> Container {
 
         .child(container().child(text("Spring!").font_size(18.0).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 ## Interruption
@@ -221,7 +224,9 @@ is a shake nobody had to choreograph.
 It has to be two *different* frames, though. A press and its release are two,
 so a button shakes itself:
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn nudge(angle: RwSignal<f32>) -> Container {
     container()
         .rotate((move || angle.get()).transition(Transition::spring(SpringConfig::BOUNCY)))
@@ -229,6 +234,7 @@ fn nudge(angle: RwSignal<f32>) -> Container {
         .on_mouse_up(move |_, _| angle.set(0.0))
         .child(text("shake me"))
 }
+# fn main() {}
 ```
 
 Two writes inside one frame would not do it: the loop reads the signal once, so
@@ -248,6 +254,7 @@ the next animation starts from a stop however small the residue was.
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 /// Spring configuration presets
 pub struct SpringConfig {
     pub stiffness: f32,

@@ -154,12 +154,14 @@ as long as it runs and hands the property back afterwards.
 A timeline belongs to the one component it moves, so a card can hover and shake
 at the same time without the two meeting at all:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let rejections = create_signal(0);
-# let shake = move || {};
+# let rejections = create_signal(0u32);
+# fn shake() -> Keyframes<f32> {
+#     Keyframes::new(300.0).at(0.25, 6.0).at(0.75, -6.0).at(1.0, 0.0)
+# }
 container()
     .when_hovered(|s| s.scale(1.03))
     .scale(Scale::NONE.transition(Transition::spring(SpringConfig::SNAPPY)))
@@ -174,12 +176,14 @@ the card grows under the pointer while it is still shaking its head.
 The replacing rule applies when a timeline and a declaration are on **the same**
 component:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let rejections = create_signal(0);
-# let shake = move || {};
+# let rejections = create_signal(0u32);
+# fn shake() -> Keyframes<f32> {
+#     Keyframes::new(300.0).at(0.25, 6.0).at(0.75, -6.0).at(1.0, 0.0)
+# }
 container()
     .when_hovered(|s| s.rotate(3.0))
     .rotate(0.0.timeline(shake().played_by(rejections)))

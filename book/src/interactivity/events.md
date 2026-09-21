@@ -60,6 +60,8 @@ The callback receives a boolean indicating hover state.
 For visual hover effects, use `when_hovered` instead:
 
 ```rust,ignore
+# // not compiled: `log` is the caller's crate, not one the book is
+# // compiled against.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -76,7 +78,7 @@ container().on_hover(|hovered| {
 
 ## Other Buttons and Keys
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -85,7 +87,7 @@ container()
     .on_click(|| println!("left"))
     .on_right_click(|| println!("right"))
     .on_middle_click(|| println!("middle"))
-    .on_key_down(|key, _mods| {
+    .on_key_down(move |key, _mods| {
         if key == Key::Escape {
             close();
         }
@@ -220,7 +222,9 @@ Events only fire when the click is within the container's bounds. Guido properly
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn interactive_counter() -> impl Widget {
     let count = create_signal(0);
     let scroll_offset = create_signal(0.0f32);
@@ -255,11 +259,13 @@ fn interactive_counter() -> impl Widget {
                 ),
         ])
 }
+# fn main() {}
 ```
 
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl Container {
     /// Handle click events
     pub fn on_click(self, handler: impl Fn() + 'static) -> Self;

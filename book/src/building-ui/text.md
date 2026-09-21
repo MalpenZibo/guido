@@ -446,7 +446,7 @@ container().child(text("LABEL").font_size(11.0).color(Color::rgb(0.5, 0.5, 0.55)
 
 Set a default font family for the entire application:
 
-```rust,ignore
+```rust,no_run
 # extern crate guido;
 # use guido::prelude::*;
 # fn view() -> Container { container() }
@@ -455,7 +455,7 @@ Set a default font family for the entire application:
 App::new()
     .default_font_family(FontFamily::Name("Inter".into()))
     .run(|app| {
-        app.add_surface(config, || view);
+        app.add_surface(config, || view());
     });
 # ;
 # }
@@ -465,7 +465,9 @@ All text widgets will use this font family unless they explicitly override it.
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn article_card(title: &str, author: &str, preview: &str) -> Container {
     container()
         .padding(16.0)
@@ -485,6 +487,7 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
             container().child(text(preview).font_size(14.0).color(Color::rgb(0.7, 0.7, 0.75)))
         )
 }
+# fn main() {}
 ```
 
 ## API Reference
@@ -492,6 +495,7 @@ fn article_card(title: &str, author: &str, preview: &str) -> Container {
 All properties accept static values, signals, or closures.
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 text(content: impl IntoSignal<String, M>) -> Text
 
 impl Text {

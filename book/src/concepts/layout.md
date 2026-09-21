@@ -45,6 +45,8 @@ container()
 Add space between children:
 
 ```rust,ignore
+# // not compiled: `[...]` stands in for the children; this block is about
+# // the layout above them.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
@@ -326,11 +328,12 @@ container()
 `ZStack` places every child at the same position, stacked along the Z axis —
 later children paint on top:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let background = Color::rgb(0.1, 0.1, 0.15);
+# fn background() -> Container { container() }
+# fn content() -> Container { container() }
 container()
     .layout(ZStack::new())
     .child(background())
@@ -472,6 +475,7 @@ CrossAlignment::Stretch
 ### ZStack
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {

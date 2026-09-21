@@ -179,6 +179,8 @@ and effects created there are automatically owned and cleaned up when the
 child is removed or rebuilt.
 
 ```rust,ignore
+# // not compiled: `log` is the caller's crate, not one the book is
+# // compiled against.
 fn item_widget(item: Item) -> impl Widget {
     // This signal is OWNED by this row
     let clicks = create_signal(0);
@@ -209,7 +211,12 @@ closure.
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn item_widget(item: Item) -> impl Widget {
+#     container().child(text(move || item.name.clone()))
+# }
 #[derive(Clone, PartialEq)]
 struct Item {
     id: u64,
@@ -263,6 +270,7 @@ fn button(label: &str, on_click: impl Fn() + 'static) -> Container {
         .on_click(on_click)
         .child(container().child(text(label).color(Color::WHITE)))
 }
+# fn main() {}
 ```
 
 ## Mixing Static and Dynamic
@@ -296,6 +304,7 @@ container()
 ## API Reference
 
 ```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
 impl Container {
     // A widget value, or a reactive closure returning a widget / Option<widget>
     pub fn child<M>(self, child: impl IntoChild<M>) -> Self;

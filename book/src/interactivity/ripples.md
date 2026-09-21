@@ -143,9 +143,10 @@ built through `RippleConfig::with_color` — which takes a value, a closure or a
 signal — rather than assigned as a bare `Color`. The two speeds stay plain
 numbers:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
+# use guido::widgets::RippleConfig;
 # fn main() {
 # container()
 .when_pressed(|s| s.ripple_config(RippleConfig {
@@ -185,20 +186,18 @@ Click coordinates are properly transformed to local container space.
 
 Ripples respect different corner styles:
 
-```rust,ignore
+```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 // Squircle ripple
 container()
-    .corners(Corners::squircle(12.0));
-    
-    .when_pressed(|s| s.ripple())
+    .corners(Corners::squircle(12.0))
+    .when_pressed(|s| s.ripple());
 
 // Beveled ripple
 container()
     .corners(Corners::bevel(12.0))
-    
     .when_pressed(|s| s.ripple())
 # ;
 # }
@@ -206,7 +205,9 @@ container()
 
 ## Complete Example
 
-```rust,ignore
+```rust
+# extern crate guido;
+# use guido::prelude::*;
 fn ripple_button(label: &str, color: Color) -> Container {
     container()
         .padding(16.0)
@@ -221,9 +222,11 @@ fn ripple_button(label: &str, color: Color) -> Container {
         .child(container().child(text(label).color(Color::WHITE)))
 }
 
+# fn main() {
 // Usage
-ripple_button("Default Ripple", Color::rgb(0.3, 0.5, 0.8))
-ripple_button("Action Button", Color::rgb(0.8, 0.3, 0.3))
+ripple_button("Default Ripple", Color::rgb(0.3, 0.5, 0.8));
+ripple_button("Action Button", Color::rgb(0.8, 0.3, 0.3));
+# }
 ```
 
 ## Ripple Color Guidelines
