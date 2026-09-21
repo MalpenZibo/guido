@@ -81,8 +81,12 @@ placement and test in the clip's own space does: the shape shader, both quad
 pipelines — images and transformed text draw the same quad and take the same
 `QuadClip::shape` — and the region tessellator, and the backdrop pass, whose
 viewport is a box but whose fragments are tested against the clip's shape.
-`world_aabb()` is left for glyphon alone, whose `TextBounds` is four integers,
-so an *upright* text is still cut by the box around a turned clip (#405).
+`world_aabb()` is left for glyphon alone, whose `TextBounds` is four integers
+— and it is exact there, because a text the box would cut differently from the
+shape is routed to the quad instead. `PlacedShape::box_cuts_like_the_shape` is
+what decides: a turned clip always differs, an upright one only inside its
+corner boxes, and a label in the middle of a rounded card is cut the same
+either way and stays with glyphon (#405).
 
 Five pipelines, so a change to clipping has to be checked in all of them.
 `clipped_images`, `clipped_text`, `backdrop_blur_is_cut_by_its_scroller` and

@@ -7,6 +7,7 @@ use glyphon::{
 };
 use wgpu::{Device, MultisampleState, Queue};
 
+use crate::widgets::Rect;
 use crate::widgets::font::FontWeight;
 
 use super::types::TextEntry;
@@ -68,6 +69,42 @@ pub struct TextRenderState {
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,
+}
+
+/// Whether a text lies entirely off one side of its clip, and so is not drawn
+/// at all.
+///
+/// A whole side, not a corner: two boxes that overlap on neither axis are
+/// still both here, and this only says yes when one interval is wholly past
+/// the other. The tolerance is for the boundary, where a text ending exactly
+/// where its clip does should be kept rather than lost to the last bit of a
+/// float.
+fn falls_outside(text: Rect, clip: Rect) -> bool {
+    const EPSILON: f32 = 0.1;
+    text.x + text.width < clip.x - EPSILON
+        || text.x > clip.x + clip.width + EPSILON
+        || text.y + text.height < clip.y - EPSILON
+        || text.y > clip.y + clip.height + EPSILON
+}
+
+/// A text's layout box, in world pixels.
+///
+/// What the culling check has always compared against a clip, lifted out so
+/// the routing question below can ask it too. Not outset: widening it here
+/// would widen what gets culled, and the two questions want different
+/// margins — see the call that adds one.
+fn laid_out_in(entry: &TextEntry) -> Rect {
+    let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
+    let (p2x, p2y) = entry.transform.transform_point(
+        entry.rect.x + entry.rect.width,
+        entry.rect.y + entry.rect.height,
+    );
+    Rect::new(
+        p1x.min(p2x),
+        p1y.min(p2y),
+        (p2x - p1x).abs(),
+        (p2y - p1y).abs(),
+    )
 }
 
 impl TextRenderState {
@@ -173,39 +210,40 @@ impl TextRenderState {
 
             // Skip text that is completely outside its clip region (culling optimization)
             // Check this FIRST so culled texts don't get rendered via texture path either
-            if let Some(clip) = &entry.clip.map(|c| c.world_aabb()) {
-                // Get text bounding box in world space (same coordinate system as clip rect)
-                let (p1x, p1y) = entry.transform.transform_point(entry.rect.x, entry.rect.y);
-                let (p2x, p2y) = entry.transform.transform_point(
-                    entry.rect.x + entry.rect.width,
-                    entry.rect.y + entry.rect.height,
-                );
-                let text_left = p1x.min(p2x);
-                let text_top = p1y.min(p2y);
-                let text_right = p1x.max(p2x);
-                let text_bottom = p1y.max(p2y);
-
-                let clip_right = clip.x + clip.width;
-                let clip_bottom = clip.y + clip.height;
-
-                // Check if text is completely outside clip region
-                // Use small epsilon to avoid floating point precision issues at boundaries
-                let epsilon = 0.1;
-                let outside = text_right < clip.x - epsilon
-                    || text_left > clip_right + epsilon
-                    || text_bottom < clip.y - epsilon
-                    || text_top > clip_bottom + epsilon;
-
-                if outside {
-                    // Text is completely outside clip - skip it entirely
-                    culled_indices.insert(idx);
-                    continue;
-                }
+            let laid_out = laid_out_in(entry);
+            if entry
+                .clip
+                .is_some_and(|clip| falls_outside(laid_out, clip.world_aabb()))
+            {
+                // Text is completely outside clip - skip it entirely
+                culled_indices.insert(idx);
+                continue;
             }
 
             // Route all non-translation transforms (rotation, scale) to TextQuadRenderer.
             // This keeps the glyphon atlas stable — only identity/translation text goes through it.
-            if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
+            //
+            // And anything glyphon cannot cut. `TextBounds` is four integers,
+            // so the only clip it can honour is an upright rectangle: a turned
+            // one, or a corner this text actually reaches into, has to be
+            // tested in the clip's own space, and the quad is what does that
+            // (#405). Asked of where the two answers *differ* rather than
+            // whether they can, because a quad costs a rasterization and an
+            // upload per text — a label in the middle of a rounded card is cut
+            // the same by the box and stays with glyphon.
+            let moved = !entry.transform.is_identity() && !entry.transform.is_translation_only();
+            // Glyphs overshoot the box they were laid out in — descenders,
+            // italics, accents — and ink that overshoots into a corner is ink
+            // the box would not have cut. Half the font size is the slack
+            // `command_to_text_backdrop` allows for the same reason, and it
+            // errs the safe way here: too generous sends a text down the quad
+            // path the box would have cut correctly, costing a rasterization;
+            // too tight leaves ink outside its clip, which is the defect.
+            let ink = laid_out.outset(entry.font_size * 0.5);
+            let box_will_not_do = entry
+                .clip
+                .is_some_and(|clip| !clip.box_cuts_like_the_shape(ink));
+            if moved || box_will_not_do {
                 transformed_indices.push(idx);
                 continue; // Skip transformed text in direct rendering
             }
@@ -292,10 +330,11 @@ impl TextRenderState {
                 // Clip bounds stay in screen space - don't apply transform translation
                 // (text position is transformed, but clip region should remain fixed)
                 // The box around the clip, because `TextBounds` is four
-                // integers and glyphon has nowhere to put a shape. The quad
-                // path beside this one cuts the shape itself; this is the half
-                // of #405 that cannot, and a turned clip over glyphon-drawn
-                // text still lets it out at the corners.
+                // integers and glyphon has nowhere to put a shape. That is
+                // exact here rather than approximate: a text this box would
+                // cut differently from the shape never reaches this point —
+                // `box_cuts_like_the_shape` sent it down the quad path
+                // instead, which tests in the clip's own space (#405).
                 let bounds = if let Some(clip_rect) = &entry.clip.map(|c| c.world_aabb()) {
                     TextBounds {
                         left: (clip_rect.x * scale_factor) as i32,
@@ -353,6 +392,185 @@ impl TextRenderState {
                 .render(&self.atlas, &self.viewport, pass)
                 .expect("Failed to render text");
         }
+    }
+}
+
+#[cfg(test)]
+mod laid_out_tests {
+    use super::laid_out_in;
+    use crate::renderer::types::TextEntry;
+    use crate::transform::Transform;
+    use crate::widgets::font::FontWeight;
+    use crate::widgets::{Color, FontFamily, Rect};
+
+    fn entry(rect: Rect, transform: Transform) -> TextEntry {
+        TextEntry {
+            text: "x".into(),
+            rect,
+            color: Color::WHITE,
+            font_size: 16.0,
+            font_family: FontFamily::default(),
+            font_weight: FontWeight::default(),
+            clip: None,
+            transform,
+            transform_origin: None,
+        }
+    }
+
+    /// The box a text was laid out in, carried through its placement.
+    ///
+    /// Two callers read it — what gets culled against its clip, and what gets
+    /// routed away from glyphon — so every term here decides whether a text is
+    /// drawn at all or drawn through the wrong pipeline. It is four
+    /// arithmetic operations and each of them can be written backwards without
+    /// the picture obviously changing.
+    /// A text is dropped only when it is wholly past one side of its clip.
+    ///
+    /// The cheapest thing the text path does and the easiest to get backwards:
+    /// too eager and a visible text is never drawn, with nothing to say why.
+    #[test]
+    fn a_text_is_dropped_only_when_it_is_wholly_outside_its_clip() {
+        use super::falls_outside;
+        let clip = Rect::new(100.0, 100.0, 200.0, 100.0);
+
+        assert!(
+            !falls_outside(Rect::new(150.0, 120.0, 40.0, 20.0), clip),
+            "inside"
+        );
+        assert!(
+            !falls_outside(Rect::new(0.0, 0.0, 400.0, 400.0), clip),
+            "over all of it"
+        );
+
+        // A whole side past, on each of the four.
+        assert!(
+            falls_outside(Rect::new(10.0, 120.0, 80.0, 20.0), clip),
+            "left of it"
+        );
+        assert!(
+            falls_outside(Rect::new(310.0, 120.0, 80.0, 20.0), clip),
+            "right of it"
+        );
+        assert!(
+            falls_outside(Rect::new(150.0, 10.0, 40.0, 80.0), clip),
+            "above it"
+        );
+        assert!(
+            falls_outside(Rect::new(150.0, 210.0, 40.0, 80.0), clip),
+            "below it"
+        );
+
+        // Just reaching in on each side is not outside — the far edge is what
+        // decides, and reading the near one instead keeps a text that has
+        // gone and drops one that is still here.
+        assert!(
+            !falls_outside(Rect::new(20.0, 120.0, 81.0, 20.0), clip),
+            "reaching in from the left"
+        );
+        assert!(
+            !falls_outside(Rect::new(299.0, 120.0, 80.0, 20.0), clip),
+            "reaching in from the right"
+        );
+        assert!(
+            !falls_outside(Rect::new(150.0, 20.0, 40.0, 81.0), clip),
+            "reaching in from above"
+        );
+        assert!(
+            !falls_outside(Rect::new(150.0, 199.0, 40.0, 80.0), clip),
+            "reaching in from below"
+        );
+
+        // Overlapping on neither axis is still two boxes in the same frame,
+        // and a corner-to-corner pair is outside by both.
+        assert!(
+            falls_outside(Rect::new(0.0, 0.0, 50.0, 50.0), clip),
+            "off the top-left corner"
+        );
+
+        // The tolerance, which is the whole reason there is one. A text
+        // ending exactly where its clip begins is kept, and so is one a
+        // hundredth of a pixel short of it — which is where a float lands
+        // after a transform. Half a pixel past is gone. The margin runs
+        // outward on every side; inward on any of them drops a text that is
+        // still touching its clip.
+        for (label, text) in [
+            (
+                "ending exactly at the left edge",
+                Rect::new(20.0, 120.0, 80.0, 20.0),
+            ),
+            (
+                "a hundredth short of the left edge",
+                Rect::new(20.0, 120.0, 79.99, 20.0),
+            ),
+            (
+                "starting exactly at the right edge",
+                Rect::new(300.0, 120.0, 80.0, 20.0),
+            ),
+            (
+                "a hundredth past the right edge",
+                Rect::new(300.01, 120.0, 80.0, 20.0),
+            ),
+            (
+                "ending exactly at the top edge",
+                Rect::new(150.0, 20.0, 40.0, 80.0),
+            ),
+            (
+                "starting exactly at the bottom edge",
+                Rect::new(150.0, 200.0, 40.0, 80.0),
+            ),
+        ] {
+            assert!(
+                !falls_outside(text, clip),
+                "{label}: a text touching its clip is still drawn"
+            );
+        }
+        for (label, text) in [
+            (
+                "half a pixel short of the left edge",
+                Rect::new(20.0, 120.0, 79.5, 20.0),
+            ),
+            (
+                "half a pixel past the right edge",
+                Rect::new(300.5, 120.0, 80.0, 20.0),
+            ),
+            (
+                "half a pixel short of the top edge",
+                Rect::new(150.0, 20.0, 40.0, 79.5),
+            ),
+            (
+                "half a pixel past the bottom edge",
+                Rect::new(150.0, 200.5, 40.0, 80.0),
+            ),
+        ] {
+            assert!(
+                falls_outside(text, clip),
+                "{label}: past the tolerance is past the clip"
+            );
+        }
+    }
+
+    #[test]
+    fn a_text_is_laid_out_where_its_placement_puts_it() {
+        let r = Rect::new(10.0, 20.0, 100.0, 40.0);
+
+        let plain = laid_out_in(&entry(r, Transform::IDENTITY));
+        assert_eq!((plain.x, plain.y), (10.0, 20.0));
+        assert_eq!((plain.width, plain.height), (100.0, 40.0));
+
+        let moved = laid_out_in(&entry(r, Transform::translate(5.0, -7.0)));
+        assert_eq!((moved.x, moved.y), (15.0, 13.0));
+        assert_eq!((moved.width, moved.height), (100.0, 40.0));
+
+        let scaled = laid_out_in(&entry(r, Transform::scale_xy(2.0, 3.0)));
+        assert_eq!((scaled.x, scaled.y), (20.0, 60.0));
+        assert_eq!((scaled.width, scaled.height), (200.0, 120.0));
+
+        // A mirror puts the far corner first, and the box is still a box with
+        // a positive extent — which is why the corners are taken as a min and
+        // an absolute difference rather than as first and second.
+        let mirrored = laid_out_in(&entry(r, Transform::scale_xy(-1.0, 1.0)));
+        assert_eq!((mirrored.x, mirrored.y), (-110.0, 20.0));
+        assert_eq!((mirrored.width, mirrored.height), (100.0, 40.0));
     }
 }
 

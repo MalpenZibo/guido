@@ -93,9 +93,11 @@ impl PlacedShape {
 
     /// The axis-aligned world box containing the shape.
     ///
-    /// What a clip used to be, and still is for the one consumer that cannot
-    /// take a shape: glyphon clips text to an integer rect, which is
-    /// over-generous under rotation (#405).
+    /// What a clip used to be, and still is for the consumers that cannot take
+    /// a shape: glyphon clips text to an integer rect and a viewport is four
+    /// integers. Neither is an approximation any more — a text the box would
+    /// cut differently from the shape is sent down the quad path instead
+    /// (#405), and the backdrop cuts the difference back off per fragment.
     ///
     /// It is also how a *viewport* is found, which is a different thing and not
     /// an approximation — the backdrop pass narrows the box it may write to and
@@ -173,6 +175,49 @@ impl PlacedShape {
     /// one: a corner of 0.4 under a `scale(8.0)` is three pixels of curve.
     pub(crate) fn is_a_box(&self) -> bool {
         self.placement.keeps_axes() && self.largest_corner_on_surface() <= 0.5
+    }
+
+    /// Whether cutting `ink` to this shape's box cuts it the way the shape
+    /// itself would.
+    ///
+    /// What it is for: glyphon takes a `TextBounds` of four integers and has
+    /// nowhere to put a shape, so a text cut by a turned or rounded clip was
+    /// cut by the box around it and showed outside (#405). The way out is to
+    /// send that text down the textured-quad path, which tests a fragment in
+    /// the clip's own space — but a quad costs a rasterization and an upload
+    /// per text, and the atlas is stable precisely because most text does not
+    /// take one.
+    ///
+    /// So ask where the two answers differ rather than whether they can. A
+    /// turned clip differs everywhere its edge runs and there is no cheap
+    /// region to name, so that one always needs the shape. An upright clip
+    /// differs only inside the four corner boxes — `r` by `r` at each corner,
+    /// measured on the surface — and a text whose ink reaches none of them is
+    /// cut identically by either. Most text reaches none of them: a label sits
+    /// in the middle of the card that clips it.
+    pub(crate) fn box_cuts_like_the_shape(&self, ink: Rect) -> bool {
+        if !self.placement.keeps_axes() {
+            return false;
+        }
+        let (sx, sy) = self.placement.extract_scale_components();
+        let r = self.clamped_radii();
+        let b = self.world_aabb();
+        let (right, bottom) = (b.x + b.width, b.y + b.height);
+
+        // Each corner's own box, from the radius that corner actually has —
+        // four different ones is an ordinary shape.
+        [
+            (r.top_left, b.x, b.y, 1.0, 1.0),
+            (r.top_right, right, b.y, -1.0, 1.0),
+            (r.bottom_right, right, bottom, -1.0, -1.0),
+            (r.bottom_left, b.x, bottom, 1.0, -1.0),
+        ]
+        .into_iter()
+        .all(|(radius, cx, cy, dx, dy)| {
+            let (w, h) = (radius * sx * dx, radius * sy * dy);
+            let wedge = Rect::new(cx.min(cx + w), cy.min(cy + h), w.abs(), h.abs());
+            !overlaps(wedge, ink)
+        })
     }
 
     /// The largest corner this shape has, measured where it will be drawn.
@@ -734,6 +779,12 @@ impl Arc {
     }
 }
 
+/// Whether two rects share any area at all. Touching edges do not count: a
+/// corner box and an ink box that meet exactly are cut the same by either.
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
 /// Each corner at most half the smaller side — the clamp the *shader* applies,
 /// and `Rect::shape_distance` with it.
 ///
@@ -950,6 +1001,169 @@ mod tests {
                 x += 0.25;
             }
         }
+    }
+
+    /// Where it says the box is exact, no pixel disagrees.
+    ///
+    /// The hand-picked cases below say what the predicate is *for*; this says
+    /// it is not wrong. `box_cuts_like_the_shape` may answer `false` as often
+    /// as it likes — that only sends a text down the quad path it did not
+    /// need — but an answer of `true` is a promise that cutting the ink to
+    /// four integers cuts it the way the shape would, and a broken one leaves
+    /// glyphs outside their clip with nothing to catch it.
+    ///
+    /// So the promise is checked against the pixels: wherever it says `true`,
+    /// walk the ink and find a point the box keeps and the shape does not.
+    /// There must be none. Asymmetric radii, both oblong shapes, scales that
+    /// differ per axis and a mirror, because the wedges are placed by sign and
+    /// sized by scale and every one of those is a term that can be written
+    /// backwards.
+    #[test]
+    fn where_the_box_is_called_exact_no_pixel_disagrees() {
+        use crate::widgets::Corners;
+
+        // Two sets, because a corner with no radius has no wedge and so
+        // cannot say whether the wedge would have been put in the right
+        // place. The first gives all four a different size; the second
+        // returns the zeros, which is the ordinary shape of a card whose top
+        // is rounded and whose bottom is not.
+        let radii = [
+            CornerRadii {
+                top_left: 30.0,
+                top_right: 12.0,
+                bottom_right: 40.0,
+                bottom_left: 22.0,
+            },
+            CornerRadii {
+                top_left: 26.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 18.0,
+            },
+        ];
+        let placements = [
+            Transform::IDENTITY,
+            Transform::scale_xy(2.0, 3.0),
+            Transform::scale_xy(0.5, 1.5),
+            Transform::scale_xy(-1.0, 1.0),
+            Transform::rotate_degrees(20.0),
+        ];
+
+        let mut exact = 0;
+        for (w, h) in [(200.0_f32, 100.0_f32), (90.0, 240.0)] {
+            for radii in radii {
+                for placement in placements {
+                    let shape =
+                        PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, placement);
+                    let Some(to_local) = placement.inverse() else {
+                        continue;
+                    };
+                    let corners = Corners {
+                        radii: shape.clamped_radii(),
+                        curvature: 1.0,
+                    };
+                    let local = Rect::new(0.0, 0.0, w, h);
+                    let b = shape.world_aabb();
+
+                    // Ink boxes all over the shape and past every edge of it.
+                    let step = 24.0;
+                    let mut y = b.y - step;
+                    while y < b.y + b.height + step {
+                        let mut x = b.x - step;
+                        while x < b.x + b.width + step {
+                            let ink = Rect::new(x, y, step, step);
+                            if shape.box_cuts_like_the_shape(ink) {
+                                exact += 1;
+                                // Every point the box would keep, the shape keeps.
+                                let mut py = ink.y;
+                                while py < ink.y + ink.height {
+                                    let mut px = ink.x;
+                                    while px < ink.x + ink.width {
+                                        let in_box = px >= b.x
+                                            && px < b.x + b.width
+                                            && py >= b.y
+                                            && py < b.y + b.height;
+                                        if in_box {
+                                            let (lx, ly) = to_local.transform_point(px, py);
+                                            assert!(
+                                                local.contains_shape(lx, ly, corners),
+                                                "{w}x{h} under {placement:?}: the box is called \
+                                             exact for {ink:?}, and ({px}, {py}) is inside the \
+                                             box and outside the shape"
+                                            );
+                                        }
+                                        px += 1.0;
+                                    }
+                                    py += 1.0;
+                                }
+                            }
+                            x += step;
+                        }
+                        y += step;
+                    }
+                }
+            }
+        }
+        assert!(
+            exact > 100,
+            "the predicate said the box was exact {exact} times, which is too \
+             few for this to have checked anything"
+        );
+    }
+
+    /// The box is exact where the shape has no corner to differ in, and not
+    /// where it has.
+    ///
+    /// What routes a text to glyphon or to the quad. Getting it wrong in one
+    /// direction leaves ink outside its clip, which is the defect; in the
+    /// other it costs a rasterization and an upload for a text the box would
+    /// have cut correctly.
+    #[test]
+    fn a_box_cuts_like_its_shape_only_where_the_corners_are_not() {
+        let card = |radius: f32, placement: Transform| {
+            PlacedShape::placed(
+                Rect::new(0.0, 0.0, 200.0, 100.0),
+                CornerRadii::uniform(radius),
+                1.0,
+                placement,
+            )
+        };
+
+        // A square clip is its own box, wherever the ink is.
+        let square = card(0.0, Transform::IDENTITY);
+        assert!(square.box_cuts_like_the_shape(Rect::new(0.0, 0.0, 200.0, 100.0)));
+
+        let rounded = card(30.0, Transform::IDENTITY);
+        // Down the middle, clear of all four corner boxes.
+        assert!(
+            rounded.box_cuts_like_the_shape(Rect::new(40.0, 35.0, 120.0, 30.0)),
+            "a label in the middle of the card is cut the same by either"
+        );
+        // Into the top-left corner box.
+        assert!(
+            !rounded.box_cuts_like_the_shape(Rect::new(10.0, 10.0, 40.0, 20.0)),
+            "ink inside a corner box is where the two answers differ"
+        );
+        // Along the top edge but below the corners: the corner box is 30 tall,
+        // so ink starting at 35 misses it.
+        assert!(
+            rounded.box_cuts_like_the_shape(Rect::new(0.0, 35.0, 200.0, 20.0)),
+            "the corner box is as tall as the radius and no taller"
+        );
+
+        // A turn has no cheap region to name, so it always needs the shape —
+        // even for ink in the middle, and even with no corners at all.
+        let turned = card(0.0, Transform::rotate_degrees(15.0));
+        assert!(!turned.box_cuts_like_the_shape(Rect::new(80.0, 40.0, 20.0, 10.0)));
+
+        // The corner box is measured on the *surface*, so a scale grows it:
+        // this ink clears a 30-radius corner upright and not at 3x.
+        let scaled = card(30.0, Transform::scale_xy(3.0, 3.0));
+        assert!(rounded.box_cuts_like_the_shape(Rect::new(0.0, 35.0, 200.0, 20.0)));
+        assert!(
+            !scaled.box_cuts_like_the_shape(Rect::new(0.0, 35.0, 600.0, 20.0)),
+            "a 30 radius under a 3x scale is 90 pixels of corner"
+        );
     }
 
     /// A band claims only what the shape covers at *every* height inside it.
