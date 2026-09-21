@@ -154,6 +154,23 @@ pub fn quit_app() {
 /// Writing a *widget* or a *layout* rather than an application is a different
 /// job with a different vocabulary — the tree, the two contexts, the
 /// constraints. That lives in [`widget_prelude`], and is not re-exported here.
+///
+/// What an application needs includes every name it has to *write* to call the
+/// methods exported here: [`StateStyle`](crate::widgets::StateStyle) is here,
+/// so [`RippleConfig`](crate::widgets::RippleConfig) is too, because it is the
+/// only way to spell the argument to `StateStyle::ripple_config`, and a caller
+/// who can reach a method but cannot name what it takes has half of one.
+///
+/// Having to write it is the line, and three neighbours fall the far side of
+/// it. A type the exported methods merely *hold*: `StateStyle`'s fields name `BackgroundOverride` and
+/// `BorderOverride`, but `background`, `lighter`, `darker` and `border` take a
+/// colour and a number and build them. A type only a `#[doc(hidden)]` method
+/// takes: `StateWhen` is what [`Stateful`](crate::widgets::Stateful) hands
+/// `push_state_style`, the hook `when_hovered` and its siblings are written
+/// on, and every method a caller is shown takes a closure. And a bound rather
+/// than a type — `child` takes `impl IntoChild<M>`, which an argument
+/// satisfies without ever naming it, so nothing here follows from that
+/// signature either way.
 pub mod prelude {
     pub use crate::animation::{
         Animate, Animated, IntoAnimated, Keyframes, Repeat, SpringConfig, TimingFunction,
@@ -190,9 +207,9 @@ pub mod prelude {
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
         IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding, Point,
-        Rect, Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful, Text,
-        TextInput, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed, text,
-        text_input,
+        Rect, RippleConfig, Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle,
+        Stateful, Text, TextInput, TextShadow, TextStroke, TextStyle, Widget, container, image,
+        keyed, text, text_input,
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,

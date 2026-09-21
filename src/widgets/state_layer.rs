@@ -385,6 +385,18 @@ impl StateStyle {
     }
 
     /// Enable ripple effect with custom configuration.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container()
+    ///     .when_pressed(|s| s.ripple_config(RippleConfig {
+    ///         expand_speed: 0.6,
+    ///         fade_speed: 2.0,
+    ///         ..RippleConfig::with_color(Color::rgba(0.0, 0.0, 0.0, 0.2))
+    ///     }))
+    ///     .child(text("Slow to spread, quick to leave"));
+    /// ```
     pub fn ripple_config(mut self, config: RippleConfig) -> Self {
         self.ripple = Some(config);
         self
