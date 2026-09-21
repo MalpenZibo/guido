@@ -429,12 +429,7 @@ impl Container {
             // #340).
             Event::ScrollEnd { at } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
-                    let sd = self.scroll_mut();
-                    sd.scroll_state.end_gesture(now);
-                    if sd.scroll_state.should_apply_momentum() {
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-                    return EventResponse::Handled;
+                    return self.hand_off_to_momentum(id, now);
                 }
             }
 

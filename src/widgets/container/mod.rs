@@ -1589,11 +1589,22 @@ impl Widget for Container {
             _ => Cow::Borrowed(event),
         };
 
-        if let Some(response) = self.handle_scrollbar_event(tree, id, &hit, &local_event) {
-            return response;
+        let at = tree.event_instant();
+
+        // Asked once for both, because the answer is the same one and every
+        // container that does not scroll pays for it on every pointer event.
+        if self.scroll_axis != ScrollAxis::None {
+            if let Some(response) = self.handle_scrollbar_event(tree, id, &hit, &local_event) {
+                return response;
+            }
+            // Before the children, because taking the gesture from them is
+            // what it does; after the scrollbar, because a press the scrollbar
+            // took is not a press on the content.
+            if let Some(response) = self.handle_content_drag(tree, id, &hit, &local_event, at) {
+                return response;
+            }
         }
 
-        let at = tree.event_instant();
         self.track_pointer(id, &hit, &local_event, at);
 
         // Children are positioned relative to our origin (and to the scroll

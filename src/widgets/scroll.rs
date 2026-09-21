@@ -1,6 +1,6 @@
 //! Scroll configuration types for scrollable containers.
 
-use super::widget::Rect;
+use super::widget::{Point, Rect};
 use crate::clock::{EventInstant, FrameInstant};
 use crate::reactive::{IntoSignal, Signal};
 use crate::widgets::{Color, Container};
@@ -35,6 +35,20 @@ impl ScrollAxis {
     /// Returns true if horizontal scrolling is enabled
     pub fn allows_horizontal(&self) -> bool {
         matches!(self, ScrollAxis::Horizontal | ScrollAxis::Both)
+    }
+
+    /// A movement with everything this axis does not scroll taken out of it.
+    ///
+    /// Every measurement of a gesture wants the same thing — the part of it
+    /// that is this scroller's — and each place that wrote the match out
+    /// again was a place a fourth axis would have to be found.
+    pub fn along(self, dx: f32, dy: f32) -> (f32, f32) {
+        match self {
+            ScrollAxis::Vertical => (0.0, dy),
+            ScrollAxis::Horizontal => (dx, 0.0),
+            ScrollAxis::Both => (dx, dy),
+            ScrollAxis::None => (0.0, 0.0),
+        }
     }
 }
 
@@ -249,6 +263,65 @@ impl Scroll {
     }
 }
 
+/// How far a finger travels before it is scrolling rather than pressing, in
+/// logical pixels.
+///
+/// A finger landing on a button inside a list belongs to the button until it
+/// moves far enough to belong to the list, and every toolkit draws that line
+/// with a distance. Flutter's `kTouchSlop` is 18 — raised from 8 after targets
+/// proved too hard to hit — Android's `getScaledTouchSlop` is around 22 and
+/// varies by device, and GTK's `gtk-dnd-drag-threshold` is a user setting that
+/// defaults to 8. Two of the three are answers only a device or a desktop can
+/// give; 18 is the one a library can state, and it is the value the toolkit
+/// that *raised* it settled on.
+///
+/// Logical rather than physical, because a slop is a property of the hand: the
+/// same swipe is the same swipe on a HiDPI display.
+///
+/// Only a finger spends it. A mouse dragging content scrolls nothing (#429),
+/// so there is no mouse slop to be a second number here.
+pub(crate) const TOUCH_SLOP: f32 = 18.0;
+
+/// A finger on the content of a scroller, before and after it has taken the
+/// gesture from whatever it landed on.
+///
+/// Both points are in the scroller's own space — the space
+/// `handle_scrollbar_event` rebases into, and the one thing a scroll offset
+/// does not move under.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ContentDrag {
+    /// Where the finger landed, and what the slop is measured from.
+    pub origin: Point,
+    /// Where it was last seen, updated by every move. The distance from
+    /// `origin` is what buys the drag; once bought, the distance from here is
+    /// what moves the content.
+    pub last: Point,
+    /// Whether the slop has been crossed. Before it the press still belongs to
+    /// the child and this is only a distance being watched.
+    pub scrolling: bool,
+}
+
+impl ContentDrag {
+    pub fn landed(at: Point) -> Self {
+        Self {
+            origin: at,
+            last: at,
+            scrolling: false,
+        }
+    }
+
+    /// How far the finger has travelled from where it landed, measured only
+    /// along the axes this scroller scrolls.
+    ///
+    /// A sideways swipe across a vertical list is not a scroll of it, and
+    /// counting it would let one take the press off a button it never meant to
+    /// leave.
+    pub fn travel(&self, axis: ScrollAxis) -> f32 {
+        let (dx, dy) = axis.along(self.last.x - self.origin.x, self.last.y - self.origin.y);
+        dx.hypot(dy)
+    }
+}
+
 /// Internal scroll state for a container
 #[derive(Debug, Default)]
 pub(crate) struct ScrollState {
@@ -274,6 +347,9 @@ pub(crate) struct ScrollState {
     pub h_scrollbar_dragging: bool,
     pub h_scrollbar_drag_start_x: f32,
     pub h_scrollbar_drag_start_offset: f32,
+    /// The finger on the content, if one has landed on it — see
+    /// [`ContentDrag`].
+    pub content_drag: Option<ContentDrag>,
     /// Momentum velocity, in pixels per frame — the unit `advance_momentum`
     /// adds. Built from a speed, not from the last delta.
     pub velocity_x: f32,
@@ -386,6 +462,31 @@ impl ScrollState {
             self.velocity_y = self.velocity_y * (1.0 - SMOOTHING) + step_y * SMOOTHING;
         }
         self.gesture_samples = self.gesture_samples.saturating_add(1);
+    }
+
+    /// The glide stops where it is.
+    ///
+    /// A finger landing on moving content is asking it to stop, which is what
+    /// `ScrollView` does on `ACTION_DOWN` and what `Scrollable` does when a
+    /// pointer lands on a ballistic simulation. Clearing the velocity is not
+    /// enough on its own: `gesture_ended` is what says a momentum is due, and
+    /// a finger is down again.
+    pub fn stop_momentum(&mut self) {
+        self.velocity_x = 0.0;
+        self.velocity_y = 0.0;
+        self.momentum_since = None;
+        self.gesture_ended = false;
+    }
+
+    /// A gesture begins: this one's speed is its own.
+    ///
+    /// The inverse of [`end_gesture`](Self::end_gesture), and here for the
+    /// same reason — what a velocity is measured from is this type's
+    /// invariant, and a caller that has to remember two fields is a caller
+    /// that will one day remember one.
+    pub fn begin_gesture(&mut self) {
+        self.last_scroll_time = None;
+        self.gesture_samples = 0;
     }
 
     /// The gesture ended — the finger lifted.
@@ -1414,5 +1515,38 @@ mod tests {
         // At 50% scroll, offset should be 100px
         let offset = state.scrollbar_handle_offset(ScrollbarAxis::Vertical, 400.0, 200.0);
         assert_eq!(offset, 100.0);
+    }
+
+    /// The slop is spent on the axes the scroller scrolls, and on no others.
+    ///
+    /// A finger sliding sideways across a vertical list is not scrolling it,
+    /// so that travel must not buy the drag — otherwise a swipe that was
+    /// always going to end on the button it started on takes the press away
+    /// from it on the way past.
+    #[test]
+    fn a_swipe_across_a_list_is_not_travel_along_it() {
+        let mut drag = ContentDrag::landed(Point::new(100.0, 100.0));
+        drag.last = Point::new(160.0, 108.0);
+
+        assert_eq!(
+            drag.travel(ScrollAxis::Vertical),
+            8.0,
+            "only the y moved it"
+        );
+        assert_eq!(
+            drag.travel(ScrollAxis::Horizontal),
+            60.0,
+            "only the x, for a list that runs sideways"
+        );
+        assert_eq!(
+            drag.travel(ScrollAxis::Both),
+            60.0_f32.hypot(8.0),
+            "both, when both scroll"
+        );
+        assert_eq!(
+            drag.travel(ScrollAxis::None),
+            0.0,
+            "and nothing where nothing scrolls"
+        );
     }
 }
