@@ -852,12 +852,15 @@ impl Container {
         needs_repaint
     }
 
-    /// A finger on the content, and what it does to the press it landed on.
+    /// A finger landing on the content, and whatever ends the press it landed
+    /// on — the half of a content drag that happens on the way *down* the
+    /// tree.
     ///
-    /// Returns `Some` only once the gesture is the scroller's: until the slop
-    /// is spent the press belongs to whatever is under it, so the press and
-    /// the small moves that follow it are answered with `None` and go on down
-    /// the tree unchanged.
+    /// Down, because the watch has to be armed before a child takes the press
+    /// and ended before a child's `Handled` can hide the release. What it
+    /// arms is only a distance being watched: it answers `None` and the press
+    /// goes on down the tree unchanged, and is still the child's until
+    /// [`claim_the_content_drag`](Self::claim_the_content_drag) buys it.
     ///
     /// Runs after [`handle_scrollbar_event`](Self::handle_scrollbar_event) and
     /// therefore never sees a press the scrollbar took, which is why nothing
@@ -870,9 +873,8 @@ impl Container {
     /// Only called on a scroller, because that is the only kind of container
     /// with scroll state to read — `Container::event` asks once for this and
     /// the scrollbar both.
-    pub(super) fn handle_content_drag(
+    pub(super) fn watch_for_a_content_drag(
         &mut self,
-        tree: &mut Tree,
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
@@ -906,10 +908,79 @@ impl Container {
                 None
             }
 
+            // Whatever ends the press ends the drag. A release hands a live
+            // one to the momentum — the same handoff `ScrollEnd` makes for a
+            // touchpad — and a leave does not, because a gesture taken away is
+            // not a gesture thrown.
+            Event::MouseUp {
+                button: MouseButton::Left,
+                ..
+            } => {
+                let drag = self.scroll_mut().scroll_state.content_drag.take()?;
+                drag.scrolling.then(|| self.hand_off_to_momentum(id, now))
+            }
+
+            Event::MouseLeave => {
+                self.scroll_mut().scroll_state.content_drag = None;
+                None
+            }
+
+            _ => None,
+        }
+    }
+
+    /// The finger this scroller is watching, if one has landed on its content.
+    ///
+    /// `Container::event` asks before calling [`claim_the_content_drag`](Self::claim_the_content_drag)
+    /// at all, and again to tell the gesture it has already won from the one
+    /// it has not: the first is handled before the children and the second
+    /// after them.
+    pub(super) fn watched_content_drag(&self) -> Option<ContentDrag> {
+        match self.scroll_axis {
+            ScrollAxis::None => None,
+            _ => self.scroll_data().scroll_state.content_drag,
+        }
+    }
+
+    /// The move that makes a watched press this scroller's drag, and every
+    /// move after it.
+    ///
+    /// Asked after the children while the gesture is still anybody's, because
+    /// the innermost scroller that can move has to decide first: a list inside
+    /// a page takes the finger, and the page takes it only where the list is
+    /// not, or cannot move. That is the order the wheel is already resolved
+    /// in, where the innermost scroller's `Handled` ends the dispatch before
+    /// an ancestor is asked, and the order Flutter, Android and GTK all give a
+    /// nested drag (#437).
+    ///
+    /// Asked *before* them once the gesture is this scroller's: claimed is
+    /// claimed, nothing below can take it back, and a drag that went on
+    /// walking the subtree it is scrolling would pay for every widget in it
+    /// once a frame.
+    ///
+    /// Why the tree carries the answer rather than `Handled` is on
+    /// `Tree::a_scroller_is_dragging_its_content`.
+    pub(super) fn claim_the_content_drag(
+        &mut self,
+        tree: &mut Tree,
+        id: WidgetId,
+        hit: &HitContext,
+        event: &Event,
+        now: EventInstant,
+    ) -> Option<EventResponse> {
+        match event {
             Event::MouseMove {
                 at: Some(at),
                 pointer: PointerKind::Finger,
             } => {
+                // A scroller below took it, so stop watching the press. A
+                // watch kept alive would claim the moment the finger wandered
+                // outside this box, where the children are no longer asked at
+                // all.
+                if tree.a_scroller_below_took_the_drag() {
+                    self.scroll_mut().scroll_state.content_drag = None;
+                    return None;
+                }
                 let axis = self.scroll_axis;
                 let was = self.scroll_data().scroll_state.content_drag?;
                 let mut drag = ContentDrag {
@@ -956,24 +1027,8 @@ impl Container {
                 if self.apply_scroll(-dx, -dy, ScrollSource::Finger, now) {
                     request_job(id, JobRequest::Paint);
                 }
+                tree.a_scroller_is_dragging_its_content();
                 Some(EventResponse::Handled)
-            }
-
-            // Whatever ends the press ends the drag. A release hands a live
-            // one to the momentum — the same handoff `ScrollEnd` makes for a
-            // touchpad — and a leave does not, because a gesture taken away is
-            // not a gesture thrown.
-            Event::MouseUp {
-                button: MouseButton::Left,
-                ..
-            } => {
-                let drag = self.scroll_mut().scroll_state.content_drag.take()?;
-                drag.scrolling.then(|| self.hand_off_to_momentum(id, now))
-            }
-
-            Event::MouseLeave => {
-                self.scroll_mut().scroll_state.content_drag = None;
-                None
             }
 
             _ => None,

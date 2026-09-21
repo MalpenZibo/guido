@@ -308,6 +308,26 @@ pub struct Tree {
     /// Cleared going in rather than coming out, so nothing that returns early
     /// can leave it set for the next press.
     focus_claimed_the_press: bool,
+    /// Whether a scroller has taken the move being dispatched as a drag of its
+    /// content.
+    ///
+    /// The other sentence `Handled` cannot carry, and for the mirror-image
+    /// reason: a scroller claims its drag *after* its children, so that a list
+    /// inside a page takes the finger before the page does — but "a child
+    /// handled it" is not "a scroller took it", and an ancestor that read it
+    /// that way would let a text input extending a selection keep the list
+    /// around it from scrolling. So the scroller that took the gesture says
+    /// exactly that, and the ancestors that were watching the same press stop
+    /// watching it (#437).
+    ///
+    /// Android says it the other way round and at the same seam: a nested
+    /// scroller calls `requestDisallowInterceptTouchEvent`, and the
+    /// `ScrollView` above it declines to intercept for the rest of the
+    /// sequence.
+    ///
+    /// Cleared before every event, like the claim above it, so what it means
+    /// is *this* move.
+    drag_claimed_by_a_scroller: bool,
 }
 
 impl Tree {
@@ -323,6 +343,7 @@ impl Tree {
             pass_dependent: false,
             event_instant: None,
             focus_claimed_the_press: false,
+            drag_claimed_by_a_scroller: false,
         }
     }
 
@@ -399,18 +420,41 @@ impl Tree {
         self.focus_claimed_the_press
     }
 
+    /// Say that the finger move being dispatched is scrolling this container's
+    /// content, so that nothing above it claims the same gesture.
+    ///
+    /// Said by the scroller the gesture belongs to, on every move it belongs
+    /// to it for — not only the one that won it, because an ancestor that
+    /// re-armed on a later press would otherwise be watching a gesture already
+    /// spoken for.
+    pub(crate) fn a_scroller_is_dragging_its_content(&mut self) {
+        self.drag_claimed_by_a_scroller = true;
+    }
+
+    /// Whether a scroller below the one asking has already taken this move.
+    ///
+    /// Only an ancestor asks, and only from the claim it makes after its
+    /// children: a scroller checks this before it takes the gesture, and says
+    /// [`a_scroller_is_dragging_its_content`](Self::a_scroller_is_dragging_its_content)
+    /// after it has.
+    pub(crate) fn a_scroller_below_took_the_drag(&self) -> bool {
+        self.drag_claimed_by_a_scroller
+    }
+
     /// Declare when the event about to be dispatched happened, or `None` when
     /// the dispatch is over.
     ///
     /// `dispatch_events` is the caller in the loop; a test that wants to place
     /// an event in time is the other one.
     ///
-    /// It also forgets any focus claim made for the previous event, which is
-    /// what makes that claim mean *this* press — see
+    /// It also forgets what the previous event was claimed by — the focus, and
+    /// a scroller dragging its content — which is what makes a claim mean
+    /// *this* one. See
     /// [`keep_the_focus_this_press_landed_on`](Self::keep_the_focus_this_press_landed_on).
     pub fn set_event_instant(&mut self, at: Option<std::time::Instant>) {
         self.event_instant = at;
         self.focus_claimed_the_press = false;
+        self.drag_claimed_by_a_scroller = false;
     }
 
     /// Declare the instant of the frame about to run, or `None` when it is

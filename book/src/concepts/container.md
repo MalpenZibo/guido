@@ -311,6 +311,14 @@ than pressing what is under it.
 A scroller with nothing to scroll claims none of this, so a list that happens
 to fit today still answers a tap the way it always did.
 
+Nested scrollers go to the innermost one that can move: a finger in a list
+inside a page drags the list, and the page only where the list is not — or
+where it has nothing to scroll on that axis. The wheel has always gone to the
+innermost, and this is the same rule for a finger. A list that reaches its end
+mid-drag keeps the gesture rather than passing what is left of it outward, as
+Flutter's nested scrollables do; CSS calls the other behaviour scroll chaining,
+and there is no `overscroll-behavior` here to ask for it.
+
 ### Custom Scrollbars
 
 ```rust

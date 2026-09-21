@@ -12,7 +12,7 @@
 //! so a default `cargo test` still builds. With it, a machine that has no GPU
 //! adapter skips, unless `GUIDO_GPU_REQUIRED` says a skip is a failure.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -977,50 +977,58 @@ fn each_queued_event_arrives_at_the_moment_it_was_queued_for() {
     assert_eq!(*seen.borrow(), [pressed, released]);
 }
 
+/// A block of one colour, which is what these scroll scenes are made of: the
+/// frame says where the content is by where one gives way to the next.
+fn block(height: f32, color: Color) -> Container {
+    container().width(fill()).height(height).background(color)
+}
+
+/// Scrolling on the vertical axis with no scrollbar drawn over it.
+fn hidden_scroll() -> Scroll {
+    Scroll::vertical().visibility(ScrollbarVisibility::Hidden)
+}
+
 /// A scroll area as tall as its surface, over content whose top 500px are one
 /// colour and the rest another — so where the edge between them is drawn says
-/// how far the content has moved.
-fn scroll_over_an_edge() -> Container {
+/// how far the content has moved. `over` is laid on the first block for the
+/// one test that needs something in the way.
+fn scroll_over_an_edge_under(over: Option<EveryMoveIsMine>) -> Container {
     container()
         .width(fill())
         .height(fill())
-        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+        .scroll(hidden_scroll())
         .child(
             container()
                 .layout(Flex::column())
                 .width(fill())
-                .child(
-                    container()
-                        .width(fill())
-                        .height(500.0)
-                        .background(Color::rgb(1.0, 0.0, 0.0)),
-                )
-                .child(
-                    container()
-                        .width(fill())
-                        .height(1500.0)
-                        .background(Color::rgb(0.0, 0.0, 1.0)),
-                ),
+                .child(block(500.0, Color::rgb(1.0, 0.0, 0.0)).child(over))
+                .child(block(1500.0, Color::rgb(0.0, 0.0, 1.0))),
         )
+}
+
+fn scroll_over_an_edge() -> Container {
+    scroll_over_an_edge_under(None)
 }
 
 /// How far the content has scrolled, read off the frame: 500 less the first
 /// row drawn more blue than red. To the pixel, which is as fine as a frame
-/// can say it. Halved rather than walked, because every read copies the frame
-/// back from the device.
+/// can say it.
 fn scrolled(app: &Headless, surface: SurfaceId) -> f32 {
-    let blue = |y| {
-        let [r, _, b, _] = app.read_pixel(surface, 50, y);
-        b > r
-    };
-    assert!(!blue(0), "the edge has left the top of the surface");
-    let (mut above, mut below) = (0, 600);
-    while below - above > 1 {
-        let mid = (above + below) / 2;
-        if blue(mid) { below = mid } else { above = mid }
+    500.0 - first_row(app, surface, 0, |[r, _, b, _]| b > r, "edge") as f32
+}
+
+/// A finger landing at `from` and dragging 100px up the surface in five steps
+/// a frame apart, which is 18 of slop and 82 of content.
+fn drag_up(app: &mut Headless, surface: SurfaceId, at: &mut Instant, from: f32) {
+    app.event_at(surface, Event::finger_down(50.0, from), *at);
+    for step in 1..=5 {
+        *at += Duration::from_millis(8);
+        app.event_at(
+            surface,
+            Event::finger_move(50.0, from - 20.0 * step as f32),
+            *at,
+        );
     }
-    assert!(below < 600, "the edge has left the bottom of the surface");
-    500.0 - below as f32
 }
 
 /// A surface 100x600 over `view`, stepped once so the first frame has run.
@@ -1080,12 +1088,9 @@ fn scroll_over_a_button(clicks: RwSignal<u32>, height: f32) -> Container {
     container()
         .width(fill())
         .height(fill())
-        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+        .scroll(hidden_scroll())
         .child(
-            container()
-                .width(fill())
-                .height(height)
-                .background(Color::rgb(0.0, 0.0, 1.0))
+            block(height, Color::rgb(0.0, 0.0, 1.0))
                 .when_pressed(|s: StateStyle| s.background(Color::rgb(0.0, 1.0, 0.0)))
                 .on_click(move || clicks.update(|c| *c += 1)),
         )
@@ -1113,11 +1118,7 @@ fn a_finger_dragging_the_content_scrolls_it() {
     let Some(mut app) = headless() else { return };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
-    app.event_at(surface, Event::finger_down(50.0, 300.0), at);
-    for y in [280.0, 260.0, 240.0, 220.0, 200.0] {
-        at += Duration::from_millis(8);
-        app.event_at(surface, Event::finger_move(50.0, y), at);
-    }
+    drag_up(&mut app, surface, &mut at, 300.0);
     app.step_at(at);
 
     assert_eq!(
@@ -1396,6 +1397,282 @@ fn a_mouse_dragging_the_same_content_does_not_scroll_it() {
         scrolled(&app, surface),
         0.0,
         "a mouse dragging the content moves nothing"
+    );
+}
+
+/// A leaf that takes every move it is given and counts them, the way a text
+/// input extending a selection takes them. It draws nothing, so the block
+/// under it still reads off the frame.
+struct EveryMoveIsMine(Rc<Cell<u32>>);
+
+impl Widget for EveryMoveIsMine {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        Size::new(100.0, 500.0)
+    }
+
+    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
+        match event {
+            Event::MouseMove { .. } => {
+                self.0.set(self.0.get() + 1);
+                EventResponse::Handled
+            }
+            _ => EventResponse::Ignored,
+        }
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+}
+
+/// `scroll_over_an_edge` with one of those laid over the first block, and the
+/// count of the moves it was given.
+fn scroll_under_a_greedy_child(app: &mut Headless) -> (SurfaceId, Instant, Rc<Cell<u32>>) {
+    let moves = Rc::new(Cell::new(0));
+    let counted = moves.clone();
+    let (surface, at) = scroller(app, move || {
+        scroll_over_an_edge_under(Some(EveryMoveIsMine(counted.clone())))
+    });
+    (surface, at, moves)
+}
+
+/// A child taking the move is not a scroller taking it.
+///
+/// The claim a scroller makes after its children is made whether or not one of
+/// them answered `Handled`, because the only thing that means the gesture is
+/// spoken for is a *scroller* below saying so. Read the child's answer as the
+/// ruling instead and a finger could not scroll a list past anything that
+/// tracks a drag of its own — a text input being the one in the crate.
+#[test]
+fn a_child_that_takes_every_move_does_not_take_the_drag() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at, _) = scroll_under_a_greedy_child(&mut app);
+
+    drag_up(&mut app, surface, &mut at, 300.0);
+    app.step_at(at);
+
+    assert_eq!(
+        scrolled(&app, surface),
+        82.0,
+        "the leaf under the finger consumed every move, and the list it sits \
+         in scrolled by all of them but the slop"
+    );
+}
+
+/// And a gesture the list has won stops being offered to what is under it.
+///
+/// Claimed is claimed: nothing below can take a drag back, so the scroller
+/// answers the rest of it before the children rather than after, and the
+/// subtree it is scrolling is not walked once a frame for an answer that
+/// cannot change anything.
+#[test]
+fn a_drag_the_list_has_won_is_not_offered_to_the_list_again() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at, moves) = scroll_under_a_greedy_child(&mut app);
+
+    drag_up(&mut app, surface, &mut at, 300.0);
+    app.step_at(at);
+
+    assert_eq!(
+        moves.get(),
+        1,
+        "the first move was still anybody's and the leaf saw it; the four \
+         after it were the list's"
+    );
+}
+
+/// A list inside a page, both scrolling vertically, and the page's own last
+/// block below the list.
+///
+/// Down the middle the surface reads red to where the page has scrolled the
+/// list into view, green to where the list has scrolled its own content, and
+/// blue from there on — the list's remainder and the page's last block are
+/// both blue, so neither edge stops being the one below it as the two offsets
+/// move.
+///
+/// `list_content` is what the list holds: 800 in a 200-tall viewport has
+/// somewhere to go, 200 has not.
+fn a_list_inside_a_page(list_content: f32) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .scroll(hidden_scroll())
+        .child(
+            container()
+                .layout(Flex::column())
+                .width(fill())
+                .child(block(300.0, Color::rgb(1.0, 0.0, 0.0)))
+                .child(
+                    container()
+                        .width(fill())
+                        .height(200.0)
+                        .scroll(hidden_scroll())
+                        .child(
+                            container()
+                                .layout(Flex::column())
+                                .width(fill())
+                                .child(block(150.0, Color::rgb(0.0, 1.0, 0.0)))
+                                .child(block(list_content - 150.0, Color::rgb(0.0, 0.0, 1.0))),
+                        ),
+                )
+                .child(block(500.0, Color::rgb(0.0, 0.0, 1.0))),
+        )
+}
+
+/// The first row at or below `from` that `is` answers for, halved rather than
+/// walked because every read copies the frame back from the device.
+fn first_row(
+    app: &Headless,
+    surface: SurfaceId,
+    from: u32,
+    is: impl Fn([u8; 4]) -> bool,
+    edge: &str,
+) -> u32 {
+    assert!(
+        !is(app.read_pixel(surface, 50, from)),
+        "the {edge} is above row {from}, where the search starts"
+    );
+    assert!(
+        is(app.read_pixel(surface, 50, 599)),
+        "the {edge} has left the bottom of the surface"
+    );
+    let (mut above, mut below) = (from, 599);
+    while below - above > 1 {
+        let mid = (above + below) / 2;
+        if is(app.read_pixel(surface, 50, mid)) {
+            below = mid
+        } else {
+            above = mid
+        }
+    }
+    below
+}
+
+/// How far the page and the list have each scrolled, in that order.
+fn page_and_list(app: &Headless, surface: SurfaceId) -> (f32, f32) {
+    let green = first_row(app, surface, 0, |[r, g, b, _]| g > r || b > r, "red edge");
+    let blue = first_row(app, surface, green, |[_, g, b, _]| b > g, "green edge");
+    (300.0 - green as f32, 150.0 - (blue - green) as f32)
+}
+
+/// A finger in a list inside a page drags the list, and leaves the page where
+/// it was.
+///
+/// Both watch the press, because both have somewhere to go; the innermost one
+/// that can move is whose the gesture is. Flutter's arena gives it to the
+/// innermost `Scrollable`, Android's `ScrollView` declines to intercept while
+/// a nested scroller holds the sequence, and GTK bubbles from the innermost
+/// widget out. None of the three resolves it by running the outer one first —
+/// and neither does the wheel here, which the innermost scroller takes because
+/// its `Handled` ends the dispatch before an ancestor is asked.
+#[test]
+fn a_finger_in_a_list_inside_a_page_drags_the_list() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
+    assert_eq!(
+        page_and_list(&app, surface),
+        (0.0, 0.0),
+        "neither has moved on the first frame"
+    );
+
+    // The list is the 200 rows below 300, and the finger stays inside it.
+    drag_up(&mut app, surface, &mut at, 480.0);
+    app.step_at(at);
+
+    assert_eq!(
+        page_and_list(&app, surface),
+        (0.0, 82.0),
+        "the finger travelled 100px up inside the list, 18 of which bought \
+         the drag, and the page around it stayed where it was"
+    );
+}
+
+/// A finger that wanders out of the page's box does not hand it the gesture
+/// the list is already holding.
+///
+/// The page stopped watching the press the moment the list took it, which is
+/// the half of that ruling nothing else would notice: a container that clips
+/// does not dispatch a positioned event that falls outside it, so a page that
+/// kept its watch would find the list out of the way and claim a gesture that
+/// has been somebody else's for a dozen frames.
+#[test]
+fn a_drag_that_leaves_the_page_does_not_become_the_pages() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
+
+    drag_up(&mut app, surface, &mut at, 480.0);
+
+    // Out of the surface sideways, which the compositor goes on reporting
+    // while the finger is down, and 180px up from where it landed.
+    at += Duration::from_millis(8);
+    app.event_at(surface, Event::finger_move(150.0, 300.0), at);
+    app.step_at(at);
+
+    assert_eq!(
+        page_and_list(&app, surface),
+        (0.0, 82.0),
+        "the list kept the gesture it won, and the page claimed nothing"
+    );
+}
+
+/// A finger on the page outside the list drags the page, which is what makes
+/// the rule innermost-*under-the-finger* rather than innermost-ever.
+#[test]
+fn a_finger_on_the_page_outside_the_list_drags_the_page() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
+
+    // 300 rows of the page above the list, and the finger stays in them.
+    drag_up(&mut app, surface, &mut at, 200.0);
+    app.step_at(at);
+
+    assert_eq!(
+        page_and_list(&app, surface),
+        (82.0, 0.0),
+        "the page took the drag it was under, and the list it carries did not"
+    );
+}
+
+/// A list that runs out mid-drag keeps the gesture rather than passing what is
+/// left of it to the page.
+///
+/// The fork CSS calls scroll chaining, and the three toolkits do not agree on
+/// it: Flutter's nested scrollables keep the drag and overscroll instead,
+/// Android's `NestedScrollView` passes the remainder up, and the web chains by
+/// default and offers `overscroll-behavior` to say otherwise. Keeping it is
+/// what follows from the claim being a claim — and the one of the three that
+/// needs no vocabulary to express, which is what an unasked question should
+/// cost.
+#[test]
+fn a_list_that_runs_out_mid_drag_does_not_hand_the_rest_to_the_page() {
+    let Some(mut app) = headless() else { return };
+    // 50 rows of room in the list, against 400 in the page under it.
+    let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(250.0));
+
+    drag_up(&mut app, surface, &mut at, 480.0);
+    app.step_at(at);
+
+    assert_eq!(
+        page_and_list(&app, surface),
+        (0.0, 50.0),
+        "the list took as much of the 82px as it had room for, and the 32 \
+         it could not went nowhere"
+    );
+}
+
+/// And the page takes a drag over a list that has nowhere to go. A list that
+/// fits is not a claim on the gesture — the same answer `has_room_to_scroll`
+/// already gives a tap, now that an ancestor depends on it.
+#[test]
+fn a_finger_in_a_list_that_fits_drags_the_page_around_it() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(200.0));
+
+    drag_up(&mut app, surface, &mut at, 480.0);
+    app.step_at(at);
+
+    assert_eq!(
+        page_and_list(&app, surface),
+        (82.0, 0.0),
+        "the list under the finger cannot move, so the page did"
     );
 }
 
