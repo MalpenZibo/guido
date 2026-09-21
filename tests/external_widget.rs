@@ -52,7 +52,7 @@ impl Widget for Bar {
         // A pointer event may have no position — see `Event::coords`. A widget
         // outside the crate has to be able to say so, which means naming the
         // `Option` rather than unwrapping it.
-        if let Event::MouseMove { at } = event {
+        if let Event::MouseMove { at, .. } = event {
             self.pointed_at.set(Some(*at));
             return EventResponse::Handled;
         }
@@ -143,7 +143,16 @@ fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
     });
 
     let mut send = |at| {
-        tree.with_widget_mut(root, |w, id, t| w.event(t, id, &Event::MouseMove { at }));
+        tree.with_widget_mut(root, |w, id, t| {
+            w.event(
+                t,
+                id,
+                &Event::MouseMove {
+                    at,
+                    pointer: PointerKind::Mouse,
+                },
+            )
+        });
     };
 
     send(Some(Point::new(3.0, 4.0)));

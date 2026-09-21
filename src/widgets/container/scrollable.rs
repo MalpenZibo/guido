@@ -3,13 +3,18 @@
 use std::borrow::Cow;
 
 use crate::animation::{SpringConfig, Transition};
+use crate::clock::EventInstant;
 use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::Constraints;
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widgets::Scroll;
-use crate::widgets::scroll::{ScrollAxis, ScrollbarAxis, ScrollbarVisibility};
-use crate::widgets::widget::{Event, EventResponse, MouseButton, Point, Rect, ScrollSource};
+use crate::widgets::scroll::{
+    ContentDrag, ScrollAxis, ScrollbarAxis, ScrollbarVisibility, TOUCH_SLOP,
+};
+use crate::widgets::widget::{
+    Event, EventResponse, MouseButton, Point, PointerKind, Rect, ScrollSource,
+};
 
 use super::Container;
 use super::animations::AnimationState;
@@ -528,6 +533,7 @@ impl Container {
             Event::MouseDown {
                 at: Some(at),
                 button,
+                ..
             } if *button == MouseButton::Left => {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
@@ -568,7 +574,7 @@ impl Container {
             // ends on the release, which needs no position at all. The hover
             // below is the other half, and wants the opposite: over nothing
             // is not hovered.
-            Event::MouseMove { at } => {
+            Event::MouseMove { at, .. } => {
                 // Handle dragging
                 if let Some(at) = at {
                     if self.scroll_data().scroll_state.scrollbar_dragging {
@@ -846,6 +852,190 @@ impl Container {
         needs_repaint
     }
 
+    /// A finger on the content, and what it does to the press it landed on.
+    ///
+    /// Returns `Some` only once the gesture is the scroller's: until the slop
+    /// is spent the press belongs to whatever is under it, so the press and
+    /// the small moves that follow it are answered with `None` and go on down
+    /// the tree unchanged.
+    ///
+    /// Runs after [`handle_scrollbar_event`](Self::handle_scrollbar_event) and
+    /// therefore never sees a press the scrollbar took, which is why nothing
+    /// here has to ask what kind of pointer is dragging a handle: a finger
+    /// grabs the scrollbar exactly as a mouse does. What it does ask is
+    /// [`PointerKind`], because a mouse dragging the *content* must go on
+    /// doing nothing — drag-select inside a scrollable is what a content
+    /// drag-scroll would cost (#429).
+    ///
+    /// Only called on a scroller, because that is the only kind of container
+    /// with scroll state to read — `Container::event` asks once for this and
+    /// the scrollbar both.
+    pub(super) fn handle_content_drag(
+        &mut self,
+        tree: &mut Tree,
+        id: WidgetId,
+        hit: &HitContext,
+        event: &Event,
+        now: EventInstant,
+    ) -> Option<EventResponse> {
+        match event {
+            Event::MouseDown {
+                at: Some(at),
+                button: MouseButton::Left,
+                pointer: PointerKind::Finger,
+            } if hit.contains(Some(*at)) && self.has_room_to_scroll() => {
+                let drag = ContentDrag::landed(hit.rebase(*at));
+                // A finger on moving content is asking it to stop, and that is
+                // not a tap: the gesture is the scroller's from the first
+                // event, so nothing below ever sees the press and no slop is
+                // spent buying what is already owned.
+                if self.scroll_data().scroll_state.should_apply_momentum() {
+                    let sd = self.scroll_mut();
+                    sd.scroll_state.stop_momentum();
+                    sd.scroll_state.begin_gesture();
+                    sd.scroll_state.content_drag = Some(ContentDrag {
+                        scrolling: true,
+                        ..drag
+                    });
+                    request_job(id, JobRequest::Paint);
+                    return Some(EventResponse::Handled);
+                }
+                self.scroll_mut().scroll_state.content_drag = Some(drag);
+                // The press is still the child's. All that has happened is
+                // that there is now a distance being watched.
+                None
+            }
+
+            Event::MouseMove {
+                at: Some(at),
+                pointer: PointerKind::Finger,
+            } => {
+                let axis = self.scroll_axis;
+                let was = self.scroll_data().scroll_state.content_drag?;
+                let mut drag = ContentDrag {
+                    last: hit.rebase(*at),
+                    ..was
+                };
+                let travel = drag.travel(axis);
+                let crossed_here = !was.scrolling && travel >= TOUCH_SLOP;
+                drag.scrolling |= crossed_here;
+                if !drag.scrolling {
+                    self.scroll_mut().scroll_state.content_drag = Some(drag);
+                    return None;
+                }
+
+                // What this move is worth. Ordinarily the step since the last
+                // one; on the move that crosses the slop, the part of the
+                // travel beyond it — the slop is spent, and the rest is
+                // already scroll.
+                //
+                // Not the whole move, which would jump the content by the
+                // threshold, and not nothing either: a compositor coalesces
+                // motion to one event per frame (`push_event`), so a fast
+                // swipe crosses the slop and a hundred pixels in the same
+                // event, and dropping all of it would leave the content
+                // trailing the finger by that distance for the rest of the
+                // gesture. Android subtracts the slop from the first delta for
+                // this reason.
+                let (dx, dy) = if crossed_here {
+                    self.take_the_press_back(tree, id, now);
+                    self.scroll_mut().scroll_state.begin_gesture();
+                    let beyond = (travel - TOUCH_SLOP) / travel;
+                    let (ox, oy) =
+                        axis.along(drag.last.x - was.origin.x, drag.last.y - was.origin.y);
+                    (ox * beyond, oy * beyond)
+                } else {
+                    (drag.last.x - was.last.x, drag.last.y - was.last.y)
+                };
+                self.scroll_mut().scroll_state.content_drag = Some(drag);
+
+                // The content follows the finger: down the glass is back up
+                // the list. A move the content cannot answer — a finger held
+                // past the end — asks for no frame, as the wheel path does not
+                // either.
+                if self.apply_scroll(-dx, -dy, ScrollSource::Finger, now) {
+                    request_job(id, JobRequest::Paint);
+                }
+                Some(EventResponse::Handled)
+            }
+
+            // Whatever ends the press ends the drag. A release hands a live
+            // one to the momentum — the same handoff `ScrollEnd` makes for a
+            // touchpad — and a leave does not, because a gesture taken away is
+            // not a gesture thrown.
+            Event::MouseUp {
+                button: MouseButton::Left,
+                ..
+            } => {
+                let drag = self.scroll_mut().scroll_state.content_drag.take()?;
+                drag.scrolling.then(|| self.hand_off_to_momentum(id, now))
+            }
+
+            Event::MouseLeave => {
+                self.scroll_mut().scroll_state.content_drag = None;
+                None
+            }
+
+            _ => None,
+        }
+    }
+
+    /// Whether this scroller has anywhere to go on the axes it scrolls.
+    ///
+    /// A declaration is not an overflow: a list that happens to fit must not
+    /// take a tap away from what is in it, and a drag it cannot answer is one
+    /// it should never have claimed. The wheel path says the same thing by
+    /// consuming only what `apply_scroll` moved.
+    fn has_room_to_scroll(&self) -> bool {
+        if self.scroll_axis == ScrollAxis::None {
+            return false;
+        }
+        let state = &self.scroll_data().scroll_state;
+        let (x, y) = self
+            .scroll_axis
+            .along(state.max_scroll_x(), state.max_scroll_y());
+        x > 0.0 || y > 0.0
+    }
+
+    /// The finger lifted: the glide begins here, and asks for the frames to
+    /// run it if it has any speed to spend.
+    ///
+    /// One place, because a touchpad's `ScrollEnd` and a finger's release are
+    /// the same moment told by two devices — and a change to what a lift does
+    /// that reached only one of them would leave a flick coasting and a drag
+    /// stopping dead.
+    pub(super) fn hand_off_to_momentum(
+        &mut self,
+        id: WidgetId,
+        now: EventInstant,
+    ) -> EventResponse {
+        let sd = self.scroll_mut();
+        sd.scroll_state.end_gesture(now);
+        if sd.scroll_state.should_apply_momentum() {
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        }
+        EventResponse::Handled
+    }
+
+    /// The press this scroller just took from its children is void: tell them
+    /// so, and give up its own hover and press with it — a finger that is
+    /// scrolling is not hovering anything, and nothing under it is being held
+    /// down.
+    ///
+    /// `MouseLeave` is how a press ends without activating anything —
+    /// `pointer_left` drops `PRESSED` and cancels the ripple rather than
+    /// completing it, and the `MouseUp` arm's `is_pressed` guard is what makes
+    /// the real release that follows fire nothing. It is the same event the
+    /// compositor's own `wl_touch.cancel` is folded into, for the same reason.
+    fn take_the_press_back(&mut self, tree: &mut Tree, id: WidgetId, now: EventInstant) {
+        for &child_id in self.children_source.get() {
+            tree.with_widget_mut(child_id, |child, child_id, tree| {
+                child.event(tree, child_id, &Event::MouseLeave)
+            });
+        }
+        self.pointer_left(id, now);
+    }
+
     /// Apply scroll delta and return true if any scrolling occurred
     pub(super) fn apply_scroll(
         &mut self,
@@ -884,12 +1074,7 @@ impl Container {
                 .scroll_state
                 .last_scroll_time
                 .map(|t| at.duration_since(t).as_secs_f32() * 1000.0);
-            let (sample_x, sample_y) = match axis {
-                ScrollAxis::Vertical => (0.0, delta_y),
-                ScrollAxis::Horizontal => (delta_x, 0.0),
-                ScrollAxis::Both => (delta_x, delta_y),
-                ScrollAxis::None => (0.0, 0.0),
-            };
+            let (sample_x, sample_y) = axis.along(delta_x, delta_y);
             sd.scroll_state
                 .record_gesture_sample(sample_x, sample_y, dt_ms);
             sd.scroll_state.last_scroll_time = Some(at);

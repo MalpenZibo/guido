@@ -278,6 +278,39 @@ takes no signal — it decides what kind of widget this is, as `layout` and
 A container with no `.scroll(..)` does not scroll, which is what the old
 `ScrollAxis::None` said.
 
+### What Moves It
+
+Three gestures, and which of them applies depends on what is pointing:
+
+| Gesture | Mouse | Finger |
+|------|------|------|
+| Wheel or touchpad over the content | yes | — |
+| Dragging the scrollbar handle, or clicking its track | yes | yes |
+| Dragging the **content** | no | yes |
+
+The last row is the touch gesture, and the pointer kind is why it is one row
+and not two. A finger drags the content because grabbing a scrollbar is the one
+gesture a touch interface never uses; a mouse does not, because dragging
+content with a mouse is how text is selected, and a scrollable that swallowed
+the drag would take selection away inside itself.
+
+A finger owns nothing until it has moved 18 logical pixels — the slop Flutter's
+`kTouchSlop` settled on. Under that the press belongs to whatever it landed on,
+so tapping a button inside a list still presses the button. Over it the press
+is taken back: the child is told the press it saw is void, exactly as it is
+when the pointer leaves without releasing, so its pressed state clears and its
+`on_click` does not fire. The slop is spent once — the move that crosses it
+scrolls the part of itself beyond it, so the content neither jumps by the
+threshold nor loses the rest of a fast swipe.
+
+Releasing mid-motion hands the content to the same momentum a touchpad flick
+gets — it coasts and slows down. A finger landing on content that is still
+coasting stops it, and that press is the scroller's: it stops the list rather
+than pressing what is under it.
+
+A scroller with nothing to scroll claims none of this, so a list that happens
+to fit today still answers a tap the way it always did.
+
 ### Custom Scrollbars
 
 ```rust

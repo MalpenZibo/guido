@@ -18,7 +18,7 @@ Wayland → Platform → App → Widget Tree
 ### Mouse Movement
 
 ```text
-Event::MouseMove { at };
+Event::MouseMove { at, pointer };
 Event::MouseEnter { at };
 Event::MouseLeave
 ```
@@ -28,11 +28,23 @@ Tracked for hover states. The platform layer determines which widget the cursor 
 ### Mouse Buttons
 
 ```text
-Event::MouseDown { at, button };
+Event::MouseDown { at, button, pointer };
 Event::MouseUp { at, button }
 ```
 
 Used for click detection and pressed states.
+
+### Which Pointer
+
+A move and a press carry a `PointerKind` — `Mouse` or `Finger`. Touch is folded
+into the pointer pipeline, so a finger arrives as an ordinary `MouseDown` and
+every widget that wants to treat the two alike gets that for free.
+
+One field, not a parallel touch event family: `Event::Scroll` carries a
+`ScrollSource` on the same principle. Almost nothing reads it. What does is a
+scroller, because a finger dragging its content scrolls it and a mouse doing
+the same must go on selecting text — see
+[Scrolling](../concepts/container.md#scrolling).
 
 ### Scrolling
 
@@ -254,7 +266,10 @@ The platform layer receives Wayland protocol events:
 fn pointer_motion(x: f32, y: f32) {
     self.cursor_x = x;
     self.cursor_y = y;
-    self.dispatch(Event::MouseMove { at: Some(Point::new(x, y)) });
+    self.dispatch(Event::MouseMove {
+        at: Some(Point::new(x, y)),
+        pointer: PointerKind::Mouse,
+    });
 }
 
 fn pointer_button(button: u32, state: ButtonState) {

@@ -201,7 +201,7 @@ impl Container {
                     callback(true);
                 }
             }
-            Event::MouseMove { at } => {
+            Event::MouseMove { at, .. } => {
                 // A pressed container keeps receiving moves that leave it —
                 // that implicit capture is what makes dragging work. A move
                 // with no position is not one of those: there is nowhere to
@@ -288,7 +288,7 @@ impl Container {
                 }
             }
 
-            Event::MouseDown { at, button } => {
+            Event::MouseDown { at, button, .. } => {
                 if pressed_inside
                     && let Some(at) = at
                     && *button == MouseButton::Left
@@ -429,12 +429,7 @@ impl Container {
             // #340).
             Event::ScrollEnd { at } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
-                    let sd = self.scroll_mut();
-                    sd.scroll_state.end_gesture(now);
-                    if sd.scroll_state.should_apply_momentum() {
-                        request_job(id, JobRequest::Animation(RequiredJob::Paint));
-                    }
-                    return EventResponse::Handled;
+                    return self.hand_off_to_momentum(id, now);
                 }
             }
 

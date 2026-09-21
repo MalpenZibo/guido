@@ -576,6 +576,12 @@ Wayland → Platform → App → Widget Tree
 delta, and it is what decides when momentum scrolling may begin — guaranteed
 only for `ScrollSource::Finger`.
 
+`MouseMove` and `MouseDown` carry a `PointerKind`. Touch is folded into the
+pointer pipeline (`src/platform/input.rs`), which is what lets a widget alias
+the two in one arm; the kind is the one thing the fold cannot alias, and a
+scroller is what reads it — a finger dragging content scrolls it, a mouse does
+not.
+
 Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)
 - Ignore and let parent continue (`EventResponse::Ignored`)

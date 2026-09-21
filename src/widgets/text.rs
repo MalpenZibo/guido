@@ -301,7 +301,7 @@ impl Widget for Text {
         let inside = match event {
             // A pointer with no position is over nothing — the same answer a
             // `MouseLeave` gives, and `contains_at` is where that is decided.
-            Event::MouseMove { at } | Event::MouseEnter { at } => tree
+            Event::MouseMove { at, .. } | Event::MouseEnter { at } => tree
                 .get_bounds(id)
                 .is_some_and(|bounds| bounds.contains_at(*at)),
             Event::MouseLeave => false,

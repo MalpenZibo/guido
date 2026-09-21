@@ -1023,6 +1023,25 @@ fn scrolled(app: &Headless, surface: SurfaceId) -> f32 {
     500.0 - below as f32
 }
 
+/// A surface 100x600 over `view`, stepped once so the first frame has run.
+fn scroller(app: &mut Headless, view: impl Fn() -> Container + 'static) -> (SurfaceId, Instant) {
+    let surface = app.surface(fixed_bar().height(600), view);
+    app.configure(surface, 100, 600, 1.0);
+    let at = Instant::now();
+    app.step_at(at);
+    (surface, at)
+}
+
+/// A second of frames at sixty a second, and how far the content had got by
+/// the end of it. `at` comes back where the last frame left it.
+fn coast(app: &mut Headless, surface: SurfaceId, at: &mut Instant) -> f32 {
+    for _ in 0..60 {
+        *at += Duration::from_millis(16);
+        app.step_at(*at);
+    }
+    scrolled(app, surface)
+}
+
 /// A flick played through the application: six samples eight milliseconds
 /// apart, the finger lifted, then frames at sixty a second. The same shape
 /// `tests/scroll_momentum.rs` asserts on a tree, one layer up — through the
@@ -1030,15 +1049,7 @@ fn scrolled(app: &Headless, surface: SurfaceId) -> f32 {
 #[test]
 fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
     let Some(mut app) = headless() else { return };
-    let surface = app.surface(
-        SurfaceConfig::new()
-            .height(600)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
-        scroll_over_an_edge,
-    );
-    app.configure(surface, 100, 600, 1.0);
-    let mut at = Instant::now();
-    app.step_at(at);
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     for _ in 0..6 {
         app.event_at(
@@ -1053,14 +1064,338 @@ fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
     let at_lift = scrolled(&app, surface);
     assert_eq!(at_lift, 60.0, "the samples themselves moved the content");
 
-    for _ in 0..60 {
-        at += Duration::from_millis(16);
-        app.step_at(at);
-    }
-    let coasted = scrolled(&app, surface) - at_lift;
+    let coasted = coast(&mut app, surface, &mut at) - at_lift;
     assert!(
         coasted > 10.0,
         "the finger lifted after a 60px flick and the content coasted {coasted}px"
+    );
+}
+
+/// A scroller as tall as its surface, over one pressable block taller than it.
+///
+/// The block lights green while it is pressed and counts what it activates, so
+/// a frame says whether the press is still live and `clicks` says whether it
+/// ever fired.
+fn scroll_over_a_button(clicks: RwSignal<u32>, height: f32) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+        .child(
+            container()
+                .width(fill())
+                .height(height)
+                .background(Color::rgb(0.0, 0.0, 1.0))
+                .when_pressed(|s: StateStyle| s.background(Color::rgb(0.0, 1.0, 0.0)))
+                .on_click(move || clicks.update(|c| *c += 1)),
+        )
+}
+
+/// Whether the block is drawing its pressed state this frame — green rather
+/// than blue, read where the block covers the surface whatever the offset.
+fn pressed(app: &Headless, surface: SurfaceId) -> bool {
+    let [_, g, b, _] = app.read_pixel(surface, 50, 10);
+    g > b
+}
+
+/// A finger on the content is the gesture a touch interface actually uses, and
+/// until #429 the only one guido answered was grabbing the scrollbar.
+///
+/// The slop is spent once and is all that is spent: the move that crosses it
+/// scrolls the part of itself beyond it, and every move after it scrolls
+/// whole. Flutter starts the drag where it was won rather than where the
+/// finger landed, so the content never jumps by the threshold, and Android
+/// subtracts the slop from that first delta rather than discarding it — which
+/// matters here because a compositor coalesces motion to one event a frame, so
+/// a fast swipe can cross the slop and a hundred pixels at once.
+#[test]
+fn a_finger_dragging_the_content_scrolls_it() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
+
+    app.event_at(surface, Event::finger_down(50.0, 300.0), at);
+    for y in [280.0, 260.0, 240.0, 220.0, 200.0] {
+        at += Duration::from_millis(8);
+        app.event_at(surface, Event::finger_move(50.0, y), at);
+    }
+    app.step_at(at);
+
+    assert_eq!(
+        scrolled(&app, surface),
+        82.0,
+        "the finger travelled 100px up, 18 of which bought the drag"
+    );
+}
+
+/// And a finger lifted while it is still moving hands off to the momentum
+/// `a_flick_played_through_the_application_coasts_past_its_last_sample` already
+/// plays through a `Scroll` gesture. Same physics, fed from the drag.
+///
+/// The lift is the pair the fold synthesizes — a release, then the leave that
+/// says nothing hovers after a finger — because a momentum that the second of
+/// those cancelled would coast for exactly no frames.
+#[test]
+fn a_finger_lifted_mid_drag_hands_the_content_to_its_momentum() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
+
+    app.event_at(surface, Event::finger_down(50.0, 500.0), at);
+    for y in [490.0, 480.0, 470.0, 460.0, 450.0, 440.0, 430.0] {
+        at += Duration::from_millis(8);
+        app.event_at(surface, Event::finger_move(50.0, y), at);
+    }
+    app.event_at(surface, Event::mouse_up(50.0, 430.0, MouseButton::Left), at);
+    app.event_at(surface, Event::MouseLeave, at);
+    app.step_at(at);
+
+    let at_lift = scrolled(&app, surface);
+    assert_eq!(
+        at_lift, 52.0,
+        "the drag itself moved the content: seven 10px steps, 18 of which \
+         bought the drag"
+    );
+
+    let coasted = coast(&mut app, surface, &mut at) - at_lift;
+    assert!(
+        coasted > 10.0,
+        "the finger lifted mid-drag and the content coasted {coasted}px"
+    );
+}
+
+/// A drag's momentum is built from that drag, not from whatever scrolled here
+/// last.
+///
+/// `last_scroll_time` and the sample count outlive a gesture, so a drag that
+/// followed one without resetting them would measure its first sample against
+/// a timestamp seconds old and smooth the previous gesture's velocity into its
+/// own — a list flung the way it was going before, by a finger that dragged it
+/// the other way.
+///
+/// The stale state here is a touchpad gesture that simply stopped reporting:
+/// the protocol only promises an `axis_stop` for a finger, so a `Continuous`
+/// source leaving a velocity behind is the ordinary case rather than a
+/// contrived one.
+#[test]
+fn a_drag_after_another_gesture_is_flung_by_its_own_speed() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
+
+    // Scrolled downward, fast, and never terminated.
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Continuous),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.step_at(at);
+    assert_eq!(
+        scrolled(&app, surface),
+        60.0,
+        "the samples moved the content"
+    );
+
+    // Seconds later, a finger drags the other way and lifts at once.
+    at += Duration::from_secs(1);
+    app.event_at(surface, Event::finger_down(50.0, 300.0), at);
+    at += Duration::from_millis(8);
+    app.event_at(surface, Event::finger_move(50.0, 320.0), at);
+    app.event_at(surface, Event::mouse_up(50.0, 320.0, MouseButton::Left), at);
+    app.event_at(surface, Event::MouseLeave, at);
+    app.step_at(at);
+    let at_lift = scrolled(&app, surface);
+
+    let after = coast(&mut app, surface, &mut at);
+    assert_eq!(
+        after, at_lift,
+        "one move is one sample and a sample is not a speed, so nothing was \
+         thrown — least of all downward, which is where the gesture before \
+         this one was going"
+    );
+}
+
+/// A finger on a coasting list stops it.
+///
+/// `ScrollView` treats a touch during a fling as a drag already in progress,
+/// so the glide ends at the press rather than 18px later — waiting for the
+/// slop would slide the content out from under the finger first, and a tap
+/// below the slop would never stop it at all.
+#[test]
+fn a_finger_on_a_coasting_list_stops_it() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
+
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    app.step_at(at);
+
+    // Two frames of glide, so the content is demonstrably still moving.
+    for _ in 0..2 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    let gliding = scrolled(&app, surface);
+    assert!(gliding > 60.0, "the flick is still running at {gliding}px");
+
+    app.event_at(surface, Event::finger_down(50.0, 300.0), at);
+    app.step_at(at);
+    let at_press = scrolled(&app, surface);
+
+    assert_eq!(
+        coast(&mut app, surface, &mut at),
+        at_press,
+        "a second of frames after the finger landed, and the content stayed \
+         where it was"
+    );
+}
+
+/// And stopping it is not tapping it: the press is the scroller's from the
+/// first event, so nothing under the finger lights up and nothing fires.
+#[test]
+fn a_finger_that_stops_a_coasting_list_activates_nothing() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
+
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    app.step_at(at);
+    at += Duration::from_millis(16);
+    app.step_at(at);
+
+    app.event_at(surface, Event::finger_down(50.0, 100.0), at);
+    app.step_at(at);
+    assert!(
+        !pressed(&app, surface),
+        "the finger stopped the list, so nothing under it is held down"
+    );
+
+    app.event_at(surface, Event::mouse_up(50.0, 100.0, MouseButton::Left), at);
+    app.event_at(surface, Event::MouseLeave, at);
+    app.step_at(at);
+    assert_eq!(clicks.get(), 0, "and the lift activated nothing");
+}
+
+/// Below the slop the press is still the child's: a finger that wobbles on a
+/// button has pressed the button, which is the whole reason the threshold is
+/// 18px rather than one.
+#[test]
+fn a_finger_that_moves_less_than_the_slop_still_clicks_what_it_pressed() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
+
+    app.event_at(surface, Event::finger_down(50.0, 100.0), at);
+    app.step_at(at);
+    assert!(pressed(&app, surface), "the finger landed on the block");
+
+    at += Duration::from_millis(8);
+    app.event_at(surface, Event::finger_move(50.0, 90.0), at);
+    app.step_at(at);
+    assert!(
+        pressed(&app, surface),
+        "10px is under the slop, so the press is still the block's"
+    );
+
+    app.event_at(surface, Event::mouse_up(50.0, 90.0, MouseButton::Left), at);
+    app.step_at(at);
+    assert_eq!(clicks.get(), 1, "and the lift activated it");
+}
+
+/// Above it the press is taken back. The child saw a `MouseDown` and lit up;
+/// crossing the slop sends it the `MouseLeave` that ends a press without
+/// activating anything, so the state layer clears and the eventual release
+/// fires nothing — `pointer_left` and the `is_pressed` guard on the `MouseUp`
+/// arm, which is the mechanism #429's comment found already here.
+#[test]
+fn a_drag_that_crosses_the_slop_takes_the_press_back_from_the_child() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
+
+    app.event_at(surface, Event::finger_down(50.0, 100.0), at);
+    app.step_at(at);
+    assert!(pressed(&app, surface), "the finger landed on the block");
+
+    at += Duration::from_millis(8);
+    app.event_at(surface, Event::finger_move(50.0, 60.0), at);
+    app.step_at(at);
+    assert!(
+        !pressed(&app, surface),
+        "40px is a scroll, and the press it took is void"
+    );
+
+    app.event_at(surface, Event::mouse_up(50.0, 60.0, MouseButton::Left), at);
+    app.step_at(at);
+    assert_eq!(clicks.get(), 0, "so the release activated nothing");
+}
+
+/// A scroller with nothing to scroll claims nothing. A declaration is not an
+/// overflow: the same list is short today and long tomorrow, and the short one
+/// must not swallow the tap that the long one is right to take.
+///
+/// The wheel path says this by consuming only what `apply_scroll` moved; the
+/// drag has to say it up front, because by the time the slop is crossed the
+/// child's press has already been cancelled.
+#[test]
+fn a_list_that_fits_does_not_take_the_tap_it_cannot_scroll() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 100.0));
+
+    app.event_at(surface, Event::finger_down(50.0, 20.0), at);
+    at += Duration::from_millis(8);
+    app.event_at(surface, Event::finger_move(50.0, 60.0), at);
+    app.step_at(at);
+    assert!(
+        pressed(&app, surface),
+        "40px over content that cannot move is still a press on the block"
+    );
+
+    app.event_at(surface, Event::mouse_up(50.0, 60.0, MouseButton::Left), at);
+    app.step_at(at);
+    assert_eq!(clicks.get(), 1, "and the lift activated it");
+}
+
+/// The same drag with a mouse scrolls nothing, which is the ruling on #429's
+/// second open question: a pointer that hovers is a pointer that can select,
+/// and drag-select inside a scrollable is what a content drag-scroll would
+/// cost. A mouse scrolls by the wheel and by the scrollbar, as it always has.
+#[test]
+fn a_mouse_dragging_the_same_content_does_not_scroll_it() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
+
+    app.event_at(
+        surface,
+        Event::mouse_down(50.0, 300.0, MouseButton::Left),
+        at,
+    );
+    for y in [280.0, 260.0, 240.0, 220.0, 200.0] {
+        at += Duration::from_millis(8);
+        app.event_at(surface, Event::mouse_move(50.0, y), at);
+    }
+    app.step_at(at);
+
+    assert_eq!(
+        scrolled(&app, surface),
+        0.0,
+        "a mouse dragging the content moves nothing"
     );
 }
 
