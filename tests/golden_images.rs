@@ -155,6 +155,11 @@ fn render_pixels(
     clear: Color,
 ) -> Pixels {
     let (logical_width, logical_height) = logical;
+    // The rule `surface::buffer_size` applies to a Wayland buffer, spelled
+    // again rather than called: that one is `pub(crate)` and takes a logical
+    // size in whole pixels, and a scenario names its viewport in the `f32`
+    // layout speaks. Both round halfway away from zero, which is what a
+    // scenario at a fractional scale depends on.
     let width = (logical_width * scale).round() as u32;
     let height = (logical_height * scale).round() as u32;
 
@@ -1621,6 +1626,46 @@ fn hidpi_at_scale_2x() {
         );
 
     golden("hidpi_at_scale_2x", (200.0, 84.0), 2.0, BACKDROP, view);
+}
+
+/// A sibling of the scenario above at scale 1.5, where the scale is not an
+/// integer.
+///
+/// Not the same composition, and deliberately so: every number in it is odd
+/// and there is a label the other has not got. Radii, border widths and shadow
+/// extents are scaled in the shader and glyphs are rasterised at `font_size *
+/// scale`; at 2 every one of those lands on a whole physical pixel, so a
+/// half-pixel error there is invisible. Nothing lands on one here. The surface
+/// is 201x85 logical — 301.5 x 127.5 physical, rounded halfway away from zero
+/// — and the padding, spacing and sizes are odd, so each edge falls between
+/// two pixels rather than on one.
+///
+/// This is the scale the compositor used to round up to 2 and downscale from,
+/// which no golden could see: the pixels were right for a scale of 2 and the
+/// screen was not showing them at 2.
+#[test]
+fn hidpi_at_scale_1_5x() {
+    let view = container()
+        .background(BACKDROP)
+        .padding(11.0)
+        .layout(Flex::row().spacing(13.0))
+        .child(
+            swatch(81.0, 63.0, Color::rgb(0.30, 0.55, 0.95))
+                .corners(15.0)
+                .border(3.0, Color::WHITE),
+        )
+        .child(
+            container()
+                .layout(Flex::column().spacing(7.0))
+                .child(
+                    swatch(83.0, 35.0, Color::WHITE)
+                        .corners(Corners::squircle(15.0))
+                        .shadow(common::LADDER[3]),
+                )
+                .child(label("1.5", 21.0)),
+        );
+
+    golden("hidpi_at_scale_1_5x", (201.0, 85.0), 1.5, BACKDROP, view);
 }
 
 /// Text as glyphon draws it: axis-aligned, several sizes on one surface. This
