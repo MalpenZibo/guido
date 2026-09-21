@@ -1588,7 +1588,17 @@ impl Widget for TextInput {
                 self.is_dragging = false;
                 request_job(id, JobRequest::Paint);
             }
-            Event::MouseLeave => self.release_pointer(),
+            Event::MouseLeave => {
+                // A selection drag survives the pointer leaving the *field* —
+                // that is how you select past its edge, and `release_pointer`
+                // above is called for it. It must not survive the pointer
+                // leaving the *surface*, because nothing out there will ever
+                // deliver the release that ends it: the drag would then extend
+                // on the next move that arrived, with no button held. A touch
+                // gesture the compositor cancels is how that now happens.
+                self.is_dragging = false;
+                self.release_pointer();
+            }
             _ => {}
         }
 

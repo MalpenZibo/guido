@@ -32,7 +32,9 @@ Multiple surfaces share one reactive state and one renderer.
 - **Session lock** (`ext-session-lock-v1`) — one lock surface per output,
   hotplug handled, reactive `lock_state()`
 - **Touch** (`wl_touch`) — the first finger drives the pointer pipeline, so tap
-  is click and state layers work
+  is click and state layers work. The rules of that folding are
+  `translate_touch`, a free function with unit tests beside it; what still
+  needs a device is the wire above it
 - **Clipboard** — async prefetch so paste never blocks the UI thread, plus
   primary selection
 - **Compositor effects** — `ext-background-effect-v1` for backdrop blur, with
