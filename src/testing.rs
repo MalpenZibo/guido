@@ -12,6 +12,13 @@
 //! never talks to anything. A test says what the compositor said and then reads
 //! both halves — what the widgets became, and what each surface asked for.
 //!
+//! The connection has a half of its own, and the recorder answers for that
+//! too: [`Headless::connect_output`] plugs a monitor in,
+//! [`disconnect_output`](Headless::disconnect_output) takes it away, and
+//! [`grant_lock`](Headless::grant_lock) answers the session lock the
+//! application asked for. Both were watched by a person with a spare screen
+//! until #424.
+//!
 //! Surfaces declared before the loop runs come from [`Headless::surface`], the
 //! way `App::add_surface` declares them. After it is running they come from
 //! guido's own `spawn_surface` and go away through `surface_handle(id).close()`,
@@ -25,6 +32,9 @@
 
 use std::time::Instant;
 
+use crate::outputs::{self, OutputId, OutputInfo};
+use crate::platform::LockEvent;
+use crate::platform::outputs::OutputRegistry;
 use crate::reactive;
 use crate::renderer::{GpuContext, RenderTarget, Renderer};
 use crate::surface::{SurfaceConfig, SurfaceId};
@@ -71,8 +81,29 @@ struct RecordedSurface {
     frame_callbacks: u32,
 }
 
-/// The compositor's half of a *connection*: every surface it holds, and the
-/// order it was told to build and tear them down in.
+/// The compositor's half of the session lock: whether it is holding a grant,
+/// what it has been asked to cover, and what it has said about it.
+#[derive(Default)]
+struct RecordedLock {
+    /// Whether a lock object exists: asked for, and not yet handed back. What
+    /// refuses a second request, as `active_lock.is_some()` does on a
+    /// compositor.
+    asked: bool,
+    /// Whether the compositor has granted it. Asking does not make it so — the
+    /// grant is a thing the compositor says, and here the test says it,
+    /// through [`Headless::grant_lock`].
+    granted: bool,
+    /// Every lock surface asked for, oldest first: the id, the output it was
+    /// to cover, and whether it was granted. Refused asks are kept, because a
+    /// refusal that repeats is #422 — a monitor that has gone being asked for
+    /// a cover sixty times a second — and only the asks can show it.
+    requests: Vec<(SurfaceId, OutputId, bool)>,
+    events: Vec<LockEvent>,
+}
+
+/// The compositor's half of a *connection*: every surface it holds, the
+/// monitors it is advertising, the lock it has granted, and the order it was
+/// told to build and tear surfaces down in.
 ///
 /// Lists rather than counts, because the order is what is asserted.
 #[derive(Default)]
@@ -80,6 +111,15 @@ struct Recorder {
     surfaces: rustc_hash::FxHashMap<SurfaceId, RecordedSurface>,
     created: Vec<SurfaceId>,
     destroyed: Vec<SurfaceId>,
+    /// The connectors the compositor is advertising, in the order they were
+    /// plugged in — the globals, in `OutputRegistry`'s terms.
+    connectors: Vec<String>,
+    /// Which of them has which id, and the only place one is minted. The same
+    /// registry `WaylandState` keys by `ObjectId`, keyed here by connector
+    /// name: the id policy has one definition, so a harness cannot go on
+    /// agreeing with itself after the real one has changed.
+    outputs: OutputRegistry<String>,
+    lock: RecordedLock,
 }
 
 impl Recorder {
@@ -89,6 +129,50 @@ impl Recorder {
 
     fn get_mut(&mut self, id: SurfaceId) -> &mut RecordedSurface {
         self.surfaces.get_mut(&id).unwrap_or_else(|| missing(id))
+    }
+
+    /// Advertise a monitor, as `new_output` does: mint it an id, then publish
+    /// the list.
+    fn connect_output(&mut self, name: &str) -> OutputId {
+        self.connectors.push(name.to_string());
+        let id = self.outputs.add(name.to_string());
+        self.publish_outputs();
+        id
+    }
+
+    /// Take one away, as `output_destroyed` does: forget the mapping, drop
+    /// what pointed at it, publish what is left.
+    ///
+    /// The mapping goes before the global, and the list is published in
+    /// between, because that is the order a compositor does it in: when
+    /// `output_destroyed` drops the mapping, sctk's `outputs()` still holds
+    /// the dying `wl_output` for one more round. That gap is where #422's
+    /// phantom was minted, so a recorder that closed it by hand would be
+    /// publishing a list nothing had to filter.
+    fn disconnect_output(&mut self, id: OutputId) {
+        let Some(at) = self
+            .connectors
+            .iter()
+            .position(|name| self.outputs.id_for(name) == Some(id))
+        else {
+            return;
+        };
+        self.outputs.remove(&self.connectors[at]);
+        outputs::output_removed(id);
+        self.publish_outputs();
+        self.connectors.remove(at);
+    }
+
+    /// Rebuild the reactive list from the registry, as `sync_outputs` does.
+    ///
+    /// Through `outputs::sync_outputs`, which is the Wayland handler's own way
+    /// in — outputs never reach `Platform`, so a recorder that writes the
+    /// signal plays the same part rather than a new one.
+    fn publish_outputs(&self) {
+        outputs::sync_outputs(self.outputs.connected(
+            self.connectors.iter().map(|name| (name.clone(), name)),
+            |name, id| Some(OutputInfo::named(id, name)),
+        ));
     }
 }
 
@@ -251,6 +335,51 @@ impl Platform for Recorder {
         )
     }
 
+    /// A compositor with `ext-session-lock-v1` and no other lock client, which
+    /// refuses a second request the way the real one does. The lock is asked
+    /// for here and granted later, by [`Headless::grant_lock`] — the round
+    /// trip is the reason `LockState::Locking` exists.
+    fn start_session_lock(&mut self) -> bool {
+        if self.lock.asked {
+            return false;
+        }
+        self.lock.asked = true;
+        true
+    }
+
+    /// Cover one output. The two refusals are the compositor's own: no grant
+    /// to hang the surface on, and a monitor that is not there — the second is
+    /// what a lock asking for a departed output's cover runs into, over and
+    /// over, and it is kept rather than merely refused.
+    fn create_lock_surface(&mut self, id: SurfaceId, output: OutputId) -> bool {
+        let granted = self.lock.asked
+            && self
+                .connectors
+                .iter()
+                .any(|name| self.outputs.id_for(name) == Some(output));
+        self.lock.requests.push((id, output, granted));
+        if !granted {
+            return false;
+        }
+        self.created.push(id);
+        // Born with nothing, as a lock surface is: its size and its scale both
+        // arrive with the compositor's configure, and until one does there is
+        // no frame for either to be wrong in.
+        self.surfaces.insert(id, RecordedSurface::default());
+        true
+    }
+
+    fn take_lock_events(&mut self) -> Vec<LockEvent> {
+        std::mem::take(&mut self.lock.events)
+    }
+
+    /// The lock object goes back with the session, as `unlock_and_destroy`
+    /// hands it back — and no `Finished` follows a clean unlock.
+    fn unlock_session(&mut self) {
+        self.lock.asked = false;
+        self.lock.granted = false;
+    }
+
     fn create_render_target(
         &self,
         _id: SurfaceId,
@@ -330,6 +459,33 @@ impl Headless {
             &mut self.tree,
         ));
         id
+    }
+
+    /// Plug a monitor in, under the connector name it would report. Returns
+    /// the id it was minted, which is what
+    /// [`SurfaceConfig::output`](crate::surface::SurfaceConfig::output) pins a
+    /// surface to and what [`disconnect_output`](Self::disconnect_output)
+    /// takes back.
+    ///
+    /// The id is the compositor's to hand out rather than the caller's, which
+    /// is why this takes a name and not the whole [`OutputInfo`]: ids are
+    /// minted once and never reused, and an application that could choose one
+    /// could choose one that has already been a monitor.
+    pub fn connect_output(&mut self, name: &str) -> OutputId {
+        self.host.connect_output(name)
+    }
+
+    /// Unplug one. The reactive list loses it, and so does everything that
+    /// said which output a surface was on.
+    pub fn disconnect_output(&mut self, id: OutputId) {
+        self.host.disconnect_output(id)
+    }
+
+    /// Say the compositor mapped a surface onto an output, which is what a
+    /// `wl_surface` enter event says and what
+    /// [`surface_output`](crate::outputs::surface_output) reports afterwards.
+    pub fn enter_output(&mut self, surface: SurfaceId, output: OutputId) {
+        outputs::surface_entered_output(surface, output);
     }
 
     /// Say what the compositor confirmed for one surface. Until this is called
@@ -510,6 +666,56 @@ impl Headless {
         &self.host.destroyed
     }
 
+    /// The surfaces the application itself still holds, in the order the ids
+    /// were handed out — what the next frame would draw on.
+    ///
+    /// The other half of [`surfaces_destroyed`](Self::surfaces_destroyed): a
+    /// surface the compositor was told to destroy and the application goes on
+    /// holding is abandoned rather than torn down, and only these two
+    /// together can say so.
+    pub fn surfaces_live(&self) -> Vec<SurfaceId> {
+        let mut ids: Vec<SurfaceId> = self.surfaces.ids().collect();
+        ids.sort_by_key(SurfaceId::raw);
+        ids
+    }
+
+    /// Say the compositor granted the lock the application asked for, which is
+    /// what `ext_session_lock_v1.locked` says. Until it does, the application
+    /// sits in [`LockState::Locking`](crate::session_lock::LockState::Locking)
+    /// and there are no lock surfaces — a compositor answers a round trip
+    /// later, and may refuse.
+    pub fn grant_lock(&mut self) {
+        self.host.lock.granted = true;
+        self.host.lock.events.push(LockEvent::Locked);
+    }
+
+    /// Whether the compositor is holding a lock grant. The application's own
+    /// view of it is [`session_locked`](crate::session_lock::session_locked);
+    /// this is the half that says the unlock reached the compositor.
+    pub fn is_locked(&self) -> bool {
+        self.host.lock.granted
+    }
+
+    /// Every lock surface the compositor was asked for, oldest first: the id,
+    /// the output it was to cover, and whether it was granted. Refused asks
+    /// are in it, because a refusal that repeats is the whole of what #422
+    /// looked like from here.
+    pub fn lock_surface_requests(&self) -> &[(SurfaceId, OutputId, bool)] {
+        &self.host.lock.requests
+    }
+
+    /// The lock surfaces it granted, oldest first — the asks above, less the
+    /// refusals.
+    pub fn lock_surfaces_created(&self) -> Vec<(SurfaceId, OutputId)> {
+        self.host
+            .lock
+            .requests
+            .iter()
+            .filter(|(_, _, granted)| *granted)
+            .map(|(id, output, _)| (*id, *output))
+            .collect()
+    }
+
     /// The colour at one pixel of a surface's last frame, in physical
     /// coordinates.
     pub fn read_pixel(&self, id: SurfaceId, x: u32, y: u32) -> [u8; 4] {
@@ -517,6 +723,54 @@ impl Headless {
             RenderTarget::Offscreen(offscreen) => offscreen.read_pixel(x, y),
             RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
         }
+    }
+}
+
+#[cfg(test)]
+mod the_two_refusals_the_loop_cannot_reach {
+    use super::*;
+
+    /// A cover is refused without a grant to hang it on, and refused for a
+    /// monitor that is not there.
+    ///
+    /// Beside the recorder rather than in `tests/headless_app.rs` because the
+    /// loop reaches neither: it asks for a cover only while the lock is
+    /// granted, and only for an output the list holds. What makes them
+    /// load-bearing anyway is the case where the list and the registry
+    /// disagree — the second refusal is what #422's phantom ran into, sixty
+    /// times a second.
+    #[test]
+    fn a_cover_is_refused_without_a_grant_and_for_a_monitor_that_is_not_there() {
+        let mut recorder = Recorder::default();
+        let screen = recorder.connect_output("eDP-1");
+        let phantom = OutputId::from_raw(9);
+
+        assert!(
+            !recorder.create_lock_surface(SurfaceId::next(), screen),
+            "no lock has been asked for yet"
+        );
+
+        assert!(recorder.start_session_lock());
+        assert!(
+            !recorder.create_lock_surface(SurfaceId::next(), phantom),
+            "an output the registry never gave that id to"
+        );
+        assert!(
+            recorder.create_lock_surface(SurfaceId::next(), screen),
+            "and the monitor that is really there is covered"
+        );
+
+        let granted: Vec<bool> = recorder
+            .lock
+            .requests
+            .iter()
+            .map(|(_, _, granted)| *granted)
+            .collect();
+        assert_eq!(
+            granted,
+            [false, false, true],
+            "every ask is kept, refused or not"
+        );
     }
 }
 

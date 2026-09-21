@@ -129,7 +129,7 @@ every run for months.
 | API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 15% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | new per-thread state — a `thread_local!` or a `static` `GlobalSignal` | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
-| the application above the compositor — a surface configuring, a frame opening, input routing, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
+| the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is what is left of the hole. Until #264 it was the whole of it:
@@ -155,10 +155,21 @@ The grab-conflict teardown is watched too, now that the recorder keeps the
 `grab` flag it used to throw away: a new grab that cannot nest under the live
 chain brings that chain down, and a test says in which order.
 
-The session lock and output hotplug are the remainder. They need no redesign —
-the map was the missing part — but they do need machinery: the recorder answers
-four of `Platform`'s lock methods with the trait's defaults, and `sync_outputs`
-is `pub(crate)` so no test in `tests/` can reach it.
+The session lock and output hotplug are watched now as well. `connect_output`
+and `disconnect_output` mint ids through the same `OutputRegistry` the Wayland
+handler keys by `ObjectId` and publish through the same `pub(crate)` writers —
+outputs never reach `Platform`, so a recorder that writes the signal plays the
+same part rather than a new one — and the recorder answers `Platform`'s four
+lock methods instead of taking their defaults, with the grant said by the test
+rather than by itself. So a bar spawned per monitor going when its monitor
+goes, a lock covering each output exactly once, and a monitor unplugged
+mid-lock being asked for nothing further (#422's spin) each have a test.
+
+What stays out of reach is everything that needs a `WaylandState`. Every
+surviving mutant in `src/platform/outputs.rs` is a method on it, and no test
+can build one without a connection: what they carry is watched either side —
+the id policy by the registry's unit test, the reactive list by the recorder's
+— but the methods themselves belong to the row above.
 
 ## What watches the harness
 

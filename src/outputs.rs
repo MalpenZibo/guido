@@ -4,19 +4,44 @@
 //! tracked closure (effects, dynamic children, reactive properties) and the
 //! closure re-runs when monitors are added, removed, or reconfigured.
 //!
+//! One bar per monitor, reacting to hotplug. The effect re-runs on every
+//! change to the list, so what it has already built has to be remembered:
+//! spawning for each output it finds would hand a monitor a second bar the
+//! first time any other one is plugged in.
+//!
 //! ```no_run
 //! # use guido::prelude::*;
+//! # use std::cell::RefCell;
+//! # use std::collections::HashMap;
+//! # use std::rc::Rc;
 //! # let bar_widget = || text("bar");
-//! // One bar per monitor, reacting to hotplug:
+//! let bars: Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> = Rc::default();
 //! create_effect(move || {
-//!     for info in outputs().get() {
-//!         spawn_surface(
-//!             SurfaceConfig::new().height(32).output(info.id),
-//!             move || bar_widget(),
-//!         );
+//!     let current = outputs().get();
+//!     let mut bars = bars.borrow_mut();
+//!
+//!     // A monitor that has gone takes its bar with it.
+//!     bars.retain(|id, bar| {
+//!         let alive = current.iter().any(|o| o.id == *id);
+//!         if !alive {
+//!             bar.close();
+//!         }
+//!         alive
+//!     });
+//!
+//!     // And one that has arrived gets one, once.
+//!     for info in current {
+//!         bars.entry(info.id).or_insert_with(|| {
+//!             spawn_surface(
+//!                 SurfaceConfig::new().height(32).output(info.id),
+//!                 move || bar_widget(),
+//!             )
+//!         });
 //!     }
 //! });
 //! ```
+//!
+//! `examples/multi_output.rs` is this with something in the bar.
 //!
 //! `surface_output(id)` reports which output a surface is currently shown on
 //! (tracked read — reactive when called inside a tracked closure).
@@ -65,6 +90,28 @@ pub struct OutputInfo {
     pub logical_size: Option<(i32, i32)>,
     /// Logical position in the global compositor space, if known.
     pub logical_position: Option<(i32, i32)>,
+}
+
+/// Behind the test cfgs because both callers are tests — the registry's own
+/// and the recorder's. Without them a compositor describes every output it
+/// advertises, and there is nothing for this to build.
+#[cfg(any(test, feature = "testing"))]
+impl OutputInfo {
+    /// A monitor the compositor has said nothing about but its connector
+    /// name, which is what a test needs and all it needs: the id says which
+    /// monitor, the name says which one a failing assertion means.
+    pub(crate) fn named(id: OutputId, name: &str) -> Self {
+        Self {
+            id,
+            name: Some(name.to_string()),
+            description: None,
+            make: String::new(),
+            model: String::new(),
+            scale_factor: 1,
+            logical_size: None,
+            logical_position: None,
+        }
+    }
 }
 
 /// Reactive list of connected outputs.
