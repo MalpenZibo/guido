@@ -75,12 +75,19 @@ renderer refused the job outright for anything but a translation.
 
 ## Clipping
 
-`PlacedShape` (`src/shape.rs`) holds a rounded rect as its widget declared it
-plus the transform that places it, and every consumer that can invert the
-placement and test in the clip's own space does: the shape shader, both quad
-pipelines — images and transformed text draw the same quad and take the same
-`QuadClip::shape` — and the region tessellator, and the backdrop pass, whose
-viewport is a box but whose fragments are tested against the clip's shape.
+A draw command *names* its clip rather than carrying one: `cmd.clip` is a
+`ClipRef` into the frame's clip tree (`src/renderer/clip.rs`) and `cmd.clip()`
+resolves it, at the half dozen reads in `render.rs` and `region.rs` and nowhere
+else. That is what lets a cached subtree be replayed somewhere else without
+dragging its scroller's viewport along (#441).
+
+What it resolves to is unchanged. `PlacedShape` (`src/shape.rs`) holds a rounded
+rect as its widget declared it plus the transform that places it, and every
+consumer that can invert the placement and test in the clip's own space does:
+the shape shader, both quad pipelines — images and transformed text draw the
+same quad and take the same `QuadClip::shape` — and the region tessellator, and
+the backdrop pass, whose viewport is a box but whose fragments are tested
+against the clip's shape.
 `world_aabb()` is left for glyphon alone, whose `TextBounds` is four integers
 — and it is exact there, because a text the box would cut differently from the
 shape is routed to the quad instead. `PlacedShape::box_cuts_like_the_shape` is
@@ -101,9 +108,10 @@ becomes one — for the compositor's blur and for the input region, from the sam
 function. It takes the shape and its transform and cuts bands out of the
 transformed outline, so a turned container claims what it drew rather than the
 box around it. The clip is a shape too and is intersected scanline by scanline
-rather than as a box — but what arrives is `effective_clip`, already collapsed
-by `intersect_clips` — exactly when the two spaces are a scale, a quarter turn
-or a mirror apart, and to the box around both at any other angle.
+rather than as a box — but what arrives is the one shape `cmd.clip()` resolves
+to, already collapsed by `intersect_clips` — exactly when the two spaces are a
+scale, a quarter turn or a mirror apart, and to the box around both at any
+other angle.
 
 A scanline's answer is a *list* of spans, not one. Every curvature but the
 scoop bounds a convex region, which a horizontal line meets once; a scoop is

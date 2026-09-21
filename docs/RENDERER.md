@@ -33,7 +33,6 @@ pub struct RenderNode {
     pub repainted: Cell<bool>,               // true = freshly painted this frame
     pub partial: bool,                       // Some children were not painted (do not cache)
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>, // Cached flatten output
-    pub last_flatten: Cell<Option<FlattenPlace>>, // Where the last two flattens saw it
 }
 ```
 
@@ -394,10 +393,10 @@ the convex part and `take_bites_from` removes what each disc covers. A band is c
 widest part of a bite can sit strictly between two scanlines, which is not
 something a convex boundary can do.
 
-**One clip, though.** What arrives is `effective_clip`, which `intersect_clips`
-has already collapsed. That collapse is exact when the two spaces differ by a
-scale, a quarter turn or a mirror, and is the box around both for any other
-angle. What this consumer escapes is the *shape against clip* box intersection,
+**One clip, though.** What arrives is one resolved shape, which
+`intersect_clips` has already collapsed from the chain the clip tree holds.
+That collapse is exact when the two spaces differ by a scale, a quarter turn or
+a mirror, and is the box around both for any other angle. What this consumer escapes is the *shape against clip* box intersection,
 not the clip chain's own.
 
 **`clamp_radii` is the shader's clamp**, each corner cut to at most half the
@@ -421,9 +420,15 @@ pub struct FlattenedCommand {
     pub world_transform: Transform,
     pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
-    pub clip: Option<PlacedShape>,
+    pub clip: Option<ClipRef>,      // The clip it is cut to, named rather than copied
 }
 ```
+
+`clip` is a reference into the frame's clip tree, and
+`FlattenedCommand::clip()` is what resolves it to the `PlacedShape` every
+pipeline takes. The half dozen reads in `render.rs` are the only places that
+resolution happens, which is why nothing below them changed when the
+representation did.
 
 ### PlacedShape
 
@@ -479,6 +484,24 @@ transform, so nothing is worse than it was. GTK's GSK meets the same wall with
 the same single-rounded-rect clip and answers it by rasterising a clip mask;
 that is the door out if the fallback is ever seen.
 
+### Clips, and why a command only names one
+
+A clip belongs to the node that declared it. Flatten used to resolve the chain
+into one world-space `PlacedShape` and write it into every command below, and
+that copy is what a cached subtree could not get rid of: replaying its commands
+somewhere else shifted the viewport along with the rows, so a scrolling list
+painted straight through its scroller from the first scrolled frame.
+
+So the clips of a frame live in a `ClipTree` (`src/renderer/clip.rs`) and a
+command carries a `ClipRef` naming one. Each entry keeps what its clip cuts on
+its own, what it cuts under its parent, and which entry that parent is — the
+shape of Chromium's clip tree, where draw commands reference clip nodes and
+scrolling moves a transform node rather than every clip below it.
+
+Resolution is `FlattenedCommand::clip()`, called at the half dozen places
+`render.rs` and `region.rs` read a clip. The five pipelines and every shader are
+handed the `PlacedShape` they always were.
+
 ### Incremental Flatten
 
 The flattener caches results per node to avoid re-flattening clean subtrees:
@@ -486,47 +509,46 @@ The flattener caches results per node to avoid re-flattening clean subtrees:
 ```rust
 pub struct CachedFlatten {
     pub commands: Vec<FlattenedCommand>,  // Flattened output from this subtree
+    pub clips: Vec<CachedClip>,           // The clips this subtree placed
     pub world_transform: Transform,       // World transform at time of caching
-    pub parent_clip: Option<PlacedShape>, // Clip inherited from above, back then
 }
 ```
 
-When a `RenderNode` has `repainted == false` (reused from paint cache) and both the
-cached and current world transforms are translation-only, the flattener reuses cached
-commands with a (dx, dy) offset instead of recursing into children. After a full flatten,
-results are cached back onto the node for next frame.
+When a `RenderNode` has `repainted == false` (reused from paint cache) and both
+the cached and current world transforms are translation-only, the flattener
+reuses cached commands with a (dx, dy) offset instead of recursing into
+children. After a full flatten, results are cached back onto the node for next
+frame.
 
-`parent_clip` is what makes that safe under a clip, and
-`CachedFlatten::replay_offset` is where the rule lives: the entry may be
-replayed only when the clip it was cached under, translated by `(dx, dy)`,
-equals the one inherited this frame — the whole `PlacedShape` and not just
-where it sits, so a resized viewport is refused along with a moved one. A
-static `Overflow::Hidden` box passes with `dx = dy = 0`; a scrolling one does
-not, because the rows move and the viewport does not.
+`CachedFlatten::replay_offset` is the whole of the rule for *using* an entry,
+and a translation is the whole of what it asks. It used to ask a second
+question — whether the clip inherited from above had made the same journey the
+content did — which is what excluded every scrolling subtree, and what #441
+removed by removing the copy the question was about.
 
-A node that sets a clip of *its own* still caches nothing. Replaying it would
-have to place that clip too, and reaching the cache from inside a scroller
-needs the clip to stop being baked into each command in the first place (#441).
+Whether an entry is worth *making* is a second rule, and it is the paint
+cache's: an entry is collected only for a subtree with nothing culled under it.
+`cache_paint_results` drops a partial paint from the paint cache, so the widget
+repaints next frame, so the replay path is never offered its entry — collecting
+one is a copy of everything the subtree drew, made for a frame that cannot ask
+for it. Flatten computes the same partial-ness the cache walk does, one phase
+earlier, by having `flatten_node` return it. In a scrolling list that is the
+list itself and every ancestor of it: on `benches/scroll_list` at 5000 rows it
+is 45 commands copied per frame instead of 266, for the same 4108 replays
+across the run — seventeen a frame.
 
-`last_flatten` decides the other half: not whether an entry may be *used* but
-whether it is worth *making*. Collecting one copies everything the subtree
-pushed, and under a clip that copy is repaid only where the subtree already is
-— so only a subtree that is standing still is worth collecting, and **one frame
-of stillness is not standing still**. `FlattenPlace` records where the last
-flatten saw the node and whether the one before it saw the same, so an entry is
-collected on the **third** frame in one place — the first to find the node
-where the two before it did. Above a clip, where any delta is accepted, it is
-made whatever the subtree did.
+A clip costs a replay three cases instead, in `ClipTree::replay`. A clip the
+subtree placed itself travels with it: translated by the same offset as the
+content, then cut afresh by its parent, so a viewport resized above cuts the
+new intersection rather than the old one shifted. A clip it inherited is not
+its to carry and is looked up where the subtree now finds itself — that is how
+a row scrolls while its scroller does not. An overlay's clip answers to no
+ancestor and is only carried. The references are the ones the cached commands
+already hold, so a replay writes the shapes through them and touches no
+command.
 
-That threshold is a measurement, not a taste. On `benches/scroll_list` at 5000
-rows, 18% of the nodes under the scroller's clip are where they were the frame
-before and **not one** of them is still there the frame after: writing on the
-first frame bought 945 replays across the run and paid 21501 entries for them,
-and the flatten phase cost twice what not caching at all costs. Writing on the
-second brings it back to parity and keeps the static case, which is the one the
-feature is for. `FRAMES_TO_SETTLE` in `tests/paint_cache_across_frames.rs` is
-that threshold written down as a test: one frame in one place must leave no
-entry behind, and the third must leave one.
+That is also why a node that sets a clip of its own is cached like any other
+now: its clip is one of the ones it placed.
 
 The cache lives in `RefCell<Option<Rc<CachedFlatten>>>` on the node, so flatten
 only needs `&RenderNode` and shallow node clones share the cached output.
@@ -666,6 +688,7 @@ fn paint(&self, ctx: &mut PaintContext) {
 | `src/renderer/paint_context.rs` | PaintContext API |
 | `src/renderer/commands.rs` | DrawCommand enum |
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
+| `src/renderer/clip.rs` | ClipRef, ClipTree, CachedClip — the clips a frame places |
 | `src/renderer/gpu.rs` | ShapeInstance, GPU data structures |
 | `src/renderer/render.rs` | Main Renderer, GPU pipeline |
 | `src/renderer/shader.wgsl` | WGSL shaders for SDF rendering |

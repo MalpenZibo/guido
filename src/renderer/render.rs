@@ -695,7 +695,7 @@ fn backdrop_region(
         // The clip itself, not the box around it: the pass narrows its viewport
         // by the box and then cuts the difference back off per fragment, the
         // same two steps it already takes for the shape.
-        clip: cmd.clip,
+        clip: cmd.clip(),
     }
 }
 
@@ -875,8 +875,8 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             if let Some(g) = gradient {
                 instance = instance.with_gradient(g);
             }
-            if let Some(ref clip) = cmd.clip {
-                instance = instance.with_clip(clip, scale);
+            if let Some(clip) = cmd.clip() {
+                instance = instance.with_clip(&clip, scale);
             }
 
             Some(instance)
@@ -899,8 +899,8 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             )
             .with_transform(&cmd.world_transform, scale);
 
-            if let Some(ref clip) = cmd.clip {
-                instance = instance.with_clip(clip, scale);
+            if let Some(clip) = cmd.clip() {
+                instance = instance.with_clip(&clip, scale);
             }
 
             Some(instance)
@@ -934,7 +934,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size: *font_size,
             font_family: font_family.clone(),
             font_weight: *font_weight,
-            clip: cmd.clip,
+            clip: cmd.clip(),
             transform: cmd.world_transform,
             transform_origin: cmd.world_transform_origin,
         }),
@@ -1111,7 +1111,7 @@ mod tests {
             placement: Transform::rotate_degrees(20.0),
         };
         let mut cmd = frosted(Rect::new(10.0, 20.0, 100.0, 30.0), Transform::IDENTITY);
-        cmd.clip = Some(clip);
+        cmd.clip = Some(crate::renderer::clip::ClipRef::placed(clip));
 
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
         let arrived = frost.region.clip.expect("a clip");
