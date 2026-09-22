@@ -1,11 +1,25 @@
-//! Every piece of per-thread state in the crate is listed under **Ambient
-//! state** in `docs/ARCHITECTURE.md`, with the reason nothing explicit carries
-//! it — see that section for why the list exists.
+//! Every piece of ambient state in the crate is listed under **Ambient state**
+//! in `docs/ARCHITECTURE.md`, with the reason nothing explicit carries it — see
+//! that section for why the list exists.
 //!
-//! Two declarations count: a `static` inside `thread_local!`, and a
-//! `static _: GlobalSignal<_>`, which is a thread's signal reached through a
-//! `static` and outlives the `App` the same way. Counting only the first would
-//! make the second the way to add state without a row.
+//! Three declarations count, and each is a way to add state without a row if
+//! only the others are counted:
+//!
+//! - a `static` inside `thread_local!`, which is the thread's own cell;
+//! - a `static _: GlobalSignal<_>`, which is a thread's signal reached through
+//!   a `static` and outlives the `App` the same way;
+//! - a module-scope `static` behind a lock or an atomic — `Mutex`, `RwLock`,
+//!   `OnceLock`, `LazyLock`, `Atomic*` — which is the crate's answer to the
+//!   half of the problem a thread's cell cannot hold. `WriteSignal` is `Send`,
+//!   so a background task has to put its writes somewhere, and what it puts
+//!   them in is the state with the *longest* life here, not the shortest.
+//!
+//! What that third kind leaves out, and why, is in that section. The
+//! asymmetry is here: the thread's two forms are counted wherever they are
+//! written, function bodies included, because for them a row too many costs a
+//! sentence and a scan taught to look in fewer places is a place to hide one.
+//! Nobody has written either inside a function, so the two rules agree on this
+//! crate and only one of them ever had to be decided.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -43,18 +57,53 @@ fn static_name(line: &str) -> Option<String> {
     Some(name)
 }
 
+/// Whether the line opens a `static` item rather than merely spelling the
+/// keyword. `&'static str` in a signature is what would otherwise be read as a
+/// declaration, and a signature mentioning a `Mutex` return type would then be
+/// a cell named `str`.
+fn declares_static(trimmed: &str) -> bool {
+    let after_visibility = trimmed.strip_prefix("pub").map_or(trimmed, |rest| {
+        // `pub(crate)`, `pub(super)`, `pub(in path)`.
+        rest.strip_prefix('(')
+            .and_then(|restricted| restricted.split_once(')'))
+            .map_or(rest, |(_, after)| after)
+    });
+    after_visibility.trim_start().starts_with("static ")
+}
+
+/// The type a `static` is declared as, without its path or its generic
+/// arguments: `Mutex` for `static Q: std::sync::Mutex<Vec<Write>> = ..`.
+///
+/// The type ends at the `=` that opens the initializer, which no type can
+/// contain — a declaration split across lines by rustfmt keeps that `=` on the
+/// first one.
+fn static_type(trimmed: &str) -> Option<&str> {
+    let declared = trimmed.split_once(':')?.1.split('=').next()?;
+    let head = declared.split('<').next()?.trim();
+    head.rsplit("::").next()
+}
+
+/// Whether the type carries interior mutability, which is what makes a
+/// `static` state rather than a constant written the long way.
+fn is_shared_cell(ty: &str) -> bool {
+    ty.starts_with("Atomic") || matches!(ty, "Mutex" | "RwLock" | "OnceLock" | "LazyLock")
+}
+
 /// The cells `text` declares, outside the body of any inline `#[cfg(test)]`
-/// module: a `static` inside `thread_local!`, in either spelling of the macro,
-/// and a `static` whose type is a `GlobalSignal`, by whatever path.
+/// module: a `static` inside `thread_local!`, in either spelling of the macro;
+/// a `static` whose type is a `GlobalSignal`, by whatever path; and a `static`
+/// behind a lock or an atomic at module scope.
 ///
 /// Lines rather than a parser, relying on rustfmt: a block closes with a `}` at
 /// the indentation its opening line had.
 fn cells_in(text: &str) -> Vec<String> {
     let indent = |line: &str| line.len() - line.trim_start().len();
     let mut cells = Vec::new();
-    // The indentation a `thread_local!` block or a test module opened at.
+    // The indentation a `thread_local!` block, a test module or a function
+    // body opened at.
     let mut in_cells: Option<usize> = None;
     let mut in_test: Option<usize> = None;
+    let mut in_fn: Option<usize> = None;
     let mut after_cfg_test = false;
 
     for line in text.lines() {
@@ -75,6 +124,21 @@ fn cells_in(text: &str) -> Vec<String> {
         }
         after_cfg_test = trimmed == "#[cfg(test)]";
 
+        // Function bodies are tracked rather than skipped, because only the
+        // process-wide form is bounded to module scope. Opening on the brace
+        // rather than on the `fn` keeps a signature rustfmt broke over several
+        // lines, and a bodiless one in a trait, from swallowing the rest of
+        // the file — the cost is a function-local `static` reported as
+        // ambient, which is loud, where the reverse is silent.
+        if in_fn.is_some_and(|open| trimmed.starts_with('}') && indent(line) == open) {
+            in_fn = None;
+        } else if in_fn.is_none()
+            && trimmed.ends_with('{')
+            && trimmed.split_whitespace().any(|word| word == "fn")
+        {
+            in_fn = Some(indent(line));
+        }
+
         if in_cells.is_some_and(|open| trimmed.starts_with('}') && indent(line) == open) {
             in_cells = None;
             continue;
@@ -82,15 +146,17 @@ fn cells_in(text: &str) -> Vec<String> {
         if trimmed.contains("thread_local!") && trimmed.ends_with('{') {
             in_cells = Some(indent(line));
         }
+        let declared_type = declares_static(trimmed)
+            .then(|| static_type(trimmed))
+            .flatten();
         let is_cell = in_cells.is_some()
             || trimmed.contains("thread_local!")
-            || trimmed.split_once(':').is_some_and(|(_, ty)| {
-                ty.trim_start()
-                    .split('<')
-                    .next()
-                    .is_some_and(|path| path.ends_with("GlobalSignal"))
-            });
-        if is_cell && let Some(name) = static_name(line) {
+            || declared_type == Some("GlobalSignal");
+        let is_process_wide =
+            in_cells.is_none() && in_fn.is_none() && declared_type.is_some_and(is_shared_cell);
+        if (is_cell || is_process_wide)
+            && let Some(name) = static_name(line)
+        {
             cells.push(name);
         }
     }
@@ -185,7 +251,7 @@ fn the_ambient_state_table_lists_every_cell_and_only_those() {
 /// A scan that misses a cell passes silently, which is the one failure the test
 /// above cannot report — so the misses are asked about here directly.
 #[test]
-fn the_scan_sees_every_spelling_and_skips_only_test_bodies() {
+fn the_scan_sees_every_spelling_and_the_scope_each_one_needs() {
     let text = r#"
 #[cfg(test)]
 mod characterization;
@@ -210,11 +276,29 @@ mod imp {
         pub(super) static NESTED: Cell<u32> = const { Cell::new(0) };
     }
     static NOT_A_CELL: &str = "after the block closed";
+    pub(super) static NESTED_QUEUE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 }
 
 static GLOBAL: GlobalSignal<u32> = GlobalSignal::new(|| 0);
 static BY_PATH: crate::reactive::GlobalSignal<u32> = crate::reactive::GlobalSignal::new(|| 0);
 static PLAIN: u32 = 0;
+
+static EPOCH: AtomicU64 = AtomicU64::new(0);
+static QUEUE: Mutex<Vec<Write>> = Mutex::new(Vec::new());
+static BY_FULL_PATH: std::sync::RwLock<Table> = std::sync::RwLock::new(Table::new());
+static SPLIT_OVER_LINES: LazyLock<RwLock<FamilyTable>> =
+    LazyLock::new(|| RwLock::new(FamilyTable::default()));
+static ONCE: OnceLock<Handle> = OnceLock::new();
+const NOT_A_STATIC: AtomicBool = AtomicBool::new(false);
+
+impl SurfaceId {
+    pub fn next(&self, name: &'static str) -> Mutex<u8> {
+        static FUNCTION_LOCAL: AtomicU64 = AtomicU64::new(0);
+        Mutex::new(0)
+    }
+}
+
+static AFTER_A_FUNCTION_BODY: AtomicBool = AtomicBool::new(false);
 "#;
     assert_eq!(
         cells_in(text),
@@ -222,8 +306,15 @@ static PLAIN: u32 = 0;
             "AFTER_A_TEST_MOD_DECLARATION",
             "ONE_LINE",
             "NESTED",
+            "NESTED_QUEUE",
             "GLOBAL",
-            "BY_PATH"
+            "BY_PATH",
+            "EPOCH",
+            "QUEUE",
+            "BY_FULL_PATH",
+            "SPLIT_OVER_LINES",
+            "ONCE",
+            "AFTER_A_FUNCTION_BODY",
         ]
     );
 }

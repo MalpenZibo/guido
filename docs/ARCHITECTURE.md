@@ -407,12 +407,16 @@ copy that nothing would ever take.
 
 ## Ambient state
 
-State nothing passes: a `thread_local!` cell, or a `static` `GlobalSignal`,
-which is a thread's signal reached through a `static`. It reaches whoever reads
-it without appearing in any signature, and it outlives the `App` that filled it
-unless `App::drop` resets it. Each has a row saying why neither the `Tree`, a
-pass nor an existing struct carries it, and `tests/ambient_state_inventory.rs`
-fails on one without.
+State nothing passes: a `thread_local!` cell; a `static` `GlobalSignal`, which
+is a thread's signal reached through a `static`; or a process-wide `static`
+with interior mutability — behind a lock or an atomic. The last is usually what
+a background thread writes into, having no reach into either of the other two,
+but the kind is the declaration and not the reason: `WRITE_EPOCH` below is
+written on the main thread alone and is a row all the same. It reaches whoever
+reads it without appearing in any signature, and it outlives the `App` that
+filled it unless `App::drop` resets it. Each has a row saying why neither the
+`Tree`, a pass nor an existing struct carries it, and
+`tests/ambient_state_inventory.rs` fails on one without.
 
 Most follow from one choice: a signal read inside a `move ||` closure subscribes
 by itself, and an event handler is a closure with no arguments, so the reactive
@@ -425,26 +429,23 @@ has queued, mirrored or declared, and `ReactiveState` is the machinery that
 makes a `move ||` closure reactive at all. Each is forgotten as one value, by a
 `reset` that destructures it, rather than through a list somebody has to keep
 true — which is what #372 was: `DEFAULT_FONT_FAMILY` was missing from one, and
-nothing could say so. New state of either kind is a field in one of them,
-reviewed beside the others and reset with them, and not a new cell with a row
-of its own. `tests/ambient_state_inventory.rs` holds both structs to the
-promise this paragraph makes.
+nothing could say so. New state either struct could hold is a field in one of
+them, reviewed beside the others and reset with them, and not a new cell with a
+row of its own — being reset with the struct is the test, and it is what the
+process-wide rows below say they cannot pass.
+`tests/ambient_state_inventory.rs` holds both structs to the promise this
+paragraph makes.
 
-A third kind sits outside this register and has no rows: a process-wide
-`static` behind a lock or an atomic, which is how the crate carries the state a
-*background thread* touches. `WRITE_QUEUE` and `WRITE_EPOCH`
-(`src/reactive/runtime.rs`) take writes from a `Send` `WriteSignal`,
-`INGRESS_SENDER` (`src/ingress.rs`) and `EXIT_REQUEST`, `WAKE_REQUESTED`,
-`PING_SENT`, `WAKEUP_PING` (`src/jobs.rs`) carry the loop's wakeups, and
-`FAMILIES` (`src/widgets/font.rs`) interns font family names. `FAMILIES` is the
-one that had to argue for itself, because it is reachable from an ordinary
-value: a `FontFamily` is an index into it and outlives both the `App` — `APP`,
-which `reset` empties whole, would recycle the slot under a value somebody
-still holds — and the thread that minted it. Its own comment has the argument.
-
-`tests/ambient_state_inventory.rs` cannot see that kind, and #460 is where
-giving it rows is weighed. Until then this paragraph is the register for it,
-and a new one belongs in the list above.
+What stays out: a `static` with no interior mutability, which is a constant
+written the long way, and a `static` declared *inside a function* —
+`SurfaceId::next`'s counter, `shared_device`'s cached adapter,
+`service_runtime`'s handle, `wakeup_test_lock`'s mutex. That second line is
+syntactic, and it is not a claim that those four are harmless: the counter
+mints ids that outlive every `App`, which is the property `FAMILIES` has a row
+for. It is a claim about who reads them. A declaration inside a function is
+reviewed by whoever changes that function and is reachable from nowhere else,
+so it is not state arriving with no signature naming it, which is what this
+register is of. Sweeping either in would make the register noise.
 
 | cell | file | why nothing explicit carries it |
 | --- | --- | --- |
@@ -464,6 +465,14 @@ and a new one belongs in the list above.
 | `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `AppState::lock` |
 | `FOCUS` | `src/reactive/focus.rs` | `GlobalSignal`: the focused widget and its ancestors, so resolving a `when_focused` subscribes to it |
 | `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `AppState::live_popups` reactive, owned by the application rather than by whichever popup opened first |
+| `WRITE_QUEUE` | `src/reactive/runtime.rs` | Process-wide: the writes a `Send` `WriteSignal` made off the main thread, pushed by whichever thread holds the writer and drained by the loop. The one place it cannot be is a thread's cell, `REACTIVE` and `APP` included — the producer would push into its own and the loop would drain an empty one |
+| `WRITE_EPOCH` | `src/reactive/runtime.rs` | Process-wide: the number each queued write is tagged with, so writers an `App` left behind cannot write into the next one. It has to outlive what it retires, which a field of `ReactiveState` cannot: `reset` takes every field back to its default, and an epoch that returns to zero revives the writers the increment was there to discard |
+| `INGRESS_SENDER` | `src/ingress.rs` | Process-wide: the loop's calloop channel, reached from whichever thread sends on it — a service queues a write from its own; a selection reader takes its handle on the main thread and sends from the reader's, seconds later. `with_app_state` on a worker mints that thread its own empty `AppState`, so a field there would read back as "no loop" and silently take the fallback |
+| `EXIT_REQUEST` | `src/jobs.rs` | Process-wide: `restart_app` is documented as callable from any thread and `quit_app` sets the same flag, which the main loop reads once a pass. A thread's cell would record the request on the thread that made it and leave the loop running |
+| `WAKE_REQUESTED` | `src/jobs.rs` | Process-wide: "someone poked the loop, make a pass", raised by whoever queued the work and taken by the loop. `ingress::notify` falls back to `wake_loop` when there is no channel to send on, and that fallback runs on the background thread that queued the write |
+| `PING_SENT` | `src/jobs.rs` | Process-wide: whether a ping is already armed for the current blocked period, which is what stops every producer writing one. Coalescing is only correct if all of them read the same flag, which is exactly what a thread's cell is not |
+| `WAKEUP_PING` | `src/jobs.rs` | Process-wide: the calloop `Ping` the flag above arms, installed by `App::run` and pinged from whichever thread has work. `Mutex<Option<Ping>>` rather than a `OnceLock` so `App::drop` can take it back out |
+| `FAMILIES` | `src/widgets/font.rs` | Process-wide: interned font family names. Not `APP`, whose `reset` empties it whole and would recycle a slot under a `FontFamily` an application still holds; not a thread's, because `FontFamily` is `Copy` and `create_signal` requires `Send`, so a name minted on a worker would be read on the main thread as a different family or none. Blink's `AtomicString` table is per-process for the same reason, and the declaration carries the argument |
 
 ## Widget Trait
 
