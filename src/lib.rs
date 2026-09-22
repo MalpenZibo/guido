@@ -747,14 +747,23 @@ fn run_jobs(
     jobs::recycle_job_buffer(followup);
 }
 
+/// What arrived for one surface, each event with when it happened.
+///
+/// Named because it travels: a frame takes the whole buffer from the surface
+/// and gives it back — see [`Surface::recycle_events`] — so the same `Vec`
+/// appears in every signature along the way, and they have to agree.
+type EventQueue = Vec<(std::time::Instant, widgets::Event)>;
+
 /// What this surface tells us about itself, read once at the top of a frame.
 ///
 /// Copying it frees the borrow on `wayland_state`, which the phases below
 /// need mutably — and nothing the compositor sends can change it before this
 /// frame ends anyway.
+///
+/// The input that arrived with it is *not* in here: it is read once, at the
+/// top, and the buffer goes back to the surface immediately. A field for it
+/// would be one that is empty for the rest of the frame.
 struct Frame {
-    /// What arrived for this surface, each with when it happened.
-    events: Vec<(std::time::Instant, widgets::Event)>,
     scale_factor: f32,
     width: u32,
     height: u32,
@@ -802,10 +811,26 @@ fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
 /// rather than fail to build. The defaults are for a surface that *cannot* do
 /// the thing, never for one that has not been taught to.
 pub(crate) trait Surface {
-    /// The facts a frame is built from, or `None` if this surface has no size
-    /// to draw at yet. Takes the queued input with it, so calling it twice for
-    /// one frame loses events.
-    fn open_frame(&mut self) -> Option<Frame>;
+    /// The facts a frame is built from and the input queued for it, or `None`
+    /// if this surface has no size to draw at yet. Drains the queue, so calling
+    /// it twice for one frame loses events.
+    fn open_frame(&mut self) -> Option<(Frame, EventQueue)>;
+
+    /// Take the drained event buffer back, now that the frame has read it.
+    ///
+    /// The queue is handed over rather than lent because the phases after the
+    /// dispatch need `wayland_state` mutably, and lending it would hold the
+    /// platform's borrow across the one part of a frame that runs the caller's
+    /// own handlers. So the events die with the frame — but the allocation need
+    /// not: a surface under the pointer would otherwise allocate a queue and
+    /// free one every frame, for a buffer whose size barely changes.
+    /// [`surface::recycle_events`] is the rule both implementations answer with.
+    ///
+    /// The default drops it, which is what a surface that has no queue of its
+    /// own can honestly do with one.
+    fn recycle_events(&mut self, events: EventQueue) {
+        let _ = events;
+    }
 
     /// The size the compositor has confirmed, if it has confirmed one.
     ///
@@ -1285,7 +1310,7 @@ pub(crate) struct WaylandSurface<'a> {
 }
 
 impl Surface for WaylandSurface<'_> {
-    fn open_frame(&mut self) -> Option<Frame> {
+    fn open_frame(&mut self) -> Option<(Frame, EventQueue)> {
         let surface = self.state.get_surface_mut(self.id)?;
         if !surface.configured {
             return None;
@@ -1297,14 +1322,22 @@ impl Surface for WaylandSurface<'_> {
         // frame that renders.
         let events = surface.take_events();
         let fully_initialized = surface.first_frame_presented && surface.scale_factor_received;
-        Some(Frame {
+        Some((
+            Frame {
+                scale_factor: surface.scale_factor,
+                width: surface.width,
+                height: surface.height,
+                frame_callback_pending: surface.frame_callback_pending,
+                force_render_surface: !fully_initialized,
+            },
             events,
-            scale_factor: surface.scale_factor,
-            width: surface.width,
-            height: surface.height,
-            frame_callback_pending: surface.frame_callback_pending,
-            force_render_surface: !fully_initialized,
-        })
+        ))
+    }
+
+    fn recycle_events(&mut self, events: EventQueue) {
+        if let Some(surface) = self.state.get_surface_mut(self.id) {
+            surface.recycle_events(events);
+        }
     }
 
     fn configured_size(&self) -> Option<(u32, u32)> {
@@ -1508,11 +1541,21 @@ struct Geometry {
 /// Read the surface's state and take its queued input, or give up on this
 /// frame: an unconfigured surface has no size to render at, and one whose GPU
 /// state has not been built yet gets it on the next iteration.
-fn open_frame<P: Platform>(ctx: &mut FrameContext<P>) -> Option<Frame> {
+fn open_frame<P: Platform>(ctx: &mut FrameContext<P>) -> Option<(Frame, EventQueue)> {
+    // Held across the GPU check rather than looked up twice, because the
+    // give-up path has something to say to the same surface.
+    let mut host = ctx.wayland_state.surface(ctx.id)?;
     // The host answers for the compositor; the GPU readiness is ours, and a
     // surface still building its swapchain has nowhere to draw.
-    let frame = ctx.wayland_state.surface(ctx.id)?.open_frame()?;
-    ctx.surface.is_gpu_ready().then_some(frame)
+    let (frame, events) = host.open_frame()?;
+    if ctx.surface.is_gpu_ready() {
+        return Some((frame, events));
+    }
+    // The *events* are dropped on purpose — the Wayland `open_frame` says why
+    // holding them would be worse. The buffer they arrived in is not: it is
+    // the surface's, and it goes straight back.
+    host.recycle_events(events);
+    None
 }
 
 /// Resolve the physical size, bring the swapchain in line with it, and work
@@ -2060,12 +2103,24 @@ fn render_surface<P: Platform>(
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
     at: std::time::Instant,
 ) {
-    let Some(frame) = open_frame(ctx) else {
+    let Some((frame, events)) = open_frame(ctx) else {
         return;
     };
 
     let root = ctx.surface.widget_id;
-    dispatch_events(&frame.events, root, ctx.tree, active_roots);
+    dispatch_events(&events, root, ctx.tree, active_roots);
+    // Here, and not at the end: the buffer goes back the instant it has been
+    // read, so it is the surface's again before the first of the returns below
+    // can happen. A hand-back further down would have to be repeated at the
+    // pacing gate, at the nothing-moved gate and at a swapchain that failed to
+    // present — three chances to forget one.
+    //
+    // A surface that has never been sent anything has nothing to give back, and
+    // is spared the lookup: this runs on every frame of every surface, and the
+    // point of it was to stop paying for input that is not there.
+    if events.capacity() > 0 {
+        with_surface(ctx.wayland_state, ctx.id, |s| s.recycle_events(events));
+    }
 
     let geometry = resolve_geometry(ctx, &frame);
 
@@ -3489,7 +3544,6 @@ mod a_frame_is_a_description_not_a_connection {
 
     fn frame(callback_pending: bool, force: bool) -> Frame {
         Frame {
-            events: Vec::new(),
             scale_factor: 1.0,
             width: 200,
             height: 50,
@@ -3589,7 +3643,7 @@ mod a_second_host_can_answer_for_a_compositor {
     }
 
     impl Surface for Recorder {
-        fn open_frame(&mut self) -> Option<Frame> {
+        fn open_frame(&mut self) -> Option<(Frame, EventQueue)> {
             None
         }
 
@@ -3858,15 +3912,17 @@ mod a_frame_lands_where_the_surface_points {
     }
 
     impl Surface for OneSurface {
-        fn open_frame(&mut self) -> Option<Frame> {
-            Some(Frame {
-                events: Vec::new(),
-                scale_factor: 1.0,
-                width: self.width,
-                height: self.height,
-                frame_callback_pending: false,
-                force_render_surface: true,
-            })
+        fn open_frame(&mut self) -> Option<(Frame, EventQueue)> {
+            Some((
+                Frame {
+                    scale_factor: 1.0,
+                    width: self.width,
+                    height: self.height,
+                    frame_callback_pending: false,
+                    force_render_surface: true,
+                },
+                EventQueue::new(),
+            ))
         }
     }
 
@@ -3878,7 +3934,7 @@ mod a_frame_lands_where_the_surface_points {
     struct OneHandle<'a>(&'a mut OneSurface);
 
     impl Surface for OneHandle<'_> {
-        fn open_frame(&mut self) -> Option<Frame> {
+        fn open_frame(&mut self) -> Option<(Frame, EventQueue)> {
             self.0.open_frame()
         }
     }
@@ -3923,7 +3979,7 @@ mod a_frame_lands_where_the_surface_points {
             renderer: &mut renderer,
             tree: &mut tree,
         };
-        let frame = ctx.wayland_state.surface(id).unwrap().open_frame().unwrap();
+        let (frame, _) = ctx.wayland_state.surface(id).unwrap().open_frame().unwrap();
 
         let first = resolve_geometry(&mut ctx, &frame);
         assert!(first.needs_resize, "an 8x8 target for a 100x32 frame");

@@ -154,9 +154,17 @@ impl WaylandSurfaceState {
         }
     }
 
-    /// Take all pending events (drains the queue)
-    pub fn take_events(&mut self) -> Vec<(std::time::Instant, Event)> {
+    /// Take all pending events (drains the queue).
+    ///
+    /// The buffer goes with them, and comes back through
+    /// [`recycle_events`](Self::recycle_events) once the frame has read it.
+    pub fn take_events(&mut self) -> crate::EventQueue {
         std::mem::take(&mut self.pending_events)
+    }
+
+    /// Take the drained buffer back, so the next event queued has room already.
+    pub fn recycle_events(&mut self, events: crate::EventQueue) {
+        crate::surface::recycle_events(&mut self.pending_events, events);
     }
 
     /// Record the scale this surface renders at, and answer whether it moved.

@@ -41,7 +41,7 @@ use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::{Event, MouseButton, Rect, Widget};
-use crate::{Frame, LoopContext, Platform, Surface, iterate};
+use crate::{EventQueue, Frame, LoopContext, Platform, Surface, iterate};
 
 /// The compositor's half of one surface: what it has said, and what it has
 /// been asked for.
@@ -59,8 +59,17 @@ struct RecordedSurface {
     height: u32,
     scale: f32,
     configured: bool,
-    events: Vec<(Instant, Event)>,
+    events: EventQueue,
     first_frame_presented: bool,
+    /// Whether the compositor is holding this surface's `wl_surface.frame`
+    /// callback back — what paces a frame out.
+    ///
+    /// Not what `mark_frame_callback_pending` writes, which here is
+    /// `first_frame_presented`: nothing in a recorder ever *answers* a
+    /// callback, so one it armed itself would pace every frame from then on
+    /// and never let go. It is the test's to say, once, through
+    /// [`Headless::hold_frame_callback`].
+    frame_callback_held: bool,
     exclusive_zones: Vec<i32>,
     /// Every input region asked for, oldest first. Kept whole rather than
     /// resolved, because "no region at all" and "a region holding nothing" are
@@ -182,20 +191,27 @@ fn missing(id: SurfaceId) -> ! {
 }
 
 impl Surface for &mut RecordedSurface {
-    fn open_frame(&mut self) -> Option<Frame> {
+    fn open_frame(&mut self) -> Option<(Frame, EventQueue)> {
         if !self.configured {
             return None;
         }
-        Some(Frame {
-            events: std::mem::take(&mut self.events),
-            scale_factor: self.scale,
-            width: self.width,
-            height: self.height,
-            // Never pending: a driver that had to wait for a callback nobody
-            // sends would step once and stop.
-            frame_callback_pending: false,
-            force_render_surface: !self.first_frame_presented,
-        })
+        Some((
+            Frame {
+                scale_factor: self.scale,
+                width: self.width,
+                height: self.height,
+                // Not pending unless a test says so: a driver that had to wait
+                // for a callback nobody sends would step once and stop, so the
+                // default is a compositor that has already shown everything.
+                frame_callback_pending: self.frame_callback_held,
+                force_render_surface: !self.first_frame_presented,
+            },
+            std::mem::take(&mut self.events),
+        ))
+    }
+
+    fn recycle_events(&mut self, events: EventQueue) {
+        crate::surface::recycle_events(&mut self.events, events);
     }
 
     fn configured_size(&self) -> Option<(u32, u32)> {
@@ -520,6 +536,26 @@ impl Headless {
     /// [`click`](Self::click)'s are.
     pub fn event_at(&mut self, id: SurfaceId, event: Event, at: Instant) {
         self.host.get_mut(id).events.push((at, event));
+    }
+
+    /// Say the compositor has not shown this surface's last frame yet — an
+    /// unanswered `wl_surface.frame` callback, which is what paces a frame out.
+    ///
+    /// One way only, and it has to be: nothing here ever sends the callback
+    /// back, so from this call on every frame of that surface is paced out
+    /// unless it is resized or rescaled.
+    pub fn hold_frame_callback(&mut self, id: SurfaceId) {
+        self.host.get_mut(id).frame_callback_held = true;
+    }
+
+    /// How many events the surface's queue has room for without allocating.
+    ///
+    /// The buffer a frame drains is handed back to the surface once it has been
+    /// routed, so a surface under continuous input allocates for its queue once
+    /// rather than once a frame. Zero after a frame that carried events is that
+    /// buffer dropped.
+    pub fn event_queue_capacity(&self, id: SurfaceId) -> usize {
+        self.host.get(id).events.capacity()
     }
 
     /// One frame: open it, route what is queued, measure, paint, present.

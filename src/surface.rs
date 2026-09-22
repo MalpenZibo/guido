@@ -439,6 +439,34 @@ pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
     (named, held != Some(named))
 }
 
+/// Give a drained event buffer back to the queue it was taken from, keeping
+/// whichever of the two has the most room.
+///
+/// A surface's queue is emptied into every frame and refilled by the next
+/// pointer motion, so without this a surface under the cursor allocates one and
+/// frees one per frame for a buffer whose size barely changes — the same
+/// bargain [`crate::jobs::recycle_job_buffer`] strikes for a job queue, with
+/// one buffer per surface rather than a pool, because a surface drains its own
+/// queue once a frame and there is never a second in flight.
+///
+/// `queue` is appended to rather than overwritten. The frame holds the
+/// platform's `&mut` from the moment it takes the buffer until it hands it
+/// back, so in the loop the queue is empty here and the append costs nothing —
+/// but "whatever is queued stays queued" is a cheaper thing for the rule to be
+/// than for every caller to have to prove.
+///
+/// A free function because both halves of the [`crate::Surface`] seam need it,
+/// the Wayland surface state and the recorder, and neither can be built by a
+/// unit test. Generic because nothing in it is about an event.
+pub(crate) fn recycle_events<T>(queue: &mut Vec<T>, mut drained: Vec<T>) {
+    if drained.capacity() <= queue.capacity() {
+        return;
+    }
+    drained.clear();
+    drained.append(queue);
+    *queue = drained;
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).
@@ -1427,6 +1455,39 @@ mod tests {
         // against — so 0.5 twice is one change, not two.
         assert_eq!(adopted_scale(None, 0.5), (1.0, true));
         assert_eq!(adopted_scale(Some(1.0), 0.5), (1.0, false));
+    }
+
+    /// A drained buffer goes back with its capacity and without its contents,
+    /// unless the queue has already grown a bigger one — and whatever arrived
+    /// in the meantime survives the swap.
+    ///
+    /// The buffer a frame hands back is the one it has just *read*, not one it
+    /// emptied: `dispatch_events` takes the queue by reference, so every event
+    /// of the frame is still in it. Dropping them here is the difference
+    /// between routing a click once and routing it on every frame afterwards.
+    #[test]
+    fn a_recycled_event_buffer_keeps_the_larger_room_and_loses_nothing() {
+        let mut queue: Vec<u8> = Vec::new();
+        let mut drained = Vec::with_capacity(16);
+        drained.extend([1, 2, 3]);
+        recycle_events(&mut queue, drained);
+        assert!(queue.capacity() >= 16, "the room the frame handed back");
+        assert!(queue.is_empty(), "and not the events it had already routed");
+
+        // An event that arrived while the frame held the buffer is still
+        // queued, and stays queued, in front of whatever comes next.
+        queue.push(7);
+        let mut drained = Vec::with_capacity(64);
+        drained.extend([8, 9]);
+        recycle_events(&mut queue, drained);
+        assert_eq!(queue, [7], "what is queued stays, what was routed goes");
+        assert!(queue.capacity() >= 64);
+
+        // A smaller buffer is dropped rather than swapped in: the queue would
+        // lose room by taking it. Its events go with it, having been routed.
+        recycle_events(&mut queue, vec![10]);
+        assert!(queue.capacity() >= 64, "the bigger buffer stays");
+        assert_eq!(queue, [7], "and it still holds what it held");
     }
 
     /// The buffer is the logical size times the scale, rounded halfway away

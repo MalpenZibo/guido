@@ -165,6 +165,111 @@ fn a_click_inside_runs_the_handler_and_one_outside_does_not() {
     assert_eq!(clicks.get(), 1, "a click outside it changes nothing");
 }
 
+/// The buffer a frame drains the surface's input into goes back to the surface,
+/// so a bar under the pointer allocates for its queue once and not once a
+/// frame.
+///
+/// The queue used to be `mem::take`n, which leaves a `Vec` with no capacity
+/// behind: every frame that carried an event allocated the next queue from
+/// scratch and freed the one it had just walked.
+#[test]
+fn an_event_queue_keeps_the_room_it_earned_across_frames() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || bar(clicks));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    let room = app.event_queue_capacity(surface);
+    assert!(
+        room >= 2,
+        "the press and the release came back in their buffer, not as an \
+         allocation the next event has to make"
+    );
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    assert_eq!(clicks.get(), 2, "both frames routed what they took");
+    assert_eq!(
+        app.event_queue_capacity(surface),
+        room,
+        "and the second frame queued into the same buffer as the first"
+    );
+}
+
+/// A frame that is paced out returns before it draws anything — and it has
+/// already routed its input by then, so it owes the surface the buffer back
+/// just as much as a frame that reached the end.
+///
+/// The early return is the whole point: the hand-back sits above it rather than
+/// at the end of the frame, where the pacing gate, the nothing-moved gate and a
+/// swapchain that failed to present would each be a way to forget it.
+///
+/// Two clicks, not one, and a bar whose colour follows them. A click that
+/// changes nothing visible stops at the *nothing-moved* gate, which is a
+/// different early return further down — so a test written with `bar()` passes
+/// with the hold deleted, proves the other gate, and says so in an assertion
+/// message that is false. Here the first click presents a frame and the second,
+/// identical but for the hold, does not: the count standing still can only be
+/// the pacing gate.
+#[test]
+fn a_paced_out_frame_loses_neither_its_events_nor_its_buffer() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .background(move || {
+                    if clicks.get().is_multiple_of(2) {
+                        Color::rgb(1.0, 0.0, 0.0)
+                    } else {
+                        Color::rgb(0.0, 0.0, 1.0)
+                    }
+                })
+                .on_click(move || clicks.update(|c| *c += 1)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let presented = app.frames_presented(surface);
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    assert!(
+        app.frames_presented(surface) > presented,
+        "this click repaints the bar, so an unpaced frame draws it — which is \
+         what makes the frame below distinguishable"
+    );
+
+    // The compositor has not shown the last frame: nothing but a resize or a
+    // scale change opens the gate now, and this frame has neither.
+    app.hold_frame_callback(surface);
+    let presented = app.frames_presented(surface);
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+
+    assert_eq!(
+        app.frames_presented(surface),
+        presented,
+        "the same click that drew a frame a moment ago drew none, so this one \
+         stopped at the pacing gate"
+    );
+    assert_eq!(
+        clicks.get(),
+        2,
+        "input is routed above the gate, not below it"
+    );
+    assert!(
+        app.event_queue_capacity(surface) >= 2,
+        "and the buffer came back from a frame that drew nothing"
+    );
+}
+
 /// The reservation a fixed-height bar declares, which it declares once — at
 /// creation, the way `create_surface_with_id` does, and never again.
 ///
