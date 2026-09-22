@@ -141,6 +141,7 @@ every run for months.
 | a new map or set — that it is keyed by `rustc_hash` and not by std's SipHash | `tests/hashers_are_fx.rs` — the source, read for a bare `HashMap`, against the opt-out list beside it |
 | the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
 | a performance claim about a frame | `benches/scroll_list` and `benches/static_clip` — one scripted gesture over two workloads, run by hand; the two `*_benchmark_is_repeatable.rs` tests are what say their counts repeat. A change that helps one and hurts the other is why there are two. The `renderer` skill has the rest |
+| a claim that a frame allocates less | the heap section of those same two tables. `CountingAllocator` is a `GlobalAlloc` the *binary* installs — a library may not — and `render_stats` samples it at each end of a frame; `tests/frame_allocations_are_counted.rs` says the window really is a frame's, and the two repeatability tests say the figures repeat. Two windows are printed, the scripted frames' own and the whole play's: a change to how a widget is *built* lands only in the second |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is what is left of the hole. Until #264 it was the whole of it:

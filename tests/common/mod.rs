@@ -253,6 +253,65 @@ pub fn write_if_blessed(path: &std::path::Path, blessing: Blessing, write: impl 
     }
 }
 
+/// One scripted play at a time in this binary.
+///
+/// The heap counter a benchmark run reports is the whole process's, because a
+/// frame's allocations are — wgpu's threads and the graphics driver's allocate
+/// inside a frame as surely as the frame loop does. So two tests playing
+/// scripts on two threads would each be charged the other's frames. The lock
+/// is per binary, which is what is wanted: a binary is a process.
+///
+/// Poison is stepped over rather than propagated. It means an earlier test
+/// panicked, which is already a failure; making every later test fail too
+/// hides which one it was.
+pub fn one_play_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    static PLAYING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    PLAYING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// How close two plays have to come on a count of allocations: a thousandth.
+///
+/// The tight one, and it holds. Nine runs of one benchmark spread by about ten
+/// allocations in five hundred thousand, and forty runs of the test binary with
+/// four copies of itself competing for the machine did not move it at all —
+/// a request is a request whoever is making it. The regression that made this
+/// counter worth having was 4034 in 533865.
+pub const COUNTS_AGREE_TO: u64 = 1000;
+
+/// And on a count of bytes: a twentieth.
+///
+/// Far looser, because bytes are not requests. The number of requests inside a
+/// frame is fixed by the script, but their *sizes* are not all the code's: on a
+/// loaded machine the same play came back with 2258089 bytes and 2279145, a
+/// spread of 0.93%, and `static_clip` moved 1.3% — a driver sizing a buffer for
+/// itself, in steps. A tighter margin failed one run in four under load, which
+/// is a test asserting something its figure does not do.
+///
+/// It is still worth asserting. The change that made this section worth
+/// printing cut a benchmark's bytes by 51%.
+pub const BYTES_AGREE_TO: u64 = 20;
+
+/// How close two plays of one script have to come on a heap figure: within one
+/// part in `in_parts`, or sixteen, whichever is larger.
+///
+/// Not exactly, which is the difference between these and the counts beside
+/// them. The counter is process-wide by design, so a play carries whatever the
+/// driver's own threads did inside it — see [`COUNTS_AGREE_TO`] and
+/// [`BYTES_AGREE_TO`] for what that costs each kind of figure. The wider of the
+/// two windows the benchmarks print takes in the adapter's own setup as well,
+/// so its count of allocations is held to a hundredth rather than a thousandth.
+pub fn heap_figures_agree(first: u64, second: u64, what: &str, in_parts: u64) {
+    let margin = (first.max(second) / in_parts).max(16);
+    assert!(
+        first.abs_diff(second) <= margin,
+        "the same script over the same tree asked the allocator for {what} \
+         {first} one run and {second} the next, which is further apart than the \
+         {margin} the driver's own threads account for"
+    );
+}
+
 /// An application driven without a compositor, or `None` where this machine
 /// has no adapter to draw with.
 ///

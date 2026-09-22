@@ -15,6 +15,8 @@
 //! repeatable nothing, and every other assertion would still pass.
 //!
 //! Only counts, never microseconds — `scripted::Counts` says which is which.
+//! The heap figures are a third thing, and `scripted::Heap` says what about
+//! them holds.
 //!
 //! The file compiles the benchmark's own modules rather than a copy of them.
 
@@ -33,9 +35,15 @@ const ROWS: usize = 40;
 /// Short, because the property is the script's determinism and not its length.
 const FRAMES_PER_PHASE: usize = 6;
 
+/// What a binary has to install for any of that to be counted at all. The
+/// library may not: a `#[global_allocator]` is the final binary's to choose.
+#[global_allocator]
+static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
+
 /// `None` on a machine with no adapter, which is a skip unless the job pointed
 /// at lavapipe says a skip is a failure.
 fn play(rows: usize, panels: Panel) -> Option<scripted::Run> {
+    let _alone = common::one_play_at_a_time();
     let mut app = common::headless()?;
     let script = scripted::script(FRAMES_PER_PHASE);
     Some(scripted::play(
@@ -62,6 +70,62 @@ fn two_runs_of_the_same_script_agree_on_every_count() {
             panels.name()
         );
     }
+}
+
+/// And the same of what the frames cost the heap, which is the number the
+/// benchmark grew a fourth section for.
+///
+/// One scenario rather than both: what is being asserted is that the figure
+/// repeats, and each play is a full run of the script. The other scenario's is
+/// asserted to differ below, which is the pair that says the number is not a
+/// constant.
+///
+/// Apart from the counts above because it is not one: the counter is the whole
+/// process's, so the graphics driver's worker threads are in it, and two plays
+/// agree to within the handful of allocations those add.
+///
+/// A play is thrown away first, for the reason `scripted::play` throws away its
+/// first frame: the first play in a process pays for everything the process
+/// builds lazily — font caches, glyph atlases, the driver's own tables — which
+/// is not a measurement of the script.
+#[test]
+fn two_runs_of_the_same_script_allocate_the_same_way() {
+    let Some(_warm) = play(ROWS, Panel::Resting) else {
+        return;
+    };
+    let first = play(ROWS, Panel::Resting).expect("the first run had an adapter");
+    let second = play(ROWS, Panel::Resting).expect("the first run had an adapter");
+
+    assert!(
+        first.heap.frame_allocations > 0,
+        "nothing was counted: this binary did not install guido::heap::CountingAllocator"
+    );
+    common::heap_figures_agree(
+        first.heap.frame_allocations,
+        second.heap.frame_allocations,
+        "allocations",
+        common::COUNTS_AGREE_TO,
+    );
+    common::heap_figures_agree(
+        first.heap.frame_bytes,
+        second.heap.frame_bytes,
+        "bytes",
+        common::BYTES_AGREE_TO,
+    );
+    // Both windows, because the section prints both under one header that says
+    // they repeat.
+    common::heap_figures_agree(
+        first.heap.play_allocations,
+        second.heap.play_allocations,
+        "allocations over the whole play",
+        100,
+    );
+    common::heap_figures_agree(
+        first.heap.play_bytes,
+        second.heap.play_bytes,
+        "bytes over the whole play",
+        common::BYTES_AGREE_TO,
+    );
 }
 
 /// What the scenario is for, asserted rather than left to a reader comparing
@@ -144,6 +208,25 @@ fn hiding_overflow_is_reported_as_more_work_than_resting_on_a_scroller() {
          benchmark prints two tables for",
         hidden.counts.paint_children_culled,
         resting.counts.paint_children_culled
+    );
+    // And on the heap, on the same pair of runs: a counter that came back with
+    // the same number for both scenarios would satisfy every assertion above
+    // about repeating and be measuring nothing.
+    //
+    // Which way round is not claimed — that would be a story about where a
+    // scroller's allocations go, and nothing here can tell. What is claimed is
+    // the size of the gap: a hundredth of the number, where two plays of one
+    // scenario agree to a thousandth. Measured, the two are 3738 and 3000.
+    assert!(
+        resting
+            .heap
+            .frame_allocations
+            .abs_diff(hidden.heap.frame_allocations)
+            > resting.heap.frame_allocations / 100,
+        "the two scenarios allocated {} times and {} times, which is inside the \
+         margin two plays of one scenario are allowed",
+        resting.heap.frame_allocations,
+        hidden.heap.frame_allocations
     );
 }
 

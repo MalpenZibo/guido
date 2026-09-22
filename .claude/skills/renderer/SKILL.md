@@ -177,6 +177,17 @@ The counts repeat exactly, which is what makes the diff readable at all: a
 hand-scrolled run of the same example polled 136714 frames one time and 83209
 the next, and neither average described the other's workload.
 
+Under the table is what the run cost the heap, which is the number a change that
+exists to stop allocating has to move. It is counted by `CountingAllocator`, a
+`GlobalAlloc` the benchmark binary installs — guido ships it and installs
+nothing, because a `#[global_allocator]` belongs to the final binary — and it is
+printed over two windows. The frame figures are the scripted frames' own,
+sampled by `render_stats` at each end of a frame; the play figures cover
+everything from before the tree exists. A change to what a frame does shows in
+both and loudest in the first; a change to how a widget is *built* shows only in
+the second. The live-byte lines are a level rather than a total, and the peak is
+measured from where the play found it.
+
 Two things it will not tell you. The microseconds are the machine's as much as
 the code's, so a loaded machine has nothing to say — and nothing asserts them,
 so no CI job can fail on them. And the **GPU phase is printed apart, under the

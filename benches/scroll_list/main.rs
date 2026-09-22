@@ -20,6 +20,12 @@ mod scripted;
 
 use guido::testing::Headless;
 
+/// The heap column has to be asked for here. A `#[global_allocator]` may only
+/// be set by the binary that links the program, so guido ships the allocator
+/// and installs nothing.
+#[global_allocator]
+static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
+
 /// As many frames per phase as a gesture a person would make: four phases of
 /// sixty is four seconds of scrolling at 60Hz.
 const FRAMES_PER_PHASE: usize = 60;
