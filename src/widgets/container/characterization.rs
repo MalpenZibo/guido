@@ -6408,3 +6408,48 @@ fn a_container_of_constants_costs_what_an_empty_one_costs() {
         furnished - bare
     );
 }
+
+/// A gradient and a shadow live behind a pointer, and a container that
+/// declares neither does not follow it.
+///
+/// 72 bytes on every container in every tree, for two decorations a list row
+/// declares on none of them — see `DecorationProps`, which has the rule.
+///
+/// The second half is what `anims` insists on too: nothing into a container
+/// that has none must not be the thing that allocates one.
+#[test]
+fn a_container_declaring_no_decoration_allocates_no_decoration() {
+    // 392 is `Container`'s exact size today, written as a ceiling only so
+    // that shrinking it further needs no edit here. There is no headroom in
+    // it: the next field of any size fails this too, and the message will
+    // point at decorations that are innocent. That is deliberate — a struct on
+    // every widget in every tree is worth re-reading when it grows — but the
+    // reader who lands here from an unrelated field should know to look at
+    // their own change first.
+    assert!(
+        size_of::<Container>() <= 392,
+        "72 bytes of gradient and shadow should be one 8-byte pointer: {} bytes",
+        size_of::<Container>()
+    );
+
+    assert!(
+        container().decoration.is_none(),
+        "a plain container has nothing to decorate and allocates nothing for it"
+    );
+    assert!(
+        container().background(Color::RED).decoration.is_none(),
+        "nor does one that is merely painted"
+    );
+
+    assert!(
+        container().shadow(LIFTED).decoration.is_some(),
+        "declaring a shadow is what allocates the box"
+    );
+    assert!(
+        container()
+            .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
+            .decoration
+            .is_some(),
+        "and so is declaring a gradient"
+    );
+}

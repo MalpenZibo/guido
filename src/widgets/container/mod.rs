@@ -187,17 +187,30 @@ pub enum Overflow {
 /// The three transform components and the point they act about. Boxed and
 /// absent by default, like `anims` and `interaction`.
 ///
-/// `Option<Signal<T>>` is 12 bytes — `Signal` is two `u32` plus a fieldless
-/// `SignalKind` whose niche the `Option` reuses — so four of them is 48 on
-/// every container in every tree, and the overwhelming majority declare none.
-/// Behind a pointer, `Container` measures 312 bytes against main's 328, which
-/// spent 24 here on the two fields this replaces.
+/// Four property fields on every container in every tree, and the
+/// overwhelming majority declare none — so they live behind a pointer, and a
+/// container that declares no transform does not follow it.
 #[derive(Default)]
 pub(super) struct TransformProps {
     pub(super) translate: Prop<Translate>,
     pub(super) rotate: Prop<f32>,
     pub(super) scale: Prop<Scale>,
     pub(super) pivot: Prop<Pivot>,
+}
+
+/// The two decorations a container rarely has. Boxed and absent by default,
+/// for the reason [`TransformProps`] above is.
+///
+/// What earns a place here is being **both large and rarely declared**. A
+/// `LinearGradient` is two colours and a direction and a `Shadow` is an offset,
+/// a blur, a spread and a colour — 36 bytes each, and since #450 a property
+/// field holds its value inline, so `Prop::Unset` occupies all 36 whether
+/// anything was declared or not. `backdrop_blur` is as rare and fails the other
+/// half at 12 bytes, so it stays where it is.
+#[derive(Default)]
+pub(super) struct DecorationProps {
+    pub(super) gradient: Prop<Option<LinearGradient>>,
+    pub(super) shadow: Prop<Shadow>,
 }
 
 bitflags::bitflags! {
@@ -407,11 +420,9 @@ pub struct Container {
     // Styling properties
     pub(super) padding: Prop<Padding>,
     pub(super) background: Prop<Color>,
-    pub(super) gradient: Prop<Option<LinearGradient>>,
     pub(super) corners: Prop<crate::widgets::Corners>,
     pub(super) border_width: Prop<f32>,
     pub(super) border_color: Prop<Color>,
-    pub(super) shadow: Prop<Shadow>,
     pub(super) width: Prop<Length>,
     pub(super) height: Prop<Length>,
     pub(super) overflow: Prop<Overflow>,
@@ -441,6 +452,7 @@ pub struct Container {
     pub(super) shadow_reach: Cell<f32>,
     pub(super) visible: Prop<bool>,
     pub(super) transform: Option<Box<TransformProps>>,
+    pub(super) decoration: Option<Box<DecorationProps>>,
 
     // Interaction state (callbacks, hover/press, state styles, ripple)
     // Only allocated when interaction features are used
@@ -491,11 +503,9 @@ impl Container {
             children_source,
             padding: Prop::Unset,
             background: Prop::Unset,
-            gradient: Prop::Unset,
             corners: Prop::Unset,
             border_width: Prop::Unset,
             border_color: Prop::Unset,
-            shadow: Prop::Unset,
             width: Prop::Unset,
             height: Prop::Unset,
             overflow: Prop::Unset,
@@ -503,6 +513,7 @@ impl Container {
             shadow_reach: Cell::new(0.0),
             visible: Prop::Unset,
             transform: None,
+            decoration: None,
             interaction: None,
             widget_ref: None,
             backdrop_blur: Prop::Unset,
@@ -585,6 +596,21 @@ impl Container {
     /// Get or create the transform components.
     fn transform_mut(&mut self) -> &mut TransformProps {
         self.transform.get_or_insert_with(Box::default)
+    }
+
+    /// Get or create the decoration group.
+    fn decoration_mut(&mut self) -> &mut DecorationProps {
+        self.decoration.get_or_insert_with(Box::default)
+    }
+
+    pub(super) fn gradient_prop(&self) -> Prop<Option<LinearGradient>> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.gradient)
+    }
+
+    pub(super) fn shadow_prop(&self) -> Prop<Shadow> {
+        self.decoration.as_deref().map_or(Prop::Unset, |d| d.shadow)
     }
 
     pub(super) fn translate_prop(&self) -> Prop<Translate> {
@@ -870,7 +896,7 @@ impl Container {
     ///     .gradient(move || expanded.get().then(|| palette.get()));
     /// ```
     pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
-        self.gradient = gradient.into_prop();
+        self.decoration_mut().gradient = gradient.into_prop();
         self
     }
 
@@ -1091,7 +1117,8 @@ impl Container {
     ///     .when_hovered(|s| s.shadow(LIFTED));
     /// ```
     pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
-        self.shadow = animated_properties::declare::shadow(&mut self.anims, shadow);
+        let declared = animated_properties::declare::shadow(&mut self.anims, shadow);
+        self.decoration_mut().shadow = declared;
         self
     }
 
