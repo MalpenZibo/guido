@@ -2,7 +2,7 @@
 //!
 //! These types allow configuring font family and weight on text widgets.
 
-use std::cell::RefCell;
+use std::sync::{LazyLock, RwLock};
 
 use cosmic_text::{Family, Weight};
 use rustc_hash::FxHashMap;
@@ -39,29 +39,38 @@ pub enum FontFamily {
     Name(FamilyId),
 }
 
-thread_local! {
-    /// Every family name this thread has been asked for, and never fewer.
-    ///
-    /// A cell of its own rather than a field of `AppState`, which is where
-    /// `docs/ARCHITECTURE.md` says new ambient state belongs. What makes
-    /// `AppState` safe is that `reset` empties *all* of it between
-    /// applications — and `tests/ambient_state_inventory.rs` refuses a field
-    /// that opts out, because opting out is how #372 happened. A `FontFamily`
-    /// is a value an application can still be holding after its `App` is
-    /// gone, and it is an index into this table, so emptying the table would
-    /// leave that index naming whatever the next application interned into
-    /// the slot: the same family, silently meaning something else. Nothing
-    /// else in `AppState` is reachable from a value that outlives it.
-    ///
-    /// Interning therefore lasts as long as the thread, as Blink's
-    /// `AtomicString` table lasts as long as the process.
-    ///
-    /// The names are leaked on the way in, which is what makes reading one
-    /// back a `&'static str` — a lifetime that needs nowhere to live. An
-    /// application names a handful of families and never unnames one, so the
-    /// table is bounded by the program text rather than by what it runs.
-    static FAMILIES: RefCell<FamilyTable> = RefCell::new(FamilyTable::default());
-}
+/// Every family name this process has been asked for, and never fewer.
+///
+/// **Not** a `thread_local!`, and not a field of `AppState` either, although
+/// `docs/ARCHITECTURE.md` says new ambient state belongs in the latter. Both
+/// have the same fault from opposite directions, and a `FontFamily` outlives
+/// them both:
+///
+/// - `AppState` is safe because `reset` empties *all* of it between
+///   applications, and `tests/ambient_state_inventory.rs` refuses a field that
+///   opts out — opting out is how #372 happened. But a `FontFamily` an
+///   application still holds is an index into this table, so a recycled slot
+///   would silently rename a family.
+/// - A thread's table would be worse. `FontFamily` is `Copy` and therefore
+///   `Send`, `create_signal` requires `Send`, and `WriteSignal` is `Send` on
+///   purpose so a background task can write — so
+///   `writer.set(FontFamily::name("Inter"))` from a service would mint an
+///   index in the worker's table and apply it on the main thread, where it
+///   names a different family or none at all. `to_cosmic` turns "none" into
+///   sans-serif, so the failure would be a silently wrong font.
+///
+/// Per-process is what Blink's `AtomicString` table is, for this reason.
+///
+/// The names are leaked on the way in, which is what makes reading one back a
+/// `&'static str` — a lifetime that needs nowhere to live, on any thread. An
+/// application names a handful of families and never unnames one, so the table
+/// is bounded by the program text rather than by what it runs.
+///
+/// The lock is not on a hot path: interning happens where a widget is built,
+/// and reading happens on the shaping paths, each of which is a cache miss
+/// about to run cosmic-text.
+static FAMILIES: LazyLock<RwLock<FamilyTable>> =
+    LazyLock::new(|| RwLock::new(FamilyTable::default()));
 
 #[derive(Default)]
 struct FamilyTable {
@@ -81,33 +90,38 @@ impl FontFamily {
     /// A family by name, interned.
     ///
     /// The same name always gives the same family, for the life of the
-    /// thread — including across an `App` being dropped and another built,
-    /// which is why the table it interns into is the one thing `AppState`
-    /// does not reset.
+    /// process — on any thread, and across an `App` being dropped and another
+    /// built. See [`FAMILIES`] for why it has to be both.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
     /// text("Hello").font_family(FontFamily::name("Inter"));
     /// ```
     pub fn name(name: &str) -> Self {
-        FontFamily::Name(FAMILIES.with_borrow_mut(|table| {
-            if let Some(&id) = table.ids.get(name) {
-                return id;
-            }
-            let leaked: &'static str = String::leak(name.to_owned());
-            let id = FamilyId(table.names.len() as u32);
-            table.names.push(leaked);
-            table.ids.insert(leaked, id);
-            id
-        }))
+        if let Some(&id) = FAMILIES.read().expect("family table").ids.get(name) {
+            return FontFamily::Name(id);
+        }
+        let mut table = FAMILIES.write().expect("family table");
+        // Read again: another thread may have interned it between the two.
+        if let Some(&id) = table.ids.get(name) {
+            return FontFamily::Name(id);
+        }
+        let leaked: &'static str = String::leak(name.to_owned());
+        let id = FamilyId(table.names.len() as u32);
+        table.names.push(leaked);
+        table.ids.insert(leaked, id);
+        FontFamily::Name(id)
     }
 
     /// The name this family was interned under, or `None` for a generic one.
     pub fn family_name(self) -> Option<&'static str> {
         match self {
-            FontFamily::Name(FamilyId(index)) => {
-                FAMILIES.with_borrow(|table| table.names.get(index as usize).copied())
-            }
+            FontFamily::Name(FamilyId(index)) => FAMILIES
+                .read()
+                .expect("family table")
+                .names
+                .get(index as usize)
+                .copied(),
             _ => None,
         }
     }
@@ -222,13 +236,20 @@ mod tests {
         assert_eq!(FontFamily::Monospace.family_name(), None);
     }
 
-    /// An id outlives the `App` that minted it.
+    /// An id outlives the `App` that minted it, and the thread that minted it.
     ///
-    /// The invariant the table's placement exists for — see `FAMILIES`, which
-    /// argues it. Without this, a `FontFamily` held across an application
-    /// boundary silently starts naming something else.
+    /// The two invariants the table's placement exists for — see [`FAMILIES`],
+    /// which argues both. Without the first, a `FontFamily` held across an
+    /// application boundary silently starts naming something else; without the
+    /// second, one written from a background task through a `WriteSignal` —
+    /// which is `Send` on purpose — names something else on the thread that
+    /// reads it.
     #[test]
-    fn an_id_survives_the_application_that_minted_it() {
+    fn an_id_survives_the_application_and_the_thread_that_minted_it() {
+        // A decoy first, so a worker with a table of its own would number
+        // "Iosevka" from zero and disagree — without it the two could agree by
+        // accident, and the assertion below would pin nothing.
+        let _decoy = FontFamily::name("a name nothing else in the suite uses");
         let before = FontFamily::name("Iosevka");
         crate::app_state::reset();
         assert_eq!(
@@ -237,5 +258,14 @@ mod tests {
             "the same name still means the same family"
         );
         assert_eq!(before.family_name(), Some("Iosevka"));
+
+        let elsewhere = std::thread::spawn(|| FontFamily::name("Iosevka"))
+            .join()
+            .expect("the worker interned a name");
+        assert_eq!(
+            elsewhere, before,
+            "and a family named on another thread is the same family here"
+        );
+        assert_eq!(elsewhere.family_name(), Some("Iosevka"));
     }
 }
