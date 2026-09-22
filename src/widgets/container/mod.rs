@@ -1438,8 +1438,8 @@ impl Widget for Container {
             return LayoutHints::default();
         }
         LayoutHints {
-            fill_width: self.width.get_or_untracked(Length::default()).fill,
-            fill_height: self.height.get_or_untracked(Length::default()).fill,
+            fill_width: self.width.get_or_untracked(Length::default()).is_fill(),
+            fill_height: self.height.get_or_untracked(Length::default()).is_fill(),
         }
     }
 
@@ -2050,7 +2050,7 @@ fn declare_size<M>(
     let (prop, ease) = value.into_animated().into_eased();
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
-    let resolved = |length: Length| length.exact.or(length.min).unwrap_or(0.0);
+    let resolved = |length: Length| length.exact_size().or(length.min()).unwrap_or(0.0);
     let installed = ease.map(|(config, enter_from)| {
         install(
             resolved(declared_seed(&prop)),
