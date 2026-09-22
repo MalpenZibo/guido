@@ -1,0 +1,128 @@
+name: Prepare release
+
+# The version bump, as a pull request, before any tag exists.
+#
+# It used to happen the other way round: publishing the draft cut the tag, and
+# the workflow the tag triggered wrote the bump afterwards and pushed it to
+# main. That order is why every tag from v0.2.0 to v0.6.0 carries the *previous*
+# version in its own Cargo.toml — `git checkout v0.6.0 && cargo build` builds a
+# crate calling itself 0.5.0, and a `{ git = ..., tag = "v0.6.0" }` dependency
+# resolves to 0.5.0 and refuses a `version = "0.6"` beside it. The published
+# crates were always right; only the tags disagreed with them.
+#
+# So the bump lands first, on main, through the same gate as everything else.
+# Publishing the draft then tags a commit that already says what it is, and
+# `publish.yml` has nothing left to write — it checks and publishes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to release, without the leading v (e.g. 0.7.0). Empty takes
+          the version Release Drafter resolved for the current draft, which is
+          the number the tag will use.
+        required: false
+        type: string
+
+permissions:
+  # `gh release list` reads the draft; `gh label create` is the Issues API,
+  # which is where labels live however little they look like issues.
+  contents: read
+  issues: write
+
+jobs:
+  prepare:
+    name: Open the release pull request
+    runs-on: ubuntu-latest
+    steps:
+      # PAT_TOKEN, not github.token: a pull request opened with the workflow
+      # token does not trigger workflows, so CI would never run on it and the
+      # `CI` context the main ruleset requires would stay pending forever. The
+      # token used to push the bump straight past branch protection; opening a
+      # pull request with it is strictly less than that.
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          token: ${{ secrets.PAT_TOKEN }}
+
+      # The draft's tag name is what the tag will actually be called, resolved
+      # by Release Drafter from the labels on everything merged since the last
+      # release. Reading it here is what keeps the bump and the tag talking
+      # about the same number; the input is the override for when they should
+      # not be.
+      - name: Work out the version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIVEN: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${GIVEN#v}"
+          if [ -z "$version" ]; then
+            version=$(gh release list --limit 30 --json isDraft,tagName \
+              --jq 'map(select(.isDraft)) | .[0].tagName // empty')
+            version="${version#v}"
+          fi
+          if [ -z "$version" ]; then
+            echo "::error::No draft release to take a version from, and none given."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-release
+
+      # `cargo release version` and nothing else: it carries the workspace
+      # version, the `version` requirement that pins guido-macros beside its
+      # path, and the lock file, which is every place the number is written.
+      # No tag, no publish, no push — those are not this workflow's to make.
+      - name: Set the version
+        run: cargo release version "${{ steps.version.outputs.version }}" --execute --no-confirm
+
+      # Nothing to bump means the bump already landed. Saying so beats opening
+      # an empty pull request that looks like the release was prepared.
+      - name: There has to be something to bump
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "::error::Cargo.toml is already at ${{ steps.version.outputs.version }} — nothing to prepare."
+            exit 1
+          fi
+          git --no-pager diff --stat
+
+      # The pull request is a release mechanism, not a change worth announcing
+      # in the notes it exists to produce. `skip-changelog` is in this repo's
+      # exclude-labels, which keeps it out of $CHANGES and out of the version
+      # resolver — without it the Cargo.toml edit reads as a dependency update
+      # and votes for a patch bump of the release it is preparing.
+      - name: The skip-changelog label has to exist to be applied
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create skip-changelog \
+            --description "Kept out of the release notes" \
+            --color ededed --force
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          branch: release/v${{ steps.version.outputs.version }}
+          base: main
+          commit-message: "chore: bump version to ${{ steps.version.outputs.version }}"
+          title: "chore: release v${{ steps.version.outputs.version }}"
+          labels: skip-changelog
+          delete-branch: true
+          body: |
+            Version bump for **v${{ steps.version.outputs.version }}**, opened by
+            the Prepare release workflow.
+
+            Merge this, then publish the drafted release. The tag is cut at
+            main's head, which this commit is, so the tag carries the version it
+            names — `publish.yml` refuses to publish if it does not.
+
+            Nothing here is hand-written: `cargo release version` produced it.

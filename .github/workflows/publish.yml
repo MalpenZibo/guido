@@ -1,5 +1,18 @@
 name: Publish to crates.io
 
+# Publishes the tag, and writes nothing.
+#
+# This workflow used to set the version itself: it checked out the tag, ran
+# `cargo release version`, committed the bump and pushed it to main, then
+# published. The bump could only ever land *after* the tag that triggered it,
+# which is why every tag up to v0.6.0 holds the version before its own. The
+# bump now arrives ahead of the tag through `prepare-release.yml`, so there is
+# nothing left here to write — and no reason for this job to hold a token that
+# can push to main.
+#
+# What remains is the check that the old order made impossible: a tag has to
+# carry the version it names.
+
 on:
   release:
     types: [published]
@@ -7,22 +20,38 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
+      # A release event puts github.ref at refs/tags/<tag>, so this is the
+      # tagged commit and nothing else.
       - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Before the system dependencies and before cargo-release: `cargo
+      # metadata --no-deps` only reads the manifests, so a tag that disagrees
+      # with itself is red in seconds rather than after a build. Refusing here
+      # costs a re-run; publishing 0.7.0 from a tree that says 0.6.0 costs a
+      # yanked version, because crates.io takes a version number once.
+      - name: The tag has to carry the version it names
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r '.packages[] | select(.name == "guido") | .version')
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} names $tag, but Cargo.toml at this commit says $crate."
+            echo "The bump has to land before the tag: run the 'Prepare release' workflow,"
+            echo "merge the pull request it opens, then publish the draft release so the tag"
+            echo "is cut at the bump commit. Nothing was published."
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} and Cargo.toml agree on $crate."
 
       - name: Install system dependencies
         run: |
@@ -34,17 +63,8 @@ jobs:
         with:
           tool: cargo-release
 
-      - name: Set version
-        run: cargo release version ${{ steps.version.outputs.version }} --execute --no-confirm
-
-      - name: Commit version bump
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}"
-          git push origin HEAD:main
-
+      # --allow-branch HEAD because a release event checks out a tag, which is
+      # a detached HEAD and no branch at all.
       - name: Publish workspace
         run: cargo release publish --workspace --execute --no-confirm --allow-branch HEAD
         env:
