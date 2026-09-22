@@ -62,15 +62,15 @@ impl Container {
     ) {
         let targets = [
             (
-                lengths.width.exact,
-                lengths.width.min,
-                lengths.width.max,
+                lengths.width.exact_size(),
+                lengths.width.min(),
+                lengths.width.max(),
                 content.width + lengths.padding.horizontal_total(),
             ),
             (
-                lengths.height.exact,
-                lengths.height.min,
-                lengths.height.max,
+                lengths.height.exact_size(),
+                lengths.height.min(),
+                lengths.height.max(),
                 content.height + lengths.padding.vertical_total(),
             ),
         ];

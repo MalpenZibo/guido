@@ -28,7 +28,7 @@
 
 use super::*;
 use crate::finite::FiniteOr;
-use crate::layout::Axis;
+use crate::layout::{Axis, Extent};
 use crate::tree::LayoutCtx;
 
 /// The container's own size declarations, resolved for one layout pass.
@@ -77,12 +77,12 @@ impl Container {
         let has_fixed_width = self
             .width
             .get_or_untracked(Length::default())
-            .exact
+            .exact_size()
             .is_some();
         let has_fixed_height = self
             .height
             .get_or_untracked(Length::default())
-            .exact
+            .exact_size()
             .is_some();
         let tight_width = constraints.min_width == constraints.max_width;
         let tight_height = constraints.min_height == constraints.max_height;
@@ -104,16 +104,8 @@ impl Container {
             self.overflow.get_or(Overflow::Visible),
         );
 
-        if let Some(f) = width.fraction
-            && constraints.max_width.is_finite()
-        {
-            width.exact = Some((constraints.max_width * f).max(0.0));
-        }
-        if let Some(f) = height.fraction
-            && constraints.max_height.is_finite()
-        {
-            height.exact = Some((constraints.max_height * f).max(0.0));
-        }
+        width.resolve_fraction(constraints.max_width);
+        height.resolve_fraction(constraints.max_height);
 
         // Event dispatch reads the resolved value from here rather than from
         // the signal, so it costs nothing on the pointer path.
@@ -147,17 +139,14 @@ impl Container {
     ) -> f32 {
         if let Some(anim) = anim
             && !anim.is_initial()
-            && length.exact.is_some()
+            && length.exact_size().is_some()
         {
             return anim.displayed_in(ctx);
         }
-        match length.exact {
-            Some(exact) => exact,
-            None => match length.max {
-                Some(max) => available.min(max),
-                None => available,
-            },
-        }
+        // No maximum is `f32::MAX`, so the `min` is the whole of the answer.
+        length
+            .exact_size()
+            .unwrap_or_else(|| length.clamp_max(available))
     }
 
     /// What the children are offered, where the first one starts, and the
@@ -202,20 +191,24 @@ impl Container {
 
         // Pass the effective minimum down so alignments like Center and End
         // know how much room they actually have to place children in.
-        let min_width = if lengths.width.exact.is_some() || lengths.width.fill {
+        let min_width = if lengths.width.settled_without_content() {
             max_width
         } else {
-            let effective = lengths.width.min.unwrap_or(0.0).max(constraints.min_width);
+            let effective = lengths
+                .width
+                .min()
+                .unwrap_or(0.0)
+                .max(constraints.min_width);
             (effective - padding.horizontal_total())
                 .max(0.0)
                 .min(max_width)
         };
-        let min_height = if lengths.height.exact.is_some() || lengths.height.fill {
+        let min_height = if lengths.height.settled_without_content() {
             max_height
         } else {
             let effective = lengths
                 .height
-                .min
+                .min()
                 .unwrap_or(0.0)
                 .max(constraints.min_height);
             (effective - padding.vertical_total())
@@ -309,7 +302,7 @@ impl Container {
             Axis::Vertical => a.height(),
         });
         let animating = anim.is_some_and(|a| a.is_animating());
-        let has_exact = length.exact.is_some();
+        let has_exact = length.exact_size().is_some();
 
         // Growing back to fit the content is the default; these are the cases
         // where the author asked for a smaller box on purpose.
@@ -328,21 +321,20 @@ impl Container {
             } else {
                 content.max(animated)
             }
-        } else if let Some(exact) = length.exact {
-            exact
-        } else if length.fill {
-            parent_max
         } else {
-            content
+            match length.extent() {
+                Extent::Exact(exact) => exact,
+                Extent::Fill => parent_max,
+                // A fraction was made exact by `resolve_fraction` before this
+                // ran, so reaching here means the constraints were unbounded
+                // and there was no share to take — which sizes to content, as
+                // an undeclared length does.
+                Extent::Auto | Extent::Fraction(_) => content,
+            }
         };
 
         // min/max apply on top of everything above, fill included.
-        if let Some(min) = length.min {
-            size = size.max(min);
-        }
-        if let Some(max) = length.max {
-            size = size.min(max);
-        }
+        size = length.clamp(size);
         if !allow_shrink && anim.is_none() && !has_exact {
             size = size.max(content);
         }

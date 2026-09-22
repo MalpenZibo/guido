@@ -6022,7 +6022,7 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         );
         finite("padding (laid out)", lengths.padding.channels().to_vec());
         let numbers = |l: crate::layout::Length| {
-            [l.min, l.max, l.exact, l.fraction]
+            [l.min(), l.max(), l.extent().declared_size()]
                 .into_iter()
                 .flatten()
                 .collect::<Vec<f32>>()
@@ -6451,5 +6451,55 @@ fn a_container_declaring_no_decoration_allocates_no_decoration() {
             .decoration
             .is_some(),
         "and so is declaring a gradient"
+    );
+}
+
+/// An unbounded axis stays unbounded when it passes through a length that
+/// declares no maximum.
+///
+/// A scrolled axis measures with `f32::INFINITY`, and a container that names no
+/// maximum has to hand that infinity on: every reader below asks
+/// `constraints.max_width.is_finite()` and takes a different branch when it is
+/// not — `text`, `image`, `text_input`, and `Length::resolve_fraction` itself.
+///
+/// `f32::MAX` is not a stand-in for infinity, which is the trap this test
+/// exists for. It is the identity of `f32::min` only over finite inputs:
+/// `INFINITY.min(f32::MAX)` is `f32::MAX`, so a sentinel chosen to make the
+/// clamp branch-free turns an unbounded axis into a very large finite one, and
+/// a `fill` or a `fraction` underneath lays out at 3.4e38 — a number that goes
+/// on to be vertex coordinates and a scroll extent.
+///
+/// No golden and no snapshot noticed when that happened, because no scenario
+/// laid a container out under an unbounded axis. This is that scenario.
+#[test]
+fn an_unbounded_axis_survives_a_length_that_declares_no_maximum() {
+    let mut h = H::new(
+        container()
+            .height(20.0)
+            .child(container().width(fill()).height(4.0)),
+    );
+    h.layout(Constraints::new(0.0, 0.0, f32::INFINITY, 100.0));
+
+    let bar = h.children()[0];
+    let width = h.tree.cached_size(bar).unwrap().width;
+    assert!(
+        width.is_infinite(),
+        "a fill of an unbounded axis is unbounded; got {width}, so the \
+         infinity became a finite number on the way down"
+    );
+
+    // And a fraction, which is the other reader of that same `is_finite`.
+    let mut h = H::new(
+        container()
+            .height(20.0)
+            .child(container().width(fraction(0.5)).height(4.0)),
+    );
+    h.layout(Constraints::new(0.0, 0.0, f32::INFINITY, 100.0));
+    let bar = h.children()[0];
+    let width = h.tree.cached_size(bar).unwrap().width;
+    assert_eq!(
+        width, 0.0,
+        "a fraction of an unbounded axis sizes to content: there is no share \
+         to take of a space nobody has measured"
     );
 }

@@ -65,7 +65,7 @@ pub(crate) trait FiniteOr<T> {
 impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Prop<T> {
     // Matching on `get` rather than reading through `get_or`, so `default` is
     // not cloned in order to be dropped. These run per property per container
-    // per painted frame, and a `Length` or a `Shadow` is 36 bytes of it.
+    // per painted frame, and a `Shadow` is 32 bytes of it.
     //
     // An undeclared property is `None` and falls back without a word: there is
     // no declaration to report.
@@ -167,10 +167,13 @@ impl<T: AllFinite> AllFinite for Option<T> {
 }
 
 impl AllFinite for crate::layout::Length {
-    /// Four optional numbers and a flag. An absent one cannot be bad, and
-    /// `fill` is not a number at all.
+    /// An extent that may carry a number, and two bounds that may be absent.
+    ///
+    /// The bounds are read back through `min()`/`max()` rather than off the
+    /// fields, so the sentinels — finite on purpose — are answered as the
+    /// absences they stand for rather than checked as the numbers they are.
     fn all_finite(&self) -> bool {
-        [self.min, self.max, self.exact, self.fraction]
+        [self.extent().declared_size(), self.min(), self.max()]
             .into_iter()
             .flatten()
             .all(f32::is_finite)
