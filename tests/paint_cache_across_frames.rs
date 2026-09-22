@@ -1124,3 +1124,84 @@ fn a_subtree_whose_ancestor_turned_is_not_reused() {
          under the turn"
     );
 }
+
+/// A frame flattens into the buffers the frame before it left behind.
+///
+/// The output buffers have always been the surface's, cleared and refilled;
+/// the intermediate the commands are grouped in was built and freed inside
+/// every painted frame — a vector of groups, five command buffers and five
+/// bounds per group, and a clip tree.
+///
+/// Reading the capacity after two frames of the same tree would ask nothing.
+/// The scratch is full of *this* frame's buffers when it is read, and two
+/// identical frames grow to identical capacities, so a `flatten_root_into`
+/// that threw the scratch away and default-constructed a new one on the way
+/// in would report exactly what a retained one reports.
+///
+/// What tells them apart is a frame that needs *less* than the one before it.
+/// The third here is one box, flattened through the surface's own scratch:
+/// retained, the scratch still holds what the two scrolling columns needed;
+/// rebuilt, it would hold what one box needs, which is almost nothing.
+///
+/// Two scrolling columns for the frames that fill it, because the scratch has
+/// four buffers and this fills all of them: the rows still in view are twenty
+/// commands, which is past the sixteen rects a `LayerBounds` holds inline, and
+/// the two scrollers put four clips in the clip tree.
+#[test]
+fn a_frame_flattens_into_the_buffers_the_last_one_left() {
+    let mut s = Surface::new(
+        two_columns(),
+        PAD + VIEWPORT + GAP + VIEWPORT + PAD,
+        PAD + CAPTION + CAPTION_GAP + VIEWPORT + PAD,
+    );
+
+    // The pointer resting on the second column's scrollbar: something is dirty
+    // every frame, so neither of the two is skipped for having nothing to do.
+    s.frame();
+    let poke = s.scroller(1);
+
+    s.frames(poke, 1);
+    let wide = s.scratch.capacity();
+    assert!(
+        !s.commands.is_empty(),
+        "the frame drew nothing, so there is nothing for the scratch to have held"
+    );
+    // `groups` is left out: a scratch that has never been used holds one
+    // group already, so it is the one number that says nothing here. It is
+    // covered by the equality below like the rest.
+    let ScratchCapacity {
+        commands,
+        rects,
+        clips,
+        ..
+    } = wide;
+    assert!(
+        commands > 0 && rects > 0 && clips > 0,
+        "the scratch the surface owns came out of the frame empty-handed \
+         ({wide:?}) — flatten never touched the one it was handed"
+    );
+
+    // One box, through the same scratch: no clip, no bounds to spill, one
+    // command. Everything it does not need it has to find already there.
+    let mut one_box = RenderNode::new(0);
+    one_box.bounds = Rect::new(0.0, 0.0, 10.0, 10.0);
+    one_box.commands.push(Rc::new(DrawCommand::rounded_rect(
+        one_box.bounds,
+        CLIPPED_FILL,
+        0.0,
+    )));
+    let _ = flatten_root_into(&one_box, &mut s.commands, &mut s.layers, &mut s.scratch);
+
+    assert_eq!(
+        s.commands.len(),
+        1,
+        "the narrow frame is meant to need next to nothing — a frame that \
+         needs as much as the last one cannot tell a kept buffer from a new one"
+    );
+    assert_eq!(
+        s.scratch.capacity(),
+        wide,
+        "the narrow frame left the scratch its own size, so the buffers the \
+         wide frames filled were given back and built again"
+    );
+}
