@@ -61,8 +61,9 @@ impl<T: Clone + 'static> Prop<T> {
     /// lives here and in [`get_untracked`](Prop::get_untracked), and nowhere
     /// else.
     // track_caller so the snapshot diagnostic names the widget code that read
-    // the property, not this helper. It propagates through the callers below,
-    // which carry the attribute for the same reason.
+    // the property, not this helper. `get_or` carries it too and so keeps
+    // naming its own caller; the untracked pair take no snapshot and need it
+    // no more than the trait they replace did.
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn get(&self) -> Option<T> {
         match self {

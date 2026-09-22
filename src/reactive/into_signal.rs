@@ -379,6 +379,12 @@ mod one_declaration_covers_every_form {
         source.into_signal().get()
     }
 
+    /// What a property setter actually *keeps*, which is the other half: a
+    /// value is kept as one, and the four reactive forms as a signal.
+    fn keep<M>(source: impl IntoSignal<Millimetres, M>) -> Prop<Millimetres> {
+        source.into_prop()
+    }
+
     /// One declaration, and the pair arrives in all five spellings a property
     /// accepts. Drop any impl the macro emits and this stops compiling — which
     /// is the whole point of the pair being declared once.
@@ -395,6 +401,36 @@ mod one_declaration_covers_every_form {
         assert_eq!(resolve(doubled), Millimetres(8.0), "a memo");
     }
 
+    /// And each form is kept as what it is: the value as a constant, the four
+    /// reactive ones as a signal.
+    ///
+    /// Compiling is not enough here, the way it is for the test above.
+    /// [`IntoSignal::into_prop`] has a default body, so an impl that forgets to
+    /// override it still builds and still answers — with `Prop::Reactive`,
+    /// which is correct and quietly claims the arena slot the whole of #450
+    /// exists to stop claiming. Only an assertion on the variant can see that.
+    #[test]
+    fn and_a_value_is_kept_as_a_value() {
+        let count = create_signal(4.0f32);
+        let read = count.read_only();
+        let doubled = create_memo(move || count.get() * 2.0);
+
+        assert!(
+            matches!(keep(4.0f32), Prop::Const(Millimetres(4.0))),
+            "a value"
+        );
+        assert!(
+            matches!(keep(move || 4.0f32), Prop::Reactive(_)),
+            "a closure"
+        );
+        assert!(matches!(keep(read), Prop::Reactive(_)), "a signal");
+        assert!(
+            matches!(keep(count), Prop::Reactive(_)),
+            "a writable signal"
+        );
+        assert!(matches!(keep(doubled), Prop::Reactive(_)), "a memo");
+    }
+
     /// The other shape, where std has no `From` and so the value form is the
     /// macro's to emit as well. `i64` is a source nothing else in the library
     /// converts from, so these five impls are the declaration below and
@@ -408,6 +444,10 @@ mod one_declaration_covers_every_form {
             source.into_signal().get()
         }
 
+        fn keep<M>(source: impl IntoSignal<f32, M>) -> Prop<f32> {
+            source.into_prop()
+        }
+
         #[test]
         fn arrives_in_every_form_too() {
             let count = create_signal(4i64);
@@ -419,6 +459,27 @@ mod one_declaration_covers_every_form {
             assert_eq!(resolve(read), 4.0, "a signal");
             assert_eq!(resolve(count), 4.0, "a writable signal");
             assert_eq!(resolve(doubled), 8.0, "a memo");
+        }
+
+        /// And the `as` arm's value form is kept as a constant. This is the one
+        /// the default body would swallow: `LossyMarker` has its own
+        /// `into_prop`, emitted by the same macro, and nothing else in the
+        /// crate reaches it — every container property test declares a value
+        /// that arrives through the `Into` blanket instead.
+        #[test]
+        fn and_the_widened_value_is_kept_as_a_value() {
+            let count = create_signal(4i64);
+            let read = count.read_only();
+            let doubled = create_memo(move || count.get() * 2);
+
+            assert!(matches!(keep(4i64), Prop::Const(4.0)), "a value");
+            assert!(matches!(keep(move || 4i64), Prop::Reactive(_)), "a closure");
+            assert!(matches!(keep(read), Prop::Reactive(_)), "a signal");
+            assert!(
+                matches!(keep(count), Prop::Reactive(_)),
+                "a writable signal"
+            );
+            assert!(matches!(keep(doubled), Prop::Reactive(_)), "a memo");
         }
     }
 }

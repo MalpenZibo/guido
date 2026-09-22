@@ -1252,6 +1252,10 @@ impl Container {
             // a derived signal would be a subscription to two values that
             // cannot change.
             (Prop::Const(own), Prop::Const(above)) => Prop::Const(own && above),
+            // At least one side is reactive, so the `&&` has to be asked each
+            // time. Neither is `Unset` — the two arms above took those — but
+            // `get_or` is how a `Prop` is read and the default it names is the
+            // one an undeclared control would have had.
             (own, above) => Prop::Reactive(create_derived(move || {
                 above.get_or(true) && own.get_or(true)
             })),
@@ -1944,10 +1948,11 @@ fn declared_motion<T: Animatable, M>(
     value: impl IntoAnimated<T, M>,
 ) -> (Prop<T>, Option<AnimationState<T>>) {
     let (prop, motion) = value.into_animated().into_parts();
-    // Inside the `map`, so a declaration with no motion — which is almost every
-    // one — never reads the value at all. For a `Reactive` prop that read is a
-    // full closure evaluation, and a list rebuild would run one per row per
-    // property for a seed nothing keeps.
+    // Inside the `map`, as it was when the value was a signal: a declaration
+    // with no motion — which is almost every one — never reads it at all, and
+    // for a reactive property that read is a whole closure evaluation. Writing
+    // it as `motion.zip(prop.get_untracked())`, which the optional value
+    // invites, would read on every declaration instead.
     let installed = motion.map(|motion| install(declared_seed(&prop), *motion));
     (prop, installed)
 }
