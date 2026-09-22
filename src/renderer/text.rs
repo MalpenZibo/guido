@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use glyphon::{
@@ -69,6 +69,21 @@ pub struct TextRenderState {
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,
+    /// Positions in the group's texts that the textured-quad path takes, and
+    /// what [`prepare_layer`](Self::prepare_layer) hands back.
+    ///
+    /// A field for the same reason `buffers` is one: the group it describes
+    /// lasts a frame, the container it needs does not have to.
+    transformed_indices: Vec<usize>,
+    /// Positions in the group's texts that glyphon draws, parallel to the
+    /// buffers this group pushed.
+    ///
+    /// Written in the one place a buffer is pushed, so the two lists cannot
+    /// come apart: a text area reads the entry and the buffer that was shaped
+    /// for it, and an early-out added later drops both or neither. The two
+    /// hash sets this replaces said the same thing by saying who was *left
+    /// out*, which every skipping branch then had to remember.
+    kept: Vec<usize>,
 }
 
 /// Whether a text lies entirely off one side of its clip, and so is not drawn
@@ -132,6 +147,8 @@ impl TextRenderState {
             viewport,
             buffer_cache: HashMap::new(),
             frame_keys: Vec::new(),
+            transformed_indices: Vec::new(),
+            kept: Vec::new(),
         }
     }
 
@@ -164,7 +181,9 @@ impl TextRenderState {
     ///
     /// `slot` selects the renderer, and with it when this text lands relative
     /// to the other groups; see [`render_slot`](Self::render_slot).
-    /// Returns the indices, within `texts`, that need the textured-quad path.
+    /// Returns the indices, within `texts`, that need the textured-quad path —
+    /// borrowed from the scratch they were sorted into, so the group's own
+    /// prepare is the one that reads them.
     pub fn prepare_layer(
         &mut self,
         slot: usize,
@@ -173,7 +192,7 @@ impl TextRenderState {
         texts: &[TextEntry],
         screen: (u32, u32),
         scale_factor: f32,
-    ) -> Vec<usize> {
+    ) -> &[usize] {
         let (screen_width, screen_height) = screen;
         while self.text_renderers.len() <= slot {
             self.text_renderers.push(TextRenderer::new(
@@ -187,10 +206,8 @@ impl TextRenderState {
         // group's own shaped buffers begin.
         let buffers_start = self.buffers.len();
 
-        // Collect indices of texts that have non-trivial transforms (for texture-based rendering)
-        let mut transformed_indices = Vec::new();
-        // Collect indices of texts that are completely outside their clip region (to skip entirely)
-        let mut culled_indices = HashSet::new();
+        self.transformed_indices.clear();
+        self.kept.clear();
 
         for (idx, entry) in texts.iter().enumerate() {
             // Text scaled to nothing is skipped before any work is done for
@@ -203,7 +220,6 @@ impl TextRenderState {
             if !entry.transform.is_identity() && !entry.transform.is_translation_only() {
                 let (sx, sy) = entry.transform.extract_scale_components();
                 if sx.abs() < 1e-3 || sy.abs() < 1e-3 {
-                    culled_indices.insert(idx);
                     continue;
                 }
             }
@@ -216,7 +232,6 @@ impl TextRenderState {
                 .is_some_and(|clip| falls_outside(laid_out, clip.world_aabb()))
             {
                 // Text is completely outside clip - skip it entirely
-                culled_indices.insert(idx);
                 continue;
             }
 
@@ -244,7 +259,7 @@ impl TextRenderState {
                 .clip
                 .is_some_and(|clip| !clip.box_cuts_like_the_shape(ink));
             if moved || box_will_not_do {
-                transformed_indices.push(idx);
+                self.transformed_indices.push(idx);
                 continue; // Skip transformed text in direct rendering
             }
 
@@ -286,19 +301,10 @@ impl TextRenderState {
                 buffer.shape_until_scroll(&mut self.font_system, true);
                 buffer
             };
+            self.kept.push(idx);
             self.frame_keys.push(key);
             self.buffers.push(buffer);
         }
-
-        // Filter to only non-transformed, non-culled texts for TextArea creation
-        // Use HashSet for O(1) lookup instead of Vec::contains which is O(n)
-        let transformed_set: HashSet<_> = transformed_indices.iter().copied().collect();
-        let non_transformed_texts: Vec<_> = texts
-            .iter()
-            .enumerate()
-            .filter(|(idx, _)| !transformed_set.contains(idx) && !culled_indices.contains(idx))
-            .map(|(_, entry)| entry)
-            .collect();
 
         // Destructured so the text areas can borrow the buffers immutably
         // while `prepare` takes the font system and atlas mutably.
@@ -309,11 +315,16 @@ impl TextRenderState {
             viewport,
             buffers,
             text_renderers,
+            kept,
             ..
         } = self;
 
-        let text_areas: Vec<TextArea> = non_transformed_texts
+        // Lazy rather than collected: glyphon takes an iterator, so the areas
+        // are built as it reads them and the borrow of `buffers` each one
+        // carries never has to outlive the call.
+        let text_areas = kept
             .iter()
+            .map(|&idx| &texts[idx])
             .zip(buffers[buffers_start..].iter())
             .map(|(entry, buffer)| {
                 // Position text in world space using the full transform.
@@ -365,8 +376,7 @@ impl TextRenderState {
                     ),
                     custom_glyphs: &[],
                 }
-            })
-            .collect();
+            });
 
         let result = text_renderers[slot].prepare(
             device,
@@ -382,7 +392,7 @@ impl TextRenderState {
             log::error!("Text prepare failed: {:?}", e);
         }
 
-        transformed_indices
+        &self.transformed_indices
     }
 
     /// Draw the text prepared into `slot`.
@@ -395,27 +405,190 @@ impl TextRenderState {
     }
 }
 
+/// A text entry with nothing but its box and its placement said.
+///
+/// Shared by every test module that needs one — `text_quad`'s sets its own
+/// `text` on top — rather than written out per module:
+/// `TextEntry` has nine public fields and no constructor, so a builder per
+/// module is a field list per module to keep in step.
 #[cfg(test)]
-mod laid_out_tests {
-    use super::laid_out_in;
+pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> TextEntry {
+    TextEntry {
+        text: "x".into(),
+        rect,
+        color: crate::widgets::Color::WHITE,
+        font_size: 16.0,
+        font_family: crate::widgets::FontFamily::default(),
+        font_weight: FontWeight::default(),
+        clip: None,
+        transform,
+        transform_origin: None,
+    }
+}
+
+/// The per-group scratch is grown once and then kept.
+///
+/// Capacity and not an allocation count: counting allocations needs an
+/// allocator this crate does not install (#461). What a capacity can say is
+/// that the container outlived the frame boundary, which is the whole of this
+/// change — and a local cannot be asked the question at all.
+///
+/// The second frame asks for *less* than the first, which is what makes the
+/// answer mean something: only a container that was cleared rather than
+/// dropped still has the first frame's room in it.
+///
+/// Five upright texts in that first frame, and not one or two, because a
+/// `Vec<usize>` allocates room for four on its first push however few things
+/// go into it. With fewer, `kept` reads 4 on a frame that keeps five and 4
+/// again on a rebuilt frame that keeps one, and that half of the assertion
+/// cannot fail. Five crosses the step to 8. `transformed_indices` needs no
+/// such help — it goes from one entry to none, so a rebuilt one reads 0.
+#[cfg(test)]
+mod scratch_survives_the_frame {
+    use super::{TextRenderState, test_entry};
+    use crate::renderer::GpuContext;
     use crate::renderer::types::TextEntry;
     use crate::transform::Transform;
-    use crate::widgets::font::FontWeight;
-    use crate::widgets::{Color, FontFamily, Rect};
+    use crate::widgets::Rect;
 
-    fn entry(rect: Rect, transform: Transform) -> TextEntry {
-        TextEntry {
-            text: "x".into(),
-            rect,
-            color: Color::WHITE,
-            font_size: 16.0,
-            font_family: FontFamily::default(),
-            font_weight: FontWeight::default(),
-            clip: None,
-            transform,
-            transform_origin: None,
+    #[test]
+    fn a_smaller_second_frame_still_has_the_first_frame_s_room() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let mut state =
+            TextRenderState::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+
+        /// What a `Vec<usize>` allocates for its first push.
+        const MIN_CAP: usize = 4;
+        /// Enough upright texts to take `kept` past that floor.
+        const UPRIGHT: usize = 5;
+
+        // Texts glyphon draws, and then one the quad path takes, so both
+        // lists are filled: `kept` holds the first five, `transformed_indices`
+        // the last.
+        let box_ = Rect::new(0.0, 0.0, 80.0, 20.0);
+        let mut texts: Vec<TextEntry> = (0..UPRIGHT)
+            .map(|_| test_entry(box_, Transform::default()))
+            .collect();
+        texts.push(test_entry(box_, Transform::scale(2.0)));
+
+        let frame = |state: &mut TextRenderState, texts: &[TextEntry]| {
+            state.begin_frame(&gpu.queue, (200, 100));
+            let transformed =
+                state.prepare_layer(0, &gpu.device, &gpu.queue, texts, (200, 100), 1.0);
+            let quads = transformed.to_vec();
+            state.end_frame();
+            quads
+        };
+
+        assert_eq!(
+            frame(&mut state, &texts),
+            [UPRIGHT],
+            "the scaled text goes to the quad path, and only it"
+        );
+        let first = (state.transformed_indices.capacity(), state.kept.capacity());
+        assert!(
+            first.0 > 0 && first.1 > MIN_CAP,
+            "five upright and one scaled should fill one list and grow the \
+             other past a fresh `Vec`'s floor: {first:?}"
+        );
+
+        // One upright text now, and nothing at all for the quad path.
+        assert_eq!(frame(&mut state, &texts[..1]), []);
+        assert_eq!(
+            (state.transformed_indices.capacity(), state.kept.capacity()),
+            first,
+            "the second frame reused the first frame's scratch"
+        );
+    }
+}
+
+/// What the scale-collapse cull decides, at the boundary and either side.
+///
+/// The one branch in `prepare_layer` that throws a text away before anything
+/// is done for it, and it has been wrong once already: it read the diagonal
+/// rather than the row norms, so a quarter turn — where `a` and `d` are both
+/// `cos θ` — was called a collapse and the label vanished at exactly 90° and
+/// 270°. `tests/text_at_angles.rs` counts the pixels that came back, which is
+/// what caught *that*, but pixels cannot see this branch invert: a text the
+/// cull lets through at zero scale draws a quad of zero width, so nothing
+/// appears either way and the only difference is the work done to produce
+/// nothing.
+///
+/// So this asks the decision rather than the picture. `||` read as `&&` keeps
+/// a text flattened on one axis, and the threshold read as `<=` or `==`
+/// changes the answer for a text sitting exactly on it — `1e-3` survives
+/// `scale_xy` and the row norm unchanged, so the boundary is a real value and
+/// not a hair either side of one.
+#[cfg(test)]
+mod a_text_is_culled_only_when_an_axis_has_collapsed {
+    use super::{TextRenderState, test_entry};
+    use crate::renderer::GpuContext;
+    use crate::transform::Transform;
+    use crate::widgets::Rect;
+
+    /// The scale at which a text stops being drawn, as `prepare_layer` spells
+    /// it.
+    const COLLAPSED: f32 = 1e-3;
+
+    #[test]
+    fn one_flattened_axis_is_enough_and_the_threshold_itself_is_not() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let mut state =
+            TextRenderState::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let box_ = Rect::new(0.0, 0.0, 80.0, 20.0);
+
+        // `true` where the text should be thrown away. Anything kept is a
+        // transformed text, so it leaves by the quad path rather than through
+        // glyphon.
+        let cases = [
+            (Transform::scale_xy(0.0, 1.0), true, "flat in x, whole in y"),
+            (Transform::scale_xy(1.0, 0.0), true, "whole in x, flat in y"),
+            (Transform::scale_xy(0.0, 0.0), true, "flat in both"),
+            (
+                Transform::scale_xy(COLLAPSED, 1.0),
+                false,
+                "x exactly at the threshold, which is not below it",
+            ),
+            (
+                Transform::scale_xy(1.0, COLLAPSED),
+                false,
+                "y exactly at the threshold",
+            ),
+            (
+                Transform::rotate(std::f32::consts::FRAC_PI_2),
+                false,
+                "a quarter turn, where the diagonal is zero and the scale is not",
+            ),
+        ];
+
+        for (transform, culled, what) in cases {
+            let texts = [test_entry(box_, transform)];
+            state.begin_frame(&gpu.queue, (200, 100));
+            let transformed =
+                state.prepare_layer(0, &gpu.device, &gpu.queue, &texts, (200, 100), 1.0);
+            let quads = transformed.to_vec();
+            let kept = state.kept.len();
+            state.end_frame();
+
+            assert_eq!(
+                quads.is_empty(),
+                culled,
+                "{what}: {quads:?} went to the quad path"
+            );
+            assert_eq!(kept, 0, "{what}: a transformed text never reaches glyphon");
         }
     }
+}
+
+#[cfg(test)]
+mod laid_out_tests {
+    use super::{laid_out_in, test_entry as entry};
+    use crate::transform::Transform;
+    use crate::widgets::Rect;
 
     /// The box a text was laid out in, carried through its placement.
     ///

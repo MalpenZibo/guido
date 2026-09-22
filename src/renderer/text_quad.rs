@@ -144,7 +144,13 @@ impl TextQuadRenderer {
         self.quad.set_screen_size(width, height);
     }
 
-    /// Prepare text entries for rendering as textured quads.
+    /// Prepare text entries for rendering as textured quads, appending them to
+    /// `out`.
+    ///
+    /// The caller's buffer rather than one of ours, for the reason
+    /// [`ImageQuadRenderer::prepare`](super::image_quad::ImageQuadRenderer::prepare)
+    /// gives: the frame keeps one `Vec` of quads that every group addresses by
+    /// range.
     pub fn prepare(
         &mut self,
         device: &Arc<Device>,
@@ -152,21 +158,18 @@ impl TextQuadRenderer {
         entries: &[TextEntry],
         indices: &[usize],
         scale_factor: f32,
-    ) -> Vec<PreparedTextQuad> {
+        out: &mut Vec<PreparedTextQuad>,
+    ) {
         self.frame_gen += 1;
-        let quads = indices
-            .iter()
-            .map(|&idx| {
-                let entry = &entries[idx];
-                self.render_text_to_quad(device, queue, entry, scale_factor)
-            })
-            .collect();
+        out.extend(indices.iter().map(|&idx| {
+            let entry = &entries[idx];
+            self.render_text_to_quad(device, queue, entry, scale_factor)
+        }));
         // Bounded cache: on overflow keep only the textures this frame used
         if self.text_cache.len() > 512 {
             let current = self.frame_gen;
             self.text_cache.retain(|_, c| c.last_used.get() == current);
         }
-        quads
     }
 
     /// Render a single text entry to a textured quad.
@@ -407,13 +410,13 @@ impl TextQuadRenderer {
 
         // Apply the full world_transform to get screen coordinates (logical)
         // Then multiply by scale_factor to get physical pixels
-        let screen_corners: Vec<(f32, f32)> = local_corners
-            .iter()
-            .map(|&(x, y)| {
-                let (sx, sy) = entry.transform.transform_point(x, y);
-                (sx * scale_factor, sy * scale_factor)
-            })
-            .collect();
+        // An array, as the image quad beside it already builds the same four:
+        // `collect` here put four tuples on the heap once per transformed text
+        // per frame, on the cache-hit path as well as the miss.
+        let screen_corners: [(f32, f32); 4] = local_corners.map(|(x, y)| {
+            let (sx, sy) = entry.transform.transform_point(x, y);
+            (sx * scale_factor, sy * scale_factor)
+        });
 
         // The clip's own space, like the image quad beside it: a turned clip
         // cuts the turned shape, and a rounded or squircle one cuts its corners
@@ -447,6 +450,67 @@ impl TextQuadRenderer {
     /// Render the prepared text quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedTextQuad]) {
         self.quad.draw(render_pass, quads);
+    }
+}
+
+/// The rasterized-texture cache gives back what a frame stopped asking for.
+///
+/// Every entry holds a GPU texture and a bind group, so a cache that only ever
+/// grows is a leak that the compositor, not the test suite, finds out about.
+/// What bounds it is the frame counter `prepare` advances: the sweep keeps the
+/// entries whose `last_used` is *this* frame, so a counter that stopped moving
+/// would match every entry ever made and keep the lot — and the sweep would
+/// still run, still look like eviction, and evict nothing.
+///
+/// The sweep only runs once the cache is over its bound, so two frames of one
+/// text each never reach it and nothing about the counter is observable there.
+/// Overflowing it is the whole setup.
+#[cfg(test)]
+mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
+    use super::TextQuadRenderer;
+    use crate::renderer::GpuContext;
+    use crate::renderer::text::test_entry;
+    use crate::transform::Transform;
+    use crate::widgets::Rect;
+
+    /// The size `prepare` lets the cache pass before it sweeps.
+    const BOUND: usize = 512;
+
+    #[test]
+    fn a_frame_that_overflows_it_keeps_only_its_own() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let mut renderer =
+            TextQuadRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        renderer.set_screen_size(200.0, 100.0);
+
+        // Small enough that a texture apiece is cheap; the count is the point.
+        let box_ = Rect::new(0.0, 0.0, 6.0, 6.0);
+        let labelled = |text: String| {
+            let mut entry = test_entry(box_, Transform::scale(2.0));
+            entry.text = text;
+            entry
+        };
+
+        let crowd: Vec<_> = (0..=BOUND).map(|i| labelled(i.to_string())).collect();
+        let every = (0..crowd.len()).collect::<Vec<_>>();
+        let mut quads = Vec::new();
+        renderer.prepare(&gpu.device, &gpu.queue, &crowd, &every, 1.0, &mut quads);
+        assert_eq!(
+            renderer.text_cache.len(),
+            BOUND + 1,
+            "one frame past the bound, and every texture in it is this frame's"
+        );
+
+        quads.clear();
+        let after = [labelled("a label the frame before never asked for".into())];
+        renderer.prepare(&gpu.device, &gpu.queue, &after, &[0], 1.0, &mut quads);
+        assert_eq!(
+            renderer.text_cache.len(),
+            1,
+            "the frame before rasterized {BOUND} textures nobody wants now"
+        );
     }
 }
 
