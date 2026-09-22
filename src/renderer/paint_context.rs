@@ -321,7 +321,7 @@ impl<'a> PaintContext<'a> {
             radius: radius.into(),
             curvature,
             border: None,
-            shadow: Some(shadow),
+            shadow: Some(Box::new(shadow)),
             gradient: None,
         }));
     }
@@ -344,8 +344,8 @@ impl<'a> PaintContext<'a> {
             radius: radius.into(),
             curvature,
             border,
-            shadow,
-            gradient,
+            shadow: shadow.map(Box::new),
+            gradient: gradient.map(Box::new),
         }));
     }
 

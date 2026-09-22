@@ -224,10 +224,18 @@ pub enum DrawCommand {
         curvature: f32,
         /// Optional border
         border: Option<Border>,
-        /// Optional shadow
-        shadow: Option<Shadow>,
-        /// Optional gradient (overrides solid color)
-        gradient: Option<Gradient>,
+        /// Optional shadow, behind a pointer.
+        ///
+        /// Boxed, with the gradient below it, for the reason the container
+        /// that emits this command boxes its own pair: 36 bytes each as an
+        /// `Option`, declared by about one shape in fifty, and every command
+        /// is an `Rc` — so inline they were 72 bytes of `None` inside a heap
+        /// allocation made once per command per paint. `border` stays inline
+        /// because the rule is large *and* rare, and a border is neither.
+        shadow: Option<Box<Shadow>>,
+        /// Optional gradient (overrides solid color), behind a pointer — see
+        /// `shadow` above.
+        gradient: Option<Box<Gradient>>,
     },
 
     /// Draw a circle (used for ripple effects).
@@ -377,5 +385,119 @@ impl DrawCommand {
             radius,
             color,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::types::GradientDir;
+    use crate::renderer::{PaintContext, RenderNode};
+    use crate::tree::Tree;
+
+    /// How many heap allocations a command's decorations cost.
+    fn decoration_boxes(cmd: &DrawCommand) -> usize {
+        match cmd {
+            DrawCommand::RoundedRect {
+                shadow, gradient, ..
+            } => shadow.is_some() as usize + gradient.is_some() as usize,
+            _ => 0,
+        }
+    }
+
+    /// A shadow and a gradient live behind a pointer, and a rect that declares
+    /// neither does not follow it.
+    ///
+    /// 72 bytes of `None` on every command of the commonest variant, for two
+    /// decorations the examples declare on about one shape in fifty — and
+    /// every command is an `Rc<DrawCommand>`, so those bytes are a heap
+    /// allocation, made once per command per paint.
+    #[test]
+    fn a_rounded_rect_declaring_no_decoration_allocates_no_decoration() {
+        // 96 is `DrawCommand`'s exact size today, written as a ceiling only
+        // so that shrinking it further needs no edit here. `RoundedRect` is
+        // the variant that sets it, and it is what this watches: un-boxing
+        // the two decorations costs 56 bytes and blows this.
+        //
+        // Unlike the `Container` ceiling this borrows its shape from, it is
+        // not a growth guard. `RoundedRect`'s fields stop four bytes short of
+        // 96 and the tag rides in that slack, so a 4-byte field added beside
+        // them keeps the enum at 96 and passes here; an 8-byte one takes it
+        // to 104 and does not. `TextBackdropBlur` is the next largest.
+        assert!(
+            size_of::<DrawCommand>() <= 96,
+            "72 bytes of shadow and gradient should be two 8-byte pointers: {} bytes",
+            size_of::<DrawCommand>()
+        );
+
+        let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(
+            decoration_boxes(&DrawCommand::rounded_rect(rect, Color::RED, 4.0)),
+            0,
+            "a plain rounded rect has nothing to decorate and allocates nothing for it"
+        );
+        assert_eq!(
+            decoration_boxes(&DrawCommand::rounded_rect_with_curvature(
+                rect,
+                Color::RED,
+                4.0,
+                2.0
+            )),
+            0,
+            "nor does a squircle"
+        );
+
+        // The decorated cases go through `PaintContext`, because that is where
+        // the boxing is: the two methods below are the only ones in the crate
+        // that put a shadow or a gradient into a command, and a literal built
+        // here would assert nothing but its own spelling.
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(crate::widgets::container()));
+        let mut node = RenderNode::new(0);
+        let mut ctx = PaintContext::new(&mut node, &tree, id);
+
+        ctx.draw_rounded_rect_with_shadow(
+            rect,
+            Color::RED,
+            4.0,
+            1.0,
+            Shadow::new((0.0, 2.0), 4.0, 0.0, Color::BLACK),
+        );
+        let gradient = Gradient {
+            start_color: Color::RED,
+            end_color: Color::BLUE,
+            direction: GradientDir::Horizontal,
+        };
+        ctx.draw_rounded_rect_full(rect, Color::RED, 4.0, 1.0, None, None, Some(gradient));
+        ctx.draw_rounded_rect_full(
+            rect,
+            Color::RED,
+            4.0,
+            1.0,
+            None,
+            Some(Shadow::new((0.0, 2.0), 4.0, 0.0, Color::BLACK)),
+            Some(gradient),
+        );
+
+        // One decoration is one allocation: the two fields are independent, so
+        // a shadow does not drag an empty gradient onto the heap beside it.
+        assert_eq!(
+            decoration_boxes(&node.commands[0]),
+            1,
+            "declaring a shadow is what allocates the box"
+        );
+        assert_eq!(
+            decoration_boxes(&node.commands[1]),
+            1,
+            "and so is declaring a gradient"
+        );
+        // What the two-box shape costs, said out loud: the shape that declares
+        // both pays twice, where one `Decoration` box would pay once. It saves
+        // the 98% a pointer they would otherwise follow through.
+        assert_eq!(
+            decoration_boxes(&node.commands[2]),
+            2,
+            "declaring both allocates one box each"
+        );
     }
 }

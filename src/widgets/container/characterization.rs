@@ -4445,7 +4445,7 @@ fn drawn_shadow(node: &RenderNode) -> Option<Shadow> {
         DrawCommand::RoundedRect {
             shadow: Some(shadow),
             ..
-        } => Some(*shadow),
+        } => Some(**shadow),
         _ => None,
     })
 }
@@ -6074,7 +6074,7 @@ fn painted_style(
                 border,
                 shadow,
                 ..
-            } => Some((*color, *radius, *border, *shadow)),
+            } => Some((*color, *radius, *border, shadow.as_deref().copied())),
             _ => None,
         })
         .expect("the container draws a rounded rect")
