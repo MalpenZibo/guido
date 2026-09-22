@@ -610,7 +610,7 @@ impl Renderer {
                         &self.device,
                         &self.queue,
                         &self.text_entry_buf,
-                        &transformed,
+                        transformed,
                         scale,
                     );
                     self.text_quads.extend(quads);
