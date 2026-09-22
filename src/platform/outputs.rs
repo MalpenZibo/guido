@@ -9,9 +9,9 @@
 //! a global is real, and only a global the compositor has just advertised is
 //! given one.
 
-use std::collections::HashMap;
 use std::hash::Hash;
 
+use rustc_hash::FxHashMap;
 use smithay_client_toolkit::{
     delegate_output,
     output::{OutputHandler, OutputState},
@@ -30,7 +30,7 @@ use smithay_client_toolkit::reexports::client::{
 pub struct OutputRegistry<K> {
     /// Stable OutputId for each wl_output global. Ids are never reused: a
     /// reconnected monitor gets a fresh id.
-    output_ids: HashMap<K, OutputId>,
+    output_ids: FxHashMap<K, OutputId>,
     /// Next OutputId to allocate.
     next_output_id: u32,
 }
@@ -40,7 +40,7 @@ pub struct OutputRegistry<K> {
 impl<K> Default for OutputRegistry<K> {
     fn default() -> Self {
         Self {
-            output_ids: HashMap::new(),
+            output_ids: FxHashMap::default(),
             next_output_id: 0,
         }
     }

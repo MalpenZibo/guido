@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
     Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
+use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue};
 
 use crate::widgets::Rect;
@@ -65,7 +65,7 @@ pub struct TextRenderState {
     /// several times in a frame (e.g. repeated list items) — with a
     /// single-entry cache the first occurrence consumed the only buffer and
     /// every duplicate re-shaped from scratch, every frame, forever.
-    buffer_cache: HashMap<u64, Vec<Buffer>>,
+    buffer_cache: FxHashMap<u64, Vec<Buffer>>,
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,
@@ -145,7 +145,7 @@ impl TextRenderState {
             text_renderers: vec![text_renderer],
             buffers: Vec::new(),
             viewport,
-            buffer_cache: HashMap::new(),
+            buffer_cache: FxHashMap::default(),
             frame_keys: Vec::new(),
             transformed_indices: Vec::new(),
             kept: Vec::new(),

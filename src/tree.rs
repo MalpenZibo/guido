@@ -250,7 +250,7 @@ pub struct Tree {
     /// Accumulated damage region for the current frame, keyed by the
     /// surface's root widget. Per-surface so that one surface's render
     /// cannot consume (or misreport) damage accumulated by another.
-    damage: std::collections::HashMap<WidgetId, DamageRegion>,
+    damage: rustc_hash::FxHashMap<WidgetId, DamageRegion>,
     /// What time it is, for the pass currently running.
     ///
     /// A frame advances every animation in it, and asking the clock once per
@@ -337,7 +337,7 @@ impl Tree {
             dense: Vec::new(),
             sparse: Vec::new(),
             free_indices: Vec::new(),
-            damage: std::collections::HashMap::new(),
+            damage: rustc_hash::FxHashMap::default(),
             frame_instant: None,
             pass: LayoutPass::Layout,
             pass_dependent: false,

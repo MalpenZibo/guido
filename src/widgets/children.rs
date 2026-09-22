@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
@@ -18,7 +19,7 @@ enum SegmentType {
     Dynamic {
         items_fn: Rc<dyn Fn() -> Vec<DynItem>>,
         /// Cached widget IDs by key (for reuse during reconciliation)
-        cached: HashMap<u64, WidgetId>,
+        cached: FxHashMap<u64, WidgetId>,
         /// Current keys in display order
         current_keys: Vec<u64>,
         /// Whether items_fn has run at least once. After the first run the
@@ -129,7 +130,7 @@ impl ChildrenSource {
     pub fn add_dynamic(&mut self, items_fn: impl Fn() -> Vec<DynItem> + 'static) {
         self.segments.push(SegmentType::Dynamic {
             items_fn: Rc::new(items_fn),
-            cached: HashMap::new(),
+            cached: FxHashMap::default(),
             current_keys: Vec::new(),
             has_run: false,
         });

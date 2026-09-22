@@ -9,9 +9,9 @@
 //! rules of that folding are `translate_touch`, which the handlers call once
 //! they have resolved the one thing that needs a compositor.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use rustc_hash::FxHashMap;
 use smithay_client_toolkit::{
     delegate_keyboard, delegate_pointer, delegate_seat, delegate_touch,
     seat::{
@@ -171,7 +171,7 @@ pub struct InputState {
     // Touch
     pub(super) touch: Option<wl_touch::WlTouch>,
     /// Fingers currently down: id → (surface, x, y).
-    pub(super) touch_fingers: HashMap<i32, (SurfaceId, f32, f32)>,
+    pub(super) touch_fingers: FxHashMap<i32, (SurfaceId, f32, f32)>,
     /// The finger driving pointer emulation (the first one down). Widgets
     /// only understand pointer events, so the primary finger synthesizes
     /// MouseMove/MouseDown/MouseUp — a tap becomes a click.
@@ -190,7 +190,7 @@ pub struct InputState {
     pub(super) modifiers: Modifiers,
     pub(super) keyboard_serial: u32,
     /// Track raw_code → Key for press/release matching (handles compose sequences)
-    pub(super) pressed_keys: HashMap<u32, Key>,
+    pub(super) pressed_keys: FxHashMap<u32, Key>,
     /// Key repeat runs on a calloop timer owned by the toolkit, armed with the
     /// rate and delay the compositor reports. The keyboard is created inside a
     /// seat capability callback, which has no other route to the loop.
@@ -212,14 +212,14 @@ impl InputState {
             pointer_over_surface: false,
             pointer_enter_serial: 0,
             touch: None,
-            touch_fingers: HashMap::new(),
+            touch_fingers: FxHashMap::default(),
             primary_finger: None,
             event_clock: None,
             cursor_shape_manager,
             keyboard: None,
             modifiers: Modifiers::default(),
             keyboard_serial: 0,
-            pressed_keys: HashMap::new(),
+            pressed_keys: FxHashMap::default(),
             loop_handle,
             latest_input_serial: 0,
         }
@@ -402,7 +402,7 @@ enum TouchEvent {
 /// finger drives, what a second one does, where a drag is delivered once it
 /// leaves the surface it started on.
 fn translate_touch(
-    fingers: &mut HashMap<i32, (SurfaceId, f32, f32)>,
+    fingers: &mut FxHashMap<i32, (SurfaceId, f32, f32)>,
     primary: &mut Option<i32>,
     event: TouchEvent,
 ) -> Vec<(SurfaceId, Instant, Event)> {
@@ -1380,7 +1380,7 @@ mod tests {
     /// remembers between messages.
     #[derive(Default)]
     struct Touch {
-        fingers: HashMap<i32, (SurfaceId, f32, f32)>,
+        fingers: FxHashMap<i32, (SurfaceId, f32, f32)>,
         primary: Option<i32>,
     }
 

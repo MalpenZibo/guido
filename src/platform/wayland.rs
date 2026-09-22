@@ -2,6 +2,7 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle,
 };
+use rustc_hash::FxHashMap;
 use smithay_client_toolkit::reexports::calloop::LoopHandle;
 use smithay_client_toolkit::reexports::client::{
     Connection, EventQueue, Proxy, QueueHandle,
@@ -34,7 +35,6 @@ use wayland_protocols::ext::background_effect::v1::client::{
 };
 
 use std::cell::Cell;
-use std::collections::HashMap;
 
 use super::backdrop::Backdrop;
 use super::input::InputState;
@@ -222,9 +222,9 @@ pub struct WaylandState {
     pub exit: bool,
     // Multi-surface tracking
     /// All surfaces indexed by SurfaceId
-    pub surfaces: HashMap<SurfaceId, WaylandSurfaceState>,
+    pub surfaces: FxHashMap<SurfaceId, WaylandSurfaceState>,
     /// Lookup from wl_surface ObjectId to SurfaceId
-    pub surface_lookup: HashMap<ObjectId, SurfaceId>,
+    pub surface_lookup: FxHashMap<ObjectId, SurfaceId>,
     /// Which surface currently has pointer focus
     pub current_pointer_surface: Option<SurfaceId>,
     /// Which surface currently has keyboard focus
@@ -356,8 +356,8 @@ pub fn create_wayland_app(
         seat_state,
         layer_shell,
         exit: false,
-        surfaces: HashMap::new(),
-        surface_lookup: HashMap::new(),
+        surfaces: FxHashMap::default(),
+        surface_lookup: FxHashMap::default(),
         current_pointer_surface: None,
         current_keyboard_surface: None,
         outputs: OutputRegistry::new(),

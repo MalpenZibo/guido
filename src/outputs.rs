@@ -46,7 +46,7 @@
 //! `surface_output(id)` reports which output a surface is currently shown on
 //! (tracked read — reactive when called inside a tracked closure).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::reactive::global::GlobalSignal;
 use crate::reactive::{RwSignal, Signal};
@@ -117,14 +117,14 @@ impl OutputInfo {
 /// Reactive list of connected outputs.
 static OUTPUTS: GlobalSignal<Vec<OutputInfo>> = GlobalSignal::new(Vec::new);
 /// Which output each surface is currently shown on (latest entered).
-static SURFACE_OUTPUTS: GlobalSignal<HashMap<SurfaceId, OutputId>> =
-    GlobalSignal::new(HashMap::new);
+static SURFACE_OUTPUTS: GlobalSignal<FxHashMap<SurfaceId, OutputId>> =
+    GlobalSignal::new(FxHashMap::default);
 
 fn outputs_signal() -> RwSignal<Vec<OutputInfo>> {
     OUTPUTS.get()
 }
 
-fn surface_outputs_signal() -> RwSignal<HashMap<SurfaceId, OutputId>> {
+fn surface_outputs_signal() -> RwSignal<FxHashMap<SurfaceId, OutputId>> {
     SURFACE_OUTPUTS.get()
 }
 

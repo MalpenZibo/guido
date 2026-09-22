@@ -90,7 +90,7 @@ struct TextCacheKey {
 /// Renderer for transformed text as textured quads.
 pub struct TextQuadRenderer {
     // Rasterized text textures reused across frames
-    text_cache: std::collections::HashMap<TextCacheKey, std::rc::Rc<CachedTextTexture>>,
+    text_cache: rustc_hash::FxHashMap<TextCacheKey, std::rc::Rc<CachedTextTexture>>,
     frame_gen: u64,
     // Text rendering (glyphon-based)
     font_system: FontSystem,
@@ -128,7 +128,7 @@ impl TextQuadRenderer {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "TextQuad"),
             font_system,
-            text_cache: std::collections::HashMap::new(),
+            text_cache: rustc_hash::FxHashMap::default(),
             frame_gen: 0,
             swash_cache,
             cache,

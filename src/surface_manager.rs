@@ -3,7 +3,7 @@
 //! This module provides types for managing the lifecycle of surfaces,
 //! including GPU initialization and widget layout.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::layout::Constraints;
 use crate::reactive::owner::{OwnerId, dispose_owner_now};
@@ -203,14 +203,14 @@ pub(crate) fn teardown_widget_subtree(tree: &mut Tree, root: WidgetId) {
 
 /// Manages all surfaces in the application.
 pub struct SurfaceManager {
-    surfaces: HashMap<SurfaceId, ManagedSurface>,
+    surfaces: FxHashMap<SurfaceId, ManagedSurface>,
 }
 
 impl SurfaceManager {
     /// Create a new empty surface manager.
     pub fn new() -> Self {
         Self {
-            surfaces: HashMap::new(),
+            surfaces: FxHashMap::default(),
         }
     }
 
