@@ -22,6 +22,12 @@ mod scripted;
 
 use guido::testing::Headless;
 
+/// The heap column has to be asked for here. A `#[global_allocator]` may only
+/// be set by the binary that links the program, so guido ships the allocator
+/// and installs nothing.
+#[global_allocator]
+static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
+
 /// As many frames per phase as `scroll_list` plays, so the two tables are read
 /// the same way.
 const FRAMES_PER_PHASE: usize = 60;

@@ -18,6 +18,9 @@
 //! produced it.
 //!
 //! Only counts, never microseconds — `scripted::Counts` says which is which.
+//! The heap figures are a third thing, and `scripted::Heap` says what about
+//! them holds: the counts repeat to within the handful the graphics driver's
+//! own threads add, and the live-byte levels are a level rather than a total.
 //!
 //! The file compiles the benchmark's own modules rather than a copy of them. A
 //! harness that watched a second implementation of the workload would be
@@ -37,10 +40,16 @@ const ROWS: usize = 200;
 /// Short, because the property is the script's determinism and not its length.
 const FRAMES_PER_PHASE: usize = 6;
 
+/// What a binary has to install for any of that to be counted at all. The
+/// library may not: a `#[global_allocator]` is the final binary's to choose.
+#[global_allocator]
+static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
+
 /// `None` on a machine with no adapter, which is a skip unless the job pointed
 /// at lavapipe says a skip is a failure — `common::headless` keeps that
 /// contract for every test that needs one.
 fn play(rows: usize) -> Option<scripted::Run> {
+    let _alone = common::one_play_at_a_time();
     let mut app = common::headless()?;
     let script = scripted::script(FRAMES_PER_PHASE);
     Some(scripted::play(
@@ -62,6 +71,61 @@ fn two_runs_of_the_same_script_agree_on_every_count() {
     assert_eq!(
         first.counts, second.counts,
         "the same script over the same tree did two different amounts of work"
+    );
+}
+
+/// And the same of what the frames cost the heap, which is the number the
+/// benchmark grew a fourth section for.
+///
+/// It is asserted apart from the counts above because it is not one: the
+/// counter is the whole process's, so the graphics driver's worker threads are
+/// in it and two plays agree within a margin rather than exactly. How wide a
+/// margin, and why it is not the same for a count of requests as for a count of
+/// bytes, is on `common::COUNTS_AGREE_TO` and `common::BYTES_AGREE_TO`.
+///
+/// A play is thrown away first, for the reason `scripted::play` throws away its
+/// first frame: the first play in a process pays for everything the process
+/// builds lazily — font caches, glyph atlases, the driver's own tables — and
+/// that was 39 allocations of 12238 here, which is not a measurement of the
+/// script. Every other test in this file compares counts, which those do not
+/// touch.
+#[test]
+fn two_runs_of_the_same_script_allocate_the_same_way() {
+    let Some(_warm) = play(ROWS) else {
+        return;
+    };
+    let first = play(ROWS).expect("the first run had an adapter");
+    let second = play(ROWS).expect("the first run had an adapter");
+
+    assert!(
+        first.heap.frame_allocations > 0,
+        "nothing was counted: this binary did not install guido::heap::CountingAllocator"
+    );
+    common::heap_figures_agree(
+        first.heap.frame_allocations,
+        second.heap.frame_allocations,
+        "allocations",
+        common::COUNTS_AGREE_TO,
+    );
+    common::heap_figures_agree(
+        first.heap.frame_bytes,
+        second.heap.frame_bytes,
+        "bytes",
+        common::BYTES_AGREE_TO,
+    );
+    // Both windows, because the section prints both under one header that says
+    // they repeat.
+    common::heap_figures_agree(
+        first.heap.play_allocations,
+        second.heap.play_allocations,
+        "allocations over the whole play",
+        100,
+    );
+    common::heap_figures_agree(
+        first.heap.play_bytes,
+        second.heap.play_bytes,
+        "bytes over the whole play",
+        common::BYTES_AGREE_TO,
     );
 }
 
@@ -109,6 +173,21 @@ fn a_longer_list_is_reported_as_more_work() {
         long.counts.window_children_total,
         short.counts.window_children_total
     );
+    // And the heap, on the same pair of runs: a figure that came back the same
+    // for four times the rows would satisfy every assertion above about
+    // repeating and be measuring nothing.
+    //
+    // The peak rather than the count, and that is the finding. Four times the
+    // rows is four times the widgets held at once, so the peak moves; the
+    // *count* barely does, because a scroller paints what its viewport shows
+    // and a longer list below it costs the frames nothing. 12238 allocations
+    // at 200 rows against 12200 at 800.
+    assert!(
+        long.heap.peak_live_bytes > short.heap.peak_live_bytes,
+        "four times the rows held {} bytes at their peak against {}",
+        long.heap.peak_live_bytes,
+        short.heap.peak_live_bytes
+    );
 }
 
 /// The table headed *"identical on every run of this revision"* makes a claim
@@ -128,6 +207,43 @@ fn the_table_that_says_it_repeats_repeats() {
         counts_table(&scripted::report(&second, ROWS)),
         "a column under the header that promises to repeat did not"
     );
+}
+
+/// The heap section is not under that header, and the tests above read the
+/// fields rather than the printed lines — so nothing said the printed lines
+/// carry the figures they are labelled with. A report that put the whole play's
+/// number under `heap.frame_allocations` would leave every assertion in this
+/// file green and give a person comparing two revisions the wrong number, which
+/// is exactly what the adapter test exists to stop for the GPU line.
+///
+/// Six names and six values, against the run they were taken from. `report` is
+/// one function and `static_clip` prints the same one, so once is enough.
+#[test]
+fn the_heap_section_prints_the_figure_each_of_its_names_promises() {
+    let Some(run) = play(ROWS) else {
+        return;
+    };
+    let report = scripted::report(&run, ROWS);
+    let heap = &run.heap;
+
+    for (name, value) in [
+        ("heap.frame_allocations", heap.frame_allocations as i64),
+        ("heap.frame_bytes", heap.frame_bytes as i64),
+        ("heap.play_allocations", heap.play_allocations as i64),
+        ("heap.play_bytes", heap.play_bytes as i64),
+        ("heap.peak_live_bytes", heap.peak_live_bytes as i64),
+        ("heap.retained_bytes", heap.retained_bytes),
+    ] {
+        let line = report
+            .lines()
+            .find(|line| line.trim_start().starts_with(name))
+            .unwrap_or_else(|| panic!("the report never names {name}"));
+        assert_eq!(
+            line.split_whitespace().nth(1),
+            Some(value.to_string().as_str()),
+            "{name} is printed as {line:?} and the run says {value}"
+        );
+    }
 }
 
 /// The lines of the report between the counts header and the phases that

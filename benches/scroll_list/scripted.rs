@@ -8,7 +8,12 @@
 //! number nobody can check.
 //!
 //! What repeats and what does not is the whole design, and it is written down
-//! on [`Counts`], on [`Run`] and on [`PhaseCost`], beside the fields it decides.
+//! on [`Counts`], on [`Run`], on [`PhaseCost`] and on [`Heap`], beside
+//! the fields it decides.
+//!
+//! The allocation figures are zero unless the binary installed
+//! [`guido::heap::CountingAllocator`] — a library may not — so each of the four
+//! binaries that compile this file does.
 
 use std::time::{Duration, Instant};
 
@@ -126,6 +131,62 @@ impl Counts {
     }
 }
 
+/// What the play cost the heap, over two windows.
+///
+/// Neither of the two beside it, which is why it is a third. [`Counts`] is
+/// scoped to what the *renderer* decided, and an allocation is not a decision
+/// it makes alone — the script's own bookkeeping and the driver's threads
+/// allocate inside a frame too. [`PhaseCost`] is a cost nothing can assert, and
+/// these repeat: the counts of allocations to a thousandth, because a request
+/// is a request whoever makes it, and the counts of bytes to a twentieth,
+/// because their *sizes* are partly the driver's — it sizes its own buffers,
+/// and it does so in steps. The repeatability tests hold them to exactly those
+/// margins, which is what a loaded machine leaves.
+///
+/// **Two windows, because a change lands in one of them.** The frame figures
+/// are the scripted frames' own, summed from one `render_stats` sample per
+/// frame; the play figures are everything from before the tree exists to the
+/// last frame. A change to what a frame does shows in both, and far more
+/// loudly in the first; a change to how a widget is *built* shows only in the
+/// second. One window would have hidden one of the two.
+///
+/// No `PartialEq`, deliberately. The live-byte fields are a level rather than
+/// a total and an equality assertion over them would be a flake.
+///
+/// Zero throughout unless the binary installed
+/// [`guido::heap::CountingAllocator`], which is a thing only a binary may do:
+/// both benchmarks and both repeatability tests install it.
+#[derive(Debug, Default, Clone)]
+pub struct Heap {
+    /// Times the scripted frames went to the allocator.
+    pub frame_allocations: u64,
+    /// And the bytes they asked for. A reallocation asks for the difference,
+    /// so a buffer that doubles its way up is counted once at its final size.
+    pub frame_bytes: u64,
+    /// Times the whole play did, the tree it scrolls included.
+    pub play_allocations: u64,
+    /// And its bytes.
+    pub play_bytes: u64,
+    /// The most bytes that were live at once during the play.
+    pub peak_live_bytes: usize,
+    /// What was still live when it ended.
+    pub retained_bytes: i64,
+}
+
+impl Heap {
+    fn add(&mut self, snapshot: &StatsSnapshot) {
+        self.frame_allocations += snapshot.allocations;
+        self.frame_bytes += snapshot.bytes_allocated;
+    }
+
+    fn close(&mut self, play: &guido::heap::Region) {
+        self.play_allocations = play.allocations();
+        self.play_bytes = play.bytes();
+        self.peak_live_bytes = play.peak_live_bytes();
+        self.retained_bytes = play.retained_bytes();
+    }
+}
+
 /// One phase's cost, one sample per painted frame, in microseconds.
 ///
 /// The samples are kept rather than folded into a running average, because the
@@ -172,6 +233,9 @@ pub struct Run {
     /// the CPU columns do not.
     pub adapter: String,
     pub counts: Counts,
+    /// What the play cost the heap — see [`Heap`] for why it is not in
+    /// [`Counts`].
+    pub heap: Heap,
     /// Of the frames that did not paint, the ones where the loop was woken,
     /// asked the tree, and found nothing to repaint.
     ///
@@ -222,6 +286,11 @@ where
     W: Widget + 'static,
     F: FnOnce() -> W,
 {
+    // From here, so that building the tree is inside the wider of the two
+    // windows: the rows are what the peak is mostly made of, and a revision
+    // that made one row cost twice as much allocates nowhere near a frame.
+    let play = guido::heap::Region::start();
+
     let (width, height) = viewport;
     let id = app.surface(
         SurfaceConfig::new()
@@ -264,6 +333,7 @@ where
         );
 
         run.counts.add(&snapshot);
+        run.heap.add(&snapshot);
         // A delta that painted nothing is a delta the scroller refused: it had
         // reached an end, and `apply_scroll` returns false rather than asking
         // for a frame.
@@ -279,6 +349,8 @@ where
             run.painted.push(snapshot);
         }
     }
+
+    run.heap.close(&play);
 
     run
 }
@@ -362,6 +434,26 @@ pub fn report(run: &Run, rows: usize) -> String {
         gpu.p95_us(),
         gpu.max_us()
     ));
+
+    let heap = &run.heap;
+    out.push_str(
+        "\nheap, over two windows: the scripted frames, and the whole play with \
+         the tree built inside it\n\
+         the counts of allocations repeat; the counts of bytes repeat to \
+         within a twentieth, because a\n\
+         driver sizing its own buffer moves them in steps; the live bytes are a \
+         level rather than a total\n",
+    );
+    for (name, value) in [
+        ("heap.frame_allocations", heap.frame_allocations as i64),
+        ("heap.frame_bytes", heap.frame_bytes as i64),
+        ("heap.play_allocations", heap.play_allocations as i64),
+        ("heap.play_bytes", heap.play_bytes as i64),
+        ("heap.peak_live_bytes", heap.peak_live_bytes as i64),
+        ("heap.retained_bytes", heap.retained_bytes),
+    ] {
+        out.push_str(&format!("  {name:<26} {value}\n"));
+    }
 
     out
 }
