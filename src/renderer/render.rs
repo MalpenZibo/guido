@@ -65,6 +65,8 @@ pub struct Renderer {
     text_entry_buf: Vec<TextEntry>,
     image_quads: Vec<PreparedImageQuad>,
     text_quads: Vec<PreparedTextQuad>,
+    /// What each group's draws address, one entry per group, rebuilt per frame.
+    prepared_layers: Vec<PreparedLayer>,
     backdrop: BackdropRenderer,
 
     // Screen dimensions
@@ -184,6 +186,7 @@ impl Renderer {
             text_entry_buf: Vec::new(),
             image_quads: Vec::new(),
             text_quads: Vec::new(),
+            prepared_layers: Vec::new(),
             backdrop,
             screen_width: 800.0,
             screen_height: 600.0,
@@ -398,7 +401,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        let prepared = self.prepare_layers(commands, layers);
+        self.prepare_layers(commands, layers);
 
         // A backdrop effect reads pixels already drawn, which a pass cannot do
         // to its own attachment: the frame goes to an offscreen target and is
@@ -447,7 +450,7 @@ impl Renderer {
             // Groups are drawn in order; within a group, bucket order. The
             // shape pipeline is re-bound per draw because the image and text
             // renderers replace it.
-            for (index, layer) in prepared.iter().enumerate() {
+            for (index, layer) in self.prepared_layers.iter().enumerate() {
                 if !layers[index].backdrop.is_empty() {
                     // The effect samples the target, so the pass has to end
                     // and its contents be stored before it can run.
@@ -530,20 +533,18 @@ impl Renderer {
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
     }
 
-    /// Resolve every group's GPU work before the pass opens.
+    /// Resolve every group's GPU work before the pass opens, into
+    /// `prepared_layers`.
     ///
     /// Uploads cannot happen inside a render pass, so all shaping, atlas
     /// packing and buffer writes are done here and the pass only issues draws.
-    fn prepare_layers(
-        &mut self,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
-    ) -> Vec<PreparedLayer> {
+    fn prepare_layers(&mut self, commands: &[FlattenedCommand], layers: &[CommandLayer]) {
         let scale = self.scale_factor;
 
         self.shape_instance_buf.clear();
         self.image_quads.clear();
         self.text_quads.clear();
+        self.prepared_layers.clear();
         self.image_quad_renderer.begin_frame();
         self.text_mask.begin_frame();
         self.text_state.begin_frame(
@@ -551,7 +552,6 @@ impl Renderer {
             (self.screen_width as u32, self.screen_height as u32),
         );
 
-        let mut prepared = Vec::with_capacity(layers.len());
         // Each group with directly-rendered text needs its own glyphon
         // renderer, so slots are handed out only to groups that have some.
         let mut next_text_slot = 0;
@@ -569,13 +569,13 @@ impl Renderer {
             if !layer.images.is_empty() {
                 self.image_quad_renderer
                     .set_screen_size(self.screen_width, self.screen_height);
-                let quads = self.image_quad_renderer.prepare(
+                self.image_quad_renderer.prepare(
                     &self.device,
                     &self.queue,
                     &commands[layer.images.clone()],
                     scale,
+                    &mut self.image_quads,
                 );
-                self.image_quads.extend(quads);
             }
             let images = images_start..self.image_quads.len();
 
@@ -606,14 +606,14 @@ impl Renderer {
                 if !transformed.is_empty() {
                     self.text_quad_renderer
                         .set_screen_size(self.screen_width, self.screen_height);
-                    let quads = self.text_quad_renderer.prepare(
+                    self.text_quad_renderer.prepare(
                         &self.device,
                         &self.queue,
                         &self.text_entry_buf,
                         transformed,
                         scale,
+                        &mut self.text_quads,
                     );
-                    self.text_quads.extend(quads);
                 }
             }
             let text_quads = text_quads_start..self.text_quads.len();
@@ -626,7 +626,7 @@ impl Renderer {
             );
             let overlay = overlay_start..self.shape_instance_buf.len() as u32;
 
-            prepared.push(PreparedLayer {
+            self.prepared_layers.push(PreparedLayer {
                 shapes,
                 images,
                 text_slot,
@@ -636,7 +636,6 @@ impl Renderer {
         }
 
         self.text_state.end_frame();
-        prepared
     }
 }
 
@@ -1201,5 +1200,87 @@ mod tests {
 
         assert_eq!(moved.spec.density, 2.0, "the surface scale, and no more");
         assert_eq!(turned.spec.density, 2.0 * TEXT_SUPERSAMPLE);
+    }
+
+    /// The frame's groups are prepared into a buffer the renderer keeps.
+    ///
+    /// The one container this change moved out of a local and into the
+    /// renderer, and so the one a later edit could put back without anything
+    /// noticing: `prepare_layers` fills it and the draw loop reads it a
+    /// hundred lines later, which compiles either way. Capacity across two
+    /// frames is what says it is still the same `Vec` — the mechanism, for the
+    /// reason the sibling test in `text.rs` gives.
+    ///
+    /// Five groups and then one, and neither number is arbitrary. A `Vec` of a
+    /// 64-byte element starts at capacity 4 however few things are pushed into
+    /// it, so a first frame of two groups and a rebuilt second frame of one
+    /// both read 4 and the test would pass against the very regression it is
+    /// here for. Five crosses that step to 8; one rebuilt would come back at
+    /// 4.
+    #[test]
+    fn the_frame_s_groups_are_prepared_into_a_buffer_the_renderer_keeps() {
+        /// What `Vec` allocates for the first push of an element this size.
+        const MIN_CAP: usize = 4;
+        assert!(std::mem::size_of::<PreparedLayer>() <= 1024);
+
+        let Some(gpu) = crate::or_skip(crate::renderer::GpuContext::try_new()) else {
+            return;
+        };
+        let mut renderer = Renderer::new(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let mut target = RenderTarget::offscreen(&gpu, 32, 32);
+
+        let box_at = |x: f32| FlattenedCommand {
+            command: Rc::new(DrawCommand::RoundedRect {
+                rect: Rect::new(x, 0.0, 10.0, 10.0),
+                color: crate::widgets::Color::WHITE,
+                radius: CornerRadii::uniform(0.0),
+                curvature: 1.0,
+                border: None,
+                shadow: None,
+                gradient: None,
+            }),
+            world_transform: Transform::IDENTITY,
+            world_transform_origin: None,
+            layer: RenderLayer::Shapes,
+            clip: None,
+        };
+        let commands: [FlattenedCommand; 5] = std::array::from_fn(|i| box_at(i as f32 * 12.0));
+        let group = |shapes: std::ops::Range<usize>| CommandLayer {
+            backdrop: 0..0,
+            shapes,
+            images: 0..0,
+            text: 0..0,
+            overlay: 0..0,
+        };
+        let layers: [CommandLayer; 5] = std::array::from_fn(|i| group(i..i + 1));
+
+        let mut frame = |renderer: &mut Renderer, layers: &[CommandLayer]| {
+            renderer.render(
+                &mut target,
+                &commands,
+                layers,
+                crate::widgets::Color::TRANSPARENT,
+            );
+        };
+
+        frame(&mut renderer, &layers);
+        let first = renderer.prepared_layers.capacity();
+        assert!(
+            first > MIN_CAP,
+            "five groups should have grown past a fresh `Vec`'s floor: {first}"
+        );
+
+        // One group this time. A `Vec` built per frame would come back at that
+        // floor; one that was cleared still has room for five.
+        frame(&mut renderer, &layers[..1]);
+        assert_eq!(
+            renderer.prepared_layers.capacity(),
+            first,
+            "the second frame reused the first frame's buffer"
+        );
     }
 }

@@ -493,18 +493,24 @@ impl ImageQuadRenderer {
         })
     }
 
-    /// Prepare image commands for rendering.
+    /// Prepare image commands for rendering, appending them to `out`.
+    ///
+    /// The caller's buffer rather than one of ours: every group's quads end up
+    /// in the same frame-long `Vec` addressed by range, so a `Vec` returned
+    /// here would be allocated per group only to be drained into that one.
     pub fn prepare(
         &mut self,
         device: &Device,
         queue: &Queue,
         commands: &[FlattenedCommand],
         scale_factor: f32,
-    ) -> Vec<PreparedImageQuad> {
-        commands
-            .iter()
-            .filter_map(|cmd| self.prepare_single(device, queue, cmd, scale_factor))
-            .collect()
+        out: &mut Vec<PreparedImageQuad>,
+    ) {
+        out.extend(
+            commands
+                .iter()
+                .filter_map(|cmd| self.prepare_single(device, queue, cmd, scale_factor)),
+        );
     }
 
     /// Prepare a single image command.
