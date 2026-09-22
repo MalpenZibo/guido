@@ -598,7 +598,7 @@ impl TextInput {
         self.cached_glyph_positions = crate::renderer::measure_char_positions_styled(
             display,
             font_size,
-            font_family,
+            *font_family,
             font_weight,
         );
         self.cached_text_width = self
@@ -763,7 +763,7 @@ impl TextInput {
                 display,
                 self.cached_font_size,
                 relative_x,
-                &self.cached_font_family,
+                self.cached_font_family,
                 self.cached_font_weight,
             );
         }
@@ -1445,7 +1445,7 @@ impl Widget for TextInput {
             text_bounds,
             drawn_color,
             self.cached_font_size,
-            self.cached_font_family.clone(),
+            self.cached_font_family,
             self.cached_font_weight,
             stroke,
             shadow,

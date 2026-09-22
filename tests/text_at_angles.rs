@@ -47,7 +47,7 @@ fn scene_with(build: impl Fn(Container) -> Container + 'static) -> impl Widget +
                 .layout(Flex::row())
                 .child(
                     text("HELLO")
-                        .font_family(FontFamily::Name(FONT_FAMILY.into()))
+                        .font_family(FontFamily::name(FONT_FAMILY))
                         .font_size(22.0)
                         .color(Color::WHITE),
                 ),

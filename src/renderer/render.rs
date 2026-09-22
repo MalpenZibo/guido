@@ -823,7 +823,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         spec: MaskSpec {
             text,
             font_size: *font_size,
-            font_family,
+            font_family: *font_family,
             font_weight: *font_weight,
             // Shaped by whichever path will draw the glyphs over the frost:
             // the two break their lines in different places, and the frost has
@@ -932,7 +932,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             rect: *rect,
             color: *color,
             font_size: *font_size,
-            font_family: font_family.clone(),
+            font_family: *font_family,
             font_weight: *font_weight,
             clip: cmd.clip(),
             transform: cmd.world_transform,

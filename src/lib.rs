@@ -61,21 +61,21 @@ use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 ///
 /// ```no_run
 /// # use guido::prelude::*;
-/// set_default_font_family(FontFamily::Name("Inter".into()));
+/// set_default_font_family(FontFamily::name("Inter"));
 /// ```
 pub fn set_default_font_family(family: FontFamily) {
-    with_app_state(|app| *app.default_font_family.borrow_mut() = family);
+    with_app_state(|app| app.default_font_family.set(family));
 }
 
 /// Get the current application-wide default font family.
 pub fn default_font_family() -> FontFamily {
-    with_app_state(|app| app.default_font_family.borrow().clone())
+    with_app_state(|app| app.default_font_family.get())
 }
 
 /// Load custom font data into the application.
 ///
 /// The font bytes will be loaded into all internal FontSystem instances,
-/// making the font available for use via `FontFamily::Name(...)`.
+/// making the font available for use via `FontFamily::name`.
 ///
 /// This should be called before creating any widgets or surfaces — and
 /// before *each* [`App::run`], not once for the process: the fonts belong to
@@ -2150,7 +2150,7 @@ impl App {
     /// # let config = SurfaceConfig::new();
     /// # let view = || text("hi");
     /// App::new()
-    ///     .default_font_family(FontFamily::Name("Inter".into()))
+    ///     .default_font_family(FontFamily::name("Inter"))
     ///     .run(|app| {
     ///         app.add_surface(config, view);
     ///     });
@@ -2604,10 +2604,10 @@ mod restart_tests {
     /// was a hand-written list of calls rather than a value.
     #[test]
     fn a_second_app_does_not_inherit_the_font_the_first_one_declared() {
-        let first = App::new().default_font_family(FontFamily::Name("Inter".into()));
+        let first = App::new().default_font_family(FontFamily::name("Inter"));
         assert_eq!(
             default_font_family(),
-            FontFamily::Name("Inter".into()),
+            FontFamily::name("Inter"),
             "the declaration reaches the widgets that will read it"
         );
         drop(first);

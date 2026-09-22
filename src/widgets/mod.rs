@@ -23,7 +23,7 @@ pub use container::{
 };
 pub use control::Control;
 pub use corners::Corners;
-pub use font::{FontFamily, FontWeight};
+pub use font::{FamilyId, FontFamily, FontWeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use into_child::{
     DynamicChildren, ForwardedChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,

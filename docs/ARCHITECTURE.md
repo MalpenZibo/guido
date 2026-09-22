@@ -442,6 +442,7 @@ promise this paragraph makes.
 | `CLOCKS` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about reading a clock outside its pass |
 | `STATS` | `src/render_stats.rs` | The `render-stats` feature only: counters bumped from every pass, compiled out otherwise |
 | `MODIFIERS` | `src/keyboard.rs` | `GlobalSignal`: the keyboard modifiers, read by any handler, which has no platform |
+| `FAMILIES` | `src/widgets/font.rs` | Interned font family names. Outside `APP` because a `FontFamily` an application still holds is an index into it, and `reset` would recycle the slot — the cell's own comment argues it |
 | `OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: the connected outputs, read by application code that decides which surfaces to spawn |
 | `SURFACE_OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: which output each surface is on, read through `surface_output` by code that holds only a `SurfaceId` |
 | `EFFECTS` | `src/compositor.rs` | `GlobalSignal`: what the compositor supports (blur), learned by the platform and read by widget code that has none |

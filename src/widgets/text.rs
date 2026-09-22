@@ -264,7 +264,7 @@ impl Widget for Text {
             &self.cached_text,
             self.cached_font_size,
             max_width,
-            &self.cached_font_family,
+            self.cached_font_family,
             self.cached_font_weight,
         );
 
@@ -347,7 +347,7 @@ impl Widget for Text {
                 radius,
                 stroke,
                 self.cached_font_size,
-                self.cached_font_family.clone(),
+                self.cached_font_family,
                 self.cached_font_weight,
             );
         }
@@ -356,7 +356,7 @@ impl Widget for Text {
             local_bounds,
             color,
             self.cached_font_size,
-            self.cached_font_family.clone(),
+            self.cached_font_family,
             self.cached_font_weight,
             if frosted { None } else { stroke },
             shadow,
@@ -1150,7 +1150,7 @@ mod tests {
                     ..
                 } = &**cmd
                 {
-                    return Some((font_family.clone(), *font_weight));
+                    return Some((*font_family, *font_weight));
                 }
             }
             node.children.iter().find_map(|c| find(c))
