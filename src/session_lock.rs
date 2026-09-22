@@ -21,7 +21,7 @@
 //! unlocking (it idles waiting for the next [`lock_session`] call) — unlike
 //! ordinary surfaces, closing lock surfaces never exits the app.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::app_state::with_app_state;
 use crate::outputs::{self, OutputId, OutputInfo};
@@ -54,7 +54,7 @@ pub(crate) struct LockData {
     /// session stays locked, so an output plugged in meanwhile gets a surface.
     factory: Option<LockWidgetFn>,
     /// Lock surface per output.
-    surfaces: HashMap<OutputId, SurfaceId>,
+    surfaces: FxHashMap<OutputId, SurfaceId>,
 }
 
 /// What the application last asked for, waiting for the state machine.

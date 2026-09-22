@@ -18,8 +18,9 @@
 
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
+
+use rustc_hash::FxHashMap;
 
 use super::owner::{OwnerId, under_scope};
 use super::runtime::SignalId;
@@ -42,7 +43,7 @@ pub(crate) struct SignalStorage {
     free_indices: Vec<u32>,
     /// Derived closures keyed by SignalId. When a signal has a derived closure,
     /// `.get()` calls the closure instead of reading from `slots`.
-    derived: HashMap<SignalId, Rc<dyn Any>>,
+    derived: FxHashMap<SignalId, Rc<dyn Any>>,
 }
 
 /// Briefly borrow storage to Rc::clone a signal's value handle.

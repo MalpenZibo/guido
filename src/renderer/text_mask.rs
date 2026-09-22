@@ -27,13 +27,13 @@
 //! and a red one is the same hole.
 
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
     Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
+use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 use crate::widgets::FontFamily;
@@ -145,7 +145,7 @@ impl Shaper {
 pub struct TextMaskRenderer {
     shaper: Option<Shaper>,
     format: TextureFormat,
-    masks: HashMap<MaskKey, Rc<CachedMask>>,
+    masks: FxHashMap<MaskKey, Rc<CachedMask>>,
     frame_gen: u64,
 }
 
@@ -154,7 +154,7 @@ impl TextMaskRenderer {
         Self {
             shaper: None,
             format,
-            masks: HashMap::new(),
+            masks: FxHashMap::default(),
             frame_gen: 0,
         }
     }

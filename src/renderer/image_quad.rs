@@ -3,10 +3,10 @@
 //! This module renders images as textured quads with full transform support
 //! (rotation, scale, translate). Textures are cached for performance.
 
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use rustc_hash::FxHashMap;
 use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroup, Buffer as WgpuBuffer, Device, Extent3d, Queue, RenderPass, Texture,
@@ -84,7 +84,7 @@ pub struct ImageQuadRenderer {
     quad: TexturedQuadPipeline,
 
     // Texture cache
-    texture_cache: HashMap<CacheKey, Arc<CachedTexture>>,
+    texture_cache: FxHashMap<CacheKey, Arc<CachedTexture>>,
     current_frame: u64,
     max_cache_size: usize,
 }
@@ -93,7 +93,7 @@ impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
-            texture_cache: HashMap::new(),
+            texture_cache: FxHashMap::default(),
             current_frame: 0,
             max_cache_size: 64,
         }
