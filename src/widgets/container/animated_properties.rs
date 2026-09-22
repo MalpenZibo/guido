@@ -549,7 +549,7 @@ macro_rules! emit_declare {
         pub(in crate::widgets::container) fn $name<M>(
             anims: &mut Option<Box<ContainerAnims>>,
             value: impl crate::animation::IntoAnimated<$decl, M>,
-        ) -> crate::reactive::Signal<$decl> {
+        ) -> crate::reactive::Prop<$decl> {
             declare_size(anims, value, AnimKind::$name, AnimSlot::$name)
         }
     };
@@ -557,7 +557,7 @@ macro_rules! emit_declare {
         pub(in crate::widgets::container) fn $name<M>(
             anims: &mut Option<Box<ContainerAnims>>,
             value: impl crate::animation::IntoAnimated<$decl, M>,
-        ) -> crate::reactive::Signal<$decl> {
+        ) -> crate::reactive::Prop<$decl> {
             declare_anim(anims, value, AnimKind::$name, AnimSlot::$name)
         }
     };

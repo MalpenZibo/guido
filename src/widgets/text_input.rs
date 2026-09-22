@@ -17,8 +17,8 @@ use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
-    CursorIcon, IntoSignal, OptionSignalExt, RwSignal, Signal, clipboard_copy, clipboard_paste,
-    has_focus, primary_copy, primary_paste, release_focus, request_focus, set_cursor,
+    CursorIcon, IntoSignal, Prop, RwSignal, clipboard_copy, clipboard_paste, has_focus,
+    primary_copy, primary_paste, release_focus, request_focus, set_cursor,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
@@ -45,12 +45,12 @@ use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget}
 pub(crate) struct InputStyle {
     /// Colour of the caret. Defaults to the resolved text colour — a field
     /// that only sets its text colour should not sprout a blue cursor.
-    pub(crate) cursor_color: Option<Signal<Color>>,
+    pub(crate) cursor_color: Prop<Color>,
     /// Colour of the selection band drawn behind the selected glyphs.
-    pub(crate) selection_color: Option<Signal<Color>>,
+    pub(crate) selection_color: Prop<Color>,
     /// Colour of the placeholder. Defaults to the text colour at reduced
     /// alpha — a placeholder is the same text, quieter.
-    pub(crate) placeholder_color: Option<Signal<Color>>,
+    pub(crate) placeholder_color: Prop<Color>,
 }
 
 /// Cursor blink interval in milliseconds
@@ -252,28 +252,28 @@ pub struct TextInput {
     cached_font_weight: FontWeight,
 
     // Password mode
-    password: Option<Signal<bool>>,
+    password: Prop<bool>,
     /// What `password` said when layout last read it, which is what the masked
     /// display and its measurements were built from.
     cached_password: bool,
-    mask_char: Option<Signal<char>>,
+    mask_char: Prop<char>,
     cached_mask_char: char,
 
     /// Whether the text refuses to change. Not the same as disabled: a
     /// read-only field still takes the focus, still says so, and still lets a
     /// selection be made and copied — it only refuses the edit.
-    readonly: Option<Signal<bool>>,
+    readonly: Prop<bool>,
 
     /// Whether a caret is drawn at all. Off costs nothing: no caret, no blink,
     /// nothing to wake the loop for.
-    caret: Option<Signal<bool>>,
+    caret: Prop<bool>,
     cached_caret: bool,
 
     /// Handle for application code to reach this input — to focus it, mostly.
     widget_ref: Option<WidgetRef>,
     /// Shown while the value is empty. Reactive: a prompt that changes — PAM
     /// asking a different question — changes what the empty field says.
-    placeholder: Option<Signal<String>>,
+    placeholder: Prop<String>,
 
     /// An unmade offer of the initial focus. Cleared once made, so autofocus is
     /// a *first layout* behaviour rather than something that fights the user on
@@ -339,15 +339,15 @@ impl TextInput {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
-            password: None,
+            password: Prop::Unset,
             cached_password: false,
-            mask_char: None,
+            mask_char: Prop::Unset,
             cached_mask_char: '•',
-            readonly: None,
-            caret: None,
+            readonly: Prop::Unset,
+            caret: Prop::Unset,
             cached_caret: true,
             widget_ref: None,
-            placeholder: None,
+            placeholder: Prop::Unset,
             autofocus_pending: false,
             selection: Selection::new(0),
             cursor_visible: true,
@@ -403,13 +403,13 @@ impl TextInput {
 
     /// Enable password mode (masks text with bullet characters)
     pub fn password<M>(mut self, enabled: impl IntoSignal<bool, M>) -> Self {
-        self.password = Some(enabled.into_signal());
+        self.password = enabled.into_prop();
         self
     }
 
     /// Set custom mask character for password mode (default: '•')
     pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
-        self.mask_char = Some(c.into_signal());
+        self.mask_char = c.into_prop();
         self
     }
 
@@ -448,7 +448,7 @@ impl TextInput {
     /// [`on_submit`](Self::on_submit), which is Qt's line and the one a caller
     /// can put its own guard behind.
     pub fn readonly<M>(mut self, readonly: impl IntoSignal<bool, M>) -> Self {
-        self.readonly = Some(readonly.into_signal());
+        self.readonly = readonly.into_prop();
         self
     }
 
@@ -478,7 +478,7 @@ impl TextInput {
     ///
     /// Reactive, so a prompt that changes changes the empty field with it.
     pub fn placeholder<M>(mut self, text: impl IntoSignal<String, M>) -> Self {
-        self.placeholder = Some(text.into_signal());
+        self.placeholder = text.into_prop();
         self
     }
 
@@ -502,7 +502,7 @@ impl TextInput {
     /// where the rest of the declared values are read, so a field can be told
     /// to stop drawing one without being rebuilt and losing its focus.
     pub fn caret<M>(mut self, caret: impl IntoSignal<bool, M>) -> Self {
-        self.caret = Some(caret.into_signal());
+        self.caret = caret.into_prop();
         self
     }
 
@@ -829,7 +829,7 @@ impl TextInput {
     /// a field told to freeze must be frozen for the very next key rather than
     /// for the frame after the next pass.
     fn refuses_edits(&self) -> bool {
-        self.readonly.as_ref().is_some_and(|r| r.get_untracked())
+        self.readonly.get_or_untracked(false)
     }
 
     fn insert_text(&mut self, text: &str, edit: Edit) {
@@ -1272,19 +1272,19 @@ impl TextInput {
 
     /// Colour of the caret.
     pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().cursor_color = Some(color.into_signal());
+        self.input_style_mut().cursor_color = color.into_prop();
         self
     }
 
     /// Colour of the selection band behind the selected glyphs.
     pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().selection_color = Some(color.into_signal());
+        self.input_style_mut().selection_color = color.into_prop();
         self
     }
 
     /// Colour of the placeholder.
     pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().placeholder_color = Some(color.into_signal());
+        self.input_style_mut().placeholder_color = color.into_prop();
         self
     }
 }
@@ -1370,17 +1370,23 @@ impl Widget for TextInput {
             // Only when there is nothing to show instead. Read inside the
             // tracking scope like every other paint input, so a prompt that
             // changes repaints the field.
+            // The emptiness test first: reading the prop clones the prompt out
+            // and subscribes to it, and a field with content shows no prompt —
+            // so doing it the other way round allocates a `String` per paint
+            // and repaints a field for a prompt it is not displaying.
             let placeholder = self
-                .placeholder
-                .filter(|_| self.cached_value.is_empty())
-                .map(|signal| {
+                .cached_value
+                .is_empty()
+                .then(|| self.placeholder.get())
+                .flatten()
+                .map(|placeholder| {
                     let color = input.placeholder_color.get_or(Color::rgba(
                         text_color.r,
                         text_color.g,
                         text_color.b,
                         text_color.a * PLACEHOLDER_ALPHA,
                     ));
-                    (signal.get(), color)
+                    (placeholder, color)
                 });
             (
                 text_color,

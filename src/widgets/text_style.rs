@@ -55,7 +55,7 @@ use smallvec::SmallVec;
 use crate::clock::FrameInstant;
 use crate::finite::{FiniteOr, first_finite_override};
 use crate::jobs::RequiredJob;
-use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
+use crate::reactive::{IntoSignal, OptionSignalExt, Prop, Signal};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
@@ -227,17 +227,21 @@ pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct TextStyle {
     /// Colour of the glyphs.
-    pub color: Option<Signal<Color>>,
+    pub color: Prop<Color>,
     /// Font size in logical pixels.
-    pub font_size: Option<Signal<f32>>,
+    pub font_size: Prop<f32>,
     /// Font family.
+    ///
+    /// The one property still holding a signal for a constant. `Prop<T>` keeps
+    /// the value inline, and `FontFamily` is not `Copy`, so a `Prop` here would
+    /// take `Copy` off this public type — see #452.
     pub font_family: Option<Signal<FontFamily>>,
     /// Font weight on the CSS 100-900 scale.
-    pub font_weight: Option<Signal<FontWeight>>,
+    pub font_weight: Prop<FontWeight>,
     /// Contour drawn around the glyphs, under the fill.
-    pub stroke: Option<Signal<TextStroke>>,
+    pub stroke: Prop<TextStroke>,
     /// Soft shadow cast by the glyphs.
-    pub shadow: Option<Signal<TextShadow>>,
+    pub shadow: Prop<TextShadow>,
 }
 
 /// What a widget's text declarations come to: its own, and the active state
@@ -266,26 +270,26 @@ pub struct TextStyle {
 #[derive(Default)]
 pub(crate) struct ResolvedTextStyle {
     /// Active overrides, nearest first.
-    color_overrides: SmallVec<[Signal<Color>; 3]>,
-    font_size_overrides: SmallVec<[Signal<f32>; 3]>,
+    color_overrides: SmallVec<[Prop<Color>; 3]>,
+    font_size_overrides: SmallVec<[Prop<f32>; 3]>,
     /// The widget's own declaration, which every override falls through to and
     /// where the door reports.
-    color: Option<Signal<Color>>,
-    font_size: Option<Signal<f32>>,
+    color: Prop<Color>,
+    font_size: Prop<f32>,
     font_family: Option<Signal<FontFamily>>,
-    font_weight: Option<Signal<FontWeight>>,
-    stroke: Option<Signal<TextStroke>>,
-    shadow: Option<Signal<TextShadow>>,
+    font_weight: Prop<FontWeight>,
+    stroke: Prop<TextStroke>,
+    shadow: Prop<TextShadow>,
 }
 
 impl ResolvedTextStyle {
     /// Add an active override, further out than every one already added.
     pub(crate) fn push_override(&mut self, style: &TextStyle) {
-        if let Some(color) = style.color {
-            self.color_overrides.push(color);
+        if style.color.is_set() {
+            self.color_overrides.push(style.color);
         }
-        if let Some(font_size) = style.font_size {
-            self.font_size_overrides.push(font_size);
+        if style.font_size.is_set() {
+            self.font_size_overrides.push(style.font_size);
         }
         self.take_unset(style);
     }
@@ -332,12 +336,12 @@ impl ResolvedTextStyle {
 
     /// The contour drawn around the glyphs, if one is declared.
     pub(crate) fn stroke(&self) -> Option<TextStroke> {
-        self.stroke.map(|s| s.get())
+        self.stroke.get()
     }
 
     /// The shadow cast by the glyphs, if one is declared.
     pub(crate) fn shadow(&self) -> Option<TextShadow> {
-        self.shadow.map(|s| s.get())
+        self.shadow.get()
     }
 }
 
@@ -600,12 +604,12 @@ macro_rules! declares_text_style {
                 mut self,
                 color: impl $crate::animation::IntoAnimated<$crate::widgets::Color, M>,
             ) -> Self {
-                let signal = $crate::widgets::container::declare(
+                let declared = $crate::widgets::container::declare(
                     &mut self.$anims,
                     color,
                     |a: &mut $crate::widgets::text_style::TextAnims| &mut a.color,
                 );
-                self.text_style_mut().color = Some(signal);
+                self.text_style_mut().color = declared;
                 self
             }
 
@@ -614,12 +618,12 @@ macro_rules! declares_text_style {
                 mut self,
                 size: impl $crate::animation::IntoAnimated<f32, M>,
             ) -> Self {
-                let signal = $crate::widgets::container::declare(
+                let declared = $crate::widgets::container::declare(
                     &mut self.$anims,
                     size,
                     |a: &mut $crate::widgets::text_style::TextAnims| &mut a.font_size,
                 );
-                self.text_style_mut().font_size = Some(signal);
+                self.text_style_mut().font_size = declared;
                 self
             }
 
@@ -637,7 +641,7 @@ macro_rules! declares_text_style {
                 mut self,
                 weight: impl $crate::reactive::IntoSignal<$crate::widgets::FontWeight, M>,
             ) -> Self {
-                self.text_style_mut().font_weight = Some(weight.into_signal());
+                self.text_style_mut().font_weight = weight.into_prop();
                 self
             }
 
@@ -656,7 +660,7 @@ macro_rules! declares_text_style {
                 mut self,
                 stroke: impl $crate::reactive::IntoSignal<$crate::widgets::TextStroke, M>,
             ) -> Self {
-                self.text_style_mut().stroke = Some(stroke.into_signal());
+                self.text_style_mut().stroke = stroke.into_prop();
                 self
             }
 
@@ -665,7 +669,7 @@ macro_rules! declares_text_style {
                 mut self,
                 shadow: impl $crate::reactive::IntoSignal<$crate::widgets::TextShadow, M>,
             ) -> Self {
-                self.text_style_mut().shadow = Some(shadow.into_signal());
+                self.text_style_mut().shadow = shadow.into_prop();
                 self
             }
         }
@@ -697,13 +701,13 @@ impl TextStyle {
     /// let _ = text("label").when_hovered(|s| s.color(HOT.transition(80.0)));
     /// ```
     pub fn color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.color = Some(color.into_signal());
+        self.color = color.into_prop();
         self
     }
 
     /// Font size in logical pixels.
     pub fn font_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.font_size = Some(size.into_signal());
+        self.font_size = size.into_prop();
         self
     }
 
@@ -715,7 +719,7 @@ impl TextStyle {
 
     /// Font weight on the CSS 100-900 scale.
     pub fn font_weight<M>(mut self, weight: impl IntoSignal<FontWeight, M>) -> Self {
-        self.font_weight = Some(weight.into_signal());
+        self.font_weight = weight.into_prop();
         self
     }
 
@@ -731,13 +735,13 @@ impl TextStyle {
 
     /// Contour drawn around the glyphs, under the fill.
     pub fn text_stroke<M>(mut self, stroke: impl IntoSignal<TextStroke, M>) -> Self {
-        self.stroke = Some(stroke.into_signal());
+        self.stroke = stroke.into_prop();
         self
     }
 
     /// Soft shadow cast by the glyphs.
     pub fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
-        self.shadow = Some(shadow.into_signal());
+        self.shadow = shadow.into_prop();
         self
     }
 }

@@ -2,7 +2,7 @@
 
 use super::widget::{Point, Rect};
 use crate::clock::{EventInstant, FrameInstant};
-use crate::reactive::{IntoSignal, Signal};
+use crate::reactive::{IntoSignal, Prop};
 use crate::widgets::{Color, Container};
 
 /// Axis for scrollbar calculations (vertical or horizontal)
@@ -131,12 +131,12 @@ fn pill() -> crate::widgets::Corners {
 /// Everything else here is declared and therefore reactive.
 pub struct Scroll {
     pub(crate) axis: ScrollAxis,
-    pub(crate) visibility: Option<Signal<ScrollbarVisibility>>,
-    pub(crate) width: Option<Signal<f32>>,
-    pub(crate) hover_width: Option<Signal<f32>>,
-    pub(crate) margin: Option<Signal<f32>>,
-    pub(crate) min_handle_size: Option<Signal<f32>>,
-    pub(crate) reserve_gutter: Option<Signal<bool>>,
+    pub(crate) visibility: Prop<ScrollbarVisibility>,
+    pub(crate) width: Prop<f32>,
+    pub(crate) hover_width: Prop<f32>,
+    pub(crate) margin: Prop<f32>,
+    pub(crate) min_handle_size: Prop<f32>,
+    pub(crate) reserve_gutter: Prop<bool>,
     pub(crate) track: Option<Box<dyn Fn(Container) -> Container>>,
     pub(crate) handle: Option<Box<dyn Fn(Container) -> Container>>,
 }
@@ -145,12 +145,12 @@ impl Scroll {
     fn new(axis: ScrollAxis) -> Self {
         Self {
             axis,
-            visibility: None,
-            width: None,
-            hover_width: None,
-            margin: None,
-            min_handle_size: None,
-            reserve_gutter: None,
+            visibility: Prop::Unset,
+            width: Prop::Unset,
+            hover_width: Prop::Unset,
+            margin: Prop::Unset,
+            min_handle_size: Prop::Unset,
+            reserve_gutter: Prop::Unset,
             track: None,
             handle: None,
         }
@@ -173,13 +173,13 @@ impl Scroll {
 
     /// Whether the scrollbar is drawn. Hidden still scrolls.
     pub fn visibility<M>(mut self, visibility: impl IntoSignal<ScrollbarVisibility, M>) -> Self {
-        self.visibility = Some(visibility.into_signal());
+        self.visibility = visibility.into_prop();
         self
     }
 
     /// The width of the track and handle at rest.
     pub fn width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
-        self.width = Some(width.into_signal());
+        self.width = width.into_prop();
         self
     }
 
@@ -188,25 +188,25 @@ impl Scroll {
     /// Not a `when_hovered(|s| s.width(..))`: the growth is a scale animation on
     /// the handle, so it belongs to the geometry rather than to the styling.
     pub fn hover_width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
-        self.hover_width = Some(width.into_signal());
+        self.hover_width = width.into_prop();
         self
     }
 
     /// The gap between the scrollbar and the container's edges.
     pub fn margin<M>(mut self, margin: impl IntoSignal<f32, M>) -> Self {
-        self.margin = Some(margin.into_signal());
+        self.margin = margin.into_prop();
         self
     }
 
     /// How short the handle is allowed to get, so it stays grabbable.
     pub fn min_handle_size<M>(mut self, size: impl IntoSignal<f32, M>) -> Self {
-        self.min_handle_size = Some(size.into_signal());
+        self.min_handle_size = size.into_prop();
         self
     }
 
     /// Whether the scrollbar takes space from the content or floats over it.
     pub fn reserve_gutter<M>(mut self, reserve: impl IntoSignal<bool, M>) -> Self {
-        self.reserve_gutter = Some(reserve.into_signal());
+        self.reserve_gutter = reserve.into_prop();
         self
     }
 

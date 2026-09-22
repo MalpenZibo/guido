@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
+use crate::reactive::{IntoSignal, Prop, Signal};
 use crate::renderer::PaintContext;
 use crate::tree::LayoutCtx;
 
@@ -107,7 +107,7 @@ pub enum ContentFit {
 /// ```
 pub struct Image {
     source: Signal<ImageSource>,
-    content_fit: Option<Signal<ContentFit>>,
+    content_fit: Prop<ContentFit>,
     /// Read under layout tracking, and used again by paint on the same frame.
     cached_content_fit: ContentFit,
     /// Cached intrinsic size from the image source
@@ -121,7 +121,7 @@ impl Image {
     pub fn new<M>(source: impl IntoSignal<ImageSource, M>) -> Self {
         Self {
             source: source.into_signal(),
-            content_fit: None,
+            content_fit: Prop::Unset,
             cached_content_fit: ContentFit::default(),
             intrinsic_size: None,
             cached_source: None,
@@ -130,7 +130,7 @@ impl Image {
 
     /// Set the content fit mode.
     pub fn content_fit<M>(mut self, fit: impl IntoSignal<ContentFit, M>) -> Self {
-        self.content_fit = Some(fit.into_signal());
+        self.content_fit = fit.into_prop();
         self
     }
 

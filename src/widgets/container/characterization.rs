@@ -18,7 +18,7 @@ use crate::animation::{Animate, Keyframes, Repeat, SpringConfig, TimingFunction,
 use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
-use crate::reactive::create_signal;
+use crate::reactive::{Signal, create_signal};
 use crate::renderer::{DrawCommand, RenderNode};
 use crate::widgets::CornerRadii;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
@@ -3644,8 +3644,8 @@ fn a_state_override_replaces_the_whole_corner_shape() {
     let hovered = c.interaction.as_ref().expect("a hover layer").states[0]
         .1
         .corners
-        .expect("which declares a shape")
-        .get_untracked();
+        .get_untracked()
+        .expect("which declares a shape");
 
     assert_eq!(hovered.curvature, 1.0, "rounded, not squircle");
     assert_eq!(hovered.radii.top_left, 20.0);
@@ -6141,6 +6141,57 @@ macro_rules! emit_property_tests {
                     );
                 }
 
+                /// A plain value claims no signal slot; the same value
+                /// behind a closure claims exactly one.
+                ///
+                /// Both halves matter. That the constant is free is the claim;
+                /// that the closure still costs a slot is what says the test
+                /// is looking at the declaration at all, and not at a tree
+                /// that happens to allocate nothing.
+                ///
+                /// The two trees are the same recipe, so whatever the recipe
+                /// builds around the declaration — a child, a sibling, the
+                /// container's own slot — cancels, and the difference is the
+                /// declaration alone. `slot_count` counts every slot ever
+                /// allocated, so a constant that reaches `alloc_slot` shows up
+                /// whether or not it is later disposed.
+                ///
+                /// Over the table rather than once, because the eleven
+                /// properties do not share a setter — `width` and `height` go
+                /// through `declare_size` and the other nine through
+                /// `declare_anim`, and a constant that stays free in one is no
+                /// evidence about the other.
+                #[test]
+                fn a_constant_claims_no_slot_where_a_closure_claims_one() {
+                    use crate::reactive::storage::slot_count;
+                    let value = $value;
+
+                    // Built and dropped once before either measurement, so
+                    // whatever a first container in a fresh runtime sets up is
+                    // behind both of them. `$declared_as` is substituted at
+                    // each use rather than bound to a name: a closure is not
+                    // generic, so one binding could not take a value here and
+                    // a closure below.
+                    drop(($declared_as)(value($from)));
+
+                    let mark = slot_count();
+                    drop(($declared_as)(value($from)));
+                    let constant = slot_count() - mark;
+
+                    let mark = slot_count();
+                    drop(($declared_as)(move || value($from)));
+                    let reactive = slot_count() - mark;
+
+                    assert_eq!(
+                        constant,
+                        reactive - 1,
+                        "{}: a constant declaration must claim no slot, and a \
+                         closure must claim one — got {constant} against \
+                         {reactive}",
+                        stringify!($name),
+                    );
+                }
+
                 emit_timeline_test!(
                     $timeline, $name, $value, $declared_as, $probe, $from, $to, $base
                 );
@@ -6150,3 +6201,49 @@ macro_rules! emit_property_tests {
 }
 
 crate::widgets::container::animated_properties::animated_properties!(emit_property_tests);
+
+/// Seven constant properties on a container cost what the bare container costs.
+///
+/// The per-property test above asks one question of each of the eleven; this
+/// asks the question #450 was opened about, which is what a *row of a list*
+/// costs. Six is the number the ablation in that issue measured — 194 MB
+/// against 149 MB at twenty thousand rows, and the 45 MB between them was
+/// these. Seven rather than six only because a border declares its width and
+/// its colour in the one call.
+///
+/// The container's own slot is on the other side of the comparison rather than
+/// asserted away: a bare `container()` claims one, and that is the ~1.08 KB
+/// base the issue names as a non-goal.
+#[test]
+fn a_container_of_constants_costs_what_an_empty_one_costs() {
+    use crate::reactive::storage::slot_count;
+    use crate::widgets::{Color, Corners, Padding};
+
+    let furnish = || {
+        container()
+            .width(200.0)
+            .height(100.0)
+            .padding(Padding::all(8.0))
+            .background(Color::RED)
+            .corners(Corners::rounded(4.0))
+            .border(2.0, Color::BLACK)
+    };
+
+    // Once through first, so a fresh runtime's own setup is behind both marks.
+    drop(furnish());
+
+    let mark = slot_count();
+    drop(container());
+    let bare = slot_count() - mark;
+
+    let mark = slot_count();
+    drop(furnish());
+    let furnished = slot_count() - mark;
+
+    assert_eq!(
+        furnished,
+        bare,
+        "seven constant properties claimed {} slots between them",
+        furnished - bare
+    );
+}
