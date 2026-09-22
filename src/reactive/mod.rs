@@ -11,6 +11,7 @@ pub mod into_signal;
 pub mod invalidation;
 pub mod memo;
 pub mod owner;
+pub mod prop;
 pub mod runtime;
 pub mod service;
 pub mod signal;
@@ -39,6 +40,7 @@ pub use into_signal::{
     ValueMarker,
 };
 pub use into_signal::{IntoSignal, IntoVal};
+pub use prop::Prop;
 // The scope a widget opens around its own signal reads. Public because a
 // widget written outside the crate needs it: without one, its reads attribute
 // to the nearest ancestor that opened a scope — its parent container — so a

@@ -1,4 +1,5 @@
 use super::memo::Memo;
+use super::prop::Prop;
 use super::signal::{RwSignal, Signal, create_derived, create_stored};
 
 // ============================================================================
@@ -26,6 +27,24 @@ pub struct MemoMarker;
 /// closures, signals, and memos each use a distinct marker.
 pub trait IntoSignal<T: Clone + 'static, M = ValueMarker> {
     fn into_signal(self) -> Signal<T>;
+
+    /// The same declaration, as a property keeps it.
+    ///
+    /// A property that never changes has no use for the arena a signal lives
+    /// in, and this is where that is decided — off the marker, which already
+    /// says which of the five spellings arrived, so no runtime question is
+    /// asked and none could be. The default is the reactive answer, and the
+    /// two impls that know they were handed a plain value override it; a new
+    /// impl that forgets to is reactive, which is correct and merely costs a
+    /// slot, rather than constant, which would be wrong.
+    ///
+    /// See [`Prop`] for what the slot was costing.
+    fn into_prop(self) -> Prop<T>
+    where
+        Self: Sized,
+    {
+        Prop::Reactive(self.into_signal())
+    }
 }
 
 // ============================================================================
@@ -67,6 +86,10 @@ impl<T> IntoVal<Option<T>> for T {
 impl<T: Clone + 'static, I: Into<T>> IntoSignal<T, ValueMarker> for I {
     fn into_signal(self) -> Signal<T> {
         create_stored(self.into())
+    }
+
+    fn into_prop(self) -> Prop<T> {
+        Prop::Const(self.into())
     }
 }
 
@@ -163,6 +186,10 @@ macro_rules! converts {
         impl $crate::reactive::IntoSignal<$to, $crate::reactive::LossyMarker> for $from {
             fn into_signal(self) -> $crate::reactive::Signal<$to> {
                 $crate::reactive::create_stored(self as $to)
+            }
+
+            fn into_prop(self) -> $crate::reactive::Prop<$to> {
+                $crate::reactive::Prop::Const(self as $to)
             }
         }
     )*};
