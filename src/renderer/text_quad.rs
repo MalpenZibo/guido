@@ -410,13 +410,13 @@ impl TextQuadRenderer {
 
         // Apply the full world_transform to get screen coordinates (logical)
         // Then multiply by scale_factor to get physical pixels
-        let screen_corners: Vec<(f32, f32)> = local_corners
-            .iter()
-            .map(|&(x, y)| {
-                let (sx, sy) = entry.transform.transform_point(x, y);
-                (sx * scale_factor, sy * scale_factor)
-            })
-            .collect();
+        // An array, as the image quad beside it already builds the same four:
+        // `collect` here put four tuples on the heap once per transformed text
+        // per frame, on the cache-hit path as well as the miss.
+        let screen_corners: [(f32, f32); 4] = local_corners.map(|(x, y)| {
+            let (sx, sy) = entry.transform.transform_point(x, y);
+            (sx * scale_factor, sy * scale_factor)
+        });
 
         // The clip's own space, like the image quad beside it: a turned clip
         // cuts the turned shape, and a rounded or squircle one cuts its corners
