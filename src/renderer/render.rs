@@ -583,7 +583,7 @@ impl Renderer {
             self.text_entry_buf.extend(
                 commands[layer.text.clone()]
                     .iter()
-                    .filter_map(command_to_text_entry),
+                    .filter_map(TextEntry::from_command),
             );
             let text_quads_start = self.text_quads.len();
             let mut text_slot = None;
@@ -905,7 +905,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
 
             Some(instance)
         }
-        // Text commands are handled separately via command_to_text_entry
+        // Text commands are handled separately via `TextEntry::from_command`
         DrawCommand::Text { .. } => None,
         // Filters the target rather than adding geometry; handled between
         // draw groups, not as an instance.
@@ -914,31 +914,6 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
         DrawCommand::InputRegion { .. } => None,
         // Image commands are handled separately via ImageQuadRenderer
         DrawCommand::Image { .. } => None,
-    }
-}
-
-/// Convert a text command to a TextEntry for text rendering.
-fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
-    match &*cmd.command {
-        DrawCommand::Text {
-            text,
-            rect,
-            color,
-            font_size,
-            font_family,
-            font_weight,
-        } => Some(TextEntry {
-            text: text.clone(),
-            rect: *rect,
-            color: *color,
-            font_size: *font_size,
-            font_family: *font_family,
-            font_weight: *font_weight,
-            clip: cmd.clip(),
-            transform: cmd.world_transform,
-            transform_origin: cmd.world_transform_origin,
-        }),
-        _ => None,
     }
 }
 
@@ -954,7 +929,7 @@ mod tests {
     fn frosted(rect: Rect, transform: Transform) -> FlattenedCommand {
         FlattenedCommand {
             command: Rc::new(DrawCommand::TextBackdropBlur {
-                text: "09:41".to_owned(),
+                text: "09:41".into(),
                 stroke: None,
                 rect,
                 radius: 10.0,

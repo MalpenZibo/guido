@@ -27,7 +27,7 @@ fn drawn(widget: impl Widget + 'static) -> Vec<(String, Color)> {
 fn collect(node: &RenderNode, out: &mut Vec<(String, Color)>) {
     for cmd in &node.commands {
         if let DrawCommand::Text { text, color, .. } = &**cmd {
-            out.push((text.clone(), *color));
+            out.push((text.to_string(), *color));
         }
     }
     for child in &node.children {

@@ -396,7 +396,7 @@ impl<'a> PaintContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_backdrop_blur(
         &mut self,
-        text: &str,
+        text: impl Into<Rc<str>>,
         rect: Rect,
         radius: f32,
         stroke: Option<TextStroke>,
@@ -404,13 +404,14 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
     ) {
+        let text = text.into();
         if text.is_empty() || radius <= 0.0 {
             return;
         }
         self.node
             .commands
             .push(Rc::new(DrawCommand::TextBackdropBlur {
-                text: text.to_owned(),
+                text,
                 stroke: stroke.filter(|s| s.width > 0.0),
                 rect,
                 radius,
@@ -433,7 +434,13 @@ impl<'a> PaintContext<'a> {
     // -------------------------------------------------------------------------
 
     /// Draw text with default font settings.
-    pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
+    pub fn draw_text(
+        &mut self,
+        text: impl Into<Rc<str>>,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+    ) {
         self.draw_text_styled(
             text,
             rect,
@@ -447,19 +454,20 @@ impl<'a> PaintContext<'a> {
     /// Draw text with custom font family and weight.
     pub fn draw_text_styled(
         &mut self,
-        text: &str,
+        text: impl Into<Rc<str>>,
         rect: Rect,
         color: Color,
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
     ) {
+        let text = text.into();
         // Skip empty text
         if text.is_empty() {
             return;
         }
         self.node.commands.push(Rc::new(DrawCommand::Text {
-            text: text.to_string(),
+            text,
             rect,
             color,
             font_size,
@@ -477,7 +485,7 @@ impl<'a> PaintContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_decorated(
         &mut self,
-        text: &str,
+        text: impl Into<Rc<str>>,
         rect: Rect,
         color: Color,
         font_size: f32,
@@ -486,6 +494,10 @@ impl<'a> PaintContext<'a> {
         stroke: Option<TextStroke>,
         shadow: Option<TextShadow>,
     ) {
+        // Converted once, here: every sample below draws the same string, and
+        // what each command needs is a count on that one allocation rather
+        // than a copy of the bytes.
+        let text = text.into();
         if text.is_empty() {
             return;
         }
@@ -498,7 +510,7 @@ impl<'a> PaintContext<'a> {
         if let Some(shadow) = shadow.filter(|s| s.color.a > 0.0) {
             for (dx, dy, sample_color) in shadow.samples() {
                 self.draw_text_styled(
-                    text,
+                    Rc::clone(&text),
                     rect.offset(dx, dy),
                     sample_color,
                     font_size,
@@ -511,7 +523,7 @@ impl<'a> PaintContext<'a> {
         if let Some(stroke) = stroke.filter(|s| s.width > 0.0) {
             for (dx, dy) in stroke.samples() {
                 self.draw_text_styled(
-                    text,
+                    Rc::clone(&text),
                     rect.offset(dx, dy),
                     stroke.color,
                     font_size,

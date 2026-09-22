@@ -4,14 +4,16 @@
 //! to test is exactly that: how many copies, where, in what colour, and — the
 //! part that is easy to get backwards — that the stroke lands *under* the fill.
 
+use std::rc::Rc;
+
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, RenderNode};
+use guido::renderer::{DrawCommand, RenderNode, TextEntry, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
-/// Every text command a widget emits, in draw order, as (x, y, colour).
-fn draws(widget: impl Widget + 'static) -> Vec<(f32, f32, Color)> {
+/// Lay out and paint a widget, and hand back the tree it painted into.
+fn painted(widget: impl Widget + 'static) -> RenderNode {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
@@ -19,9 +21,13 @@ fn draws(widget: impl Widget + 'static) -> Vec<(f32, f32, Color)> {
 
     let mut node = RenderNode::new(root.as_u64());
     tree.paint_widget(root, &mut node);
+    node
+}
 
+/// Every text command a widget emits, in draw order, as (x, y, colour).
+fn draws(widget: impl Widget + 'static) -> Vec<(f32, f32, Color)> {
     let mut out = Vec::new();
-    collect(&node, &mut out);
+    collect(&painted(widget), &mut out);
     out
 }
 
@@ -284,4 +290,72 @@ fn decoration_does_not_change_how_much_room_the_text_takes() {
             .unwrap()
     };
     assert_eq!(measure(true), measure(false));
+}
+
+/// The string handle of every text command in the tree, in draw order.
+fn strings(node: &RenderNode, out: &mut Vec<Rc<str>>) {
+    for cmd in &node.commands {
+        if let DrawCommand::Text { text, .. } = &**cmd {
+            out.push(Rc::clone(text));
+        }
+    }
+    for child in &node.children {
+        strings(child, out);
+    }
+}
+
+/// A text with both decorations, which is the paint that emits the most copies.
+fn decorated() -> impl Widget + 'static {
+    container().child(
+        text("the quick brown fox")
+            .color(Color::WHITE)
+            .text_stroke(TextStroke::new(2.0, Color::BLACK))
+            .text_shadow(TextShadow::new(0.0, 2.0, 6.0, Color::RED)),
+    )
+}
+
+#[test]
+fn every_copy_of_a_decorated_text_names_one_allocation() {
+    // A shadow is a ring of copies and a stroke is another, and each copy is a
+    // command of its own. They say the same thing, so they have to say it out
+    // of the same allocation: one string per paint, not one per sample.
+    let mut handles = Vec::new();
+    strings(&painted(decorated()), &mut handles);
+    assert!(
+        handles.len() > 20,
+        "expected the decorations to expand into many copies, got {}",
+        handles.len()
+    );
+
+    let first = &handles[0];
+    for (i, handle) in handles.iter().enumerate().skip(1) {
+        assert!(
+            Rc::ptr_eq(first, handle),
+            "copy {i} of {} was allocated again rather than shared",
+            handles.len()
+        );
+    }
+}
+
+#[test]
+fn the_entry_the_renderer_builds_shares_the_command_s_allocation() {
+    // The copies above are made once per paint and kept; this one is made
+    // again every frame, for every text on screen.
+    let node = painted(decorated());
+    let (mut commands, mut layers) = (Vec::new(), Vec::new());
+    let _ = flatten_root_into(&node, &mut commands, &mut layers);
+
+    let flattened = commands
+        .iter()
+        .find(|cmd| matches!(&*cmd.command, DrawCommand::Text { .. }))
+        .expect("a text command");
+    let DrawCommand::Text { text, .. } = &*flattened.command else {
+        unreachable!("just matched")
+    };
+
+    let entry = TextEntry::from_command(flattened).expect("a text command makes an entry");
+    assert!(
+        Rc::ptr_eq(text, &entry.text),
+        "the entry copied the string instead of naming the command's"
+    );
 }

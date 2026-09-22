@@ -37,7 +37,8 @@ pub enum RenderLayer {
 ///
 /// This is the flattened representation ready for GPU submission.
 /// Uses `Rc<DrawCommand>` so cloning (e.g. for cached flatten reuse)
-/// is a reference count bump instead of deep-cloning String/FontFamily.
+/// is a reference count bump instead of copying whatever the command owns —
+/// an image's path, and the string a text is drawn from.
 #[derive(Debug, Clone)]
 pub struct FlattenedCommand {
     /// The draw command (shared via Rc to avoid clone overhead)

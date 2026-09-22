@@ -141,6 +141,11 @@ ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight);
 ctx.draw_image(source, rect, content_fit);
 ```
 
+The text methods take anything convertible into an `Rc<str>` — a `&str`, a
+`String`, or a handle a caller already holds — because the command stores one.
+A decorated text is drawn as a ring of offset copies and each copy is a command
+of its own, so the conversion happens once, at the call, rather than per copy.
+
 ### Children
 
 ```rust

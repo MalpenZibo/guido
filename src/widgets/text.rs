@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
@@ -340,9 +342,12 @@ impl Widget for Text {
         // same coverage mask, outside the letter rather than under it, so the
         // glass keeps what the frost put in it.
         let frosted = blur.filter(|radius| *radius > 0.0).is_some();
+        // One allocation, whatever the paint asks for: the frost rasterizes
+        // the same string the glyphs are drawn from.
+        let drawn: Rc<str> = self.cached_text.as_str().into();
         if let Some(radius) = blur {
             ctx.draw_text_backdrop_blur(
-                &self.cached_text,
+                Rc::clone(&drawn),
                 local_bounds,
                 radius,
                 stroke,
@@ -352,7 +357,7 @@ impl Widget for Text {
             );
         }
         ctx.draw_text_decorated(
-            &self.cached_text,
+            drawn,
             local_bounds,
             color,
             self.cached_font_size,

@@ -78,7 +78,7 @@ struct CachedTextTexture {
 /// Everything that affects the rasterized pixels of a text texture.
 #[derive(PartialEq, Eq, Hash)]
 struct TextCacheKey {
-    text: String,
+    text: std::rc::Rc<str>,
     font_size_bits: u32,
     weight: u16,
     family: crate::widgets::FontFamily,

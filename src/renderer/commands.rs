@@ -1,5 +1,7 @@
 //! Draw command definitions for the render tree.
 
+use std::rc::Rc;
+
 use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
@@ -242,8 +244,10 @@ pub enum DrawCommand {
 
     /// Draw text.
     Text {
-        /// The text string to render
-        text: String,
+        /// The text string to render, shared rather than copied: a decorated
+        /// text is drawn as a ring of offset copies, and every one of them is
+        /// a command carrying this same string.
+        text: Rc<str>,
         /// The bounding rectangle for the text in local coordinates
         rect: Rect,
         /// The text color
@@ -308,7 +312,7 @@ pub enum DrawCommand {
     /// has to come out identical to the text drawn after it.
     TextBackdropBlur {
         /// The text whose coverage is the mask.
-        text: String,
+        text: Rc<str>,
         /// A contour to draw around that coverage, once the blur is composited
         /// and before the glyphs land on it. Carried here because the mask it
         /// needs is the one this command already rasterizes — and because the

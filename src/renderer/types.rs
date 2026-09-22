@@ -1,5 +1,9 @@
 //! Shared types for the renderer.
 
+use std::rc::Rc;
+
+use super::commands::DrawCommand;
+use super::flatten::FlattenedCommand;
 use crate::transform::Transform;
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::{Color, Rect};
@@ -125,8 +129,10 @@ impl Shadow {
 /// A text entry for rendering, containing all information needed to render text.
 #[derive(Debug, Clone)]
 pub struct TextEntry {
-    /// The text string to render
-    pub text: String,
+    /// The text string to render, named rather than copied: the entry is
+    /// rebuilt from its command every frame, and the command already owns the
+    /// one allocation the string needs.
+    pub text: Rc<str>,
     /// The bounding rectangle for the text in logical pixels
     pub rect: Rect,
     /// The text color
@@ -145,6 +151,39 @@ pub struct TextEntry {
     pub transform: Transform,
     /// Custom transform origin in logical screen coordinates, if any
     pub transform_origin: Option<(f32, f32)>,
+}
+
+impl TextEntry {
+    /// The entry a flattened [`DrawCommand::Text`] asks the text pipeline for,
+    /// or `None` for any other command.
+    ///
+    /// Everything the glyphs need is already in the command; what the flatten
+    /// adds is where the command ended up — its world transform and the clip
+    /// it was cut to.
+    pub fn from_command(cmd: &FlattenedCommand) -> Option<Self> {
+        let DrawCommand::Text {
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+        } = &*cmd.command
+        else {
+            return None;
+        };
+        Some(Self {
+            text: Rc::clone(text),
+            rect: *rect,
+            color: *color,
+            font_size: *font_size,
+            font_family: *font_family,
+            font_weight: *font_weight,
+            clip: cmd.clip(),
+            transform: cmd.world_transform,
+            transform_origin: cmd.world_transform_origin,
+        })
+    }
 }
 
 /// The two halves of "how far a shadow reaches", checked against each other.
