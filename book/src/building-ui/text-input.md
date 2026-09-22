@@ -85,7 +85,7 @@ container().child(text_input(value).font_family(FontFamily::Monospace));
 container().child(text_input(value));
 
 // Custom font
-container().child(text_input(value).font_family(FontFamily::Name("JetBrains Mono".into())))
+container().child(text_input(value).font_family(FontFamily::name("JetBrains Mono")))
 # ;
 # }
 ```

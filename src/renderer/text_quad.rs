@@ -202,7 +202,7 @@ impl TextQuadRenderer {
             text: entry.text.clone(),
             font_size_bits: scaled_font_size.to_bits(),
             weight: weight.0,
-            family: entry.font_family.clone(),
+            family: entry.font_family,
             color: [
                 (entry.color.r * 255.0) as u8,
                 (entry.color.g * 255.0) as u8,

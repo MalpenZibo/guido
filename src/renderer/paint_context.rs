@@ -502,7 +502,7 @@ impl<'a> PaintContext<'a> {
                     rect.offset(dx, dy),
                     sample_color,
                     font_size,
-                    font_family.clone(),
+                    font_family,
                     font_weight,
                 );
             }
@@ -515,7 +515,7 @@ impl<'a> PaintContext<'a> {
                     rect.offset(dx, dy),
                     stroke.color,
                     font_size,
-                    font_family.clone(),
+                    font_family,
                     font_weight,
                 );
             }

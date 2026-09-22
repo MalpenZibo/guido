@@ -60,7 +60,7 @@ impl MeasureCacheKey {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
@@ -113,7 +113,7 @@ impl TextMeasurer {
             text,
             font_size,
             max_width,
-            &FontFamily::default(),
+            FontFamily::default(),
             FontWeight::NORMAL,
         )
     }
@@ -123,7 +123,7 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Size {
         self.measure_full(text, font_size, max_width, font_family, font_weight)
@@ -139,7 +139,7 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Measured {
         let cache_key = MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight);
@@ -195,7 +195,7 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Buffer {
         let (size, line_height) = shapeable_metrics(font_size);
@@ -231,7 +231,7 @@ impl TextMeasurer {
         &mut self,
         text: &str,
         font_size: f32,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Vec<f32> {
         let char_count = text.chars().count();
@@ -284,7 +284,7 @@ impl TextMeasurer {
             text,
             font_size,
             char_index,
-            &FontFamily::default(),
+            FontFamily::default(),
             FontWeight::NORMAL,
         )
     }
@@ -295,7 +295,7 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         char_index: usize,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> f32 {
         if char_index == 0 || text.is_empty() {
@@ -321,7 +321,7 @@ impl TextMeasurer {
             text,
             font_size,
             x,
-            &FontFamily::default(),
+            FontFamily::default(),
             FontWeight::NORMAL,
         )
     }
@@ -332,7 +332,7 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         x: f32,
-        font_family: &FontFamily,
+        font_family: FontFamily,
         font_weight: FontWeight,
     ) -> usize {
         if text.is_empty() || x <= 0.0 {
@@ -401,7 +401,7 @@ pub fn measure_text_styled(
     text: &str,
     font_size: f32,
     max_width: Option<f32>,
-    font_family: &FontFamily,
+    font_family: FontFamily,
     font_weight: FontWeight,
 ) -> Size {
     with_measurer(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
@@ -412,7 +412,7 @@ pub fn measure_text_full(
     text: &str,
     font_size: f32,
     max_width: Option<f32>,
-    font_family: &FontFamily,
+    font_family: FontFamily,
     font_weight: FontWeight,
 ) -> Measured {
     with_measurer(|m| m.measure_full(text, font_size, max_width, font_family, font_weight))
@@ -428,7 +428,7 @@ pub fn measure_text_to_char_styled(
     text: &str,
     font_size: f32,
     char_index: usize,
-    font_family: &FontFamily,
+    font_family: FontFamily,
     font_weight: FontWeight,
 ) -> f32 {
     with_measurer(|m| {
@@ -441,7 +441,7 @@ pub fn measure_text_to_char_styled(
 pub fn measure_char_positions_styled(
     text: &str,
     font_size: f32,
-    font_family: &FontFamily,
+    font_family: FontFamily,
     font_weight: FontWeight,
 ) -> Vec<f32> {
     with_measurer(|m| m.char_positions_styled(text, font_size, font_family, font_weight))
@@ -457,7 +457,7 @@ pub fn char_index_from_x_styled(
     text: &str,
     font_size: f32,
     x: f32,
-    font_family: &FontFamily,
+    font_family: FontFamily,
     font_weight: FontWeight,
 ) -> usize {
     with_measurer(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
@@ -488,7 +488,7 @@ mod baseline_tests {
                     "a line of words",
                     font_size,
                     Some(100.0),
-                    &FontFamily::default(),
+                    FontFamily::default(),
                     FontWeight::NORMAL,
                 );
                 assert!(
@@ -516,7 +516,7 @@ mod baseline_tests {
                 "Hxgjp",
                 font_size,
                 None,
-                &FontFamily::default(),
+                FontFamily::default(),
                 FontWeight::NORMAL,
             );
             assert!(

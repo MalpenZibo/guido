@@ -262,7 +262,7 @@ container().child(text("Monospace text").font_family(FontFamily::Monospace));
 container().child(text("Code example"));
 
 // Custom font by name (if available on system)
-container().child(text("Custom font").font_family(FontFamily::Name("Inter".into())))
+container().child(text("Custom font").font_family(FontFamily::name("Inter")))
 # ;
 # }
 ```
@@ -273,7 +273,7 @@ Available font families:
 - `FontFamily::Monospace` - Monospace/fixed-width font
 - `FontFamily::Cursive` - Cursive font
 - `FontFamily::Fantasy` - Fantasy/decorative font
-- `FontFamily::Name(String)` - Custom font by name
+- `FontFamily::name(&str)` - Custom font by name, interned
 
 ### Font Weight
 
@@ -453,7 +453,7 @@ Set a default font family for the entire application:
 # fn main() {
 # let config = SurfaceConfig::new();
 App::new()
-    .default_font_family(FontFamily::Name("Inter".into()))
+    .default_font_family(FontFamily::name("Inter"))
     .run(|app| {
         app.add_surface(config, || view());
     });

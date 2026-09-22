@@ -113,7 +113,7 @@ pub(crate) struct AppState {
     pub(crate) text_measurer: RefCell<Option<TextMeasurer>>,
     /// Read by every text widget at construction, before any tree or surface
     /// exists.
-    pub(crate) default_font_family: RefCell<FontFamily>,
+    pub(crate) default_font_family: Cell<FontFamily>,
     /// Font bytes loaded before any renderer exists, handed to each font
     /// system when it is built.
     pub(crate) custom_fonts: RefCell<Vec<Arc<Vec<u8>>>>,

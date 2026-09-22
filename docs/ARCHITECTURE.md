@@ -430,6 +430,22 @@ reviewed beside the others and reset with them, and not a new cell with a row
 of its own. `tests/ambient_state_inventory.rs` holds both structs to the
 promise this paragraph makes.
 
+A third kind sits outside this register and has no rows: a process-wide
+`static` behind a lock or an atomic, which is how the crate carries the state a
+*background thread* touches. `WRITE_QUEUE` and `WRITE_EPOCH`
+(`src/reactive/runtime.rs`) take writes from a `Send` `WriteSignal`,
+`INGRESS_SENDER` (`src/ingress.rs`) and `EXIT_REQUEST`, `WAKE_REQUESTED`,
+`PING_SENT`, `WAKEUP_PING` (`src/jobs.rs`) carry the loop's wakeups, and
+`FAMILIES` (`src/widgets/font.rs`) interns font family names. `FAMILIES` is the
+one that had to argue for itself, because it is reachable from an ordinary
+value: a `FontFamily` is an index into it and outlives both the `App` — `APP`,
+which `reset` empties whole, would recycle the slot under a value somebody
+still holds — and the thread that minted it. Its own comment has the argument.
+
+`tests/ambient_state_inventory.rs` cannot see that kind, and #460 is where
+giving it rows is weighed. Until then this paragraph is the register for it,
+and a new one belongs in the list above.
+
 | cell | file | why nothing explicit carries it |
 | --- | --- | --- |
 | `REACTIVE` | `src/reactive/state.rs` | The reactive runtime: the arena signals live in, the owners that dispose them, who is reading right now, and who has to be told when a value changes. A signal read inside a reactive closure subscribes by itself, so none of it can be an argument — floem and leptos keep a runtime for the same reason |

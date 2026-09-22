@@ -56,7 +56,7 @@ const MAX_SIDE: u32 = 2048;
 pub struct MaskSpec<'a> {
     pub text: &'a str,
     pub font_size: f32,
-    pub font_family: &'a FontFamily,
+    pub font_family: FontFamily,
     pub font_weight: FontWeight,
     /// The buffer to shape in, in the same texels as everything else here.
     ///
@@ -200,7 +200,7 @@ impl TextMaskRenderer {
             text: spec.text.to_owned(),
             font_size_bits: font_size.to_bits(),
             weight: weight.0,
-            family: spec.font_family.clone(),
+            family: spec.font_family,
             width,
             height,
             buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),

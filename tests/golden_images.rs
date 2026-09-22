@@ -524,7 +524,7 @@ fn stripes(width: f32, count: usize, bar: f32) -> Container {
 /// Always the vendored family, never whatever the machine happens to have.
 fn label(content: &str, size: f32) -> Text {
     text(content)
-        .font_family(FontFamily::Name(FONT_FAMILY.into()))
+        .font_family(FontFamily::name(FONT_FAMILY))
         .font_size(size)
         .color(Color::WHITE)
 }
