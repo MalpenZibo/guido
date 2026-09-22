@@ -6,6 +6,7 @@ pub mod clock;
 pub mod compositor;
 mod deferred;
 pub(crate) mod finite;
+pub mod heap;
 pub mod image_metadata;
 mod ingress;
 mod jobs;

@@ -773,6 +773,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
+| `src/heap.rs` | `CountingAllocator`: what a frame asks of the allocator, for the binary that installs it |
 | `src/transform.rs` | Transform matrix operations |
 | `src/shape.rs` | A rounded rect and the transform that places it — one type for clips, compositor regions and the backdrop mask |
 | `src/region.rs` | A placed shape tessellated into the rectangles a `wl_region` is made of |
