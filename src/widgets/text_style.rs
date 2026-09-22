@@ -55,7 +55,7 @@ use smallvec::SmallVec;
 use crate::clock::FrameInstant;
 use crate::finite::{FiniteOr, first_finite_override};
 use crate::jobs::RequiredJob;
-use crate::reactive::{IntoSignal, OptionSignalExt, Prop, Signal};
+use crate::reactive::{IntoSignal, Prop, Signal};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
@@ -326,7 +326,8 @@ impl ResolvedTextStyle {
 
     /// The family to shape the glyphs with.
     pub(crate) fn font_family(&self) -> FontFamily {
-        self.font_family.get_or_else(crate::default_font_family)
+        self.font_family
+            .map_or_else(crate::default_font_family, |family| family.get())
     }
 
     /// The weight to shape them at, on the CSS 100-900 scale.

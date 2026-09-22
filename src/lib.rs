@@ -241,7 +241,7 @@ pub mod prelude {
 pub mod widget_prelude {
     pub use crate::clock::{EventInstant, FrameInstant};
     pub use crate::layout::{Constraints, IntoF32, Layout};
-    pub use crate::reactive::{JobType, OptionSignalExt, with_signal_tracking};
+    pub use crate::reactive::{JobType, with_signal_tracking};
     pub use crate::renderer::{PaintContext, RenderNode};
     /// The composed matrix. An application says `translate`, `rotate` and
     /// `scale`; a widget written outside the crate positions what it paints,

@@ -22,7 +22,7 @@
 //! [`Length`]: crate::layout::Length
 //! [`Pivot`]: crate::pivot::Pivot
 
-use crate::reactive::{Prop, Signal};
+use crate::reactive::Prop;
 
 /// A value that can say whether every number inside it is finite.
 ///
@@ -85,23 +85,6 @@ impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Prop<T> {
             Some(value) if value.all_finite() => value,
             _ => default,
         }
-    }
-}
-
-impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
-    fn get_finite_or(&self, default: T, id: crate::tree::WidgetId, property: &'static str) -> T {
-        let value = crate::reactive::OptionSignalExt::get_or(self, default.clone());
-        if value.all_finite() {
-            value
-        } else {
-            crate::reactive::diagnostics::non_finite_value(id, property);
-            default
-        }
-    }
-
-    fn get_finite_or_quietly(&self, default: T) -> T {
-        let value = crate::reactive::OptionSignalExt::get_or(self, default.clone());
-        if value.all_finite() { value } else { default }
     }
 }
 

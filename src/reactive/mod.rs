@@ -68,9 +68,7 @@ pub mod __internal {
 pub use callback::Callback;
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service, create_task};
-pub use signal::{
-    OptionSignalExt, RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored,
-};
+pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored};
 
 /// Reset all reactive system state.
 ///
