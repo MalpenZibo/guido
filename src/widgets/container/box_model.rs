@@ -143,7 +143,8 @@ impl Container {
         {
             return anim.displayed_in(ctx);
         }
-        // No maximum is `f32::MAX`, so the `min` is the whole of the answer.
+        // No maximum is `INFINITY`, so the `min` is the whole of the answer
+        // and an unbounded `available` stays unbounded.
         length
             .exact_size()
             .unwrap_or_else(|| length.clamp_max(available))

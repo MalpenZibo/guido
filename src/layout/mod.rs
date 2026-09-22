@@ -440,6 +440,44 @@ mod a_length_is_what_it_carries {
         );
     }
 
+    /// An extent carries a number only when it names one.
+    ///
+    /// Its own test because its only readers cannot speak for it: `AllFinite`
+    /// checks the number it returns, and the characterization enumeration
+    /// reads a length's numbers back through the very same call — so a
+    /// `declared_size` that answered `None` to everything would leave both the
+    /// checker and the checked agreeing that a `width(NaN)` has no number in
+    /// it, and nothing would object.
+    #[test]
+    fn an_extent_carries_a_number_only_when_it_names_one() {
+        assert_eq!(
+            Extent::Auto.declared_size(),
+            None,
+            "sizing to content is not a number"
+        );
+        assert_eq!(
+            Extent::Fill.declared_size(),
+            None,
+            "nor is taking what is offered"
+        );
+        assert_eq!(Extent::Exact(12.0).declared_size(), Some(12.0));
+        assert_eq!(Extent::Fraction(0.25).declared_size(), Some(0.25));
+
+        // Which is what lets a bad number be found wherever it was declared.
+        assert!(
+            Length::exact(f32::NAN)
+                .extent()
+                .declared_size()
+                .is_some_and(f32::is_nan)
+        );
+        assert!(
+            fraction(f32::NAN)
+                .extent()
+                .declared_size()
+                .is_some_and(f32::is_nan)
+        );
+    }
+
     /// The four sizing cases are four, and each one says only itself.
     ///
     /// They were three independent fields, so `exact(10)` and `fill` and
