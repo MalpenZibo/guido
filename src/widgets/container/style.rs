@@ -85,7 +85,7 @@ impl Container {
     ///
     /// [`effective_background_target`]: Self::effective_background_target
     pub(super) fn effective_gradient(&self, id: WidgetId) -> Option<LinearGradient> {
-        let base = self.gradient.get().flatten()?;
+        let base = self.gradient_prop().get().flatten()?;
         self.resolve_state_value(id, Some(base), |state| {
             if let Some(BackgroundOverride::Exact(_)) = state.background {
                 // Passed over, as the solid fill passes it over, when the colour
@@ -174,7 +174,9 @@ impl Container {
     /// laid out once; `when_hovered(|s| s.shadow(lift))` with `lift` a signal
     /// re-lays out the container when it moves.
     pub(super) fn max_shadow_extent(&self, id: WidgetId) -> f32 {
-        let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
+        let base = self
+            .shadow_prop()
+            .get_finite_or(Shadow::none(), id, "shadow");
         let anim = self.anims.as_ref().and_then(|a| a.shadow());
         let declared = self
             .interaction
@@ -383,7 +385,9 @@ impl Container {
     }
 
     pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadow {
-        let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
+        let base = self
+            .shadow_prop()
+            .get_finite_or(Shadow::none(), id, "shadow");
         self.resolve_state_value(id, base, |state| state.shadow.get())
     }
 
