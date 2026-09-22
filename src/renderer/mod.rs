@@ -31,7 +31,15 @@ mod types;
 
 pub use clip::ClipRef;
 pub use commands::{Border, CornerRadii, DrawCommand};
-pub use flatten::{CommandLayer, FlattenedCommand, RegionsCarried, flatten_root_into};
+// `RenderLayer` is exported because `FlattenScratch`'s documentation links to
+// it and rustdoc runs with warnings denied, a link the type has carried since
+// before it was public. It is not a new hole: `FlattenedCommand::layer` has
+// always handed one out, so a caller could read the field and not name what it
+// got back.
+pub use flatten::{
+    CommandLayer, FlattenScratch, FlattenedCommand, RegionsCarried, RenderLayer, ScratchCapacity,
+    flatten_root_into,
+};
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};

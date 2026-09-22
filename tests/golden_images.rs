@@ -76,7 +76,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{GpuContext, RenderNode, Renderer, flatten_root_into};
+use guido::renderer::{FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -167,7 +167,12 @@ fn render_pixels(
 
     let mut commands = Vec::new();
     let mut layers = Vec::new();
-    let _ = flatten_root_into(&node, &mut commands, &mut layers);
+    let _ = flatten_root_into(
+        &node,
+        &mut commands,
+        &mut layers,
+        &mut FlattenScratch::default(),
+    );
 
     let device = ctx.device.clone();
     let queue = ctx.queue.clone();

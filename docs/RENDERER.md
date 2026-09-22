@@ -164,7 +164,9 @@ ctx.draw_overlay_rounded_rect(rect, color, radius);
 
 ## Tree Flattening
 
-The `flatten_root_into()` function converts the hierarchical render tree into a flat list of `FlattenedCommand`s ready for GPU submission, reusing the output buffer's capacity across frames.
+The `flatten_root_into()` function converts the hierarchical render tree into a flat list of `FlattenedCommand`s ready for GPU submission, reusing the output buffer's capacity across frames. The intermediate it groups them in is reused too: a `FlattenScratch` lives on the surface beside those buffers and is emptied on the way in rather than built, so a steady-state frame allocates nothing for the groups, their buckets, their bounds or the frame's clips.
+
+Nothing is ever handed back, so the price is the peak: a surface holds what its widest frame needed for as long as it lives. Per draw group that is five command buffers — the widest frame's commands, held a second time alongside the ones in `flattened_commands` — plus five `LayerBounds`, sixteen rects each inline and up to `MAX_TRACKED_RECTS` on the heap once one spills, on the order of a kilobyte and a half of inline group and five kilobytes of spilled rects. One pathological frame pins that for the surface's life, which is the same bargain the command buffer already made and the reason a `FlattenScratch` belongs to a surface rather than to an application.
 
 ### World Transform Computation
 

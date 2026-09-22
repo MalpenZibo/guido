@@ -33,7 +33,8 @@ mod common;
 use common::Harness;
 use guido::prelude::*;
 use guido::renderer::{
-    CommandLayer, CornerRadii, DrawCommand, FlattenedCommand, NodeId, RenderNode, flatten_root_into,
+    CommandLayer, CornerRadii, DrawCommand, FlattenScratch, FlattenedCommand, NodeId, RenderNode,
+    ScratchCapacity, flatten_root_into,
 };
 use guido::shape::PlacedShape;
 use guido::tree::WidgetId;
@@ -326,10 +327,13 @@ fn scroller_of_tall_rows() -> Container {
 /// A surface that renders frame after frame into one retained root node.
 struct Surface {
     surface: Harness,
-    /// Retained across frames and `clear()`ed per frame — `SurfaceState::root_node`.
+    /// Retained across frames and `clear()`ed per frame — `ManagedSurface::root_node`.
     root_node: RenderNode,
     commands: Vec<FlattenedCommand>,
     layers: Vec<CommandLayer>,
+    /// Retained across frames and `clear()`ed per frame, like the two above —
+    /// `ManagedSurface::flatten_scratch`.
+    scratch: FlattenScratch,
     width: f32,
     height: f32,
 }
@@ -344,6 +348,7 @@ impl Surface {
             root_node: RenderNode::new(root.as_u64()),
             commands: Vec::new(),
             layers: Vec::new(),
+            scratch: FlattenScratch::default(),
             width,
             height,
         }
@@ -381,10 +386,11 @@ impl Surface {
             root_node,
             commands,
             layers,
+            scratch,
             ..
         } = self;
         tree.paint_widget(*root, root_node);
-        let _ = flatten_root_into(root_node, commands, layers);
+        let _ = flatten_root_into(root_node, commands, layers, scratch);
         for child in &root_node.children {
             guido::cache_paint_results(tree, child);
         }

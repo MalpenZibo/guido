@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use crate::layout::Constraints;
 use crate::reactive::owner::{OwnerId, dispose_owner_now};
-use crate::renderer::{CommandLayer, FlattenedCommand, GpuContext, RenderNode, RenderTarget};
+use crate::renderer::{
+    CommandLayer, FlattenScratch, FlattenedCommand, GpuContext, RenderNode, RenderTarget,
+};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::{Rect, Widget};
@@ -36,6 +38,9 @@ pub struct ManagedSurface {
     pub flattened_commands: Vec<FlattenedCommand>,
     /// Draw groups over `flattened_commands`, in draw order.
     pub command_layers: Vec<CommandLayer>,
+    /// Where flatten builds those two before it fills them (reused across
+    /// frames to avoid allocation)
+    pub flatten_scratch: FlattenScratch,
     /// Where input reaches this surface before any container has spoken:
     /// what the config declared, and what a handle has said since.
     ///
@@ -94,6 +99,7 @@ impl ManagedSurface {
             root_node: RenderNode::new(widget_id.as_u64()),
             flattened_commands: Vec::new(),
             command_layers: Vec::new(),
+            flatten_scratch: FlattenScratch::default(),
             input_base: config_input_region,
             input_region: None,
             viewport_destination: None,
