@@ -55,7 +55,7 @@ use smallvec::SmallVec;
 use crate::clock::FrameInstant;
 use crate::finite::{FiniteOr, first_finite_override};
 use crate::jobs::RequiredJob;
-use crate::reactive::{IntoSignal, Prop, Signal};
+use crate::reactive::{IntoSignal, Prop};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
@@ -231,11 +231,7 @@ pub struct TextStyle {
     /// Font size in logical pixels.
     pub font_size: Prop<f32>,
     /// Font family.
-    ///
-    /// The one property still holding a signal for a constant. `Prop<T>` keeps
-    /// the value inline, and `FontFamily` is not `Copy`, so a `Prop` here would
-    /// take `Copy` off this public type — see #452.
-    pub font_family: Option<Signal<FontFamily>>,
+    pub font_family: Prop<FontFamily>,
     /// Font weight on the CSS 100-900 scale.
     pub font_weight: Prop<FontWeight>,
     /// Contour drawn around the glyphs, under the fill.
@@ -276,7 +272,7 @@ pub(crate) struct ResolvedTextStyle {
     /// where the door reports.
     color: Prop<Color>,
     font_size: Prop<f32>,
-    font_family: Option<Signal<FontFamily>>,
+    font_family: Prop<FontFamily>,
     font_weight: Prop<FontWeight>,
     stroke: Prop<TextStroke>,
     shadow: Prop<TextShadow>,
@@ -327,7 +323,8 @@ impl ResolvedTextStyle {
     /// The family to shape the glyphs with.
     pub(crate) fn font_family(&self) -> FontFamily {
         self.font_family
-            .map_or_else(crate::default_font_family, |family| family.get())
+            .get()
+            .unwrap_or_else(crate::default_font_family)
     }
 
     /// The weight to shape them at, on the CSS 100-900 scale.
@@ -633,7 +630,7 @@ macro_rules! declares_text_style {
                 mut self,
                 family: impl $crate::reactive::IntoSignal<$crate::widgets::FontFamily, M>,
             ) -> Self {
-                self.text_style_mut().font_family = Some(family.into_signal());
+                self.text_style_mut().font_family = family.into_prop();
                 self
             }
 
@@ -714,7 +711,7 @@ impl TextStyle {
 
     /// Font family.
     pub fn font_family<M>(mut self, family: impl IntoSignal<FontFamily, M>) -> Self {
-        self.font_family = Some(family.into_signal());
+        self.font_family = family.into_prop();
         self
     }
 
@@ -744,5 +741,79 @@ impl TextStyle {
     pub fn text_shadow<M>(mut self, shadow: impl IntoSignal<TextShadow, M>) -> Self {
         self.shadow = shadow.into_prop();
         self
+    }
+}
+
+#[cfg(test)]
+mod a_constant_text_property_is_a_constant {
+    use super::*;
+    use crate::reactive::storage::slot_count;
+    use crate::widgets::text;
+
+    /// A family named with a value claims no signal slot; the same family
+    /// behind a closure claims one.
+    ///
+    /// The shape `a_constant_claims_no_slot_where_a_closure_claims_one` uses
+    /// on `Container`'s eleven properties, for the last property that could
+    /// not take it. `font_family` held an `Option<Signal<FontFamily>>` while
+    /// every other property held a `Prop`, because `Prop` stores its value
+    /// inline and `FontFamily` was not `Copy` — so declaring a family that
+    /// cannot change still allocated somewhere to keep it.
+    ///
+    /// Both halves. That the closure still claims a slot is what says this is
+    /// looking at the declaration rather than at a widget that happens to
+    /// allocate nothing.
+    /// Slots claimed by building `what` once, with a warm-up build first so
+    /// that whatever a path sets up one time is behind the measurement.
+    fn slots(what: impl Fn()) -> usize {
+        what();
+        let mark = slot_count();
+        what();
+        slot_count() - mark
+    }
+
+    #[test]
+    fn a_named_family_claims_no_slot_where_a_closure_claims_one() {
+        let constant = slots(|| drop(text("x").font_family(FontFamily::name("Inter"))));
+        let reactive = slots(|| drop(text("x").font_family(|| FontFamily::name("Inter"))));
+
+        assert_eq!(
+            constant,
+            reactive - 1,
+            "a named family must claim no slot and a closure must claim one — \
+             got {constant} against {reactive}"
+        );
+    }
+
+    /// And a generic family, which is the commonest of all, costs what
+    /// declaring no family costs.
+    ///
+    /// Against a bare `text`, not against zero: a text widget claims a slot
+    /// for its own content before any style is declared on it, and that is not
+    /// what this is about.
+    #[test]
+    fn a_generic_family_costs_what_declaring_none_costs() {
+        drop(text("x").font_family(FontFamily::Monospace));
+
+        let mark = slot_count();
+        drop(text("x"));
+        let bare = slot_count() - mark;
+
+        let mark = slot_count();
+        drop(text("x").font_family(FontFamily::Monospace));
+        let named = slot_count() - mark;
+
+        let mark = slot_count();
+        drop(text("x").mono());
+        let shorthand = slot_count() - mark;
+
+        assert_eq!(
+            named, bare,
+            "`Monospace` is a discriminant, not a value to keep"
+        );
+        assert_eq!(
+            shorthand, bare,
+            "and `mono()` is the same declaration spelled shorter"
+        );
     }
 }
