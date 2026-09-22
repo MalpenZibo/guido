@@ -65,7 +65,15 @@ impl FlattenedCommand {
     }
 }
 
-/// Draw commands grouped so that batching never reorders drawing.
+/// Where one frame's draw commands are grouped, before they are handed on as
+/// one buffer.
+///
+/// It belongs to the surface rather than to the frame, and
+/// [`flatten_root_into`] empties it on the way in instead of building one: a
+/// frame's groups, buckets, bounds and clips are the same shapes frame after
+/// frame, so what the widest frame needed is what the next one fills. The
+/// output buffers already made that bargain — this is the intermediate they
+/// are drained out of making it too.
 ///
 /// Each group buckets its commands by [`RenderLayer`], and the GPU draws a
 /// group one bucket at a time — shapes, then images, then text, then overlay.
@@ -84,8 +92,14 @@ impl FlattenedCommand {
 /// observable where the pixels meet, so the group is kept unless the incoming
 /// command's bounds actually intersect something already drawn above it. A
 /// column of buttons stays one group; a tint over a photo gets two.
-struct LayeredCommands {
+pub struct FlattenScratch {
+    /// Every group this scratch has ever held, the live ones first. Dropping
+    /// the ones a narrower frame does not need would free the five buffers
+    /// inside each, which is the whole of what is being kept.
     groups: Vec<LayerBuckets>,
+    /// How many of `groups` this frame has opened. The rest are empty and
+    /// waiting; nothing outside this file sees past it.
+    used: usize,
     /// The clips this frame has placed, which the commands above name.
     clips: ClipTree,
     /// What this frame carries for the compositor, counted while the commands
@@ -162,6 +176,34 @@ impl LayerBounds {
             self.overflowed = true;
         }
     }
+
+    /// Back to what [`Default`] gives, without giving back the rects' room.
+    ///
+    /// Every field, and that is the point: a `union` or an `overflowed` left
+    /// over from the last frame is a group split this frame cannot account
+    /// for.
+    fn clear(&mut self) {
+        // Destructured so that a field added here is a compile error rather
+        // than a value that quietly survives into the next frame.
+        let Self {
+            union,
+            rects,
+            overflowed,
+        } = self;
+        *union = None;
+        rects.clear();
+        *overflowed = false;
+    }
+
+    /// How many rects this can hold before it allocates — counted only once it
+    /// has spilled off the stack, since the inline room is not a frame's doing.
+    fn heap_rects(&self) -> usize {
+        if self.rects.spilled() {
+            self.rects.capacity()
+        } else {
+            0
+        }
+    }
 }
 
 /// Number of [`RenderLayer`] variants.
@@ -190,15 +232,155 @@ impl LayerBuckets {
             RenderLayer::Overlay => &mut self.overlay,
         }
     }
+
+    /// Every bucket, in draw order, for the one place that walks all five
+    /// without naming them.
+    fn buckets_mut(&mut self) -> [&mut Vec<FlattenedCommand>; LAYER_COUNT] {
+        [
+            &mut self.backdrop,
+            &mut self.shapes,
+            &mut self.images,
+            &mut self.text,
+            &mut self.overlay,
+        ]
+    }
+
+    /// Back to what [`Default`] gives, without giving back the buffers.
+    ///
+    /// `high_water` too: a group that starts at anything but the lowest layer
+    /// would split on a command that belongs in it.
+    fn clear(&mut self) {
+        // Destructured, as in [`LayerBounds::clear`]: a bucket or a mark left
+        // out here is a group boundary the next frame did not ask for.
+        let Self {
+            backdrop,
+            shapes,
+            images,
+            text,
+            overlay,
+            high_water,
+            bounds,
+        } = self;
+        for bucket in [backdrop, shapes, images, text, overlay] {
+            bucket.clear();
+        }
+        *high_water = RenderLayer::default();
+        for bounds in bounds {
+            bounds.clear();
+        }
+    }
+
+    /// How many commands this group's buckets can hold before they allocate.
+    fn command_capacity(&self) -> usize {
+        self.backdrop.capacity()
+            + self.shapes.capacity()
+            + self.images.capacity()
+            + self.text.capacity()
+            + self.overlay.capacity()
+    }
 }
 
-impl LayeredCommands {
-    fn new() -> Self {
+impl Default for FlattenScratch {
+    fn default() -> Self {
         Self {
             groups: vec![LayerBuckets::default()],
+            used: 1,
             clips: ClipTree::default(),
             carried: RegionsCarried::default(),
         }
+    }
+}
+
+/// What a [`FlattenScratch`] is holding onto between frames.
+///
+/// Four numbers rather than one, because they are four different buffers and a
+/// sum could hide one of them being rebuilt behind another one growing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScratchCapacity {
+    /// Draw groups the scratch can hold without allocating.
+    pub groups: usize,
+    /// Commands its buckets can hold, summed over every group it kept.
+    pub commands: usize,
+    /// Bounds rectangles they can hold, counting only what spilled onto the
+    /// heap — the inline room comes with the group and says nothing about
+    /// whether it is being reused.
+    pub rects: usize,
+    /// Clips its clip tree can hold.
+    pub clips: usize,
+}
+
+impl FlattenScratch {
+    /// What this scratch can take before it asks for more memory.
+    ///
+    /// Read by `tests/paint_cache_across_frames.rs`, which is the only thing
+    /// that can say a frame refilled the buffers the frame before it left.
+    pub fn capacity(&self) -> ScratchCapacity {
+        ScratchCapacity {
+            groups: self.groups.capacity(),
+            commands: self.groups.iter().map(LayerBuckets::command_capacity).sum(),
+            rects: self
+                .groups
+                .iter()
+                .flat_map(|group| &group.bounds)
+                .map(LayerBounds::heap_rects)
+                .sum(),
+            clips: self.clips.capacity(),
+        }
+    }
+
+    /// Empty every buffer, keeping what each one is holding.
+    ///
+    /// The one thing that must not happen here is a field surviving: a
+    /// `high_water`, a `bounds` or an `overflowed` left over from the last
+    /// frame is a group boundary this frame did not ask for, and the groups
+    /// past `used` are already in this state.
+    fn clear(&mut self) {
+        // Destructured, as the two above are. `used` goes back to one *after*
+        // the loop: it is what says which groups were written, so emptying
+        // them is the last thing it is good for.
+        let Self {
+            groups,
+            used,
+            clips,
+            carried,
+        } = self;
+        for group in &mut groups[..*used] {
+            group.clear();
+        }
+        *used = 1;
+        clips.clear();
+        *carried = RegionsCarried::default();
+    }
+
+    /// The groups this frame has opened, in draw order.
+    fn live(&self) -> &[LayerBuckets] {
+        &self.groups[..self.used]
+    }
+
+    fn live_mut(&mut self) -> &mut [LayerBuckets] {
+        &mut self.groups[..self.used]
+    }
+
+    /// The group commands are landing in. `used` is never zero: `Default` and
+    /// `clear` both leave one group open and nothing ever closes one.
+    fn current(&self) -> &LayerBuckets {
+        &self.groups[self.used - 1]
+    }
+
+    fn current_mut(&mut self) -> &mut LayerBuckets {
+        &mut self.groups[self.used - 1]
+    }
+
+    /// Open a group starting at `high_water`, reusing the next one this
+    /// scratch kept if there is one. Everything past `used` was emptied by
+    /// [`clear`](Self::clear), so where the group starts is all there is to
+    /// say about it.
+    fn open_group(&mut self, high_water: RenderLayer) {
+        if self.used == self.groups.len() {
+            self.groups.push(LayerBuckets::default());
+        }
+        self.groups[self.used].high_water = high_water;
+        self.used += 1;
     }
 
     fn push(&mut self, cmd: FlattenedCommand) {
@@ -215,26 +397,18 @@ impl LayeredCommands {
                 // its bounds spends one of the tracked rectangles a real
                 // overlap test needs. Its place in the list is all the region
                 // is read for.
-                self.groups
-                    .last_mut()
-                    .expect("at least one group")
-                    .bucket_mut(cmd.layer)
-                    .push(cmd);
+                self.current_mut().bucket_mut(cmd.layer).push(cmd);
                 return;
             }
             _ => {}
         }
         let layer = cmd.layer;
         let rect = world_bounds(&cmd);
-        // `expect`: `new` seeds one group and nothing ever removes one.
-        let current = self.groups.last().expect("at least one group");
+        let current = self.current();
         if layer < current.high_water && current.covered_above(layer, rect) {
-            self.groups.push(LayerBuckets {
-                high_water: layer,
-                ..Default::default()
-            });
+            self.open_group(layer);
         }
-        let current = self.groups.last_mut().expect("at least one group");
+        let current = self.current_mut();
         current.high_water = current.high_water.max(layer);
         current.record(layer, rect);
         current.bucket_mut(layer).push(cmd);
@@ -250,10 +424,9 @@ impl LayeredCommands {
     /// bucket lengths (and how many groups there were) pins the boundary
     /// exactly.
     fn mark(&self) -> Mark {
-        // `expect`: `new` seeds one group and nothing ever removes one.
-        let last = self.groups.last().expect("at least one group");
+        let last = self.current();
         Mark {
-            groups: self.groups.len(),
+            groups: self.used,
             buckets: [
                 last.backdrop.len(),
                 last.shapes.len(),
@@ -312,7 +485,7 @@ impl LayeredCommands {
 
     /// The part of each bucket that was added after `mark`, in draw order.
     fn tails_since(&self, mark: Mark) -> impl Iterator<Item = &[FlattenedCommand]> {
-        self.groups
+        self.live()
             .iter()
             .enumerate()
             .skip(mark.groups - 1)
@@ -341,20 +514,25 @@ impl LayeredCommands {
             })
     }
 
-    /// Flatten the groups into one buffer in draw order, recording where each
+    /// Move the groups into one buffer in draw order, recording where each
     /// group's buckets landed.
-    fn drain_into(self, out: &mut Vec<FlattenedCommand>, layers: &mut Vec<CommandLayer>) {
-        for group in self.groups {
+    ///
+    /// The buckets are emptied rather than consumed — `append` takes the
+    /// commands and leaves the buffer that held them, which is what the next
+    /// frame fills.
+    fn drain_into(&mut self, out: &mut Vec<FlattenedCommand>, layers: &mut Vec<CommandLayer>) {
+        for group in self.live_mut() {
             let mut layer = CommandLayer::default();
-            for (bucket, range) in [
-                (group.backdrop, &mut layer.backdrop),
-                (group.shapes, &mut layer.shapes),
-                (group.images, &mut layer.images),
-                (group.text, &mut layer.text),
-                (group.overlay, &mut layer.overlay),
-            ] {
+            let ranges = [
+                &mut layer.backdrop,
+                &mut layer.shapes,
+                &mut layer.images,
+                &mut layer.text,
+                &mut layer.overlay,
+            ];
+            for (bucket, range) in group.buckets_mut().into_iter().zip(ranges) {
                 let start = out.len();
-                out.extend(bucket);
+                out.append(bucket);
                 *range = start..out.len();
             }
             // A group left empty by a subtree that drew nothing would cost a
@@ -366,7 +544,7 @@ impl LayeredCommands {
     }
 }
 
-/// A position in [`LayeredCommands`], for capturing one subtree's output.
+/// A position in a [`FlattenScratch`], for capturing one subtree's output.
 #[derive(Debug, Clone, Copy)]
 struct Mark {
     /// How many groups existed.
@@ -405,6 +583,9 @@ impl CommandLayer {
 /// incremental reuse in subsequent frames.
 ///
 /// `layers` receives the groups to draw, in order; see [`CommandLayer`].
+/// `scratch` is where the frame is built before it lands in those two, and is
+/// the surface's rather than the frame's for the same reason they are — it is
+/// emptied here, not constructed; see [`FlattenScratch`].
 ///
 /// Returns what the frame carries that becomes a `wl_region` — a backdrop blur
 /// the *compositor* is asked to apply, and a declaration about where input
@@ -414,15 +595,16 @@ pub fn flatten_root_into(
     root: &RenderNode,
     commands: &mut Vec<FlattenedCommand>,
     layers: &mut Vec<CommandLayer>,
+    scratch: &mut FlattenScratch,
 ) -> RegionsCarried {
     commands.clear();
     layers.clear();
+    scratch.clear();
 
-    let mut layered = LayeredCommands::new();
-    flatten_node(root, Transform::IDENTITY, None, None, &mut layered);
+    flatten_node(root, Transform::IDENTITY, None, None, scratch);
 
-    let carried = layered.carried;
-    layered.drain_into(commands, layers);
+    let carried = scratch.carried;
+    scratch.drain_into(commands, layers);
     carried
 }
 
@@ -445,7 +627,7 @@ fn flatten_node(
     parent_world_transform: Transform,
     parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<ClipIndex>,
-    out: &mut LayeredCommands,
+    out: &mut FlattenScratch,
 ) -> bool {
     // Compute this node's world transform
     let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
@@ -815,6 +997,8 @@ fn tighten(base: &PlacedShape, other: &PlacedShape) -> PlacedShape {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::NodeId;
+    use crate::renderer::tree::ClipRegion;
     use crate::widgets::Color;
 
     fn command(layer: RenderLayer) -> FlattenedCommand {
@@ -836,7 +1020,7 @@ mod tests {
     /// Drive `push` with a sequence of layers and report the resulting groups
     /// as the layers each one holds, in draw order.
     fn groups(sequence: &[RenderLayer]) -> Vec<Vec<RenderLayer>> {
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         for layer in sequence {
             layered.push(command(*layer));
         }
@@ -882,7 +1066,13 @@ mod tests {
             }));
 
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
-            let told = flatten_root_into(&node, &mut commands, &mut layers).compositor_blur;
+            let told = flatten_root_into(
+                &node,
+                &mut commands,
+                &mut layers,
+                &mut FlattenScratch::default(),
+            )
+            .compositor_blur;
             let drawn = layers.iter().any(|l| !l.backdrop.is_empty());
             (told, drawn, layers.len())
         };
@@ -919,7 +1109,12 @@ mod tests {
         }));
 
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
-        let carried = flatten_root_into(&node, &mut commands, &mut layers);
+        let carried = flatten_root_into(
+            &node,
+            &mut commands,
+            &mut layers,
+            &mut FlattenScratch::default(),
+        );
 
         assert!(
             carried.input_region,
@@ -992,7 +1187,7 @@ mod tests {
         // on every frame it was reused.
         let sequence = [Shapes, Images, Shapes, Text, Images];
 
-        let mut original = LayeredCommands::new();
+        let mut original = FlattenScratch::default();
         for layer in sequence {
             original.push(command(layer));
         }
@@ -1004,7 +1199,7 @@ mod tests {
             None,
         );
 
-        let mut replayed = LayeredCommands::new();
+        let mut replayed = FlattenScratch::default();
         for cmd in cached {
             replayed.push(cmd);
         }
@@ -1036,7 +1231,7 @@ mod tests {
         // previous label is not, so splitting there would buy nothing. This
         // is the shape of nearly every real tree, which is why the overlap
         // test is what keeps the group count near one.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         for column in 0..4 {
             let x = column as f32 * 200.0;
             layered.push(command_at(Shapes, Rect::new(x, 0.0, 100.0, 40.0)));
@@ -1051,7 +1246,7 @@ mod tests {
 
     #[test]
     fn a_regression_that_covers_something_still_splits() {
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         layered.push(command_at(Text, Rect::new(0.0, 0.0, 100.0, 40.0)));
         // Lands on top of the label, so it has to be drawn after it.
         layered.push(command_at(Shapes, Rect::new(20.0, 10.0, 40.0, 10.0)));
@@ -1066,7 +1261,7 @@ mod tests {
     fn an_unbounded_command_forces_a_split() {
         // A rotated or scaled command is not bounded cheaply, so it is
         // assumed to cover anything: correctness over a spare draw call.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         layered.push(command_at(Text, Rect::new(0.0, 0.0, 10.0, 10.0)));
         let mut rotated = command_at(Shapes, Rect::new(900.0, 900.0, 10.0, 10.0));
         rotated.world_transform = Transform::rotate(45.0);
@@ -1085,7 +1280,7 @@ mod tests {
         // allows — a later command is inserted *before* that text in draw
         // order. A count would then hand a cached subtree its neighbour's
         // commands, and the neighbour would be drawn twice.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         layered.push(command_at(Text, Rect::new(0.0, 0.0, 50.0, 20.0)));
 
         // Everything from here belongs to the "subtree" being captured.
@@ -1112,7 +1307,7 @@ mod tests {
         // every frame. Letting the vector find its own size instead copies a
         // large struct over as it fills: eight shapes take the buffer to
         // eight, and the label after them doubles it to sixteen to hold nine.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         let mark = layered.mark();
         for column in 0..8 {
             let x = column as f32 * 200.0;
@@ -1134,7 +1329,7 @@ mod tests {
         // The union of two labels spans the gap between them. Testing against
         // the union alone would split on a background landing in that gap,
         // which is what showcase did three times over.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         layered.push(command_at(Text, Rect::new(0.0, 0.0, 40.0, 20.0)));
         layered.push(command_at(Text, Rect::new(400.0, 0.0, 40.0, 20.0)));
         // Squarely between them, touching neither.
@@ -1150,7 +1345,7 @@ mod tests {
     fn past_the_rect_cap_the_union_decides() {
         // Beyond MAX_TRACKED_RECTS the scan would cost more than the draw
         // call it saves, so the union takes over — which can only over-split.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         for i in 0..(MAX_TRACKED_RECTS + 1) {
             let x = i as f32 * 100.0;
             layered.push(command_at(Text, Rect::new(x, 0.0, 10.0, 10.0)));
@@ -1168,13 +1363,329 @@ mod tests {
     fn empty_groups_are_dropped() {
         // A group that ends up with nothing in it would cost pipeline
         // switches for no draws.
-        let mut layered = LayeredCommands::new();
+        let mut layered = FlattenScratch::default();
         layered.push(command(Images));
         layered.push(command(Shapes));
         let mut commands = Vec::new();
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert!(layers.iter().all(|layer| !layer.is_empty()));
+    }
+
+    // -- a scratch that is filled again, frame after frame -------------
+
+    /// Where the labels and the badge sit.
+    const NEAR: Rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 20.0,
+        height: 20.0,
+    };
+    /// The card, and what is drawn over it. Far enough from `NEAR` that the
+    /// half a font-size of slack `world_bounds` allows around a label does not
+    /// reach it, which is what makes a shape here a regression covering
+    /// nothing.
+    const CARD: Rect = Rect {
+        x: 100.0,
+        y: 100.0,
+        width: 40.0,
+        height: 40.0,
+    };
+
+    fn box_node(id: NodeId, rect: Rect) -> RenderNode {
+        let mut node = RenderNode::new(id);
+        node.bounds = rect;
+        node.commands
+            .push(Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)));
+        node
+    }
+
+    fn text_node(id: NodeId, rect: Rect) -> RenderNode {
+        let mut node = RenderNode::new(id);
+        node.bounds = rect;
+        node.commands.push(Rc::new(DrawCommand::Text {
+            text: "hi".into(),
+            rect,
+            color: Color::WHITE,
+            font_size: 10.0,
+            font_family: crate::widgets::FontFamily::default(),
+            font_weight: crate::widgets::FontWeight::default(),
+        }));
+        node
+    }
+
+    fn frame_of(children: Vec<RenderNode>) -> RenderNode {
+        let mut node = RenderNode::new(1);
+        node.bounds = Rect::new(0.0, 0.0, 200.0, 200.0);
+        node.children = children.into_iter().map(Rc::new).collect();
+        node
+    }
+
+    /// One frame through `scratch`, as everything it produced written down:
+    /// what the frame carries, every command in draw order, and the groups
+    /// over them. Two frames that differ anywhere differ here.
+    fn frame_through(node: &RenderNode, scratch: &mut FlattenScratch) -> (String, usize) {
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        let carried = flatten_root_into(node, &mut commands, &mut layers, scratch);
+        (
+            format!("{carried:?}\n{commands:?}\n{layers:?}"),
+            layers.len(),
+        )
+    }
+
+    /// What `capacity` reports is the room the buffers actually hold.
+    ///
+    /// The three tests below read those numbers to decide whether a frame
+    /// refilled the last frame's buffers, and `capacity`, `command_capacity`
+    /// and `heap_rects` exist for nothing else — no frame reads them, so this
+    /// is the only thing that will ever ask whether they are right. Their
+    /// assertions are "not zero" and "not changed", which a `capacity` that
+    /// answered a constant, or added its five buckets up with the wrong
+    /// operator, would satisfy as happily as a correct one.
+    ///
+    /// So the buffers are given room by hand, in distinct amounts across two
+    /// groups, and the answer is the one arithmetic anybody can check.
+    #[test]
+    fn the_capacity_reported_is_the_room_the_buffers_hold() {
+        let mut scratch = FlattenScratch::default();
+        scratch.groups.push(LayerBuckets::default());
+
+        // Distinct primes, so that a sum taken with the wrong operator lands
+        // nowhere near this one: 2*3*5*7*11 is 2310, and going down from 2
+        // underflows rather than arriving at 28.
+        let rooms = [[2, 3, 5, 7, 11], [13, 17, 19, 23, 29]];
+        for (group, rooms) in scratch.groups.iter_mut().zip(rooms) {
+            for (bucket, room) in group.buckets_mut().into_iter().zip(rooms) {
+                bucket.reserve_exact(room);
+                assert_eq!(
+                    bucket.capacity(),
+                    room,
+                    "the allocator gave a bucket more than it asked for, so \
+                     the sum below is arithmetic about the wrong numbers"
+                );
+            }
+        }
+        let commands: usize = rooms.iter().flatten().sum();
+
+        // Two of the ten `LayerBounds` spill off the stack and the rest do
+        // not, which is the other half of `heap_rects`: inline room belongs to
+        // the group and is not a frame's doing.
+        for (group, room) in scratch.groups.iter_mut().zip([31, 37]) {
+            let bounds = &mut group.bounds[RenderLayer::Shapes as usize];
+            bounds.rects.reserve_exact(room);
+            assert!(
+                bounds.rects.spilled() && bounds.rects.capacity() == room,
+                "the rects were meant to spill onto the heap with exactly the \
+                 room asked for"
+            );
+        }
+
+        let clip = PlacedShape::from_clip(
+            &ClipRegion {
+                rect: CARD,
+                corner_radius: CornerRadii::from(0.0),
+                curvature: 1.0,
+            },
+            Transform::IDENTITY,
+        );
+        let placed = 10;
+        for _ in 0..placed {
+            scratch.clips.place(clip, Under::Nothing);
+        }
+
+        assert_eq!(
+            commands, 129,
+            "the primes above add up to this and to nothing else, which is \
+             what the sum below is being held to"
+        );
+
+        let reported = scratch.capacity();
+        assert_eq!(
+            reported.commands, commands,
+            "the commands reported are not the five buckets of both groups \
+             added together"
+        );
+        assert_eq!(
+            reported.rects,
+            31 + 37,
+            "the rects reported are not the two spilled buffers added \
+             together — the eight that never left the stack are not room a \
+             frame won"
+        );
+        assert_eq!(
+            reported.groups,
+            scratch.groups.capacity(),
+            "the groups reported are not the groups the scratch can hold"
+        );
+        assert!(
+            reported.clips >= placed,
+            "the clip tree holds {placed} clips and reports room for \
+             {} of them",
+            reported.clips
+        );
+    }
+
+    /// A scratch that has already drawn a frame flattens the next one exactly
+    /// as a fresh scratch would.
+    ///
+    /// This is the whole of what makes the scratch reusable, and every field
+    /// of it is a way to get this wrong: a `high_water` left high splits the
+    /// next frame's first command off on its own, bounds left behind split it
+    /// against rectangles nothing drew, a stale `carried` tells the loop to
+    /// publish a region this frame does not declare. None of them is visible
+    /// in the frame that left them — they are read by the frame after.
+    ///
+    /// So two different frames, and the second one is the subject. The first
+    /// leaves every field dirty: a clip, an input region, and an overlay over
+    /// the card, which is the highest layer there is.
+    ///
+    /// The second is four commands that belong in one group, each of which
+    /// something left behind would split. The card goes down first, so that a
+    /// split after it has a group to leave behind — split on the *first*
+    /// command and the group in front is empty, and an empty group is dropped
+    /// on the way out. Then the badge, turned: a rotation has no bounds a
+    /// rectangle can hold, so `covered_above` assumes the worst and a
+    /// `high_water` still at overlay splits on it. Then the label, which lifts
+    /// the mark to text. Then the tint over the card, a regression under the
+    /// label that covers nothing the label covers — and exactly what the
+    /// previous frame's overlay covered, so bounds left behind split on it.
+    #[test]
+    fn a_scratch_that_drew_a_frame_flattens_the_next_like_a_fresh_one() {
+        let first_frame = || {
+            let mut node = box_node(1, CARD);
+            node.clip = Some(ClipRegion {
+                rect: CARD,
+                corner_radius: CornerRadii::uniform(4.0),
+                curvature: 1.0,
+            });
+            node.commands.push(Rc::new(DrawCommand::InputRegion {
+                rect: CARD,
+                corner_radii: CornerRadii::from(0.0),
+                curvature: 1.0,
+                takes: true,
+            }));
+            node.overlay_commands
+                .push(Rc::new(DrawCommand::rounded_rect(CARD, Color::WHITE, 0.0)));
+            node
+        };
+
+        let second_frame = || {
+            let mut badge = box_node(3, NEAR);
+            badge.local_transform = Transform::rotate_degrees(45.0);
+            frame_of(vec![
+                box_node(6, CARD),
+                badge,
+                text_node(4, NEAR),
+                box_node(7, CARD),
+            ])
+        };
+
+        // A fresh tree each time: what is under test is the scratch, and a
+        // node flattened twice would be answered out of its own flatten cache.
+        let mut reused = FlattenScratch::default();
+        frame_through(&first_frame(), &mut reused);
+        let after_a_frame = frame_through(&second_frame(), &mut reused);
+        let from_scratch = frame_through(&second_frame(), &mut FlattenScratch::default());
+
+        assert_eq!(
+            from_scratch.1, 1,
+            "the second frame is meant to be one group of its own accord — \
+             split it here and the comparison below stops asking anything"
+        );
+        assert_eq!(
+            after_a_frame.0, from_scratch.0,
+            "the second frame came out differently because the first one had \
+             been through the same scratch"
+        );
+    }
+
+    /// A group opened again is as empty as one opened for the first time.
+    ///
+    /// The test above only ever fills the group a frame starts in. A frame
+    /// that splits leaves a *second* group behind, and the next frame that
+    /// splits is handed that one back — with its bounds and its mark from the
+    /// frame before unless `clear` reached it. It is the one buffer that is
+    /// recycled rather than refilled, and `clear` reaches it only because
+    /// `used` still says how many groups were written when the loop runs.
+    ///
+    /// Both frames split on a tint over a label. What differs is what lands in
+    /// the second group afterwards: a label over the card in the first frame,
+    /// a shape over the card in the second. That shape regresses under the
+    /// label beside it and covers nothing the label covers — but it covers
+    /// exactly what the *previous* frame put there, so a group handed back
+    /// with its bounds intact splits the frame a third time.
+    #[test]
+    fn a_group_opened_again_is_as_empty_as_a_new_one() {
+        let splitting =
+            |last: RenderNode| frame_of(vec![text_node(2, NEAR), box_node(3, NEAR), last]);
+        let first_frame = || splitting(text_node(4, CARD));
+        let second_frame = || splitting(frame_of(vec![text_node(5, NEAR), box_node(6, CARD)]));
+
+        let mut reused = FlattenScratch::default();
+        let first = frame_through(&first_frame(), &mut reused);
+        let after_a_frame = frame_through(&second_frame(), &mut reused);
+        let from_scratch = frame_through(&second_frame(), &mut FlattenScratch::default());
+
+        assert_eq!(
+            (first.1, from_scratch.1),
+            (2, 2),
+            "both frames are meant to split once and only once — a frame that \
+             does not split never reaches the second group, and one that \
+             splits twice reached it for a reason this test cannot name"
+        );
+        assert_eq!(
+            after_a_frame.0, from_scratch.0,
+            "the second frame came out differently because it was given the \
+             first frame's second group back"
+        );
+    }
+
+    /// Three frames leave the scratch the size of one.
+    ///
+    /// Groups and clips are what a frame *appends* to rather than fills: a
+    /// group is opened, a clip is placed, and the buckets and the bounds
+    /// inside them are emptied and refilled. So either one that is not given
+    /// back at the start of a frame accumulates for as long as the surface
+    /// lives, and the frames keep coming out right while it does — an empty
+    /// group is dropped on the way to `layers`, and a clip nobody names is
+    /// read by nobody.
+    ///
+    /// A tint over a label, under a clip: the tint regresses over something it
+    /// covers, so the frame is two groups and one clip, three times over.
+    #[test]
+    fn three_frames_leave_the_scratch_the_size_of_one() {
+        let scene = || {
+            let mut node = frame_of(vec![text_node(2, CARD), box_node(3, CARD)]);
+            node.clip = Some(ClipRegion {
+                rect: CARD,
+                corner_radius: CornerRadii::uniform(4.0),
+                curvature: 1.0,
+            });
+            node
+        };
+
+        let mut scratch = FlattenScratch::default();
+        frame_through(&scene(), &mut scratch);
+        frame_through(&scene(), &mut scratch);
+        let (third, groups) = frame_through(&scene(), &mut scratch);
+        let from_scratch = frame_through(&scene(), &mut FlattenScratch::default());
+
+        assert_eq!(
+            groups, 2,
+            "the tint is meant to regress over the label — one group here and \
+             this test is about a scratch that never opens a second one"
+        );
+        assert_eq!(
+            (scratch.groups.len(), scratch.clips.mark()),
+            (groups, 1),
+            "three frames of the same two groups and the same one clip left \
+             the scratch holding more than one frame's worth"
+        );
+        assert_eq!(
+            third, from_scratch.0,
+            "the third frame's groups came back holding something a fresh \
+             scratch does not put in them"
+        );
     }
 }
 
@@ -1396,7 +1907,12 @@ mod world_geometry_tests {
             )));
 
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
-        flatten_root_into(&node, &mut commands, &mut layers);
+        flatten_root_into(
+            &node,
+            &mut commands,
+            &mut layers,
+            &mut FlattenScratch::default(),
+        );
 
         let overlay = commands
             .iter()
@@ -1466,7 +1982,12 @@ mod world_geometry_tests {
         // stops describing the thing it is cutting.
         let replayed = |node: &RenderNode| {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
-            flatten_root_into(node, &mut commands, &mut layers);
+            flatten_root_into(
+                node,
+                &mut commands,
+                &mut layers,
+                &mut FlattenScratch::default(),
+            );
             let cmd = commands.first().expect("the child draws");
             let clip = cmd.clip().expect("the child clips");
             (
@@ -1553,7 +2074,12 @@ mod world_geometry_tests {
 
         let cut = |node: &RenderNode| {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
-            flatten_root_into(node, &mut commands, &mut layers);
+            flatten_root_into(
+                node,
+                &mut commands,
+                &mut layers,
+                &mut FlattenScratch::default(),
+            );
             commands
                 .iter()
                 .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { .. }))
@@ -1649,7 +2175,12 @@ mod world_geometry_tests {
 
         let overlay_clip = |node: &RenderNode| {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
-            flatten_root_into(node, &mut commands, &mut layers);
+            flatten_root_into(
+                node,
+                &mut commands,
+                &mut layers,
+                &mut FlattenScratch::default(),
+            );
             commands
                 .iter()
                 .find(|c| c.layer == RenderLayer::Overlay)

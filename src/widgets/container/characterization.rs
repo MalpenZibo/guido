@@ -126,7 +126,12 @@ impl H {
         let node = std::rc::Rc::new(node);
         let mut commands = Vec::new();
         let mut layers = Vec::new();
-        let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers);
+        let _ = crate::renderer::flatten_root_into(
+            &node,
+            &mut commands,
+            &mut layers,
+            &mut crate::renderer::FlattenScratch::default(),
+        );
         let blur = crate::blur::regions_from_commands(&commands);
         let input = crate::region::input_ops_from_commands(&commands);
 

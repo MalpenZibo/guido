@@ -116,6 +116,23 @@ impl ClipTree {
         self.placed.len()
     }
 
+    /// Forget the clips of the frame that has been drawn, keeping the room
+    /// they took for the frame that follows it.
+    ///
+    /// The references go with them: a clip is a name for one frame only, and
+    /// the entries a cached subtree keeps hold the `Rc`s they still need.
+    pub(crate) fn clear(&mut self) {
+        // Destructured, as the flattener's own resets are: a field added to
+        // this tree has to be answered for here.
+        let Self { placed } = self;
+        placed.clear();
+    }
+
+    /// How many clips this tree can hold before it allocates again.
+    pub(crate) fn capacity(&self) -> usize {
+        self.placed.capacity()
+    }
+
     /// Where `index` cuts, with every ancestor already taken into account.
     fn shape(&self, index: ClipIndex) -> PlacedShape {
         self.placed[index.0].reference.shape()

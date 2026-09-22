@@ -1841,6 +1841,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
             &surface.root_node,
             &mut surface.flattened_commands,
             &mut surface.command_layers,
+            &mut surface.flatten_scratch,
         );
     });
 
