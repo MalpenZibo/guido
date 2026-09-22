@@ -17,6 +17,8 @@
 //! - Flatten cache hits/misses
 //! - Damage region distribution
 //! - Per-phase timing (paint, flatten, GPU render, cache)
+//! - What the frames asked of the allocator, when the binary installed
+//!   [`crate::heap::CountingAllocator`]
 
 /// Reasons why a layout was executed (can be multiple).
 /// Note: Animations and property changes flow through the reactive system via mark_needs_layout(),
@@ -73,6 +75,19 @@ pub struct StatsSnapshot {
     pub window_children_iterated: u64,
     pub window_declined_children: u64,
     pub window_declined_containers: u64,
+    /// How many times these frames went to the allocator. Zero unless the
+    /// binary installed [`crate::heap::CountingAllocator`]: the library may
+    /// not.
+    ///
+    /// Sampled at [`reset_stats`] and at each [`end_frame`], so a consumer
+    /// that scopes one frame is told what that whole frame asked for and not
+    /// only what the renderer's part of it did — dispatching the events that
+    /// provoked a frame allocates too, and a change that moved its cost from
+    /// paint into input would otherwise read as free.
+    pub allocations: u64,
+    /// The bytes behind [`allocations`](Self::allocations). A reallocation
+    /// asks for the difference between the old size and the new.
+    pub bytes_allocated: u64,
 }
 
 /// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
@@ -175,8 +190,19 @@ mod inner {
         window_children_iterated: u64,
         window_declined_children: u64,
         window_declined_containers: u64,
+        // The heap: what the frames asked for, and where the allocator's
+        // process-wide totals stood when the last frame was folded in.
+        allocations: u64,
+        bytes_allocated: u64,
+        heap_mark: (u64, u64),
         // Report timing
         last_print: Instant,
+    }
+
+    /// The allocator's totals, now. Both are monotonic, so a later reading
+    /// minus an earlier one is what happened in between.
+    fn heap_now() -> (u64, u64) {
+        (crate::heap::allocations(), crate::heap::bytes_allocated())
     }
 
     impl RenderStats {
@@ -205,8 +231,25 @@ mod inner {
                 window_children_iterated: 0,
                 window_declined_children: 0,
                 window_declined_containers: 0,
+                allocations: 0,
+                bytes_allocated: 0,
+                heap_mark: heap_now(),
                 last_print: Instant::now(),
             }
+        }
+
+        /// Fold what the allocator has been asked for since the last sample
+        /// into the total, and mark where it now stands.
+        ///
+        /// The samples are taken at [`reset_stats`] and at the end of every
+        /// frame, so a consumer that scopes one frame with `reset_stats` — a
+        /// benchmark does — is told what that frame asked for, and a driver
+        /// reporting once a second is told what the second asked for.
+        fn sample_heap(&mut self) {
+            let (allocations, bytes) = heap_now();
+            self.allocations += allocations - self.heap_mark.0;
+            self.bytes_allocated += bytes - self.heap_mark.1;
+            self.heap_mark = (allocations, bytes);
         }
 
         /// Every counter back to nothing and the second back to now, which is
@@ -367,6 +410,8 @@ mod inner {
                 window_children_iterated: stats.window_children_iterated,
                 window_declined_children: stats.window_declined_children,
                 window_declined_containers: stats.window_declined_containers,
+                allocations: stats.allocations,
+                bytes_allocated: stats.bytes_allocated,
             }
         })
     }
@@ -393,6 +438,7 @@ mod inner {
     pub fn end_frame(damage: &DamageRegion) {
         STATS.with(|s| {
             let mut stats = s.borrow_mut();
+            stats.sample_heap();
 
             match damage {
                 DamageRegion::None => stats.damage_none += 1,
@@ -488,6 +534,24 @@ mod inner {
                 gt.avg_us, gt.min_us, gt.max_us,
                 ct.avg_us, ct.min_us, ct.max_us,
             );
+
+            // The heap, for a binary that installed the counting allocator.
+            // Nothing did, and there is no line: a permanent `heap: 0` would
+            // be reporting the absence of an allocator as a frame that
+            // allocated nothing.
+            //
+            // The first of these lines is charged everything the process
+            // allocated before its first frame — the mark is taken when this
+            // thread's counters are built, and only a frame moves it. It is the
+            // second line onwards that describes a second's frames. A consumer
+            // that wants one frame's number scopes it with `reset_stats`, which
+            // is what the benchmarks do.
+            if stats.allocations > 0 {
+                eprintln!(
+                    "  heap: allocations={} bytes={}",
+                    stats.allocations, stats.bytes_allocated
+                );
+            }
 
             // The paint window, and what it could not narrow.
             if stats.window_children_total > 0 || stats.window_declined_children > 0 {

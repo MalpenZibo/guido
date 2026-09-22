@@ -749,8 +749,31 @@ This prints per-second statistics showing:
 - Paint child cache hits/misses
 - Flatten cache hits/misses
 - Damage region distribution (none, partial, full)
+- What those frames asked of the allocator, if anything installed the counter
 
 The feature has zero overhead when disabled (code is completely compiled out).
+
+### What a Frame Costs the Heap
+
+`src/heap.rs` holds `CountingAllocator`, a `GlobalAlloc` that forwards to the
+system allocator and counts on the way through. **The library never installs
+it**: a `#[global_allocator]` may only be set by the binary that links the
+program, so the two benchmarks and the tests that read the figures install it
+themselves, the line `dhat` and `stats_alloc` draw for the same reason.
+
+The counters are the whole process's, because the heap is — wgpu's threads and
+the graphics driver's allocate inside a frame too. `render_stats` samples them
+at `reset_stats` and at every `end_frame` and reports the delta, which is what
+makes a process-wide number a frame's; `Region` does the same subtraction over
+a wider stretch, and brings the live-byte high-water mark down to the level it
+starts at so two runs in one process each report their own peak.
+
+Without `render-stats` the three hooks the allocator calls are empty, so the
+counters never move and every reader answers zero. The readers are one
+implementation either way: a second set returning literal zeroes, compiled only
+when the feature is off, is a copy that no build under test contains — five of
+its mutants survived on the branch that introduced this, which is how the
+duplicate was found.
 
 ## Key Files
 
