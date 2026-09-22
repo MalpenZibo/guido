@@ -37,6 +37,7 @@ Single-threaded reactive primitives inspired by SolidJS and Floem.
 - `Effect` - Side effects that re-run when tracked signals change
 - `WriteSignal<T>` - `Send` handle for background thread updates, obtained via `RwSignal::writer()`
 - `GlobalSignal<T>` (internal) - a signal whose owner is the *application*, declared as a `static`. See "Owners" below.
+- `Prop<T>` - what a widget *property field* holds: `Unset`, `Const(T)` or `Reactive(Signal<T>)`. A constant keeps the constant and claims no signal slot, which a `create_stored()` did anyway. Produced by `IntoSignal::into_prop()`, which reads the case off the marker.
 
 **How it works:**
 ```rust
@@ -745,6 +746,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 | `src/renderer/clip.rs` | The frame's clip tree, which draw commands name rather than copy |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
 | `src/reactive/signal.rs` | Signal implementation |
+| `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
 | `src/transform.rs` | Transform matrix operations |
 | `src/shape.rs` | A rounded rect and the transform that places it — one type for clips, compositor regions and the backdrop mask |
@@ -757,7 +759,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 ### New Widget Property
 1. Add field to widget struct
 2. Add builder method returning `Self`
-3. If reactive, use `Signal<T>` type (via `IntoSignal<T>` in builder methods)
+3. Give the field type `Prop<T>` and have the builder method take `impl IntoSignal<T, M>` and store `value.into_prop()`. Read it with `get_or` / `get_or_untracked`, or `get_finite_or` where a bad number has to be coerced. Do **not** store `Option<Signal<T>>`: `into_signal()` allocates an arena slot for a constant, which is the ~112 bytes per property #450 removed.
 4. Handle in `paint()` method
 
 ### New State Layer Override

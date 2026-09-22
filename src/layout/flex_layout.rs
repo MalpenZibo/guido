@@ -32,7 +32,7 @@
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
-    reactive::{IntoSignal, OptionSignalExt, Signal},
+    reactive::{IntoSignal, Prop, Signal},
     tree::{LayoutCtx, Tree, WidgetId},
 };
 
@@ -43,9 +43,9 @@ const MIN_VISIBLE_SIZE: f32 = 0.5;
 /// Flex layout for rows and columns
 pub struct Flex {
     direction: Signal<Axis>,
-    spacing: Option<Signal<f32>>,
-    main_alignment: Option<Signal<MainAlignment>>,
-    cross_alignment: Option<Signal<CrossAlignment>>,
+    spacing: Prop<f32>,
+    main_alignment: Prop<MainAlignment>,
+    cross_alignment: Prop<CrossAlignment>,
 
     child_sizes: Vec<Size>,
     fill_indices: Vec<usize>,
@@ -60,9 +60,9 @@ impl Flex {
     pub fn new<M>(direction: impl IntoSignal<Axis, M>) -> Self {
         Self {
             direction: direction.into_signal(),
-            spacing: None,
-            main_alignment: None,
-            cross_alignment: None,
+            spacing: Prop::Unset,
+            main_alignment: Prop::Unset,
+            cross_alignment: Prop::Unset,
             child_sizes: Vec::with_capacity(8),
             fill_indices: Vec::new(),
         }
@@ -80,19 +80,19 @@ impl Flex {
 
     /// Set the spacing between children
     pub fn spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
-        self.spacing = Some(spacing.into_signal());
+        self.spacing = spacing.into_prop();
         self
     }
 
     /// Set the main axis alignment
     pub fn main_alignment<M>(mut self, alignment: impl IntoSignal<MainAlignment, M>) -> Self {
-        self.main_alignment = Some(alignment.into_signal());
+        self.main_alignment = alignment.into_prop();
         self
     }
 
     /// Set the cross axis alignment
     pub fn cross_alignment<M>(mut self, alignment: impl IntoSignal<CrossAlignment, M>) -> Self {
-        self.cross_alignment = Some(alignment.into_signal());
+        self.cross_alignment = alignment.into_prop();
         self
     }
 

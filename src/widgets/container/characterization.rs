@@ -18,7 +18,7 @@ use crate::animation::{Animate, Keyframes, Repeat, SpringConfig, TimingFunction,
 use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
-use crate::reactive::create_signal;
+use crate::reactive::{Signal, create_signal};
 use crate::renderer::{DrawCommand, RenderNode};
 use crate::widgets::CornerRadii;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
@@ -3644,8 +3644,8 @@ fn a_state_override_replaces_the_whole_corner_shape() {
     let hovered = c.interaction.as_ref().expect("a hover layer").states[0]
         .1
         .corners
-        .expect("which declares a shape")
-        .get_untracked();
+        .get_untracked()
+        .expect("which declares a shape");
 
     assert_eq!(hovered.curvature, 1.0, "rounded, not squircle");
     assert_eq!(hovered.radii.top_left, 20.0);
@@ -4317,6 +4317,84 @@ fn the_damage_reach_covers_the_shadow_a_hover_can_reach() {
     let mut flat = H::new(container().width(40.0).height(40.0).background(Color::RED));
     flat.fit(100.0, 100.0);
     assert_eq!(flat.tree.paint_overflow(flat.root), 0.0);
+}
+
+/// A transform nobody can compute reaches nowhere, rather than reaching NaN.
+///
+/// `max_transform_reach` is the one caller of the *quiet* half of `FiniteOr`,
+/// quiet because the paint beside it already reports the same bad number and
+/// saying it twice would name one mistake two ways.
+///
+/// This pins the answer, and it does not pin the coercion that produces it:
+/// defeat `get_finite_or_quietly` and this still passes, because every step
+/// between here and there is an `f32::max`, and `f32::max` returns the other
+/// operand when one is NaN. The bad number is absorbed twice over. So the
+/// coercion on this path is belt to the downstream braces rather than the only
+/// thing holding it up — which is worth knowing, because a mutation run
+/// reports that guard as unwatched and it is closer to unwatchable.
+#[test]
+fn a_transform_that_is_not_a_number_reaches_nowhere() {
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .translate((f32::NAN, f32::NAN)),
+    );
+    h.fit(200.0, 200.0);
+
+    let reach = h.tree.paint_overflow(h.root);
+    assert!(
+        reach.is_finite(),
+        "a translate nobody can compute put {reach} in the damage rect"
+    );
+    assert_eq!(reach, 0.0, "and it is coerced away, not merely made finite");
+}
+
+/// A state layer that declares *one* of the three transforms still counts
+/// towards the reach.
+///
+/// `max_transform_reach` skips a layer that moves nothing, and the skip is
+/// three `is_set` checks joined by `&&`. Every existing reach test declares a
+/// shadow or nothing at all, so dropping any one of those negations passed
+/// unnoticed: a layer declaring only a translate would be skipped, and the
+/// damage rect would stop one hover short of where the container goes.
+///
+/// One layer per transform, because the three are separate terms and a test
+/// that declared all three would survive two of the three mutations.
+#[test]
+fn a_layer_declaring_one_transform_alone_still_counts_towards_the_reach() {
+    let reach_of = |decorate: fn(StateStyle) -> StateStyle| {
+        let mut h = H::new(
+            container()
+                .width(40.0)
+                .height(40.0)
+                .background(Color::RED)
+                .when_hovered(decorate),
+        );
+        h.fit(200.0, 200.0);
+        h.tree.paint_overflow(h.root)
+    };
+
+    assert!(
+        reach_of(|s| s.translate(Translate::new(30.0, 0.0))) > 0.0,
+        "a layer that only translates still moves the box"
+    );
+    assert!(
+        reach_of(|s| s.rotate(45.0)) > 0.0,
+        "a layer that only rotates still sweeps the corners out"
+    );
+    assert!(
+        reach_of(|s| s.scale(Scale::uniform(2.0))) > 0.0,
+        "a layer that only scales still grows the box"
+    );
+
+    // And the skip itself is real: a layer that moves nothing pays nothing.
+    assert_eq!(
+        reach_of(|s| s.background(Color::BLUE)),
+        0.0,
+        "a layer that only recolours reaches no further than the box"
+    );
 }
 
 /// A spring goes past its target on purpose, so a reach measured from the target
@@ -5481,6 +5559,89 @@ fn a_descendant_declaring_itself_enabled_stays_disabled() {
     );
 }
 
+/// The same nesting with a *reactive* ancestor, which is the other half of the
+/// fold and the half a constant pair cannot speak for.
+///
+/// Two constants fold to a constant and never ask again; anything else builds
+/// a derived node that asks each time. That node's `&&` was the one thing in
+/// `fold_enabled` nothing watched — swap it for `||` and every test still
+/// passed, because no test had ever nested two units where one side was a
+/// signal.
+///
+/// Both directions, because `&&` and `||` agree whenever the two sides do.
+#[test]
+fn a_reactive_ancestor_still_folds_with_a_descendants_own_answer() {
+    let above = create_signal(false);
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        container().width(100.0).height(100.0).enabled(above).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .enabled(true)
+                .child(box_of(50.0, 20.0).on_click(move || counter.set(counter.get() + 1))),
+        ),
+    );
+    h.fit(500.0, 500.0);
+
+    // false && true: the ancestor's no wins. `||` would say yes here.
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 0, "a reactive ancestor saying no still wins");
+
+    let inner = h.children()[0];
+    assert!(
+        h.tree
+            .nearest_control(inner)
+            .expect("declaring `enabled` makes a container an interaction unit")
+            .is_disabled(),
+        "and the inner unit answers for the ancestor it cannot see"
+    );
+
+    // true && true: both agree, and the click lands.
+    above.set(true);
+    h.fit(500.0, 500.0);
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 1, "both say yes, so the click lands");
+}
+
+/// And the mirror: a constant ancestor over a reactive descendant, which takes
+/// the same derived arm from the other side.
+#[test]
+fn a_reactive_descendant_under_a_constant_ancestor_folds_too() {
+    let own = create_signal(true);
+    let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = clicks.clone();
+    let mut h = H::new(
+        container().width(100.0).height(100.0).enabled(false).child(
+            container()
+                .width(80.0)
+                .height(80.0)
+                .enabled(own)
+                .child(box_of(50.0, 20.0).on_click(move || counter.set(counter.get() + 1))),
+        ),
+    );
+    h.fit(500.0, 500.0);
+
+    // false && true again, with the reactive side underneath this time.
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 0, "the constant ancestor's no wins");
+
+    // false && false: still no, and `||` would still disagree with the line above.
+    own.set(false);
+    h.fit(500.0, 500.0);
+    for event in click_at(5.0, 5.0) {
+        h.send(event);
+    }
+    assert_eq!(clicks.get(), 0, "and saying no itself changes nothing");
+}
+
 /// The gate is a signal like every other declared property: flipping it back
 /// lets the next click through, and the write moves nothing, so it costs no
 /// layout.
@@ -6141,6 +6302,57 @@ macro_rules! emit_property_tests {
                     );
                 }
 
+                /// A plain value claims no signal slot; the same value
+                /// behind a closure claims exactly one.
+                ///
+                /// Both halves matter. That the constant is free is the claim;
+                /// that the closure still costs a slot is what says the test
+                /// is looking at the declaration at all, and not at a tree
+                /// that happens to allocate nothing.
+                ///
+                /// The two trees are the same recipe, so whatever the recipe
+                /// builds around the declaration — a child, a sibling, the
+                /// container's own slot — cancels, and the difference is the
+                /// declaration alone. `slot_count` counts every slot ever
+                /// allocated, so a constant that reaches `alloc_slot` shows up
+                /// whether or not it is later disposed.
+                ///
+                /// Over the table rather than once, because the eleven
+                /// properties do not share a setter — `width` and `height` go
+                /// through `declare_size` and the other nine through
+                /// `declare_anim`, and a constant that stays free in one is no
+                /// evidence about the other.
+                #[test]
+                fn a_constant_claims_no_slot_where_a_closure_claims_one() {
+                    use crate::reactive::storage::slot_count;
+                    let value = $value;
+
+                    // Built and dropped once before either measurement, so
+                    // whatever a first container in a fresh runtime sets up is
+                    // behind both of them. `$declared_as` is substituted at
+                    // each use rather than bound to a name: a closure is not
+                    // generic, so one binding could not take a value here and
+                    // a closure below.
+                    drop(($declared_as)(value($from)));
+
+                    let mark = slot_count();
+                    drop(($declared_as)(value($from)));
+                    let constant = slot_count() - mark;
+
+                    let mark = slot_count();
+                    drop(($declared_as)(move || value($from)));
+                    let reactive = slot_count() - mark;
+
+                    assert_eq!(
+                        constant,
+                        reactive - 1,
+                        "{}: a constant declaration must claim no slot, and a \
+                         closure must claim one — got {constant} against \
+                         {reactive}",
+                        stringify!($name),
+                    );
+                }
+
                 emit_timeline_test!(
                     $timeline, $name, $value, $declared_as, $probe, $from, $to, $base
                 );
@@ -6150,3 +6362,49 @@ macro_rules! emit_property_tests {
 }
 
 crate::widgets::container::animated_properties::animated_properties!(emit_property_tests);
+
+/// Seven constant properties on a container cost what the bare container costs.
+///
+/// The per-property test above asks one question of each of the eleven; this
+/// asks the question #450 was opened about, which is what a *row of a list*
+/// costs. Six is the number the ablation in that issue measured — 194 MB
+/// against 149 MB at twenty thousand rows, and the 45 MB between them was
+/// these. Seven rather than six only because a border declares its width and
+/// its colour in the one call.
+///
+/// The container's own slot is on the other side of the comparison rather than
+/// asserted away: a bare `container()` claims one, and that is the ~1.08 KB
+/// base the issue names as a non-goal.
+#[test]
+fn a_container_of_constants_costs_what_an_empty_one_costs() {
+    use crate::reactive::storage::slot_count;
+    use crate::widgets::{Color, Corners, Padding};
+
+    let furnish = || {
+        container()
+            .width(200.0)
+            .height(100.0)
+            .padding(Padding::all(8.0))
+            .background(Color::RED)
+            .corners(Corners::rounded(4.0))
+            .border(2.0, Color::BLACK)
+    };
+
+    // Once through first, so a fresh runtime's own setup is behind both marks.
+    drop(furnish());
+
+    let mark = slot_count();
+    drop(container());
+    let bare = slot_count() - mark;
+
+    let mark = slot_count();
+    drop(furnish());
+    let furnished = slot_count() - mark;
+
+    assert_eq!(
+        furnished,
+        bare,
+        "seven constant properties claimed {} slots between them",
+        furnished - bare
+    );
+}

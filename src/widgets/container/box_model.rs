@@ -76,12 +76,14 @@ impl Container {
         // exists either way.
         let has_fixed_width = self
             .width
-            .as_ref()
-            .is_some_and(|w| w.get_untracked().exact.is_some());
+            .get_or_untracked(Length::default())
+            .exact
+            .is_some();
         let has_fixed_height = self
             .height
-            .as_ref()
-            .is_some_and(|h| h.get_untracked().exact.is_some());
+            .get_or_untracked(Length::default())
+            .exact
+            .is_some();
         let tight_width = constraints.min_width == constraints.max_width;
         let tight_height = constraints.min_height == constraints.max_height;
         (has_fixed_width || tight_width) && (has_fixed_height || tight_height)

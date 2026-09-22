@@ -22,7 +22,7 @@
 //! [`Length`]: crate::layout::Length
 //! [`Pivot`]: crate::pivot::Pivot
 
-use crate::reactive::Signal;
+use crate::reactive::Prop;
 
 /// A value that can say whether every number inside it is finite.
 ///
@@ -62,20 +62,29 @@ pub(crate) trait FiniteOr<T> {
     fn get_finite_or_quietly(&self, default: T) -> T;
 }
 
-impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
+impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Prop<T> {
+    // Matching on `get` rather than reading through `get_or`, so `default` is
+    // not cloned in order to be dropped. These run per property per container
+    // per painted frame, and a `Length` or a `Shadow` is 36 bytes of it.
+    //
+    // An undeclared property is `None` and falls back without a word: there is
+    // no declaration to report.
     fn get_finite_or(&self, default: T, id: crate::tree::WidgetId, property: &'static str) -> T {
-        let value = crate::reactive::OptionSignalExt::get_or(self, default.clone());
-        if value.all_finite() {
-            value
-        } else {
-            crate::reactive::diagnostics::non_finite_value(id, property);
-            default
+        match self.get() {
+            Some(value) if value.all_finite() => value,
+            Some(_) => {
+                crate::reactive::diagnostics::non_finite_value(id, property);
+                default
+            }
+            None => default,
         }
     }
 
     fn get_finite_or_quietly(&self, default: T) -> T {
-        let value = crate::reactive::OptionSignalExt::get_or(self, default.clone());
-        if value.all_finite() { value } else { default }
+        match self.get() {
+            Some(value) if value.all_finite() => value,
+            _ => default,
+        }
     }
 }
 
@@ -101,12 +110,13 @@ impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Option<Signal<T>> {
 /// was read on the way in, so a frame where one of them stops being NaN is a
 /// frame this widget is woken for.
 pub(crate) fn first_finite_override<T: AllFinite + Clone + 'static>(
-    overrides: &[Signal<T>],
+    overrides: &[Prop<T>],
     base: T,
 ) -> T {
-    for signal in overrides {
-        let value = signal.get();
-        if value.all_finite() {
+    for declared in overrides {
+        if let Some(value) = declared.get()
+            && value.all_finite()
+        {
             return value;
         }
     }

@@ -15,7 +15,7 @@
 //!     .child(text("Interactive button"));
 //! ```
 
-use crate::reactive::{IntoSignal, Signal, create_stored};
+use crate::reactive::{IntoSignal, Prop, Signal, create_stored};
 use crate::renderer::Shadow;
 use crate::transform::{Scale, Translate};
 use crate::widgets::Color;
@@ -126,17 +126,17 @@ pub struct StateStyle {
     /// is one field rather than two that could disagree.
     pub border: Option<BorderOverride>,
     /// Corner radius override
-    pub corners: Option<Signal<crate::widgets::Corners>>,
+    pub corners: Prop<crate::widgets::Corners>,
     /// Displacement override
-    pub translate: Option<Signal<Translate>>,
+    pub translate: Prop<Translate>,
     /// Rotation override, in degrees
-    pub rotate: Option<Signal<f32>>,
+    pub rotate: Prop<f32>,
     /// Scale override (e.g., the shrink on press)
-    pub scale: Option<Signal<Scale>>,
+    pub scale: Prop<Scale>,
     /// Shadow override
-    pub shadow: Option<Signal<Shadow>>,
+    pub shadow: Prop<Shadow>,
     /// Override the background alpha channel (applied after background override)
-    pub alpha: Option<Signal<f32>>,
+    pub alpha: Prop<f32>,
     /// Ripple effect configuration (typically used in a pressed layer)
     pub ripple: Option<RippleConfig>,
 }
@@ -179,9 +179,9 @@ impl StateStyle {
     /// `InteractionState::declares_transform`.
     pub(crate) fn moves_anything(&self) -> Moves {
         Moves {
-            translate: self.translate.is_some(),
-            rotate: self.rotate.is_some(),
-            scale: self.scale.is_some(),
+            translate: self.translate.is_set(),
+            rotate: self.rotate.is_set(),
+            scale: self.scale.is_set(),
         }
     }
 
@@ -280,19 +280,19 @@ impl StateStyle {
     /// curvature are one value precisely because half a corner is not a
     /// corner.
     pub fn corners<M>(mut self, corners: impl IntoSignal<crate::widgets::Corners, M>) -> Self {
-        self.corners = Some(corners.into_signal());
+        self.corners = corners.into_prop();
         self
     }
 
     /// Displace the container while it is in this state.
     pub fn translate<M>(mut self, translate: impl IntoSignal<Translate, M>) -> Self {
-        self.translate = Some(translate.into_signal());
+        self.translate = translate.into_prop();
         self
     }
 
     /// Turn the container while it is in this state, in degrees.
     pub fn rotate<M>(mut self, degrees: impl IntoSignal<f32, M>) -> Self {
-        self.rotate = Some(degrees.into_signal());
+        self.rotate = degrees.into_prop();
         self
     }
 
@@ -305,7 +305,7 @@ impl StateStyle {
     /// container().when_pressed(|s| s.scale(0.98));
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoSignal<Scale, M>) -> Self {
-        self.scale = Some(factor.into_signal());
+        self.scale = factor.into_prop();
         self
     }
 
@@ -333,7 +333,7 @@ impl StateStyle {
     ///     .when_hovered(|s| s.shadow(LIFTED.transition(80.0)));
     /// ```
     pub fn shadow<M>(mut self, shadow: impl IntoSignal<Shadow, M>) -> Self {
-        self.shadow = Some(shadow.into_signal());
+        self.shadow = shadow.into_prop();
         self
     }
 
@@ -350,7 +350,7 @@ impl StateStyle {
     ///     .when_hovered(|s| s.lighter(0.1).alpha(0.7)); // boost alpha on hover
     /// ```
     pub fn alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
-        self.alpha = Some(alpha.into_signal());
+        self.alpha = alpha.into_prop();
         self
     }
 

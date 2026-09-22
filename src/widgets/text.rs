@@ -1,7 +1,7 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
-use crate::reactive::{IntoSignal, OptionSignalExt, Signal};
+use crate::reactive::{IntoSignal, Prop, Signal};
 use crate::renderer::{PaintContext, measure_text_full};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -56,10 +56,10 @@ pub struct Text {
     own_hover: Option<RwSignal<bool>>,
     /// Whether the text wraps at the width it is given. `None` is the default,
     /// which wraps — an absent signal costs a null check rather than a read.
-    wrap: Option<Signal<bool>>,
+    wrap: Prop<bool>,
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
-    backdrop_blur: Option<Signal<f32>>,
+    backdrop_blur: Prop<f32>,
     /// How the declared colour and size move, when they were declared with a
     /// motion. Absent for every text that only says what it is.
     anims: Option<Box<TextAnims>>,
@@ -83,8 +83,8 @@ impl Text {
             style: None,
             states: Vec::new(),
             own_hover: None,
-            wrap: None,
-            backdrop_blur: None,
+            wrap: Prop::Unset,
+            backdrop_blur: Prop::Unset,
             anims: None,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: DEFAULT_FONT_SIZE,
@@ -109,7 +109,7 @@ impl Text {
     /// maximum width and clipped by whatever contains it — so a write here
     /// re-measures rather than merely repainting.
     pub fn wrap<M>(mut self, wrap: impl IntoSignal<bool, M>) -> Self {
-        self.wrap = Some(wrap.into_signal());
+        self.wrap = wrap.into_prop();
         self
     }
 
@@ -151,7 +151,7 @@ impl Text {
     /// copies, so it covers the letter's own area as well as its edge, which is
     /// invisible under an opaque fill and an opaque letter over glass.
     pub fn backdrop_blur<M>(mut self, radius: impl IntoSignal<f32, M>) -> Self {
-        self.backdrop_blur = Some(radius.into_signal());
+        self.backdrop_blur = radius.into_prop();
         self
     }
 
@@ -333,7 +333,7 @@ impl Widget for Text {
                 }),
                 style.stroke(),
                 style.shadow(),
-                self.backdrop_blur.map(|radius| radius.get()),
+                self.backdrop_blur.get(),
             )
         };
         // A frosted text takes its stroke as a contour instead: drawn from the

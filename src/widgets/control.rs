@@ -33,7 +33,7 @@
 //! switch the row's highlight off while the pointer is plainly still on it.
 
 use crate::reactive::focus::focus_path;
-use crate::reactive::signal::{OptionSignalExt, RwSignal, Signal};
+use crate::reactive::{Prop, signal::RwSignal};
 use crate::tree::WidgetId;
 
 use super::container::InteractionFlags;
@@ -50,16 +50,17 @@ pub struct Control {
     /// Whether this unit takes input, with its ancestors already folded in —
     /// see [`Container::enabled`](crate::widgets::Container::enabled).
     ///
-    /// `None` where nothing at or above this unit was declared with one, which
-    /// is nearly every control there is and costs no signal at all.
-    enabled: Option<Signal<bool>>,
+    /// [`Unset`](Prop::Unset) where nothing at or above this unit was declared
+    /// with one, which is nearly every control there is and costs nothing at
+    /// all.
+    enabled: Prop<bool>,
 }
 
 impl Control {
     pub(crate) fn new(
         id: WidgetId,
         flags: RwSignal<InteractionFlags>,
-        enabled: Option<Signal<bool>>,
+        enabled: Prop<bool>,
     ) -> Self {
         Self { id, flags, enabled }
     }
@@ -110,7 +111,7 @@ impl Control {
     }
 
     /// The folded answer itself, so a nested unit can fold its own into it.
-    pub(crate) fn enabled_signal(&self) -> Option<Signal<bool>> {
+    pub(crate) fn enabled_prop(&self) -> Prop<bool> {
         self.enabled
     }
 

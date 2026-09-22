@@ -34,7 +34,7 @@
 //! container().when_hovered(|s| s.background(HOT.transition(900.0)));
 //! ```
 
-use crate::reactive::{IntoSignal, IntoVal, Signal};
+use crate::reactive::{IntoSignal, IntoVal, Prop};
 
 use super::{Animatable, Keyframes, TransitionConfig};
 
@@ -44,7 +44,7 @@ use super::{Animatable, Keyframes, TransitionConfig};
 /// can already be a property, and accepted wherever a `Container` setter
 /// declares an animatable property.
 pub struct Animated<T> {
-    signal: Signal<T>,
+    prop: Prop<T>,
     /// Boxed and absent by default, for the reason `AnimationState` boxes its
     /// `Timeline`: every animatable setter routes through here, and almost
     /// every call declares no motion at all. A `Motion` owns a `Keyframes` and
@@ -103,8 +103,8 @@ impl<T> Animated<T> {
     }
 
     /// The value and its motion, taken apart by the setter that installs them.
-    pub(crate) fn into_parts(self) -> (Signal<T>, Option<Box<Motion<T>>>) {
-        (self.signal, self.motion)
+    pub(crate) fn into_parts(self) -> (Prop<T>, Option<Box<Motion<T>>>) {
+        (self.prop, self.motion)
     }
 
     /// The value and the timing it eases with, for a property whose declared
@@ -117,7 +117,7 @@ impl<T> Animated<T> {
     /// not exist. That bound is what makes this a narrowing rather than a
     /// value quietly dropped, and relaxing it would have to bring a spelling
     /// for a timeline on a size with it.
-    pub(crate) fn into_eased(self) -> (Signal<T>, Option<(TransitionConfig, Option<T>)>) {
+    pub(crate) fn into_eased(self) -> (Prop<T>, Option<(TransitionConfig, Option<T>)>) {
         let ease = match self.motion.map(|motion| *motion) {
             Some(Motion::Ease { config, enter_from }) => Some((config, enter_from)),
             None => None,
@@ -130,7 +130,7 @@ impl<T> Animated<T> {
                 unreachable!("a timeline needs T: Animatable, which this T is not")
             }
         };
-        (self.signal, ease)
+        (self.prop, ease)
     }
 }
 
@@ -173,7 +173,7 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// ```
     fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T> {
         Animated {
-            signal: self.into_signal(),
+            prop: self.into_prop(),
             motion: Some(Box::new(Motion::Ease {
                 config: transition.into(),
                 enter_from: None,
@@ -219,7 +219,7 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
         T: Animatable,
     {
         Animated {
-            signal: self.into_signal(),
+            prop: self.into_prop(),
             motion: Some(Box::new(Motion::Play { keyframes })),
         }
     }
@@ -255,7 +255,7 @@ pub trait IntoAnimated<T: Clone + 'static, M> {
 impl<T: Clone + 'static, M, S: IntoSignal<T, M>> IntoAnimated<T, Plain<M>> for S {
     fn into_animated(self) -> Animated<T> {
         Animated {
-            signal: self.into_signal(),
+            prop: self.into_prop(),
             motion: None,
         }
     }

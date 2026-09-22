@@ -29,8 +29,7 @@ use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::{
-    IntoSignal, OptionSignalExt, RwSignal, Signal, create_derived, create_signal,
-    with_signal_tracking,
+    IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
@@ -195,10 +194,10 @@ pub enum Overflow {
 /// spent 24 here on the two fields this replaces.
 #[derive(Default)]
 pub(super) struct TransformProps {
-    pub(super) translate: Option<Signal<Translate>>,
-    pub(super) rotate: Option<Signal<f32>>,
-    pub(super) scale: Option<Signal<Scale>>,
-    pub(super) pivot: Option<Signal<Pivot>>,
+    pub(super) translate: Prop<Translate>,
+    pub(super) rotate: Prop<f32>,
+    pub(super) scale: Prop<Scale>,
+    pub(super) pivot: Prop<Pivot>,
 }
 
 bitflags::bitflags! {
@@ -265,8 +264,8 @@ pub(super) struct InteractionState {
     /// `enabled` is what a style resolves against, and that question has to be
     /// answerable with no tree — from inside a `create_derived` closure — so
     /// the ancestry is folded once, at registration, into a signal.
-    pub(super) declared_enabled: Option<Signal<bool>>,
-    pub(super) enabled: Option<Signal<bool>>,
+    pub(super) declared_enabled: Prop<bool>,
+    pub(super) enabled: Prop<bool>,
     pub(super) ripple: RippleState,
 }
 
@@ -285,8 +284,8 @@ impl Default for InteractionState {
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
             declares_transform: Moves::default(),
-            declared_enabled: None,
-            enabled: None,
+            declared_enabled: Prop::Unset,
+            enabled: Prop::Unset,
             ripple: RippleState::new(),
         }
     }
@@ -406,16 +405,16 @@ pub struct Container {
     pub(super) children_source: ChildrenSource,
 
     // Styling properties
-    pub(super) padding: Option<Signal<Padding>>,
-    pub(super) background: Option<Signal<Color>>,
-    pub(super) gradient: Option<Signal<Option<LinearGradient>>>,
-    pub(super) corners: Option<Signal<crate::widgets::Corners>>,
-    pub(super) border_width: Option<Signal<f32>>,
-    pub(super) border_color: Option<Signal<Color>>,
-    pub(super) shadow: Option<Signal<Shadow>>,
-    pub(super) width: Option<Signal<Length>>,
-    pub(super) height: Option<Signal<Length>>,
-    pub(super) overflow: Option<Signal<Overflow>>,
+    pub(super) padding: Prop<Padding>,
+    pub(super) background: Prop<Color>,
+    pub(super) gradient: Prop<Option<LinearGradient>>,
+    pub(super) corners: Prop<crate::widgets::Corners>,
+    pub(super) border_width: Prop<f32>,
+    pub(super) border_color: Prop<Color>,
+    pub(super) shadow: Prop<Shadow>,
+    pub(super) width: Prop<Length>,
+    pub(super) height: Prop<Length>,
+    pub(super) overflow: Prop<Overflow>,
     /// What `overflow` resolved to in the last layout or paint.
     ///
     /// Event dispatch needs the value the *drawn* frame used, not the current
@@ -440,7 +439,7 @@ pub struct Container {
     /// to the nothing it had not reached yet and the shadow vanished in one
     /// frame while the animation went on running.
     pub(super) shadow_reach: Cell<f32>,
-    pub(super) visible: Option<Signal<bool>>,
+    pub(super) visible: Prop<bool>,
     pub(super) transform: Option<Box<TransformProps>>,
 
     // Interaction state (callbacks, hover/press, state styles, ripple)
@@ -451,11 +450,11 @@ pub struct Container {
     pub(super) widget_ref: Option<WidgetRef>,
 
     // Backdrop blur: this surface's own content, the compositor's, or both.
-    pub(super) backdrop_blur: Option<Signal<BackdropBlur>>,
+    pub(super) backdrop_blur: Prop<BackdropBlur>,
     /// Whether pointer and touch input reaches this container's area, said to
     /// the compositor rather than to the hit test — see
     /// [`takes_input`](Container::takes_input).
-    pub(super) takes_input: Option<Signal<bool>>,
+    pub(super) takes_input: Prop<bool>,
 
     /// Declared with `control()`. A container is an interaction unit for other
     /// reasons too — see `is_control` — so this is only the explicit half.
@@ -490,24 +489,24 @@ impl Container {
         Self {
             layout: Box::new(Flex::column()),
             children_source,
-            padding: None,
-            background: None,
-            gradient: None,
-            corners: None,
-            border_width: None,
-            border_color: None,
-            shadow: None,
-            width: None,
-            height: None,
-            overflow: None,
+            padding: Prop::Unset,
+            background: Prop::Unset,
+            gradient: Prop::Unset,
+            corners: Prop::Unset,
+            border_width: Prop::Unset,
+            border_color: Prop::Unset,
+            shadow: Prop::Unset,
+            width: Prop::Unset,
+            height: Prop::Unset,
+            overflow: Prop::Unset,
             overflow_resolved: Cell::new(Overflow::Visible),
             shadow_reach: Cell::new(0.0),
-            visible: None,
+            visible: Prop::Unset,
             transform: None,
             interaction: None,
             widget_ref: None,
-            backdrop_blur: None,
-            takes_input: None,
+            backdrop_blur: Prop::Unset,
+            takes_input: Prop::Unset,
             declared_control: false,
             anims: None,
             scroll_axis: ScrollAxis::None,
@@ -588,20 +587,22 @@ impl Container {
         self.transform.get_or_insert_with(Box::default)
     }
 
-    pub(super) fn translate_signal(&self) -> Option<Signal<Translate>> {
-        self.transform.as_deref().and_then(|t| t.translate)
+    pub(super) fn translate_prop(&self) -> Prop<Translate> {
+        self.transform
+            .as_deref()
+            .map_or(Prop::Unset, |t| t.translate)
     }
 
-    pub(super) fn rotate_signal(&self) -> Option<Signal<f32>> {
-        self.transform.as_deref().and_then(|t| t.rotate)
+    pub(super) fn rotate_prop(&self) -> Prop<f32> {
+        self.transform.as_deref().map_or(Prop::Unset, |t| t.rotate)
     }
 
-    pub(super) fn scale_signal(&self) -> Option<Signal<Scale>> {
-        self.transform.as_deref().and_then(|t| t.scale)
+    pub(super) fn scale_prop(&self) -> Prop<Scale> {
+        self.transform.as_deref().map_or(Prop::Unset, |t| t.scale)
     }
 
-    pub(super) fn pivot_signal(&self) -> Option<Signal<Pivot>> {
-        self.transform.as_deref().and_then(|t| t.pivot)
+    pub(super) fn pivot_prop(&self) -> Prop<Pivot> {
+        self.transform.as_deref().map_or(Prop::Unset, |t| t.pivot)
     }
 
     /// Get or create interaction state
@@ -647,10 +648,7 @@ impl Container {
     /// - `padding(signal)` or `padding(move || ...)` — reactive
     /// - `padding(8.0.transition(200.0))` — eased instead of jumped to
     pub fn padding<M>(mut self, value: impl IntoAnimated<Padding, M>) -> Self {
-        self.padding = Some(animated_properties::declare::padding(
-            &mut self.anims,
-            value,
-        ));
+        self.padding = animated_properties::declare::padding(&mut self.anims, value);
         self
     }
 
@@ -673,10 +671,7 @@ impl Container {
     /// container().background(theme.surface.timeline(flash().played_by(errors)));
     /// ```
     pub fn background<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
-        self.background = Some(animated_properties::declare::background(
-            &mut self.anims,
-            color,
-        ));
+        self.background = animated_properties::declare::background(&mut self.anims, color);
         self
     }
 
@@ -709,10 +704,7 @@ impl Container {
     /// and the formula that draws it (and the one that answers a click) is a
     /// different one. Within a family it is continuous.
     pub fn corners<M>(mut self, corners: impl IntoAnimated<crate::widgets::Corners, M>) -> Self {
-        self.corners = Some(animated_properties::declare::corners(
-            &mut self.anims,
-            corners,
-        ));
+        self.corners = animated_properties::declare::corners(&mut self.anims, corners);
         self
     }
 
@@ -747,7 +739,7 @@ impl Container {
     /// say it with, and asks for its region on its sources alone; switch that
     /// one off with [`BackdropSources::empty`](crate::backdrop::BackdropSources::empty).
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
-        self.backdrop_blur = Some(blur.into_signal());
+        self.backdrop_blur = blur.into_prop();
         self
     }
 
@@ -803,7 +795,7 @@ impl Container {
     /// clip — because it is read off the frame that was drawn, and it is gone
     /// the moment the container stops painting.
     pub fn takes_input<M>(mut self, takes: impl IntoSignal<bool, M>) -> Self {
-        self.takes_input = Some(takes.into_signal());
+        self.takes_input = takes.into_prop();
         self
     }
 
@@ -853,14 +845,8 @@ impl Container {
         width: impl IntoAnimated<f32, M1>,
         color: impl IntoAnimated<Color, M2>,
     ) -> Self {
-        self.border_width = Some(animated_properties::declare::border_width(
-            &mut self.anims,
-            width,
-        ));
-        self.border_color = Some(animated_properties::declare::border_color(
-            &mut self.anims,
-            color,
-        ));
+        self.border_width = animated_properties::declare::border_width(&mut self.anims, width);
+        self.border_color = animated_properties::declare::border_color(&mut self.anims, color);
         self
     }
 
@@ -884,7 +870,7 @@ impl Container {
     ///     .gradient(move || expanded.get().then(|| palette.get()));
     /// ```
     pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
-        self.gradient = Some(gradient.into_signal());
+        self.gradient = gradient.into_prop();
         self
     }
 
@@ -894,28 +880,26 @@ impl Container {
     /// jumping. A size follows the content it holds as well as the length
     /// declared here, so the animation is over the resolved extent.
     pub fn width<M>(mut self, width: impl IntoAnimated<Length, M>) -> Self {
-        self.width = Some(animated_properties::declare::width(&mut self.anims, width));
+        self.width = animated_properties::declare::width(&mut self.anims, width);
         self
     }
 
     /// Set the height of the container. Eases the same way
     /// [`width`](Self::width) does.
     pub fn height<M>(mut self, height: impl IntoAnimated<Length, M>) -> Self {
-        self.height = Some(animated_properties::declare::height(
-            &mut self.anims,
-            height,
-        ));
+        self.height = animated_properties::declare::height(&mut self.anims, height);
         self
     }
 
     /// Set the overflow behaviour for content that exceeds the container bounds.
     pub fn overflow<M>(mut self, overflow: impl IntoSignal<Overflow, M>) -> Self {
-        let signal = overflow.into_signal();
+        let declared = overflow.into_prop();
         // Seed the cache the event path reads, so a container declared clipped
         // is clipped for the first event too, without depending on a layout
         // having run first.
-        self.overflow_resolved.set(signal.get_untracked());
-        self.overflow = Some(signal);
+        self.overflow_resolved
+            .set(declared.get_or_untracked(Overflow::Visible));
+        self.overflow = declared;
         self
     }
 
@@ -924,7 +908,7 @@ impl Container {
     /// When `visible` is false, the container takes up no space in layout,
     /// does not paint, and ignores all events.
     pub fn visible<M>(mut self, visible: impl IntoSignal<bool, M>) -> Self {
-        self.visible = Some(visible.into_signal());
+        self.visible = visible.into_prop();
         self
     }
 
@@ -971,8 +955,7 @@ impl Container {
     /// let _ = container().when_hovered(|s| s.enabled(false));
     /// ```
     pub fn enabled<M>(mut self, enabled: impl IntoSignal<bool, M>) -> Self {
-        let signal = enabled.into_signal();
-        self.interact_mut().declared_enabled = Some(signal);
+        self.interact_mut().declared_enabled = enabled.into_prop();
         self
     }
 
@@ -1108,10 +1091,7 @@ impl Container {
     ///     .when_hovered(|s| s.shadow(LIFTED));
     /// ```
     pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
-        self.shadow = Some(animated_properties::declare::shadow(
-            &mut self.anims,
-            shadow,
-        ));
+        self.shadow = animated_properties::declare::shadow(&mut self.anims, shadow);
         self
     }
 
@@ -1136,8 +1116,8 @@ impl Container {
     /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)));
     /// ```
     pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
-        let signal = animated_properties::declare::translate(&mut self.anims, t);
-        self.transform_mut().translate = Some(signal);
+        let declared = animated_properties::declare::translate(&mut self.anims, t);
+        self.transform_mut().translate = declared;
         self
     }
 
@@ -1171,8 +1151,8 @@ impl Container {
     /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
     /// use one curve both ways.
     pub fn rotate<M>(mut self, degrees: impl IntoAnimated<f32, M>) -> Self {
-        let signal = animated_properties::declare::rotate(&mut self.anims, degrees);
-        self.transform_mut().rotate = Some(signal);
+        let declared = animated_properties::declare::rotate(&mut self.anims, degrees);
+        self.transform_mut().rotate = declared;
         self
     }
 
@@ -1192,15 +1172,15 @@ impl Container {
     /// container().scale(Scale::NONE.timeline(pulse().played_by(beats)));
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
-        let signal = animated_properties::declare::scale(&mut self.anims, factor);
-        self.transform_mut().scale = Some(signal);
+        let declared = animated_properties::declare::scale(&mut self.anims, factor);
+        self.transform_mut().scale = declared;
         self
     }
 
     /// The point [`rotate`](Self::rotate) turns about and [`scale`](Self::scale)
     /// grows from. The centre of the container by default.
     pub fn pivot<M>(mut self, origin: impl IntoSignal<Pivot, M>) -> Self {
-        self.transform_mut().pivot = Some(origin.into_signal());
+        self.transform_mut().pivot = origin.into_prop();
         self
     }
 
@@ -1263,10 +1243,22 @@ impl Container {
         let inherited = tree
             .get_parent(id)
             .and_then(|parent| tree.nearest_control(parent))
-            .and_then(|control| control.enabled_signal());
+            .map_or(Prop::Unset, |control| control.enabled_prop());
         ix.enabled = match (ix.declared_enabled, inherited) {
-            (Some(own), Some(above)) => Some(create_derived(move || above.get() && own.get())),
-            (own, above) => own.or(above),
+            (Prop::Unset, above) => above,
+            (own, Prop::Unset) => own,
+            // Two constants fold to a constant. A literal `.enabled(false)`
+            // inside another is the whole of this case, and answering it with
+            // a derived signal would be a subscription to two values that
+            // cannot change.
+            (Prop::Const(own), Prop::Const(above)) => Prop::Const(own && above),
+            // At least one side is reactive, so the `&&` has to be asked each
+            // time. Neither is `Unset` — the two arms above took those — but
+            // `get_or` is how a `Prop` is read and the default it names is the
+            // one an undeclared control would have had.
+            (own, above) => Prop::Reactive(create_derived(move || {
+                above.get_or(true) && own.get_or(true)
+            })),
         };
     }
 
@@ -1281,7 +1273,7 @@ impl Container {
             return true;
         }
         self.interaction.as_ref().is_some_and(|ix| {
-            ix.declared_enabled.is_some()
+            ix.declared_enabled.is_set()
                 || ix.has_any_state()
                 || ix.on_click.is_some()
                 || ix.on_right_click.is_some()
@@ -1419,16 +1411,8 @@ impl Widget for Container {
             return LayoutHints::default();
         }
         LayoutHints {
-            fill_width: self
-                .width
-                .as_ref()
-                .map(|w| w.get_untracked().fill)
-                .unwrap_or(false),
-            fill_height: self
-                .height
-                .as_ref()
-                .map(|h| h.get_untracked().fill)
-                .unwrap_or(false),
+            fill_width: self.width.get_or_untracked(Length::default()).fill,
+            fill_height: self.height.get_or_untracked(Length::default()).fill,
         }
     }
 
@@ -1717,8 +1701,8 @@ impl Widget for Container {
             self.animated_border_width(id),
             self.animated_border_color(id),
             self.effective_gradient(id),
-            self.backdrop_blur.as_ref().map(|b| b.get()),
-            self.takes_input.as_ref().map(|t| t.get()),
+            self.backdrop_blur.get(),
+            self.takes_input.get(),
             self.overflow.get_or(Overflow::Visible),
         );
         self.overflow_resolved.set(overflow);
@@ -1932,14 +1916,14 @@ pub(crate) fn declare<A: Default, T: Animatable, M>(
     anims: &mut Option<Box<A>>,
     value: impl IntoAnimated<T, M>,
     slot: impl FnOnce(&mut A) -> &mut Option<AnimationState<T>>,
-) -> Signal<T> {
-    let (signal, installed) = declared_motion(value);
+) -> Prop<T> {
+    let (prop, installed) = declared_motion(value);
     match anims.as_deref_mut() {
         Some(anims) => *slot(anims) = installed,
         None if installed.is_some() => *slot(anims.get_or_insert_with(Box::default)) = installed,
         None => {}
     }
-    signal
+    prop
 }
 
 /// The same for a `Container`, which keeps a slot per *declaration* rather
@@ -1953,19 +1937,37 @@ pub(crate) fn declare_anim<T: Animatable, M>(
     value: impl IntoAnimated<T, M>,
     kind: AnimKind,
     into_slot: fn(AnimationState<T>) -> AnimSlot,
-) -> Signal<T> {
-    let (signal, installed) = declared_motion(value);
+) -> Prop<T> {
+    let (prop, installed) = declared_motion(value);
     put(anims, kind, into_slot, installed);
-    signal
+    prop
 }
 
-/// The signal a declaration keeps, and the animation its motion asks for.
+/// The declaration a property keeps, and the animation its motion asks for.
 fn declared_motion<T: Animatable, M>(
     value: impl IntoAnimated<T, M>,
-) -> (Signal<T>, Option<AnimationState<T>>) {
-    let (signal, motion) = value.into_animated().into_parts();
-    let installed = motion.map(|motion| install(signal.get_untracked(), *motion));
-    (signal, installed)
+) -> (Prop<T>, Option<AnimationState<T>>) {
+    let (prop, motion) = value.into_animated().into_parts();
+    // Inside the `map`, as it was when the value was a signal: a declaration
+    // with no motion — which is almost every one — never reads it at all, and
+    // for a reactive property that read is a whole closure evaluation. Writing
+    // it as `motion.zip(prop.get_untracked())`, which the optional value
+    // invites, would read on every declaration instead.
+    let installed = motion.map(|motion| install(declared_seed(&prop), *motion));
+    (prop, installed)
+}
+
+/// The value an animation is seeded from, which a declaration always has.
+///
+/// Loud rather than a silently dropped animation, for the reason
+/// [`Animated::into_eased`] gives about the mirror case: `into_animated` puts a
+/// value into every `Animated` it makes, so an absent one here would mean that
+/// stopped being true, and the day it does this has to say so.
+fn declared_seed<T: Clone + 'static>(prop: &Prop<T>) -> T {
+    prop.get_untracked().expect(
+        "an `Animated` always carries a value — it is built by `into_animated`, \
+         inside the setter that immediately consumes it",
+    )
 }
 
 /// The animation a motion asks for, seeded with the value declared beside it.
@@ -2017,14 +2019,14 @@ fn declare_size<M>(
     value: impl IntoAnimated<Length, M>,
     kind: AnimKind,
     into_slot: fn(AnimationState<f32>) -> AnimSlot,
-) -> Signal<Length> {
-    let (signal, ease) = value.into_animated().into_eased();
+) -> Prop<Length> {
+    let (prop, ease) = value.into_animated().into_eased();
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
     let resolved = |length: Length| length.exact.or(length.min).unwrap_or(0.0);
     let installed = ease.map(|(config, enter_from)| {
         install(
-            resolved(signal.get_untracked()),
+            resolved(declared_seed(&prop)),
             Motion::Ease {
                 config,
                 enter_from: enter_from.map(resolved),
@@ -2032,7 +2034,7 @@ fn declare_size<M>(
         )
     });
     put(anims, kind, into_slot, installed);
-    signal
+    prop
 }
 
 pub fn container() -> Container {

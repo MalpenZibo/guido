@@ -98,8 +98,8 @@ once instead, at `register_children`, and left behind as a signal on the
 
 Declaring `enabled` therefore makes a container an interaction unit, because a
 unit is what a descendant asks. A container that declares nothing keeps `None`
-and allocates no signal, and `OptionSignalExt::get_or` on a `None` reads
-nothing, so every container that does not use this pays two branches.
+and allocates no signal, and `Prop::get_or` on a `Prop::Unset` reads nothing,
+so every container that does not use this pays two branches.
 
 Context is not an alternative: `reactive::context` is scoped to the reactive
 owner — the application, a surface, a popup, a row of a dynamic list — and a
@@ -338,13 +338,12 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     /// Both halves or neither — half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corners: Option<Signal<Corners>>,
-    pub translate: Option<Signal<Translate>>,
-    pub rotate: Option<Signal<f32>>,
-    pub scale: Option<Signal<Scale>>,
-    pub shadow: Option<Signal<Shadow>>,
-    pub text_color: Option<Signal<Color>>,
-    pub alpha: Option<Signal<f32>>,
+    pub corners: Prop<Corners>,
+    pub translate: Prop<Translate>,
+    pub rotate: Prop<f32>,
+    pub scale: Prop<Scale>,
+    pub shadow: Prop<Shadow>,
+    pub alpha: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```

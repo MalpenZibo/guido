@@ -273,13 +273,15 @@ Dynamic Children chapter for the full semantics.
 
 The `IntoSignal<T>` trait allows properties to accept any of:
 
-- **Static values**: `container().background(Color::RED)` → calls `create_stored()`
+- **Static values**: `container().background(Color::RED)` → kept as the value
 - **Closures**: `container().background(move || if dark { Color::BLACK } else { Color::WHITE })` → calls `create_derived()`
 - **Signals**: `container().background(my_signal)` → passed through directly (accepts both `Signal<T>` and `RwSignal<T>`)
 
 For numeric properties (`f32`, `Length`, `Padding`), integer and float literals both coerce to the target type: `container().corners(12)` and `.corners(12.5)` are equivalent to `12.0_f32`. Float coercion is lossy (`f64 as f32`), matching the precision of the destination.
 
-All produce a `Signal<T>` (which is `Copy`). `create_signal` returns `RwSignal<T>` (read-write, Clone+PartialEq+Send) which has `.set()`, `.update()`, and `.writer()`. `Signal<T>` is read-only — use it when you only need to read values.
+A property keeps what it was given, as a `Prop<T>`: `Prop::Const` for a static value, `Prop::Reactive` for the other two, `Prop::Unset` for a property nobody declared. Which one it is is decided by the marker `IntoSignal` already carries, so `into_prop` reads the answer off the type rather than asking at runtime — a constant costs the constant and claims no signal slot, which is what #450 was about. `into_signal` is still there and still produces a `Signal<T>` (which is `Copy`) for the callers that want one.
+
+`create_signal` returns `RwSignal<T>` (read-write, Clone+PartialEq+Send) which has `.set()`, `.update()`, and `.writer()`. `Signal<T>` is read-only — use it when you only need to read values.
 
 ## Background Task Updates
 

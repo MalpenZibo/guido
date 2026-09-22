@@ -85,7 +85,7 @@ impl Container {
     ///
     /// [`effective_background_target`]: Self::effective_background_target
     pub(super) fn effective_gradient(&self, id: WidgetId) -> Option<LinearGradient> {
-        let base = self.gradient.as_ref().and_then(|g| g.get())?;
+        let base = self.gradient.get().flatten()?;
         self.resolve_state_value(id, Some(base), |state| {
             if let Some(BackgroundOverride::Exact(_)) = state.background {
                 // Passed over, as the solid fill passes it over, when the colour
@@ -120,24 +120,24 @@ impl Container {
         let base = self
             .corners
             .get_finite_or(crate::widgets::Corners::SQUARE, id, "corners");
-        self.resolve_state_value(id, base, |state| state.corners.map(|s| s.get()))
+        self.resolve_state_value(id, base, |state| state.corners.get())
     }
 
     pub(super) fn effective_translate_target(&self, id: WidgetId) -> Translate {
         let base = self
-            .translate_signal()
+            .translate_prop()
             .get_finite_or(Translate::NONE, id, "translate");
-        self.resolve_state_value(id, base, |state| state.translate.map(|s| s.get()))
+        self.resolve_state_value(id, base, |state| state.translate.get())
     }
 
     pub(super) fn effective_rotate_target(&self, id: WidgetId) -> f32 {
-        let base = self.rotate_signal().get_finite_or(0.0, id, "rotate");
-        self.resolve_state_value(id, base, |state| state.rotate.map(|s| s.get()))
+        let base = self.rotate_prop().get_finite_or(0.0, id, "rotate");
+        self.resolve_state_value(id, base, |state| state.rotate.get())
     }
 
     pub(super) fn effective_scale_target(&self, id: WidgetId) -> Scale {
-        let base = self.scale_signal().get_finite_or(Scale::NONE, id, "scale");
-        self.resolve_state_value(id, base, |state| state.scale.map(|s| s.get()))
+        let base = self.scale_prop().get_finite_or(Scale::NONE, id, "scale");
+        self.resolve_state_value(id, base, |state| state.scale.get())
     }
 
     /// How far past its own bounds the deepest shadow this container can cast
@@ -180,7 +180,7 @@ impl Container {
             .interaction
             .iter()
             .flat_map(|ix| ix.states.iter())
-            .filter_map(|(_, state)| state.shadow.map(|s| s.get()))
+            .filter_map(|(_, state)| state.shadow.get())
             .filter(AllFinite::all_finite)
             .map(|shadow| shadow.extent())
             .fold(base.extent(), f32::max);
@@ -220,13 +220,13 @@ impl Container {
             .unwrap_or_default();
         Moves {
             translate: declared.translate
-                || self.translate_signal().is_some()
+                || self.translate_prop().is_set()
                 || anims.is_some_and(|a| a.translate().is_some()),
             rotate: declared.rotate
-                || self.rotate_signal().is_some()
+                || self.rotate_prop().is_set()
                 || anims.is_some_and(|a| a.rotate().is_some()),
             scale: declared.scale
-                || self.scale_signal().is_some()
+                || self.scale_prop().is_set()
                 || anims.is_some_and(|a| a.scale().is_some()),
         }
     }
@@ -304,11 +304,9 @@ impl Container {
         let pivot = self.resolved_pivot_quietly();
         let anims = self.anims.as_ref();
 
-        let base_translate = self
-            .translate_signal()
-            .get_finite_or_quietly(Translate::NONE);
-        let base_rotate = self.rotate_signal().get_finite_or_quietly(0.0);
-        let base_scale = self.scale_signal().get_finite_or_quietly(Scale::NONE);
+        let base_translate = self.translate_prop().get_finite_or_quietly(Translate::NONE);
+        let base_rotate = self.rotate_prop().get_finite_or_quietly(0.0);
+        let base_scale = self.scale_prop().get_finite_or_quietly(Scale::NONE);
         let base = Transform::compose(base_translate, base_rotate, base_scale);
         let mut reach = outset_of(base, painted, bounds, pivot);
 
@@ -346,15 +344,13 @@ impl Container {
         // layout, which is the whole thing this avoids.
         if let Some(ref ix) = self.interaction {
             for (_, state) in ix.states.iter() {
-                if state.translate.is_none() && state.rotate.is_none() && state.scale.is_none() {
+                if !state.translate.is_set() && !state.rotate.is_set() && !state.scale.is_set() {
                     continue;
                 }
                 let candidate = Transform::compose(
-                    state
-                        .translate
-                        .map_or(base_translate, |s| s.get_untracked()),
-                    state.rotate.map_or(base_rotate, |s| s.get_untracked()),
-                    state.scale.map_or(base_scale, |s| s.get_untracked()),
+                    state.translate.get_or_untracked(base_translate),
+                    state.rotate.get_or_untracked(base_rotate),
+                    state.scale.get_or_untracked(base_scale),
                 );
                 reach = reach.max(outset_of(candidate, painted, bounds, pivot));
             }
@@ -388,7 +384,7 @@ impl Container {
 
     pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadow {
         let base = self.shadow.get_finite_or(Shadow::none(), id, "shadow");
-        self.resolve_state_value(id, base, |state| state.shadow.map(|s| s.get()))
+        self.resolve_state_value(id, base, |state| state.shadow.get())
     }
 
     // -----------------------------------------------------------------------
@@ -399,8 +395,7 @@ impl Container {
     /// the same rule every other property is resolved by, spelled here because
     /// a pivot has no state layer to be resolved through.
     pub(super) fn resolved_pivot(&self, id: WidgetId) -> Pivot {
-        self.pivot_signal()
-            .get_finite_or(Pivot::CENTER, id, "pivot")
+        self.pivot_prop().get_finite_or(Pivot::CENTER, id, "pivot")
     }
 
     /// The same, for the reach calculation: it subscribes like the paint
@@ -408,7 +403,7 @@ impl Container {
     /// that paint is reading the same signal in the same frame and one warning
     /// is the point.
     pub(super) fn resolved_pivot_quietly(&self) -> Pivot {
-        self.pivot_signal().get_finite_or_quietly(Pivot::CENTER)
+        self.pivot_prop().get_finite_or_quietly(Pivot::CENTER)
     }
 
     /// The declared padding, coerced like every other property.
@@ -687,7 +682,7 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
 /// A colour as a state layer resolves it: its background override, then its
 /// alpha, or `None` where the layer declares neither.
 fn state_colour(base: Color, state: &StateStyle) -> Option<Color> {
-    let alpha = state.alpha.map(|a| a.get());
+    let alpha = state.alpha.get();
     if state.background.is_none() && alpha.is_none() {
         return None;
     }

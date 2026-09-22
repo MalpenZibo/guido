@@ -209,13 +209,12 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.
     pub border: Option<BorderOverride>,
-    pub corners: Option<Signal<Corners>>,
-    pub translate: Option<Signal<Translate>>,
-    pub rotate: Option<Signal<f32>>,
-    pub scale: Option<Signal<Scale>>,
-    pub shadow: Option<Signal<Shadow>>,
-    pub text_color: Option<Signal<Color>>,
-    pub alpha: Option<Signal<f32>>,
+    pub corners: Prop<Corners>,
+    pub translate: Prop<Translate>,
+    pub rotate: Prop<f32>,
+    pub scale: Prop<Scale>,
+    pub shadow: Prop<Shadow>,
+    pub alpha: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```
