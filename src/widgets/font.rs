@@ -91,7 +91,7 @@ impl FontFamily {
     ///
     /// The same name always gives the same family, for the life of the
     /// process — on any thread, and across an `App` being dropped and another
-    /// built. See [`FAMILIES`] for why it has to be both.
+    /// built. See the `FAMILIES` table for why it has to be both.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -238,7 +238,7 @@ mod tests {
 
     /// An id outlives the `App` that minted it, and the thread that minted it.
     ///
-    /// The two invariants the table's placement exists for — see [`FAMILIES`],
+    /// The two invariants the table's placement exists for — see `FAMILIES`,
     /// which argues both. Without the first, a `FontFamily` held across an
     /// application boundary silently starts naming something else; without the
     /// second, one written from a background task through a `WriteSignal` —
