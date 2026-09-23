@@ -30,22 +30,12 @@ async fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             move || {
                 container()
-                    .layout(
-                        Flex::column()
-                            .spacing(40.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::column().spacing(40.0).center())
                     .padding(40.0)
                     .children([
                         // Row 1: Different origins with same rotation
                         container()
-                            .layout(
-                                Flex::row()
-                                    .spacing(80.0)
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::row().spacing(80.0).center())
                             .children([
                                 // Default origin (center)
                                 container()
@@ -89,12 +79,7 @@ async fn main() {
                             ]),
                         // Row 2: Scale with different origins
                         container()
-                            .layout(
-                                Flex::row()
-                                    .spacing(80.0)
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::row().spacing(80.0).center())
                             .children([
                                 // Default origin (center) - scale
                                 container()
@@ -122,12 +107,7 @@ async fn main() {
                             ]),
                         // Row 3: Animated rotation with different origins
                         container()
-                            .layout(
-                                Flex::row()
-                                    .spacing(80.0)
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::row().spacing(80.0).center())
                             .children([
                                 // Center origin - animated
                                 container()
@@ -155,12 +135,7 @@ async fn main() {
                             ]),
                         // Row 4: Nested containers with different origins
                         container()
-                            .layout(
-                                Flex::row()
-                                    .spacing(80.0)
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::row().spacing(80.0).center())
                             .children([
                                 // Parent rotated at center, child inside
                                 container()
@@ -168,11 +143,7 @@ async fn main() {
                                     .height(100.0)
                                     .background(Color::rgba(0.4, 0.4, 0.6, 0.5))
                                     .corners(10.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .rotate(15.0)
                                     .child(
                                         container()
@@ -187,11 +158,7 @@ async fn main() {
                                     .height(100.0)
                                     .background(Color::rgba(0.6, 0.4, 0.4, 0.5))
                                     .corners(10.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .pivot(Pivot::TOP_LEFT)
                                     .rotate(15.0)
                                     .child(

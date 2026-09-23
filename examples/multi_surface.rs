@@ -58,12 +58,7 @@ fn main() {
             move || {
                 container()
                     .height(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(16.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(16.0).center())
                     .children([
                         container()
                             .background(Color::rgb(0.3, 0.3, 0.4))

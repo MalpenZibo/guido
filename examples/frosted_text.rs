@@ -40,11 +40,7 @@ fn reading(label: Text) -> Container {
     container()
         .width(fill())
         .height(fill())
-        .layout(
-            Flex::column()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().center())
         .child(label.font_size(52.0).nowrap())
 }
 

@@ -166,6 +166,23 @@ Stretch:  ┌───┐┌─┐┌──┐
           └───┘└─┘└──┘
 ```
 
+## Centring
+
+`center()` centres the children on both axes. It is shorthand for
+`main_alignment(MainAlignment::Center)` together with
+`cross_alignment(CrossAlignment::Center)`, and composes with the rest:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .layout(Flex::column().spacing(4.0).center())
+    .children([text("Locked"), text("Type your password")])
+# ;
+# }
+```
+
 ## Complete Example
 
 ```rust
@@ -295,11 +312,7 @@ This is particularly useful for root containers that should fill their surface, 
 # fn main() {
 container()
     .height(fill())
-    .layout(
-        Flex::row()
-            .main_alignment(MainAlignment::Center)
-            .cross_alignment(CrossAlignment::Center)
-    )
+    .layout(Flex::row().center())
     .child(text("Centered in available space"))
 # ;
 # }

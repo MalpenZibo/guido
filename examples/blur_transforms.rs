@@ -65,21 +65,12 @@ fn card() -> Container {
 fn case(caption: &'static str, body: impl Widget + 'static) -> AnyWidget {
     container()
         .width(210.0)
-        .layout(
-            Flex::column()
-                .spacing(10.0)
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().spacing(10.0).center())
         .children([
             container()
                 .width(210.0)
                 .height(190.0)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(body)
                 .into_any(),
             container()
@@ -113,11 +104,7 @@ fn main() {
                         container()
                             .width(fill())
                             .height(fill())
-                            .layout(
-                                Flex::row()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::row().center())
                             .children([
                                 // A translated box is the same box somewhere
                                 // else: the easy case, and the one that was

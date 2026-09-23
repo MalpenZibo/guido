@@ -119,12 +119,7 @@ fn main() {
                 let popup_slot_for_child = popup_slot.clone();
                 container()
                     .width(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(12.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(12.0).center())
                     .child(
                         container()
                             .widget_ref(button_ref)

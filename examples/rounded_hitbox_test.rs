@@ -17,12 +17,7 @@ fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             move || {
                 container()
-                .layout(
-                    Flex::column()
-                        .spacing(30.0)
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::column().spacing(30.0).center())
                 .padding(40.0)
                 .children([
                     // Row with different corner radii
@@ -66,10 +61,6 @@ fn make_box(
         .when_hovered(|s| s.lighter(0.15))
         .when_pressed(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
-        .layout(
-            Flex::column()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().center())
         .child(text(label).font_size(14.0).color(Color::WHITE))
 }

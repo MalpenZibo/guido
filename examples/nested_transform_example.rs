@@ -14,12 +14,7 @@ fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             || {
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(40.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(40.0).center())
                     .padding(20.0)
                     .children([
                         // Case 0: Parent, child
