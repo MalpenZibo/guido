@@ -252,11 +252,7 @@ fn center_test() -> impl Widget {
                         .height(60.0)
                         .background(Color::rgb(0.2, 0.15, 0.25))
                         .corners(4.0)
-                        .layout(
-                            Flex::row()
-                                .main_alignment(MainAlignment::Center)
-                                .cross_alignment(CrossAlignment::Center),
-                        )
+                        .layout(Flex::row().center())
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4))),
                 )
                 .child(
@@ -265,11 +261,7 @@ fn center_test() -> impl Widget {
                         .height(60.0)
                         .background(Color::rgb(0.15, 0.2, 0.25))
                         .corners(4.0)
-                        .layout(
-                            Flex::column()
-                                .main_alignment(MainAlignment::Center)
-                                .cross_alignment(CrossAlignment::Center),
-                        )
+                        .layout(Flex::column().center())
                         .child(test_box(Color::rgb(0.4, 0.8, 0.4))),
                 ),
         )
@@ -288,11 +280,7 @@ fn center_test() -> impl Widget {
                         .height(50.0)
                         .background(Color::rgb(0.2, 0.25, 0.2))
                         .corners(4.0)
-                        .layout(
-                            Flex::row()
-                                .main_alignment(MainAlignment::Center)
-                                .cross_alignment(CrossAlignment::Center),
-                        )
+                        .layout(Flex::row().center())
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4))),
                 ),
         )
@@ -311,12 +299,7 @@ fn center_test() -> impl Widget {
                         .height(50.0)
                         .background(Color::rgb(0.15, 0.25, 0.2))
                         .corners(4.0)
-                        .layout(
-                            Flex::row()
-                                .spacing(6.0)
-                                .main_alignment(MainAlignment::Center)
-                                .cross_alignment(CrossAlignment::Center),
-                        )
+                        .layout(Flex::row().spacing(6.0).center())
                         .child(test_box(Color::rgb(0.8, 0.4, 0.4)))
                         .child(test_box(Color::rgb(0.4, 0.8, 0.4))),
                 ),

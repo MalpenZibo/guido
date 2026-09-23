@@ -332,12 +332,7 @@ weight of every stem. Neither affects layout.
 
 ```rust
 container()
-    .layout(
-        Flex::row()
-            .spacing(8.0)
-            .main_alignment(MainAlignment::Center)
-            .cross_alignment(CrossAlignment::Center)
-    )
+    .layout(Flex::row().spacing(8.0).center())
 ```
 
 ### Alignment Options

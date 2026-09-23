@@ -32,12 +32,7 @@ async fn main() {
         });
 
         let view = container()
-            .layout(
-                Flex::column()
-                    .spacing(20.0)
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::column().spacing(20.0).center())
             .padding(30.0)
             .children([
                 // Title
@@ -48,12 +43,7 @@ async fn main() {
                 ),
                 // Row 1: Basic transforms (rotation, scale, translation)
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(30.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(30.0).center())
                     .children([
                         // Rotation
                         container()
@@ -61,11 +51,7 @@ async fn main() {
                             .height(70.0)
                             .background(Color::rgba(0.3, 0.5, 0.8, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .rotate(15.0)
                             .child(text("Rotate 15°").font_size(13.0).color(Color::WHITE)),
                         // Scale
@@ -74,11 +60,7 @@ async fn main() {
                             .height(70.0)
                             .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .scale(1.2)
                             .child(text("Scale 1.2x").font_size(13.0).color(Color::WHITE)),
                         // Translation
@@ -87,11 +69,7 @@ async fn main() {
                             .height(70.0)
                             .background(Color::rgba(0.5, 0.8, 0.3, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .translate((10.0, -10.0))
                             .child(text("Translate").font_size(13.0).color(Color::WHITE)),
                         // Rotation + Scale
@@ -100,23 +78,14 @@ async fn main() {
                             .height(70.0)
                             .background(Color::rgba(0.8, 0.3, 0.8, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .rotate(-20.0)
                             .scale(0.9)
                             .child(text("Rot + Scale").font_size(13.0).color(Color::WHITE)),
                     ]),
                 // Row 2: Combined transforms and custom origin
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(30.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(30.0).center())
                     .children([
                         // All three: rotation + scale + translation
                         container()
@@ -124,11 +93,7 @@ async fn main() {
                             .height(80.0)
                             .background(Color::rgba(0.3, 0.7, 0.7, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .translate((5.0, 5.0))
                             .rotate(10.0)
                             .scale(1.1)
@@ -139,11 +104,7 @@ async fn main() {
                             .height(80.0)
                             .background(Color::rgba(0.7, 0.5, 0.2, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .pivot(Pivot::TOP_LEFT)
                             .rotate(15.0)
                             .child(text("Origin: Top-Left").font_size(12.0).color(Color::WHITE)),
@@ -153,11 +114,7 @@ async fn main() {
                             .height(80.0)
                             .background(Color::rgba(0.2, 0.5, 0.7, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .pivot(Pivot::BOTTOM_RIGHT)
                             .rotate(15.0)
                             .child(
@@ -171,11 +128,7 @@ async fn main() {
                             .height(80.0)
                             .background(Color::rgba(0.7, 0.3, 0.5, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .pivot(Pivot::TOP_RIGHT)
                             .scale(1.15)
                             .rotate(-10.0)
@@ -183,12 +136,7 @@ async fn main() {
                     ]),
                 // Row 3: Nested transforms
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(30.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(30.0).center())
                     .children([
                         // Nested: parent rotated, child has text
                         container()
@@ -196,11 +144,7 @@ async fn main() {
                             .height(90.0)
                             .background(Color::rgba(0.6, 0.3, 0.6, 0.5))
                             .corners(12.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .rotate(20.0)
                             .child(
                                 container()
@@ -208,11 +152,7 @@ async fn main() {
                                     .height(50.0)
                                     .background(Color::rgba(0.8, 0.6, 0.8, 0.9))
                                     .corners(6.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(text("Nested").font_size(14.0).color(Color::WHITE)),
                             ),
                         // Double nested with additional rotation
@@ -221,11 +161,7 @@ async fn main() {
                             .height(90.0)
                             .background(Color::rgba(0.3, 0.6, 0.6, 0.5))
                             .corners(12.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .rotate(15.0)
                             .child(
                                 container()
@@ -233,11 +169,7 @@ async fn main() {
                                     .height(50.0)
                                     .background(Color::rgba(0.5, 0.8, 0.8, 0.9))
                                     .corners(6.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .rotate(15.0)
                                     .child(
                                         text("30° Total")
@@ -251,11 +183,7 @@ async fn main() {
                             .height(90.0)
                             .background(Color::rgba(0.6, 0.6, 0.3, 0.5))
                             .corners(12.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .scale(1.1)
                             .translate((5.0, 0.0))
                             .child(
@@ -264,11 +192,7 @@ async fn main() {
                                     .height(50.0)
                                     .background(Color::rgba(0.8, 0.8, 0.5, 0.9))
                                     .corners(6.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .rotate(-10.0)
                                     .child(
                                         text("Scale+Trans")
@@ -282,11 +206,7 @@ async fn main() {
                             .height(70.0)
                             .background(Color::rgba(0.8, 0.3, 0.5, 0.8))
                             .corners(8.0)
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .rotate(move || angle.get())
                             .child(text("Spinning!").font_size(14.0).color(Color::WHITE)),
                     ]),

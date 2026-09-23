@@ -24,12 +24,7 @@ fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             move || {
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(20.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(20.0).center())
                     .padding(16.0)
                     .children([
                         // 1. Static rotation (45 degrees)
@@ -41,11 +36,7 @@ fn main() {
                             .rotate(45.0)
                             .child(
                                 container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(text("45").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 2. Click to rotate (increments by 45 degrees)
@@ -64,15 +55,9 @@ fn main() {
                                 rotation.update(|r| *r += 45.0);
                             })
                             .child(
-                                container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
-                                    .child(
-                                        text("Click").font_size(10.0).color(Color::WHITE).nowrap(),
-                                    ),
+                                container().layout(Flex::column().center()).child(
+                                    text("Click").font_size(10.0).color(Color::WHITE).nowrap(),
+                                ),
                             ),
                         // 3. Click to toggle scale with spring animation
                         container()
@@ -92,15 +77,9 @@ fn main() {
                                 scale_factor.set(target);
                             })
                             .child(
-                                container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
-                                    .child(
-                                        text("Scale").font_size(10.0).color(Color::WHITE).nowrap(),
-                                    ),
+                                container().layout(Flex::column().center()).child(
+                                    text("Scale").font_size(10.0).color(Color::WHITE).nowrap(),
+                                ),
                             ),
                         // 4. Static scale (smaller)
                         container()
@@ -111,11 +90,7 @@ fn main() {
                             .scale(0.7)
                             .child(
                                 container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(text("0.7x").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 5. Combined rotation + scale
@@ -127,15 +102,9 @@ fn main() {
                             .rotate(30.0)
                             .scale(0.8)
                             .child(
-                                container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
-                                    .child(
-                                        text("Both").font_size(10.0).color(Color::WHITE).nowrap(),
-                                    ),
+                                container().layout(Flex::column().center()).child(
+                                    text("Both").font_size(10.0).color(Color::WHITE).nowrap(),
+                                ),
                             ),
                         // 6. Rotation around top-left corner (transform origin)
                         container()
@@ -147,11 +116,7 @@ fn main() {
                             .pivot(Pivot::TOP_LEFT)
                             .child(
                                 container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(text("TL").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 7. Scale from bottom-right corner (transform origin)
@@ -164,11 +129,7 @@ fn main() {
                             .pivot(Pivot::BOTTOM_RIGHT)
                             .child(
                                 container()
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(text("BR").font_size(12.0).color(Color::WHITE)),
                             ),
                         // 8. Interactive: click to cycle through origins
@@ -190,20 +151,9 @@ fn main() {
                                 .when_hovered(|s| s.lighter(0.1))
                                 .when_pressed(|s| s.ripple())
                                 .on_click(move || origin_index.update(|i| *i += 1))
-                                .child(
-                                    container()
-                                        .layout(
-                                            Flex::column()
-                                                .main_alignment(MainAlignment::Center)
-                                                .cross_alignment(CrossAlignment::Center),
-                                        )
-                                        .child(
-                                            text("Cycle")
-                                                .font_size(10.0)
-                                                .color(Color::WHITE)
-                                                .nowrap(),
-                                        ),
-                                )
+                                .child(container().layout(Flex::column().center()).child(
+                                    text("Cycle").font_size(10.0).color(Color::WHITE).nowrap(),
+                                ))
                         },
                     ])
             },

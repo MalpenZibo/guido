@@ -97,11 +97,7 @@ fn main() {
                         container()
                             .width(fill())
                             .height(fill())
-                            .layout(
-                                Flex::column()
-                                    .main_alignment(MainAlignment::Center)
-                                    .cross_alignment(CrossAlignment::Center),
-                            )
+                            .layout(Flex::column().center())
                             .child(
                                 container()
                                     .width(150.0)
@@ -111,11 +107,7 @@ fn main() {
                                     // its own translucent tint over the result.
                                     .backdrop_blur(18.0)
                                     .background(Color::rgba(0.1, 0.1, 0.15, 0.45))
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(
                                         text("frosted")
                                             .font_size(18.0)

@@ -312,11 +312,7 @@ This is particularly useful for root containers that should fill their surface, 
 # fn main() {
 container()
     .height(fill())
-    .layout(
-        Flex::row()
-            .main_alignment(MainAlignment::Center)
-            .cross_alignment(CrossAlignment::Center)
-    )
+    .layout(Flex::row().center())
     .child(text("Centered in available space"))
 # ;
 # }

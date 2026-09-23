@@ -136,12 +136,7 @@ Control how children are arranged:
 # use guido::prelude::*;
 # fn main() {
 container()
-    .layout(
-        Flex::row()
-            .spacing(8.0)
-            .main_alignment(MainAlignment::Center)
-            .cross_alignment(CrossAlignment::Center)
-    )
+    .layout(Flex::row().spacing(8.0).center())
     .children([...])
 # ;
 # }
