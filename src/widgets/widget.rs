@@ -901,6 +901,14 @@ pub trait Widget {
         let _ = (tree, id);
     }
 
+    /// The reactive scope this widget owns, if it owns one — a row of a
+    /// dynamic list does. A leaving subtree pauses the effects in it, and a
+    /// reclaimed one resumes them.
+    #[doc(hidden)]
+    fn owned_scope(&self) -> Option<crate::reactive::__internal::OwnerId> {
+        None
+    }
+
     /// Publish how far this widget's paint will land outside its own bounds,
     /// before anything decides whether to paint it.
     ///
@@ -1046,6 +1054,9 @@ impl Widget for Box<dyn Widget> {
     }
     fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
         (**self).cancel_exit(tree, id)
+    }
+    fn owned_scope(&self) -> Option<crate::reactive::__internal::OwnerId> {
+        (**self).owned_scope()
     }
     fn layout_hints(&self) -> LayoutHints {
         (**self).layout_hints()

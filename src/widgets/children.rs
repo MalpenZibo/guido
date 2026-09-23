@@ -725,6 +725,10 @@ impl Widget for OwnedWidget {
         self.inner.cancel_exit(tree, id)
     }
 
+    fn owned_scope(&self) -> Option<OwnerId> {
+        Some(self.owner.id())
+    }
+
     /// Registration is reactive work, so it happens under this widget's own
     /// scope rather than under whatever scope the frame is in.
     ///

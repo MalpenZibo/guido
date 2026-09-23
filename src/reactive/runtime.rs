@@ -263,6 +263,11 @@ struct EffectSlot {
     dependencies: Vec<SignalId>,
     generation: u32,
     state: EffectState,
+    /// The effect's scope is paused (see `owner::pause_owner`): it keeps its
+    /// dependencies but does not run.
+    paused: bool,
+    /// A dependency changed while it was paused; it runs once on resume.
+    missed: bool,
 }
 
 #[derive(Default)]
@@ -318,6 +323,7 @@ impl Runtime {
         // Reading the current scope borrows nothing this call holds: it is a
         // `Cell` beside the arena, not the arena.
         let scope = current_owner();
+        let paused = super::owner::current_owner_is_paused();
         // Reuse a freed slot if available, bumping its generation so stale
         // ids for the previous occupant can never act on this effect
         if let Some(index) = self.free_effect_indices.pop() {
@@ -327,6 +333,8 @@ impl Runtime {
             slot.scope = scope;
             slot.dependencies.clear();
             slot.state = EffectState::Idle;
+            slot.paused = paused;
+            slot.missed = false;
             return EffectId {
                 index,
                 generation: slot.generation,
@@ -340,6 +348,8 @@ impl Runtime {
             dependencies: Vec::new(),
             generation: 0,
             state: EffectState::Idle,
+            paused,
+            missed: false,
         });
         EffectId {
             index,
@@ -355,9 +365,14 @@ impl Runtime {
         };
         for i in 0..subs.len() {
             let effect_id = self.signal_subscribers[signal_id.index()][i];
-            if !self.pending_effects.contains(&effect_id) {
-                self.pending_effects.push_back(effect_id);
-            }
+            self.enqueue(effect_id);
+        }
+    }
+
+    /// Queue one effect, unless it is queued already.
+    fn enqueue(&mut self, effect_id: EffectId) {
+        if !self.pending_effects.contains(&effect_id) {
+            self.pending_effects.push_back(effect_id);
         }
     }
 
@@ -366,13 +381,33 @@ impl Runtime {
         self.pending_effects.pop_front()
     }
 
+    /// Pause or resume `effects`. Resuming queues each one that missed a run
+    /// while it was paused.
+    pub(crate) fn set_effects_paused(&mut self, effects: &[EffectId], paused: bool) {
+        for &effect_id in effects {
+            if let Some(slot) = self.effect_slot_mut(effect_id) {
+                slot.paused = paused;
+                if !paused && std::mem::take(&mut slot.missed) {
+                    self.enqueue(effect_id);
+                }
+            }
+        }
+    }
+
     /// Phase 1 of effect execution (under the runtime borrow): validate the
     /// id, clear old dependencies, and hand the callback out so it can run
     /// WITHOUT the runtime borrowed. Returns `None` for stale/disposed ids
     /// or if the effect is already running (re-entrant trigger).
+    ///
+    /// A paused effect does not run either: it keeps its dependencies, and is
+    /// marked as having missed the run.
     fn begin_effect(&mut self, effect_id: EffectId) -> Option<EffectRun> {
         let slot = self.effect_slot_mut(effect_id)?;
         if slot.state != EffectState::Idle {
+            return None;
+        }
+        if slot.paused {
+            slot.missed = true;
             return None;
         }
         let callback = slot.callback.take()?;
@@ -555,6 +590,11 @@ pub(crate) fn flush_pending_effects() {
 /// effect callbacks — the runtime borrow is never held across user code.
 pub(crate) fn notify_write(signal_id: SignalId) {
     with_runtime(|rt| rt.enqueue_subscribers(signal_id));
+    flush_unless_batching();
+}
+
+/// Run what is queued now, unless a `batch()` will run it when it ends.
+pub(crate) fn flush_unless_batching() {
     let batching = with_reactive(|reactive| reactive.batch_depth.get() > 0);
     if !batching {
         flush_pending_effects();
@@ -601,9 +641,7 @@ pub fn batch<R>(f: impl FnOnce() -> R) -> R {
     });
     let result = f();
     drop(guard);
-    if with_reactive(|reactive| reactive.batch_depth.get()) == 0 {
-        flush_pending_effects();
-    }
+    flush_unless_batching();
     result
 }
 

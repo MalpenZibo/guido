@@ -229,10 +229,11 @@ container().background(theme.surface.transition(200.0).entering_from(Color::TRAN
 `.exiting_to(..)` is its mirror: where the property goes when the widget is
 removed from a dynamic children list. It is asked at removal, not at build —
 the caller knows the direction only then — and a removed child that declares
-one is *detached* rather than torn down: it keeps its slot, takes no input and
-subscribes to nothing, and is disposed when its last exit settles. Detach and
-dispose are the two halves of `teardown_widget_subtree` in `src/jobs.rs`, and
-a `keyed(..)` key that comes back mid-exit reclaims its row.
+one is *detached* rather than torn down: it keeps its slot, takes no input,
+subscribes to nothing, its effects are paused, and it is disposed when its last
+exit settles. Detach and dispose are the two halves of `teardown_widget_subtree`
+in `src/jobs.rs`, and a `keyed(..)` key that comes back mid-exit reclaims its
+row — resuming its effects, each one that missed a write running once.
 
 The take lives on `AnimationState`, not in the initialiser that seeds most
 properties — there are four of those, and an enter asked for in one of them
