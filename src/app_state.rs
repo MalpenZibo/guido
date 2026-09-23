@@ -144,6 +144,10 @@ pub(crate) struct AppState {
     /// a texture missing or evicted, an entry let go — for the loop to settle
     /// where a signal may be written.
     pub(crate) image_events: DeferredQueue<ImageEvent>,
+    /// The bytes of texture the renderer's image cache may hold before it
+    /// evicts, as the application set it. `None` is
+    /// [`DEFAULT_IMAGE_CACHE_BUDGET`](crate::DEFAULT_IMAGE_CACHE_BUDGET).
+    pub(crate) image_cache_budget: Cell<Option<usize>>,
 }
 
 /// Forget everything this `App` put here, so the next one on this thread
@@ -183,6 +187,7 @@ pub(crate) fn reset() {
             decoded_images,
             image_decoder,
             image_events,
+            image_cache_budget,
         } = app;
 
         // `take` rather than a value per line: the struct derives `Default`,
@@ -226,5 +231,6 @@ pub(crate) fn reset() {
         image_events.clear();
         decoded_images.take();
         image_decoder.take();
+        image_cache_budget.take();
     });
 }

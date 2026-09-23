@@ -112,6 +112,33 @@ pub fn load_font(data: Vec<u8>) {
     });
 }
 
+/// How many bytes of image texture the renderer keeps before it evicts, unless
+/// the application says otherwise: 100 MB, Flutter's `ImageCache` default.
+pub const DEFAULT_IMAGE_CACHE_BUDGET: usize = 100 << 20;
+
+/// Set how many bytes of image texture the renderer may keep.
+///
+/// A texture costs its width × height × 4 bytes. Under the budget nothing is
+/// evicted; over it, the least recently drawn go first — but never one drawn
+/// within the last second, so the images a frame keeps drawing stay even when
+/// they alone are over the budget. The default is [`DEFAULT_IMAGE_CACHE_BUDGET`].
+///
+/// # Example
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// set_image_cache_budget(32 << 20);
+/// ```
+pub fn set_image_cache_budget(bytes: usize) {
+    with_app_state(|app| app.image_cache_budget.set(Some(bytes)));
+}
+
+/// The bytes of image texture the renderer may keep, as set by
+/// [`set_image_cache_budget`] or the default.
+pub(crate) fn image_cache_budget() -> usize {
+    with_app_state(|app| app.image_cache_budget.get()).unwrap_or(DEFAULT_IMAGE_CACHE_BUDGET)
+}
+
 /// Get all registered custom font data (for loading into FontSystems).
 ///
 /// Returns cloned `Arc` pointers so every FontSystem (measurer, renderer)
@@ -215,7 +242,7 @@ pub mod prelude {
     };
     pub use crate::{
         App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
-        restart_app, set_default_font_family,
+        restart_app, set_default_font_family, set_image_cache_budget,
     };
 }
 
@@ -2169,6 +2196,26 @@ impl App {
     /// ```
     pub fn default_font_family(self, family: FontFamily) -> Self {
         set_default_font_family(family);
+        self
+    }
+
+    /// Set how many bytes of image texture the renderer may keep before it
+    /// evicts; see [`set_image_cache_budget`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let config = SurfaceConfig::new();
+    /// # let view = || text("hi");
+    /// App::new()
+    ///     .image_cache_budget(32 << 20)
+    ///     .run(|app| {
+    ///         app.add_surface(config, view);
+    ///     });
+    /// ```
+    pub fn image_cache_budget(self, bytes: usize) -> Self {
+        set_image_cache_budget(bytes);
         self
     }
 

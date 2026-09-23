@@ -334,55 +334,202 @@ fn an_image_whose_texture_is_gone_is_decoded_again() {
     assert_eq!(app.image_bytes_held(), 0, "and let go of again");
 }
 
-/// More images in view than the renderer's texture cache holds stay drawn,
-/// and are decoded once each.
-///
-/// Red before: eviction took the least recently used textures whether or not
-/// the frame before had drawn them. While the pixels stayed in the cache that
-/// cost an upload; once an upload drops them, every evicted image in view went
-/// blank and back to the worker, frame after frame, for as long as anything
-/// asked for frames.
-#[test]
-fn more_images_in_view_than_the_texture_cache_holds_stay_drawn() {
-    const IMAGES: u8 = 70;
-    let _serial = serial();
-    let Some(mut app) = headless() else { return };
-    let backdrop = create_signal(BACKDROP);
-    let surface = app.surface(
-        SurfaceConfig::new()
-            .height(4)
-            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
-        move || {
-            container()
-                .width(fill())
-                .height(fill())
-                .background(backdrop)
-                .layout(Flex::row())
-                .children((0..IMAGES).map(|i| {
-                    let source = ImageSource::Bytes(png([200, i, 0]).into());
-                    container()
-                        .width(4.0)
-                        .height(4.0)
-                        .child(image(source).content_fit(ContentFit::Fill))
-                }))
-        },
-    );
-    app.configure(surface, u32::from(IMAGES) * 4, 4, 1.0);
-    app.step();
-    app.wait_for_image_decodes();
-    app.step();
+/// What one of the 20×20 PNGs above costs as a texture: width × height × 4.
+const IMAGE_BYTES: usize = 20 * 20 * 4;
 
-    for frame in 0..4 {
-        backdrop.set(Color::rgb(0.0, 0.0, if frame % 2 == 0 { 0.9 } else { 1.0 }));
+/// Long enough that no texture drawn before it counts as drawn recently: the
+/// renderer spares one drawn within the last second.
+fn let_the_textures_go_idle() {
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+}
+
+/// A surface showing one of `sets` at a time, as a row of 4×4 images, over a
+/// backdrop the test can change to ask for a frame without touching the
+/// images.
+struct Switcher {
+    surface: SurfaceId,
+    which: RwSignal<usize>,
+    backdrop: RwSignal<Color>,
+}
+
+impl Switcher {
+    fn new(app: &mut Headless, sets: Vec<Vec<ImageSource>>) -> Self {
+        let width = sets.iter().map(Vec::len).max().unwrap_or(1).max(1) as u32 * 4;
+        let which = create_signal(0usize);
+        let backdrop = create_signal(BACKDROP);
+        let surface = app.surface(
+            SurfaceConfig::new()
+                .height(4)
+                .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+            move || {
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .background(backdrop)
+                    .child(move || {
+                        container().layout(Flex::row()).children(
+                            sets[which.get()].clone().into_iter().map(|source| {
+                                container()
+                                    .width(4.0)
+                                    .height(4.0)
+                                    .child(image(source).content_fit(ContentFit::Fill))
+                            }),
+                        )
+                    })
+            },
+        );
+        app.configure(surface, width, 4, 1.0);
+        Self {
+            surface,
+            which,
+            backdrop,
+        }
+    }
+
+    /// Show set `which` and step until every decode it asked for is drawn.
+    fn show(&self, app: &mut Headless, which: usize) {
+        self.which.set(which);
         app.step();
         app.wait_for_image_decodes();
         app.step();
-        let blank: Vec<u32> = (0..u32::from(IMAGES))
-            .filter(|i| app.read_pixel(surface, i * 4 + 2, 2)[2] > 150)
-            .collect();
-        assert!(
-            blank.is_empty(),
-            "frame {frame}: images {blank:?} went blank"
+    }
+
+    /// Ask for a frame that draws the same images again.
+    fn redraw(&self, app: &mut Headless) {
+        let current = self.backdrop.get_untracked();
+        self.backdrop.set(if current == BACKDROP {
+            Color::rgb(0.0, 0.0, 0.9)
+        } else {
+            BACKDROP
+        });
+        app.step();
+    }
+
+    /// The images of the set in view, by index, that are not drawn.
+    fn blank(&self, app: &Headless, count: usize) -> Vec<usize> {
+        (0..count)
+            .filter(|i| is_backdrop(app.read_pixel(self.surface, *i as u32 * 4 + 2, 2)))
+            .collect()
+    }
+}
+
+fn sources(count: u8, green: u8) -> Vec<ImageSource> {
+    (0..count)
+        .map(|i| ImageSource::Bytes(png([200, i, green]).into()))
+        .collect()
+}
+
+/// Two hundred small images, drawn once and taken off screen, are still
+/// textures when they come back: together they are nowhere near the budget.
+///
+/// Red before #512: the cache held 64 textures whatever their size, and past
+/// that evicted what had not been drawn for a second — 168 icons that cost
+/// 1600 bytes each, decoded again when a launcher opened a second time.
+#[test]
+fn small_images_off_screen_stay_cached_while_under_the_budget() {
+    const IMAGES: u8 = 200;
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0), Vec::new()]);
+    switcher.show(&mut app, 0);
+    assert_eq!(app.image_decodes_started(), u64::from(IMAGES));
+
+    switcher.show(&mut app, 1);
+    let_the_textures_go_idle();
+    switcher.redraw(&mut app);
+    switcher.redraw(&mut app);
+
+    switcher.show(&mut app, 0);
+    assert_eq!(
+        switcher.blank(&app, usize::from(IMAGES)),
+        Vec::<usize>::new(),
+        "every image is drawn again"
+    );
+    assert_eq!(
+        app.image_decodes_started(),
+        u64::from(IMAGES),
+        "and none was decoded twice"
+    );
+}
+
+/// Show image A, then image B in its place, let both go idle and draw B again
+/// under `budget`. Returns how many decodes it took to bring A back, after
+/// checking that B — on screen throughout — was never evicted.
+fn decodes_to_bring_back_an_idle_image(budget: usize) -> Option<u64> {
+    let _serial = serial();
+    let mut app = headless()?;
+    guido::set_image_cache_budget(budget);
+    let switcher = Switcher::new(&mut app, vec![sources(1, 0), sources(1, 100)]);
+    switcher.show(&mut app, 0);
+    switcher.show(&mut app, 1);
+    assert_eq!(app.image_decodes_started(), 2);
+
+    let_the_textures_go_idle();
+    switcher.redraw(&mut app);
+    switcher.redraw(&mut app);
+    assert!(switcher.blank(&app, 1).is_empty(), "B, on screen, is drawn");
+    assert_eq!(app.image_decodes_started(), 2, "and was not decoded again");
+
+    switcher.show(&mut app, 0);
+    assert!(switcher.blank(&app, 1).is_empty(), "A is drawn once back");
+    Some(app.image_decodes_started() - 2)
+}
+
+/// With room for one image and a half, the image not drawn recently is
+/// evicted and the one on screen is not.
+///
+/// Red before #512: two textures are nowhere near 64, so nothing was evicted
+/// whatever they cost.
+#[test]
+fn over_the_budget_the_image_not_drawn_recently_is_evicted() {
+    let Some(decodes) = decodes_to_bring_back_an_idle_image(IMAGE_BYTES * 3 / 2) else {
+        return;
+    };
+    assert_eq!(decodes, 1, "A was evicted, and decoded again to come back");
+}
+
+/// The budget is the one the application set, to the byte: exactly two images
+/// fit, and a byte less does not.
+///
+/// Red before #512: there was no budget to set, and two textures were never
+/// evicted.
+#[test]
+fn the_budget_the_application_sets_is_the_one_used() {
+    let Some(decodes) = decodes_to_bring_back_an_idle_image(IMAGE_BYTES * 2) else {
+        return;
+    };
+    assert_eq!(decodes, 0, "two images fit a budget of two");
+    let Some(decodes) = decodes_to_bring_back_an_idle_image(IMAGE_BYTES * 2 - 1) else {
+        return;
+    };
+    assert_eq!(decodes, 1, "and a byte less evicts one");
+}
+
+/// Images on screen whose textures together exceed the budget all stay
+/// drawn, each decoded once — even on a frame that comes after a second of
+/// nothing, when none of them was drawn recently.
+///
+/// Red before #512: the cache evicted at the start of a frame, before the
+/// frame had drawn anything, so after an idle second every texture in view
+/// was old enough to go; 38 of these went blank and back to the worker.
+#[test]
+fn images_on_screen_over_the_budget_stay_drawn() {
+    const IMAGES: u8 = 70;
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    guido::set_image_cache_budget(IMAGE_BYTES * 10);
+    let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0)]);
+    switcher.show(&mut app, 0);
+
+    for idle in 0..2 {
+        let_the_textures_go_idle();
+        switcher.redraw(&mut app);
+        app.wait_for_image_decodes();
+        app.step();
+        assert_eq!(
+            switcher.blank(&app, usize::from(IMAGES)),
+            Vec::<usize>::new(),
+            "after idle second {idle}, images went blank"
         );
     }
     assert_eq!(
