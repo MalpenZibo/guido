@@ -1707,9 +1707,9 @@ fn aligned_labels() -> Container {
                         .cross_alignment(CrossAlignment::Center),
                 )
                 .padding([14.0, 0.0])
-                // The frost first: a turned card with a background drawn
-                // before a frosted text takes the frost away, which is a
-                // defect of its own and not this scenario's.
+                // The frost first, for the layout this picture was drawn
+                // with. A frost painted after a turned card is
+                // `frost_survives_a_turned_sibling`'s to watch.
                 .child(frosted)
                 .child(turned),
         )
@@ -2250,5 +2250,43 @@ fn text_cut_to_its_lines_at_scale_2x() {
         2.0,
         BACKDROP,
         cut_to_lines(),
+    );
+}
+
+/// A frosted label painted after a turned card with a background.
+///
+/// The two do not overlap; the card being turned is all it takes. Before #487
+/// the letters here showed sharp bars under a flat tint.
+#[test]
+fn frost_survives_a_turned_sibling() {
+    let frosted = frosted_over_bars(
+        80.0,
+        label("frost", 40.0)
+            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+            .backdrop_blur(10.0)
+            .nowrap(),
+    );
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(
+            Flex::column()
+                .spacing(30.0)
+                .cross_alignment(CrossAlignment::Center),
+        )
+        .child(
+            box_of(150.0, 30.0)
+                .background(Color::rgb(0.18, 0.20, 0.28))
+                .rotate(12.0),
+        )
+        .child(frosted);
+
+    golden(
+        "frost_survives_a_turned_sibling",
+        (200.0, 190.0),
+        1.0,
+        BACKDROP,
+        view,
     );
 }
