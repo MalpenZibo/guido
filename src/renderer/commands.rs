@@ -5,7 +5,7 @@ use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Border definition for shapes.
 #[derive(Debug, Clone, Copy)]
@@ -255,6 +255,8 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight
         font_weight: FontWeight,
+        /// Where each line sits across `rect`.
+        align: TextAlign,
         /// The lines it is cut to, when it is cut. `None` draws it whole in
         /// its box.
         fit: Option<LineFit>,
@@ -329,6 +331,9 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight.
         font_weight: FontWeight,
+        /// Where each line sits across `rect` — the frost has to put its
+        /// lines where the letters put theirs.
+        align: TextAlign,
         /// The lines the text it frosts is cut to, so the mask is cut there too.
         fit: Option<LineFit>,
     },

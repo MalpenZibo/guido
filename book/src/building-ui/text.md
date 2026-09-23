@@ -325,6 +325,42 @@ text("This text will not wrap").nowrap()
 # }
 ```
 
+### Text Alignment
+
+`align` says where each line sits across the text's box. The box is the
+text's own: as wide as its widest line, so a wrapped label lines its lines up
+against each other, and as wide as the stretch when a layout stretches it.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .width(160.0)
+    .child(text("A label long enough to wrap onto a second line").align(TextAlign::Center))
+# ;
+# }
+```
+
+- `TextAlign::Start` (the default) — where the text's direction begins: the
+  left for Latin, the right for Arabic or Hebrew
+- `TextAlign::Center` — each line centred
+- `TextAlign::End` — where the text's direction ends
+- `TextAlign::Justified` — every line but a paragraph's last stretched to the
+  full width
+
+A text whose box fits its only line looks the same whichever alignment it has:
+there is no room for the line to move into. To centre a short label in a wider
+space, centre the text in its container, or stretch it across the container
+and centre its line.
+
+A line wider than its box — an unwrapped text in a narrow container — starts
+at the start and runs off the end, whatever its alignment, as it does in CSS.
+
+`align` takes a signal like the other text properties. A change moves the
+glyphs inside the box without resizing it, so it repaints the text and
+re-measures nothing.
+
 ### Limiting Lines
 
 A text that has to fit a fixed box — a window title in a bar, a track name in
@@ -552,6 +588,7 @@ impl Text {
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn wrap<M>(self, wrap: impl IntoSignal<bool, M>) -> Self;
     pub fn nowrap(self) -> Self;    // Shorthand for wrap(false)
+    pub fn align<M>(self, align: impl IntoSignal<TextAlign, M>) -> Self;
     pub fn max_lines<M>(self, lines: impl IntoSignal<Option<u32>, M>) -> Self;  // .max_lines(2)
     pub fn overflow<M>(self, overflow: impl IntoSignal<TextOverflow, M>) -> Self;
 }

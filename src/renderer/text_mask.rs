@@ -30,14 +30,14 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use glyphon::{
-    Attrs, Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
+    Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
-use crate::widgets::FontFamily;
 use crate::widgets::font::FontWeight;
+use crate::widgets::{FontFamily, TextAlign};
 
 /// Masks kept before the unused ones are dropped.
 ///
@@ -60,6 +60,9 @@ pub struct MaskSpec<'a> {
     pub font_weight: FontWeight,
     /// The lines the text is cut to, when it is cut.
     pub fit: Option<super::text_measurer::LineFit>,
+    /// Where each line sits across the buffer, as the letters over the frost
+    /// have it.
+    pub align: TextAlign,
     /// The buffer to shape in, in the same texels as everything else here.
     ///
     /// Handed in rather than derived, because the rule belongs to whichever
@@ -87,6 +90,7 @@ struct MaskKey {
     font_size_bits: u32,
     weight: u16,
     family: FontFamily,
+    align: TextAlign,
     width: u32,
     height: u32,
     /// Rounded, and in the key because it decides where the lines break: two
@@ -205,6 +209,7 @@ impl TextMaskRenderer {
             font_size_bits: font_size.to_bits(),
             weight: weight.0,
             family: spec.font_family,
+            align: spec.align,
             width,
             height,
             buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),
@@ -227,13 +232,13 @@ impl TextMaskRenderer {
 
         // Shaped the way the on-screen text is shaped, or the hole would not be
         // the shape of the letters that land in it.
-        let buffer = super::text_measurer::shape_text(
+        let buffer = super::text::shape(
             &mut shaper.font_system,
-            font_size,
             spec.text,
-            &Attrs::new()
-                .family(spec.font_family.to_cosmic())
-                .weight(weight.to_cosmic()),
+            font_size,
+            spec.font_family,
+            spec.font_weight,
+            spec.align,
             (Some(spec.buffer.0), Some(spec.buffer.1)),
             spec.fit,
             spec.density,

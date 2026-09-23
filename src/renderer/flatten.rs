@@ -44,10 +44,12 @@ pub struct FlattenedCommand {
     pub command: Rc<DrawCommand>,
     /// World transform (composed from all ancestors)
     pub world_transform: Transform,
-    /// World transform origin in screen coordinates
-    pub world_transform_origin: Option<(f32, f32)>,
     /// Render layer for ordering
     pub layer: RenderLayer,
+    /// How opaque it is drawn: the product of every opacity from the root down
+    /// to the node that painted it. Multiplied into each colour it draws —
+    /// see [`RenderNode::opacity`](super::tree::RenderNode::opacity).
+    pub opacity: f32,
     /// The clip this command is cut to, if any — named rather than copied, so
     /// that a subtree replayed somewhere else does not drag it along. Read it
     /// with [`clip`](Self::clip).
@@ -601,7 +603,7 @@ pub fn flatten_root_into(
     layers.clear();
     scratch.clear();
 
-    flatten_node(root, Transform::IDENTITY, None, None, scratch);
+    flatten_node(root, Transform::IDENTITY, None, 1.0, scratch);
 
     let carried = scratch.carried;
     scratch.drain_into(commands, layers);
@@ -622,16 +624,16 @@ pub struct RegionsCarried {
 /// For nodes with `repainted == false` and a valid `cached_flatten`,
 /// reuse the cached commands with a translation offset instead of
 /// re-flattening the entire subtree.
+///
+/// `parent_opacity` is what everything above has multiplied together, and
+/// travels down the way `parent_world_transform` does.
 fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
-    parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<ClipIndex>,
+    parent_opacity: f32,
     out: &mut FlattenScratch,
 ) -> bool {
-    // Compute this node's world transform
-    let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
-
     // Compose transforms: parent first, then local about its own pivot
     let local_centered = if node.local_transform.is_identity() {
         Transform::IDENTITY
@@ -639,6 +641,7 @@ fn flatten_node(
         node.local_transform.about(node.pivot, node.bounds)
     };
     let world_transform = parent_world_transform.then(&local_centered);
+    let opacity = parent_opacity * node.opacity;
 
     // What this node is cut by before it says anything of its own — read once,
     // because three things want it: a replay, the commands of a node that sets
@@ -654,6 +657,7 @@ fn flatten_node(
     };
     if let Some(cached) = cached_flatten
         && let Some((dx, dy)) = cached.replay_offset(world_transform)
+        && let Some(fade) = cached.replay_fade(parent_opacity)
     {
         // The clips this subtree placed for itself move with it; the one it
         // inherits is the one it finds here, wherever that has got to. Placed
@@ -662,6 +666,7 @@ fn flatten_node(
         for cmd in &cached.commands {
             let mut replayed = cmd.clone();
             replayed.world_transform = cmd.world_transform.translated(dx, dy);
+            replayed.opacity = cmd.opacity * fade;
             // A command that named no clip named the one its subtree inherited,
             // which is this frame's and not the one it was cached under.
             if replayed.clip.is_none() {
@@ -685,14 +690,6 @@ fn flatten_node(
     let marks = world_transform
         .is_translation_only()
         .then(|| (out.mark(), out.clips.mark()));
-
-    // Compute world transform origin (for shapes that need it)
-    let world_origin = if !node.local_transform.is_identity() {
-        let (world_ox, world_oy) = parent_world_transform.transform_point(origin_x, origin_y);
-        Some((world_ox, world_oy))
-    } else {
-        parent_world_origin
-    };
 
     // This node's clip, placed under the one it inherits. The intersection is
     // still computed here and once — what changed is where it is written: into
@@ -737,8 +734,8 @@ fn flatten_node(
         out.push(FlattenedCommand {
             command: Rc::clone(cmd),
             world_transform,
-            world_transform_origin: world_origin,
             layer,
+            opacity,
             clip: effective_clip.clone(),
         });
     }
@@ -746,7 +743,7 @@ fn flatten_node(
     // Recurse to children with effective clip
     let mut subtree_partial = node.partial;
     for child in &node.children {
-        subtree_partial |= flatten_node(child, world_transform, world_origin, clip_index, out);
+        subtree_partial |= flatten_node(child, world_transform, clip_index, opacity, out);
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.
@@ -773,8 +770,8 @@ fn flatten_node(
             out.push(FlattenedCommand {
                 command: Rc::clone(cmd),
                 world_transform,
-                world_transform_origin: world_origin,
                 layer: RenderLayer::Overlay,
+                opacity,
                 clip: overlay_clip.clone(),
             });
         }
@@ -802,6 +799,7 @@ fn flatten_node(
                 commands: out.commands_since(mark, inherited.as_ref()),
                 clips: out.clips.since(clip_mark),
                 world_transform,
+                opacity: parent_opacity,
             })
         });
     crate::render_stats::record_flatten_full();
@@ -1011,8 +1009,8 @@ mod tests {
         FlattenedCommand {
             command: Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)),
             world_transform: Transform::IDENTITY,
-            world_transform_origin: None,
             layer,
+            opacity: 1.0,
             clip: None,
         }
     }
@@ -1410,6 +1408,7 @@ mod tests {
             font_size: 10.0,
             font_family: crate::widgets::FontFamily::default(),
             font_weight: crate::widgets::FontWeight::default(),
+            align: Default::default(),
             fit: None,
         }));
         node
@@ -2517,5 +2516,124 @@ mod world_geometry_tests {
         assert_eq!((world.x, world.y), (20.0, 30.0));
         assert_eq!((world.width, world.height), (100.0, 60.0));
         assert_eq!(clip.world_radii().max(), 8.0, "and the corners with it");
+    }
+}
+
+#[cfg(test)]
+mod opacity_tests {
+    use super::*;
+    use crate::renderer::NodeId;
+    use crate::widgets::Color;
+
+    fn with_box(id: NodeId, opacity: f32) -> RenderNode {
+        let mut node = RenderNode::with_bounds(id, Rect::new(0.0, 0.0, 40.0, 40.0));
+        node.opacity = opacity;
+        node.commands.push(Rc::new(DrawCommand::rounded_rect(
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+            Color::WHITE,
+            0.0,
+        )));
+        node
+    }
+
+    fn flatten(root: &RenderNode) -> Vec<FlattenedCommand> {
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        flatten_root_into(
+            root,
+            &mut commands,
+            &mut layers,
+            &mut FlattenScratch::default(),
+        );
+        commands
+    }
+
+    /// A frame of `child` under a parent at `opacity`, as a fading container
+    /// paints one: the parent is new, the child is the same `Rc`.
+    fn frame_under(child: &Rc<RenderNode>, opacity: f32) -> RenderNode {
+        let mut fading = RenderNode::new(2);
+        fading.opacity = opacity;
+        fading.children.push(Rc::clone(child));
+        let mut root = RenderNode::new(1);
+        root.children.push(Rc::new(fading));
+        root
+    }
+
+    fn opacities(commands: &[FlattenedCommand]) -> Vec<f32> {
+        commands.iter().map(|c| c.opacity).collect()
+    }
+
+    /// An opacity is the product of every one above it: a half inside a half
+    /// draws at a quarter, and an overlay drawn after the children is drawn at
+    /// its own node's opacity, not at the last child's.
+    #[test]
+    fn nested_opacities_multiply() {
+        let mut inner = with_box(3, 0.5);
+        inner
+            .overlay_commands
+            .push(Rc::new(DrawCommand::circle((5.0, 5.0), 5.0, Color::WHITE)));
+        let mut outer = with_box(2, 0.5);
+        outer.children.push(Rc::new(inner));
+        outer
+            .overlay_commands
+            .push(Rc::new(DrawCommand::circle((5.0, 5.0), 5.0, Color::WHITE)));
+        let mut root = RenderNode::new(1);
+        root.children.push(Rc::new(outer));
+
+        let commands = flatten(&root);
+        let by_layer = |layer| {
+            commands
+                .iter()
+                .filter(|c| c.layer == layer)
+                .map(|c| c.opacity)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            by_layer(RenderLayer::Shapes),
+            [0.5, 0.25],
+            "the outer box at a half, the inner one at a half of that"
+        );
+        let mut overlays = by_layer(RenderLayer::Overlay);
+        overlays.sort_by(f32::total_cmp);
+        assert_eq!(overlays, [0.25, 0.5], "each overlay at its own node's");
+    }
+
+    /// A clean subtree under an ancestor whose opacity changed is replayed,
+    /// not flattened again, and drawn at the opacity it now inherits.
+    ///
+    /// This is the frame a fade is made of: the fading container repaints, so
+    /// its node is new each frame, and everything under it comes back clean
+    /// out of the paint cache with the old opacity multiplied into its cached
+    /// commands.
+    #[test]
+    fn a_clean_subtree_is_replayed_at_the_opacity_it_now_inherits() {
+        let child = Rc::new(with_box(3, 0.5));
+        let frame_under = |opacity| frame_under(&child, opacity);
+
+        assert_eq!(opacities(&flatten(&frame_under(0.8))), [0.4]);
+        let entry = child.cached_flatten.borrow().clone().expect("cached");
+
+        // Served from the paint cache from here on.
+        child.repainted.set(false);
+        assert_eq!(
+            opacities(&flatten(&frame_under(0.4))),
+            [0.2],
+            "replayed at the old opacity: the fade stopped at the child"
+        );
+        assert!(
+            Rc::ptr_eq(&entry, &child.cached_flatten.borrow().clone().unwrap()),
+            "flattened again rather than replayed — a replay writes nothing back"
+        );
+    }
+
+    /// An entry made while the subtree was invisible cannot say what it looks
+    /// like visible: every command in it is at zero. It is flattened again.
+    #[test]
+    fn an_entry_made_at_zero_is_not_replayed() {
+        let child = Rc::new(with_box(3, 1.0));
+        let frame_under = |opacity| frame_under(&child, opacity);
+
+        assert_eq!(opacities(&flatten(&frame_under(0.0))), [0.0]);
+        child.repainted.set(false);
+        assert_eq!(opacities(&flatten(&frame_under(0.5))), [0.5]);
     }
 }

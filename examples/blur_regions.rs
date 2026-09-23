@@ -75,12 +75,7 @@ fn main() {
                     .width(fill())
                     .height(fill())
                     .padding(24.0)
-                    .layout(
-                        Flex::column()
-                            .spacing(20.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::column().spacing(20.0).center())
                     .children([
                         container()
                             .layout(Flex::row().spacing(20.0))
@@ -190,11 +185,7 @@ fn main() {
                                         })
                                         .when_hovered(|s| s.lighter(0.06))
                                         .on_click(move || frosted.update(|f| *f = !*f))
-                                        .layout(
-                                            Flex::column()
-                                                .main_alignment(MainAlignment::Center)
-                                                .cross_alignment(CrossAlignment::Center),
-                                        )
+                                        .layout(Flex::column().center())
                                         .child(text(move || {
                                             if frosted.get() {
                                                 "blur on".to_owned()

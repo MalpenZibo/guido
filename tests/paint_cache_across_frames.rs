@@ -1125,6 +1125,84 @@ fn a_subtree_whose_ancestor_turned_is_not_reused() {
     );
 }
 
+/// A cached subtree whose ancestor's opacity changed is drawn at the new
+/// opacity without being painted or flattened again.
+///
+/// This is every frame of a fade. The container that fades repaints, because
+/// its opacity is read in its paint; the box inside it does not, so it comes
+/// back out of the paint cache with the commands it was flattened into — and
+/// those carry the old opacity multiplied in. Replayed as they were, the box
+/// would stay where the fade began while the container around it went on.
+///
+/// Half of a half and not the half alone, so that the box's own opacity is
+/// part of what the replay has to keep: a replay that wrote the inherited
+/// opacity over the command's instead of scaling it would draw the box at the
+/// container's.
+#[test]
+fn a_subtree_whose_ancestor_faded_is_replayed_at_the_new_opacity() {
+    let opacity = create_signal(1.0f32);
+    let mut s = Surface::new(
+        container()
+            .layout(Flex::column().spacing(GAP))
+            .padding(PAD)
+            .child(
+                container().opacity(opacity).child(
+                    container()
+                        .width(PUSHED_WIDTH)
+                        .height(BOX_HEIGHT)
+                        .opacity(0.5)
+                        .background(CLIPPED_FILL),
+                ),
+            )
+            .child(container().width(POKER).height(POKER)),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+
+    s.frame();
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (fader, poker) = (children[0], children[1]);
+    let faded = s.surface.tree.get_children(fader)[0];
+    s.frames(poker, 1);
+    let (painted, _) = s.box_drawn(CLIPPED_FILL);
+    let first = s
+        .node_of(faded)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("the box is cached from its first flatten");
+    assert_eq!(
+        s.command_of(CLIPPED_FILL).opacity,
+        0.5,
+        "at its own opacity"
+    );
+
+    opacity.set(0.5);
+    s.surface.tree.mark_needs_paint(fader);
+    s.frame();
+
+    let (reused, _) = s.box_drawn(CLIPPED_FILL);
+    assert!(
+        Rc::ptr_eq(&painted, &reused),
+        "the box repainted when the container around it faded, so flatten was \
+         never asked to replay it under the new opacity"
+    );
+    assert!(
+        Rc::ptr_eq(
+            &first,
+            &s.node_of(faded).cached_flatten.borrow().clone().unwrap()
+        ),
+        "the box was flattened again rather than replayed — replay writes \
+         nothing back, so a fresh entry means the cache refused"
+    );
+    assert_eq!(
+        s.command_of(CLIPPED_FILL).opacity,
+        0.25,
+        "the replayed box was drawn at the opacity it was cached under, not at \
+         half of the container's new one"
+    );
+}
+
 /// A frame flattens into the buffers the frame before it left behind.
 ///
 /// The output buffers have always been the surface's, cleared and refilled;

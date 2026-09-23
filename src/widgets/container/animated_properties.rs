@@ -1,4 +1,4 @@
-//! The eleven animated properties of `Container`, declared in one table.
+//! The twelve animated properties of `Container`, declared in one table.
 //!
 //! An animated property used to be written out by name in nine places that
 //! nothing kept in step — the field, the seed, the target, the drift check,
@@ -64,7 +64,9 @@ use crate::widgets::Corners;
 ///   becomes a value of its type, a container built around the declaration, a
 ///   probe reading that number back off the painted frame, and the three
 ///   numbers it moves between — where it enters from, where it lands, and
-///   where a later write sends it — and `base`, the value a timeline is
+///   where a later write sends it; `from` is where it leaves to as well, when
+///   the container is removed from the one holding it — and `base`, the value
+///   a timeline is
 ///   declared at, which is `from` for every row but `shadow`'s, for the reason
 ///   written there.
 ///
@@ -160,28 +162,34 @@ macro_rules! animated_properties {
                 timeline: yes,
                 test {
                     value: |k| Translate::new(k, 0.0),
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).translate(v)),
-                    probe: |h: &mut H| h.paint().children[0].local_transform.tx(),
+                    declared_as: |v| container().width(200.0).height(100.0).translate(v),
+                    probe: |h: &mut H| h.paint().local_transform.tx(),
                     from: 5.0, to: 50.0, then: 20.0, base: 5.0,
                 };
             rotate: f32 as f32, target: effective_rotate_target, layout: no,
                 timeline: yes,
                 test {
                     value: |k| k,
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).rotate(v)),
-                    probe: |h: &mut H| turned_degrees(&h.paint().children[0]),
+                    declared_as: |v| container().width(200.0).height(100.0).rotate(v),
+                    probe: |h: &mut H| turned_degrees(&h.paint()),
                     from: 4.0, to: 40.0, then: 16.0, base: 4.0,
                 };
             scale: Scale as Scale, target: effective_scale_target, layout: no,
                 timeline: yes,
                 test {
                     value: |k| Scale::uniform(k),
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).scale(v)),
-                    probe: |h: &mut H| h.paint().children[0].local_transform.data[0],
+                    declared_as: |v| container().width(200.0).height(100.0).scale(v),
+                    probe: |h: &mut H| h.paint().local_transform.data[0],
                     from: 0.5, to: 2.0, then: 1.25, base: 0.5,
+                };
+            opacity: f32 as f32, target: effective_opacity_target, layout: no,
+                timeline: yes,
+                test {
+                    value: |k| k,
+                    declared_as: |v| container().width(200.0).height(100.0)
+                        .background(Color::RED).opacity(v),
+                    probe: |h: &mut H| h.paint().opacity,
+                    from: 0.2, to: 1.0, then: 0.5, base: 0.2,
                 };
         }
     };
@@ -343,6 +351,35 @@ macro_rules! emit_slot_facts {
                     $(AnimSlot::$name(anim) => anim.is_animating(),)*
                 }
             }
+
+            /// Whether it declared somewhere to go when the widget is
+            /// removed.
+            pub(crate) fn declares_exit(&self) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.declares_exit(),)*
+                }
+            }
+
+            /// Begin the exit it declared, if it declared one.
+            pub(crate) fn begin_exit(&mut self, now: FrameInstant) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.begin_exit(now),)*
+                }
+            }
+
+            /// Whether an exit has begun on it, settled or not.
+            pub(crate) fn is_leaving(&self) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.is_leaving(),)*
+                }
+            }
+
+            /// Stop leaving; the next advance sends it home.
+            pub(crate) fn cancel_exit(&mut self) {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.cancel_exit(),)*
+                }
+            }
         }
     };
 }
@@ -466,7 +503,10 @@ macro_rules! emit_passes {
                 let Some(declared) = self.anims.as_deref() else {
                     return;
                 };
-                if !declared.slots().any(AnimSlot::follows_a_signal) {
+                // A container that is leaving has nowhere to drift to: its
+                // exits are heading where removal sent them, and it reads
+                // nothing that could wake it.
+                if !declared.slots().any(AnimSlot::follows_a_signal) || self.is_leaving() {
                     return;
                 }
 
@@ -513,11 +553,17 @@ macro_rules! emit_passes {
                 let mut anims = self.anims.take();
                 let mut any_animating = false;
                 if let Some(declared) = anims.as_deref_mut() {
+                    // Leaving, nothing is retargeted: the exits are going where
+                    // removal sent them, and the rest stay where they were
+                    // rather than read a target whose item may be gone.
+                    let leaving = declared.slots().any(AnimSlot::is_leaving);
                     crate::reactive::diagnostics::snapshot_zone(|| {
                         for slot in declared.slots_mut() {
                             match slot {
                                 $(AnimSlot::$name(anim) => {
-                                    retarget!($target, anim, self, id, now);
+                                    if !leaving {
+                                        retarget!($target, anim, self, id, now);
+                                    }
                                     if anim.is_animating() {
                                         any_animating = true;
                                         let required =

@@ -75,7 +75,9 @@ struct Params {
     /// Target physical pixels to clip space, and the clip's curvature.
     to_clip: [f32; 6],
     clip_curvature: f32,
-    _pad6: f32,
+    /// How opaque the composite and the contour are laid over the target —
+    /// the fade the container's ancestors ask for.
+    opacity: f32,
 }
 
 /// A rasterized coverage mask and how big it is, which the view alone does not
@@ -118,6 +120,10 @@ pub struct BackdropRegion {
     /// turned one keeps its edges; the viewport is still narrowed by the box
     /// around it, because a viewport is four integers and narrowing it is free.
     pub clip: Option<PlacedShape>,
+    /// How opaque the result is laid back over the target: what the
+    /// container's own opacity and every ancestor's multiply to. A frosted
+    /// panel fading out takes its frost with it.
+    pub opacity: f32,
 }
 
 impl BackdropRegion {
@@ -213,6 +219,7 @@ impl BackdropRegion {
             clip_radii,
             clip_curvature,
             to_clip: to_clip.data,
+            opacity: self.opacity,
             ..Params::zeroed()
         })
     }

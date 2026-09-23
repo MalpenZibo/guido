@@ -56,6 +56,21 @@ pub fn set_cursor(cursor: CursorIcon) {
     });
 }
 
+/// Send the current shape again, changed or not.
+///
+/// For a pointer entering a surface: `wl_pointer.enter` leaves the cursor
+/// undefined until a shape is set against that enter's serial, so the one the
+/// seat last had is no longer on screen — however unchanged it is here. Every
+/// toolkit re-applies it there: winit's `reload_cursor_style`, SDL's
+/// `Wayland_SeatUpdatePointerCursor`, GTK's
+/// `gdk_wayland_device_update_surface_cursor`.
+///
+/// Through the same slot as [`set_cursor`], so a widget that changes the shape
+/// while handling the same enter still has the last word.
+pub(crate) fn resend_cursor() {
+    with_app_state(|app| app.outgoing_cursor.set(app.current_cursor.get()));
+}
+
 /// Take the shape waiting to go out to the compositor, if any.
 ///
 /// Called by the main event loop to sync the cursor to Wayland.

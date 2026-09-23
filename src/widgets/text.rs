@@ -54,6 +54,27 @@ pub enum TextOverflow {
     EllipsisMiddle,
 }
 
+/// Where each line of a text sits across the text's own box.
+///
+/// The box is the one layout gave the text: as wide as its widest line unless
+/// something stretched it, so a wrapped label centres every line against the
+/// longest of them, and a stretched one centres against the stretch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TextAlign {
+    /// Where the text's direction begins: the left for Latin, the right for
+    /// Arabic or Hebrew.
+    #[default]
+    Start,
+    /// Each line centred.
+    Center,
+    /// Where the text's direction ends.
+    End,
+    /// Every line but a paragraph's last stretched to the full width, the
+    /// extra room shared between its spaces. A last line starts where `Start`
+    /// would put it.
+    Justified,
+}
+
 /// A run of text.
 ///
 /// Style is declared here — see `declares_text_style` — because this is the
@@ -92,6 +113,9 @@ pub struct Text {
     max_lines: Prop<Option<u32>>,
     /// What marks the cut when the text is longer than its lines.
     overflow: Prop<TextOverflow>,
+    /// Where each line sits across the text's box. Read at paint: it moves
+    /// glyphs inside a box whose size it does not change.
+    align: Prop<TextAlign>,
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
     backdrop_blur: Prop<f32>,
@@ -107,6 +131,9 @@ pub struct Text {
     /// The lines layout cut the text to, handed to paint so every path that
     /// shapes it cuts in the same place.
     cached_fit: Option<LineFit>,
+    /// Whether the last layout gave this text a box narrower than its line,
+    /// which only an unwrapped text can be given.
+    cached_overflows: bool,
 }
 
 impl Text {
@@ -124,6 +151,7 @@ impl Text {
             wrap: Prop::Unset,
             max_lines: Prop::Unset,
             overflow: Prop::Unset,
+            align: Prop::Unset,
             backdrop_blur: Prop::Unset,
             anims: None,
             cached_text: String::new(), // Will be set during first layout
@@ -132,6 +160,7 @@ impl Text {
             cached_font_weight: FontWeight::NORMAL,
             cached_wrap: true,
             cached_fit: None,
+            cached_overflows: false,
         }
     }
 
@@ -180,6 +209,26 @@ impl Text {
     /// marked on its own.
     pub fn overflow<M>(mut self, overflow: impl IntoSignal<TextOverflow, M>) -> Self {
         self.overflow = overflow.into_prop();
+        self
+    }
+
+    /// Where each line sits across the text's box.
+    ///
+    /// The box is the text's own: as wide as its widest line, so the lines of
+    /// a wrapped label line up against each other, and as wide as the stretch
+    /// when a layout stretches it. A text whose box fits its only line looks
+    /// the same whichever alignment it has.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// text("a label long enough to wrap onto a second line")
+    ///     .align(TextAlign::Center);
+    /// ```
+    ///
+    /// Only the glyphs move — the box is measured the same either way — so a
+    /// write here repaints the text and re-measures nothing.
+    pub fn align<M>(mut self, align: impl IntoSignal<TextAlign, M>) -> Self {
+        self.align = align.into_prop();
         self
     }
 
@@ -358,12 +407,14 @@ impl Widget for Text {
         // same shaping pass, so reporting it is free.
         ctx.tree().set_baseline(id, measured.baseline);
 
+        let width = measured
+            .size
+            .width
+            .max(constraints.min_width)
+            .min(constraints.max_width);
+        self.cached_overflows = width < measured.size.width;
         Size::new(
-            measured
-                .size
-                .width
-                .max(constraints.min_width)
-                .min(constraints.max_width),
+            width,
             measured
                 .size
                 .height
@@ -422,6 +473,14 @@ impl Widget for Text {
                 self.backdrop_blur.get(),
             )
         };
+        // A line wider than its box starts at the start and runs off the end,
+        // as CSS has it. It also keeps an unwrapped text on one line: an
+        // aligned text is shaped at exactly its box's width, and cosmic-text
+        // would wrap a line that does not fit there.
+        let align = match self.align.get_or(TextAlign::Start) {
+            _ if self.cached_overflows => TextAlign::Start,
+            align => align,
+        };
         // A frosted text takes its stroke as a contour instead: drawn from the
         // same coverage mask, outside the letter rather than under it, so the
         // glass keeps what the frost put in it.
@@ -435,6 +494,7 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
+                align,
                 self.cached_fit,
             );
         }
@@ -445,6 +505,7 @@ impl Widget for Text {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            align,
             if frosted { None } else { stroke },
             shadow,
             self.cached_fit,
@@ -665,6 +726,88 @@ mod tests {
                 wrap: false,
             }))
         );
+    }
+
+    /// The alignment every text command of a frame carries.
+    fn painted_alignments(tree: &mut Tree, root: WidgetId) -> Vec<TextAlign> {
+        measured(tree, root, 800.0);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+        node.commands
+            .iter()
+            .filter_map(|cmd| match &**cmd {
+                DrawCommand::Text { align, .. } | DrawCommand::TextBackdropBlur { align, .. } => {
+                    Some(*align)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Alignment is a declared value, so it answers to a write — and it moves
+    /// glyphs inside a box it does not resize, so the write repaints the text
+    /// and wakes no layout.
+    ///
+    /// Frosted and shadowed, so the claim covers every command the text draws:
+    /// a frost aligned differently from the letters over it is a frost beside
+    /// them, and a shadow is copies of the glyphs that have to move with them.
+    #[test]
+    fn alignment_answers_to_a_signal_with_a_repaint() {
+        let align = create_signal(TextAlign::Start);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("x")
+                .align(align)
+                .backdrop_blur(8.0)
+                .text_shadow(TextShadow::new(0.0, 2.0, 4.0, Color::BLACK)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let before = painted_alignments(&mut tree, root);
+        assert!(before.len() > 2, "a frost, a shadow and a fill: {before:?}");
+        assert!(before.iter().all(|a| *a == TextAlign::Start), "{before:?}");
+        jobs::clear_pending_jobs();
+
+        align.set(TextAlign::Center);
+        let woken = jobs::queued_job_types(root);
+        assert!(
+            woken.contains(&JobType::Paint) && !woken.contains(&JobType::Layout),
+            "an alignment repaints and re-measures nothing: {woken:?}"
+        );
+        let after = painted_alignments(&mut tree, root);
+        assert!(
+            after.iter().all(|a| *a == TextAlign::Center),
+            "every command follows the signal: {after:?}"
+        );
+    }
+
+    /// A line that does not fit its box is drawn from the start, whatever its
+    /// alignment — which is also what keeps an unwrapped one on one line.
+    #[test]
+    fn a_line_wider_than_its_box_is_drawn_from_the_start() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new("a line far longer than the box it is given")
+                .nowrap()
+                .align(TextAlign::Center),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        jobs::pump_and_layout(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 600.0));
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+        let drawn: Vec<TextAlign> = node
+            .commands
+            .iter()
+            .filter_map(|cmd| match &**cmd {
+                DrawCommand::Text { align, .. } => Some(*align),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drawn, vec![TextAlign::Start]);
+
+        // And one that fits keeps what it declared.
+        assert_eq!(painted_alignments(&mut tree, root), vec![TextAlign::Center]);
     }
 
     /// Every text command a frame drew, in paint order.

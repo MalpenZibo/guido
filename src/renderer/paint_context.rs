@@ -12,7 +12,7 @@ use crate::tree::{Tree, WidgetId};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Painting context for the renderer.
 ///
@@ -183,6 +183,19 @@ impl<'a> PaintContext<'a> {
                 .inverse()
                 .map_or(Rect::default(), |back| back.map_rect(cull)),
         );
+    }
+
+    /// Draw this node and everything under it at `opacity`, from 0 to 1.
+    ///
+    /// Multiplied into every colour the subtree draws, and into its
+    /// descendants' own opacities, when the tree is flattened — so a child
+    /// that sets one of its own is drawn at the product. Each draw is faded on
+    /// its own: where two children overlap, the overlap shows through.
+    ///
+    /// Clamped here, because a spring overshoots: an opacity past 1 would
+    /// brighten nothing and one below 0 would be a negative alpha.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.node.opacity = opacity.clamp(0.0, 1.0);
     }
 
     /// Set this node's transform origin.
@@ -404,6 +417,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        align: TextAlign,
         fit: Option<LineFit>,
     ) {
         if text.is_empty() || radius <= 0.0 {
@@ -419,6 +433,7 @@ impl<'a> PaintContext<'a> {
                 font_size,
                 font_family,
                 font_weight,
+                align,
                 fit,
             }));
     }
@@ -461,6 +476,30 @@ impl<'a> PaintContext<'a> {
         font_weight: FontWeight,
         fit: Option<LineFit>,
     ) {
+        self.push_text(
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+            TextAlign::Start,
+            fit,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+        align: TextAlign,
+        fit: Option<LineFit>,
+    ) {
         // Skip empty text
         if text.is_empty() {
             return;
@@ -472,6 +511,7 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            align,
             fit,
         }));
     }
@@ -491,6 +531,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        align: TextAlign,
         stroke: Option<TextStroke>,
         shadow: Option<TextShadow>,
         fit: Option<LineFit>,
@@ -506,13 +547,14 @@ impl<'a> PaintContext<'a> {
         // passing, while an animated shadow colour leaves transparent.
         if let Some(shadow) = shadow.filter(|s| s.color.a > 0.0) {
             for (dx, dy, sample_color) in shadow.samples() {
-                self.draw_text_styled(
+                self.push_text(
                     text,
                     rect.offset(dx, dy),
                     sample_color,
                     font_size,
                     font_family,
                     font_weight,
+                    align,
                     fit,
                 );
             }
@@ -520,19 +562,29 @@ impl<'a> PaintContext<'a> {
 
         if let Some(stroke) = stroke.filter(|s| s.width > 0.0) {
             for (dx, dy) in stroke.samples() {
-                self.draw_text_styled(
+                self.push_text(
                     text,
                     rect.offset(dx, dy),
                     stroke.color,
                     font_size,
                     font_family,
                     font_weight,
+                    align,
                     fit,
                 );
             }
         }
 
-        self.draw_text_styled(text, rect, color, font_size, font_family, font_weight, fit);
+        self.push_text(
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+            align,
+            fit,
+        );
     }
 
     // -------------------------------------------------------------------------

@@ -133,7 +133,7 @@ every run for months.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | API names written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
-| API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 15% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
+| API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 14% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | what gates a merge — the jobs a pull request has to get past | `tests/ci_gate_waits_on_every_job.rs` — every job in `.github/workflows/ci.yml` is in the `CI` job's `needs:` or on the opt-out list beside it |
 | the name the `main` ruleset requires, which lives outside the repository | `.github/required-context.sh`, a step of the `check` job: it asks GitHub what the branch requires and compares. `.github/required-context.test.sh` is its table, and a read that does not happen is a notice rather than a red check |

@@ -91,6 +91,7 @@ The primary building block. Supports:
 - Borders with SDF rendering
 - Shadows: offset, blur, spread and colour
 - Transforms (translate, rotate, scale)
+- Opacity over the whole subtree, multiplied into every draw in it
 - State layers (hover/pressed styles)
 - Ripple effects
 - Event handlers (click, hover, scroll)
@@ -101,7 +102,8 @@ Text rendering with:
 - Reactive content (static string or `Signal<String>`)
 - Font size, color, weight styling
 - Text wrapping or `nowrap()` mode
-- A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape_text` in `renderer/text_measurer.rs`, so every path cuts on the same line
+- Line alignment within the text's own box (`TextAlign`)
+- A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape` in `renderer/text.rs`, so every path cuts on the same line and aligns across the same box
 
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
@@ -487,6 +489,14 @@ pub trait Widget {
 
     /// Reconcile dynamic children. Returns true if children changed.
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
+
+    /// Removed from a dynamic list: play the exit it declared, if any, and
+    /// say whether it did. `false` is torn down in the same pass.
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
+    /// Whether that exit is still playing; once not, it is disposed.
+    fn is_exiting(&self) -> bool { false }
+    /// Its key came back mid-exit: stay, and go home from where it is.
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {}
 
     /// Publish how far this widget's paint lands outside its bounds, before
     /// anything decides whether to paint it. Called from the Paint job, and by

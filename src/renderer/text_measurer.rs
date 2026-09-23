@@ -1,10 +1,8 @@
 use crate::app_state::with_app_state;
 use crate::layout::Size;
-use crate::widgets::TextOverflow;
 use crate::widgets::font::{FontFamily, FontWeight};
-use cosmic_text::{
-    Attrs, Buffer, Ellipsize, EllipsizeHeightLimit, FontSystem, Metrics, Shaping, Wrap,
-};
+use crate::widgets::{TextAlign, TextOverflow};
+use cosmic_text::{Buffer, FontSystem};
 use rustc_hash::FxHashMap;
 
 /// The smallest font size guido will hand to the shaper.
@@ -73,160 +71,6 @@ impl LineFit {
             self.overflow,
             self.wrap,
         )
-    }
-}
-
-/// What cosmic-text is asked to mark a one-line cut with. `None` for a cut
-/// nothing marks.
-fn ellipsize(overflow: TextOverflow) -> Option<Ellipsize> {
-    let limit = EllipsizeHeightLimit::Lines(1);
-    match overflow {
-        TextOverflow::Clip => None,
-        TextOverflow::Ellipsis => Some(Ellipsize::End(limit)),
-        TextOverflow::EllipsisStart => Some(Ellipsize::Start(limit)),
-        TextOverflow::EllipsisMiddle => Some(Ellipsize::Middle(limit)),
-    }
-}
-
-/// Shape `text` at `font_size`: in a box of `size`, or, when the text is
-/// cut, to the lines `fit` allows at `scale` device pixels per logical one.
-///
-/// The one place a text is shaped, for the measurer and the three draw paths
-/// alike. Each keeps the box it always shaped an uncut text in; a cut text
-/// is shaped at the width it was laid out in and nothing else, so the line
-/// the ellipsis lands on is the line the measurer counted.
-///
-/// A cut text is given the height of the lines it keeps, which is where every
-/// reader of its lines stops and where shaping stops too. Half a line short of
-/// the next one, so a line whose glyphs are taller than the line box neither
-/// loses the last line kept nor lets the first one cut back in. That height is
-/// the whole of an unmarked cut; a marked one is finished by [`cut_to_lines`].
-pub(crate) fn shape_text(
-    font_system: &mut FontSystem,
-    font_size: f32,
-    text: &str,
-    attrs: &Attrs,
-    size: (Option<f32>, Option<f32>),
-    fit: Option<LineFit>,
-    scale: f32,
-) -> Buffer {
-    let (size_px, line_height) = shapeable_metrics(font_size);
-    let mut buffer = Buffer::new(font_system, Metrics::new(size_px, line_height));
-    let Some(fit) = fit else {
-        buffer.set_size(font_system, size.0, size.1);
-        buffer.set_text(font_system, text, attrs, Shaping::Advanced, None);
-        buffer.shape_until_scroll(font_system, true);
-        return buffer;
-    };
-    let lines = fit.max_lines.max(1) as usize;
-    buffer.set_size(
-        font_system,
-        fit.width.map(|w| w * scale),
-        Some((lines as f32 - 0.5) * line_height),
-    );
-    if !fit.wrap {
-        buffer.set_wrap(font_system, Wrap::None);
-    }
-    buffer.set_text(font_system, text, attrs, Shaping::Advanced, None);
-    buffer.shape_until_scroll(font_system, true);
-    if let Some(mark) = ellipsize(fit.overflow) {
-        cut_to_lines(font_system, &mut buffer, lines, mark);
-    }
-    buffer
-}
-
-/// Cut a shaped buffer to `max_lines` lines across all its paragraphs, and
-/// mark the cut.
-///
-/// By hand around cosmic-text's own ellipsis rather than through it, for two
-/// reasons. Its limit is per paragraph — a `\n` starts the count again, and a
-/// cut that lands on a line break has no mark, because the paragraph before it
-/// fit. And a mark it puts on any line but the first starts that line at the
-/// blank the wrap broke on, so the last line sits a space to the right of the
-/// ones above it — in 0.19 as in 0.18.
-///
-/// So the last line kept is made a paragraph of its own, split off where it
-/// begins, and cosmic-text is asked to mark only that one line, which is the
-/// case it gets right. When the cut fell after it rather than inside it, the
-/// line is given a `…` of its own to end in. An unwrapped line wider than the
-/// box is marked the same way wherever it is: it is one line already.
-///
-/// `mark` is what the cut line is marked with, as [`ellipsize`] gave it.
-fn cut_to_lines(
-    font_system: &mut FontSystem,
-    buffer: &mut Buffer,
-    max_lines: usize,
-    mark: Ellipsize,
-) {
-    let width = buffer.size().0.unwrap_or(f32::INFINITY);
-    let mut remaining = max_lines;
-    let mut i = 0;
-    while i < buffer.lines.len() {
-        let layout = buffer.line_layout(font_system, i).unwrap_or_default();
-        let count = layout.len();
-        let kept = count.min(remaining);
-        let last = kept.checked_sub(1).and_then(|at| layout.get(at));
-        let too_wide = last.is_some_and(|line| line.w > width);
-        let begins_at = last.map_or(0, |line| {
-            line.glyphs.iter().map(|g| g.start).min().unwrap_or(0)
-        });
-        let ends_here = count >= remaining;
-        let more_inside = count > remaining;
-        let more_after = ends_here && i + 1 < buffer.lines.len();
-
-        if !(more_inside || more_after || too_wide) {
-            if ends_here {
-                return;
-            }
-            remaining -= count;
-            i += 1;
-            continue;
-        }
-
-        if ends_here {
-            buffer.lines.truncate(i + 1);
-        }
-        if kept > 1 {
-            let rest = buffer.lines[i].split_off(begins_at);
-            buffer.lines.insert(i + 1, rest);
-            // The lines above the cut, laid out again as they were: a line
-            // that has none is where every reader of the buffer stops.
-            buffer.line_layout(font_system, i);
-            i += 1;
-        }
-        let mark = if more_inside || too_wide {
-            mark
-        } else {
-            let line = &mut buffer.lines[i];
-            let marked = format!("{}\u{2026}", line.text());
-            let (ending, attrs) = (line.ending(), line.attrs_list().clone());
-            line.set_text(marked, ending, attrs);
-            Ellipsize::End(EllipsizeHeightLimit::Lines(1))
-        };
-        let (fits_in, wrap, font_size) =
-            (buffer.size().0, buffer.wrap(), buffer.metrics().font_size);
-        let (mono, tab, hinting) = (
-            buffer.monospace_width(),
-            buffer.tab_width(),
-            buffer.hinting(),
-        );
-        let line = &mut buffer.lines[i];
-        line.reset_layout();
-        line.layout(
-            font_system,
-            font_size,
-            fits_in,
-            wrap,
-            mark,
-            mono,
-            tab,
-            hinting,
-        );
-        if ends_here {
-            return;
-        }
-        remaining -= kept;
-        i += 1;
     }
 }
 
@@ -401,13 +245,13 @@ impl TextMeasurer {
         font_weight: FontWeight,
         fit: Option<LineFit>,
     ) -> Buffer {
-        shape_text(
+        super::text::shape(
             &mut self.font_system,
-            font_size,
             text,
-            &Attrs::new()
-                .family(font_family.to_cosmic())
-                .weight(font_weight.to_cosmic()),
+            font_size,
+            font_family,
+            font_weight,
+            TextAlign::Start,
             (max_width, None),
             fit,
             1.0,

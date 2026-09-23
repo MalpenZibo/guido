@@ -60,7 +60,7 @@ vendor a font under `tests/assets/` and name it in every scenario, so nothing
 there can reach a system font.
 
 Measurement and the three draw paths below each shape the text for
-themselves, and all four go through `shape_text` beside the measurer. A text
+themselves, and all four go through one `shape` in `text.rs`. A text
 cut by `max_lines` carries its `LineFit` — the width it was laid out in, the
 limit, the mark — on its draw command, so each path cuts on the line the
 measurer counted; `text_cut_to_its_lines` is the golden that watches all three.

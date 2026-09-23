@@ -566,8 +566,14 @@ impl ImageQuadRenderer {
             .clip()
             .map_or(QuadClip::NONE, |clip| QuadClip::shape(&clip, scale_factor));
 
-        let vertices =
-            self.compute_vertices(&display_rect, &cmd.world_transform, uv, scale_factor, clip);
+        let vertices = self.compute_vertices(
+            &display_rect,
+            &cmd.world_transform,
+            uv,
+            scale_factor,
+            clip,
+            cmd.opacity,
+        );
 
         // Create vertex buffer
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -652,6 +658,7 @@ impl ImageQuadRenderer {
         uv: (f32, f32, f32, f32),
         scale_factor: f32,
         clip: QuadClip,
+        opacity: f32,
     ) -> [TexturedVertex; 4] {
         // Get local rect corners
         let local_corners = [
@@ -696,7 +703,7 @@ impl ImageQuadRenderer {
 
         std::array::from_fn(|i| {
             let (x, y) = screen_corners[i];
-            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip)
+            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip, opacity)
         })
     }
 

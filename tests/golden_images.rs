@@ -382,8 +382,22 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
         actual.height
     );
 
-    // The report is what somebody reads at 3am, or what an agent reads
-    // instead of guessing: how much moved, by how much, and where.
+    if let Some(report) = differences(name, &expected, &actual) {
+        panic!(
+            "`{name}` renders differently: {report}, on adapter `{adapter}`.\n\
+             If the change is intended, re-bless on lavapipe with \
+             REBLESS_GOLDEN=1 and put the diff in the pull request — that diff \
+             is the review."
+        );
+    }
+}
+
+/// How two renders differ beyond `TOLERANCE`, or `None` if they do not — with
+/// the three images written to `target/golden-failures/` when they do.
+///
+/// The report is what somebody reads at 3am, or what an agent reads instead of
+/// guessing: how much moved, by how much, and where.
+fn differences(name: &str, expected: &Pixels, actual: &Pixels) -> Option<String> {
     let mut changed = 0usize;
     let mut worst = 0u8;
     let mut first = Vec::new();
@@ -409,30 +423,27 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
             }
         }
     }
-
-    if changed > 0 {
-        let dir = failures_dir();
-        write_png(&dir.join(format!("{name}.expected.png")), &expected);
-        write_png(&dir.join(format!("{name}.actual.png")), &actual);
-        write_png(
-            &dir.join(format!("{name}.diff.png")),
-            &diff_image(&expected, &actual),
-        );
-
-        let total = (actual.width * actual.height) as f64;
-        panic!(
-            "`{name}` renders differently: {changed} of {total:.0} pixels \
-             ({:.3}%), worst channel delta {worst}, on adapter `{adapter}`.\n\
-             {}\n\
-             Images written to {}\n\
-             If the change is intended, re-bless on lavapipe with \
-             REBLESS_GOLDEN=1 and put the diff in the pull request — that diff \
-             is the review.",
-            100.0 * changed as f64 / total,
-            first.join("\n"),
-            dir.display()
-        );
+    if changed == 0 {
+        return None;
     }
+
+    let dir = failures_dir();
+    write_png(&dir.join(format!("{name}.expected.png")), expected);
+    write_png(&dir.join(format!("{name}.actual.png")), actual);
+    write_png(
+        &dir.join(format!("{name}.diff.png")),
+        &diff_image(expected, actual),
+    );
+
+    let total = (actual.width * actual.height) as f64;
+    Some(format!(
+        "{changed} of {total:.0} pixels ({:.3}%), worst channel delta {worst}\n\
+         {}\n\
+         Images written to {}",
+        100.0 * changed as f64 / total,
+        first.join("\n"),
+        dir.display()
+    ))
 }
 
 /// Render one scenario and hold it against its golden.
@@ -443,6 +454,16 @@ fn golden(
     clear: Color,
     widget: impl Widget + 'static,
 ) {
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let pixels = render_with_own_renderer(ctx, widget, logical, scale, clear);
+    assert_golden(name, adapter, pixels);
+}
+
+/// The device a golden may be drawn on, and its adapter's name — or `None`,
+/// having said why, where the scenario has to skip.
+fn rasterizer(name: &str) -> Option<(&'static GpuContext, &'static str)> {
     let required = std::env::var_os("GUIDO_GOLDEN_REQUIRED").is_some();
 
     let Some(ctx) = ctx() else {
@@ -453,7 +474,7 @@ fn golden(
              installed, or VK_ICD_FILENAMES does not point at it."
         );
         eprintln!("skipping golden `{name}`: no Vulkan adapter on this machine");
-        return;
+        return None;
     };
 
     // A golden holds only against the rasterizer it was blessed on, so running
@@ -461,7 +482,7 @@ fn golden(
     // dozen pixels on the corner tangents, every time, for every scenario. On
     // another adapter it skips instead, which is what makes `cargo test` on a
     // machine with a GPU mean something. The job that must not skip says so.
-    let adapter = &ctx.adapter_info.name;
+    let adapter = ctx.adapter_info.name.as_str();
     if !is_software_rasterizer(adapter) && std::env::var_os("GUIDO_GOLDEN_ANY_ADAPTER").is_none() {
         assert!(
             !required,
@@ -472,9 +493,19 @@ fn golden(
             "skipping golden `{name}`: `{adapter}` is not the rasterizer these \
              were blessed on. Point VK_ICD_FILENAMES at lavapipe to run them."
         );
-        return;
+        return None;
     }
+    Some((ctx, adapter))
+}
 
+/// One scenario's pixels, from a renderer made for it and dropped after.
+fn render_with_own_renderer(
+    ctx: &GpuContext,
+    widget: impl Widget + 'static,
+    logical: (f32, f32),
+    scale: f32,
+    clear: Color,
+) -> Pixels {
     // The font registry is thread-local and is read once, when a font system
     // is first built. So it is filled on this thread, before the renderer that
     // will read it exists. Registering the same bytes twice costs nothing.
@@ -489,8 +520,7 @@ fn golden(
     let mut renderer = Renderer::new(ctx.device.clone(), ctx.queue.clone(), FORMAT);
     let pixels = render_pixels(ctx, &mut renderer, widget, logical, scale, clear);
     drop(renderer);
-
-    assert_golden(name, adapter, pixels);
+    pixels
 }
 
 const BACKDROP: Color = Color::rgb(0.08, 0.08, 0.10);
@@ -839,14 +869,19 @@ fn rotated_clipping() {
 /// Generated rather than loaded — `ImageSource::Rgba` takes pixels directly, so
 /// this depends on no file and decodes nothing.
 fn checkerboard(size: u32, square: u32) -> ImageSource {
+    checkerboard_at(size, square, 0xff)
+}
+
+/// The same checkerboard with every texel at `alpha`.
+fn checkerboard_at(size: u32, square: u32, alpha: u8) -> ImageSource {
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
             let dark = ((x / square) + (y / square)).is_multiple_of(2);
-            pixels.extend_from_slice(if dark {
-                &[0x1f, 0x2b, 0x3a, 0xff]
+            pixels.extend_from_slice(&if dark {
+                [0x1f, 0x2b, 0x3a, alpha]
             } else {
-                &[0xf2, 0x73, 0x40, 0xff]
+                [0xf2, 0x73, 0x40, alpha]
             });
         }
     }
@@ -1092,11 +1127,7 @@ fn frosted_cards() -> Container {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(110.0, 70.0)
                     .corners(16.0)
@@ -1205,11 +1236,7 @@ fn scrollers() -> Container {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(104.0, 104.0)
                     .corners(Corners::rounded(34.0))
@@ -1286,21 +1313,13 @@ fn frosted_text_is_cut_by_its_scroller() {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(84.0, 84.0)
                     .corners(corners)
                     .overflow(Overflow::Hidden)
                     .rotate(degrees)
-                    .layout(
-                        Flex::row()
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().center())
                     .child(
                         container()
                             .width(150.0)
@@ -1363,11 +1382,7 @@ fn backdrop_blur_follows_every_curvature() {
         container()
             .width(150.0)
             .height(150.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(110.0, 110.0)
                     .corners(corners)
@@ -1434,11 +1449,7 @@ fn frosted_labels() -> Container {
             container()
                 .width(96.0)
                 .height(180.0)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(label.nowrap()),
         )
         .into_any()
@@ -1455,11 +1466,7 @@ fn frosted_labels() -> Container {
             container()
                 .width(96.0)
                 .height(180.0)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(container().width(72.0).child(label.wrap(true))),
         )
         .into_any()
@@ -1476,21 +1483,13 @@ fn frosted_labels() -> Container {
     let scrolled = container()
         .width(96.0)
         .height(180.0)
-        .layout(
-            Flex::row()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::row().center())
         .child(
             container()
                 .width(58.0)
                 .height(30.0)
                 .overflow(Overflow::Hidden)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(frosted().nowrap()),
         );
 
@@ -1597,6 +1596,198 @@ fn text_wraps_where_the_box_ends_at_scale_2x() {
         BACKDROP,
         view,
     );
+}
+
+/// Texts aligned across their own boxes, each box painted behind its text so
+/// the picture says what the line was aligned against.
+///
+/// Every box is narrower than the 200 logical pixels the renderer otherwise
+/// shapes in, which is the case that matters: a line centred in that floor
+/// rather than in its box sits visibly right of centre, and a line never
+/// aligned hangs from the left edge. The cells, top to bottom on the left:
+/// a wrapped text, whose box is its widest line; two paragraphs split by an
+/// explicit newline; a single line stretched wider than itself, centred and
+/// then at the end; and a justified one. On the right, the two other paths a
+/// text is shaped by — a frosted text, whose frost is shaped apart from its
+/// letters and has to break and align its lines where they do, and a turned
+/// card, which is drawn as a quad.
+fn aligned_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+
+    // A box that hugs its text, so its background is the text's own box.
+    let hugged = |label: Text| container().background(INK).child(label);
+    // A box the text is stretched across, which is the text's box too.
+    let stretched = |label: Text| {
+        container()
+            .width(170.0)
+            .background(INK)
+            .layout(Flex::column().cross_alignment(CrossAlignment::Stretch))
+            .child(label)
+    };
+    let centred = |content: &str| label(content, 16.0).align(TextAlign::Center);
+
+    let left = container()
+        .width(180.0)
+        .layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Center),
+        )
+        .child(
+            container()
+                .width(150.0)
+                .child(hugged(centred("every line of this one is centred"))),
+        )
+        .child(hugged(centred("one paragraph\nand then two")))
+        .child(stretched(centred("centred")))
+        .child(stretched(label("at the end", 16.0).align(TextAlign::End)))
+        .child(stretched(
+            label("justified from edge to edge of it", 16.0).align(TextAlign::Justified),
+        ));
+
+    let turned = container()
+        .width(150.0)
+        .rotate(12.0)
+        .child(hugged(centred("turned, and still centred")));
+
+    // Upright bars, where `stripes` lays them flat: a frost that slid along
+    // its line would blur the same flat bar it blurred before, and only bars
+    // standing across the line tell the two places apart.
+    let bars: Vec<AnyWidget> = (0..16)
+        .map(|i| {
+            let colour = if i % 2 == 0 {
+                Color::rgb(0.85, 0.35, 0.30)
+            } else {
+                Color::rgb(0.15, 0.45, 0.85)
+            };
+            swatch(10.0, 110.0, colour).into_any()
+        })
+        .collect();
+    let frosted = container()
+        .width(160.0)
+        .height(110.0)
+        .layout(ZStack::new())
+        .child(container().layout(Flex::row()).children(bars))
+        .child(
+            container()
+                .width(160.0)
+                .height(fill())
+                .layout(
+                    Flex::column()
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(
+                    container().width(150.0).child(
+                        label("frost under each of its lines", 22.0)
+                            .align(TextAlign::Center)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(10.0),
+                    ),
+                ),
+        );
+
+    container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::row().spacing(16.0))
+        .child(left)
+        .child(
+            container()
+                .layout(
+                    Flex::column()
+                        .spacing(30.0)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .padding([14.0, 0.0])
+                // The frost first: a turned card with a background drawn
+                // before a frosted text takes the frost away, which is a
+                // defect of its own and not this scenario's.
+                .child(frosted)
+                .child(turned),
+        )
+}
+
+#[test]
+fn text_aligns_within_its_own_box() {
+    golden(
+        "text_aligns_within_its_own_box",
+        (380.0, 290.0),
+        1.0,
+        BACKDROP,
+        aligned_labels(),
+    );
+}
+
+/// The same at a scale the buffer's width is not a whole multiple of, where a
+/// box shaped at exactly its own width is most likely to break a line the
+/// measurer did not.
+#[test]
+fn text_aligns_within_its_own_box_at_scale_1_5x() {
+    golden(
+        "text_aligns_within_its_own_box_at_scale_1_5x",
+        (380.0, 290.0),
+        1.5,
+        BACKDROP,
+        aligned_labels(),
+    );
+}
+
+/// A text whose box fits its only line is drawn the same whatever its
+/// alignment: there is no room for a line to move into.
+///
+/// Held against the start-aligned picture rather than a file, because the claim
+/// is that the two are the same — on every path a text can take, which is why
+/// one of them is turned.
+#[test]
+fn an_alignment_moves_nothing_in_a_box_that_fits() {
+    let Some((ctx, _)) = rasterizer("an_alignment_moves_nothing_in_a_box_that_fits") else {
+        return;
+    };
+
+    let view = |align: TextAlign| {
+        container()
+            .background(BACKDROP)
+            .padding(12.0)
+            // Not stretched: a stretched box is wider than its line, which is
+            // the case the property is for.
+            .layout(
+                Flex::column()
+                    .spacing(12.0)
+                    .cross_alignment(CrossAlignment::Start),
+            )
+            .child(label("fits", 18.0).align(align))
+            .child(
+                container()
+                    .rotate(20.0)
+                    .child(label("fits, turned", 18.0).align(align)),
+            )
+    };
+    let draw = |align| render_with_own_renderer(ctx, view(align), (180.0, 110.0), 1.0, BACKDROP);
+
+    let start = draw(TextAlign::Start);
+    for align in [TextAlign::Center, TextAlign::End, TextAlign::Justified] {
+        let other = draw(align);
+        let moved = start
+            .data
+            .iter()
+            .zip(&other.data)
+            .filter(|(a, b)| a.abs_diff(**b) > TOLERANCE)
+            .count();
+        if moved > 0 {
+            let dir = failures_dir();
+            write_png(&dir.join("fits.start.png"), &start);
+            write_png(&dir.join(format!("fits.{align:?}.png")), &other);
+            write_png(
+                &dir.join(format!("fits.{align:?}.diff.png")),
+                &diff_image(&start, &other),
+            );
+        }
+        assert_eq!(
+            moved, 0,
+            "{align:?} moved {moved} channels of a text that fits"
+        );
+    }
 }
 
 /// The same composition at scale 2. Every radius, border width and shadow
@@ -1755,16 +1946,190 @@ fn text_at_right_angles() {
         .background(BACKDROP)
         .width(360.0)
         .height(220.0)
-        .layout(
-            Flex::row()
-                .spacing(40.0)
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::row().spacing(40.0).center())
         .child(card(90.0))
         .child(card(270.0));
 
     golden("text_at_right_angles", (360.0, 220.0), 1.0, BACKDROP, view);
+}
+
+/// Everything a container draws, at a fraction of its alpha.
+///
+/// Each cell is one thing to fade — a fill, a border with nothing inside it, a
+/// shadow and the fill that casts it, a gradient, a line of text and an image
+/// — at `alpha` of its own colour's alpha, the image's texels included. None of
+/// them overlaps another, which is the case where fading
+/// each draw on its own and fading the group as one agree.
+fn every_draw_at(alpha: f32) -> Container {
+    let image_alpha = (alpha * 255.0).round() as u8;
+    let at = |c: Color| Color::rgba(c.r, c.g, c.b, c.a * alpha);
+    container()
+        .layout(Flex::row().spacing(24.0))
+        .child(swatch(50.0, 50.0, at(Color::rgb(0.85, 0.35, 0.30))).corners(10.0))
+        .child(
+            box_of(50.0, 50.0)
+                .corners(10.0)
+                .border(4.0, at(Color::rgb(0.30, 0.80, 0.45))),
+        )
+        .child(
+            swatch(50.0, 50.0, at(Color::rgb(0.95, 0.95, 0.95)))
+                .corners(10.0)
+                .shadow(Shadow::new(
+                    (0.0, 6.0),
+                    8.0,
+                    0.0,
+                    at(Color::rgb(0.95, 0.75, 0.20)),
+                )),
+        )
+        .child(
+            box_of(50.0, 50.0)
+                .corners(10.0)
+                .gradient(LinearGradient::horizontal(
+                    at(Color::rgb(0.15, 0.45, 0.85)),
+                    at(Color::rgb(0.85, 0.20, 0.75)),
+                )),
+        )
+        .child(label("Ag", 28.0).color(at(Color::WHITE)))
+        .child(
+            box_of(50.0, 50.0)
+                .child(image(checkerboard_at(50, 10, image_alpha)).content_fit(ContentFit::Cover)),
+        )
+}
+
+/// `opacity(0.5)` draws what halving every colour's alpha draws, and a half
+/// inside a half draws what a quarter does.
+///
+/// The oracle is a second render rather than a picture: the same cells built
+/// with their colours halved by hand, which is what the opacity is defined to
+/// be. The golden beside it is what says either of the two changed at all.
+///
+/// Every pipeline a colour reaches is here. The shape pipeline fades on the
+/// CPU, into each of an instance's five colours; the text is glyphon's, which
+/// fades its vertex colour; the image is the textured quad's, which fades on
+/// a vertex attribute of its own. A pipeline that ignored the opacity would
+/// draw its cell at full strength in the first render and at half in the
+/// second.
+#[test]
+fn opacity_is_every_colour_at_a_fraction_of_its_alpha() {
+    let name = "opacity_is_every_colour_at_a_fraction_of_its_alpha";
+    let quarter = Color::rgba(0.85, 0.35, 0.30, 0.25);
+    let scene = |cells: Container, nested: Container| {
+        container()
+            .background(BACKDROP)
+            .padding(24.0)
+            .layout(Flex::column().spacing(24.0))
+            .child(cells)
+            .child(nested)
+    };
+    let faded = scene(
+        every_draw_at(1.0).opacity(0.5),
+        container().opacity(0.5).child(
+            swatch(50.0, 50.0, Color::rgb(0.85, 0.35, 0.30))
+                .corners(10.0)
+                .opacity(0.5),
+        ),
+    );
+    // The image's texels round a half to 128/255 and the opacity multiplies by
+    // exactly 0.5, so the two differ there by a fraction of one unit.
+    let by_hand = scene(
+        every_draw_at(0.5),
+        container().child(swatch(50.0, 50.0, quarter).corners(10.0)),
+    );
+
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (500.0, 200.0);
+    let faded = render_with_own_renderer(ctx, faded, logical, 1.0, BACKDROP);
+    let by_hand = render_with_own_renderer(ctx, by_hand, logical, 1.0, BACKDROP);
+    if let Some(report) = differences(&format!("{name}.by_hand"), &by_hand, &faded) {
+        panic!(
+            "an opacity of a half is not every colour at half its alpha: {report} \
+             (expected is by hand, actual is the opacity)"
+        );
+    }
+    assert_golden(name, adapter, faded);
+}
+
+/// The two draws the first scenario cannot hold against a colour: a frost,
+/// which has none, and a turned text, whose texture holds the colour it was
+/// rasterised with.
+///
+/// Three frosted cards over the stripes, at an opacity of one, a half and
+/// nothing — the last is the stripes alone, blur and card gone together — and a
+/// frosted, outlined text and a turned label at a half, for the contour the
+/// backdrop pass draws and for the textured quad transformed text is drawn as.
+#[test]
+fn opacity_fades_a_frost_and_a_turned_text() {
+    let centred = |content: AnyWidget| {
+        container()
+            .width(120.0)
+            .height(160.0)
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(content)
+            .into_any()
+    };
+    let card = |opacity: f32| {
+        centred(
+            box_of(90.0, 70.0)
+                .corners(16.0)
+                .background(Color::rgba(0.10, 0.10, 0.16, 0.35))
+                .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.55))
+                .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE))
+                .opacity(opacity)
+                .into_any(),
+        )
+    };
+    let frosted_text = container()
+        .opacity(0.5)
+        .child(
+            label("Ag", 40.0)
+                .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                .backdrop_blur(14.0)
+                .text_stroke(TextStroke::new(2.0, Color::BLACK))
+                .nowrap(),
+        )
+        .into_any();
+    let turned = box_of(96.0, 40.0)
+        .background(Color::rgb(0.18, 0.20, 0.28))
+        .corners(6.0)
+        .padding(8.0)
+        .rotate(30.0)
+        .opacity(0.5)
+        .child(label("turned", 16.0))
+        .into_any();
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(600.0, 10, 16.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([
+                    card(1.0),
+                    card(0.5),
+                    card(0.0),
+                    centred(frosted_text),
+                    centred(turned),
+                ])
+                .into_any(),
+        ]);
+
+    golden(
+        "opacity_fades_a_frost_and_a_turned_text",
+        (600.0, 160.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
 }
 
 /// Text cut to its lines, through every path that draws one.

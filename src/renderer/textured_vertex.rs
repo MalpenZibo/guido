@@ -33,11 +33,16 @@ pub struct TexturedVertex {
     /// Clip corner radii [top_left, top_right, bottom_right, bottom_left], in
     /// that same space. The shader reads all four — a rect clip passes zeros.
     pub clip_params: [f32; 4],
-    /// `[curvature, _, _, _]`. Its own 16-byte slot because a `Float32x4` is
-    /// the narrowest attribute that keeps the rest of the struct aligned, and
-    /// there is no padding here to mine — unlike `ShapeInstance`, this is a
-    /// per-*vertex* buffer with four attributes in it, nowhere near a limit.
-    pub clip_curvature: [f32; 4],
+    /// `[clip curvature, opacity, _, _]`. One 16-byte slot for the two
+    /// scalars, because a `Float32x4` is the narrowest attribute that keeps the
+    /// rest of the struct aligned and a slot of its own per scalar would widen
+    /// every vertex.
+    ///
+    /// The opacity is multiplied into the alpha of every texel the quad
+    /// samples: the fade an ancestor asks for, carried on the vertex rather
+    /// than into the texture, so a text or an image that fades is not
+    /// rasterised again on every frame of it.
+    pub curvature_opacity: [f32; 4],
 }
 
 /// The clip a textured quad is cut by, in the clip's own coordinates.
@@ -109,20 +114,26 @@ impl QuadClip {
 
 impl TexturedVertex {
     /// One corner of a quad: where it is on screen, where it is in the
-    /// texture, and where it falls in its clip.
+    /// texture, where it falls in its clip, and how opaque it is drawn.
     ///
     /// `screen` is in physical pixels and `ndc` is that same point in clip
     /// space — both are wanted, so the caller passes both rather than having
     /// this undo one to get the other.
     #[inline]
-    pub fn corner(ndc: [f32; 2], uv: [f32; 2], screen: (f32, f32), clip: &QuadClip) -> Self {
+    pub fn corner(
+        ndc: [f32; 2],
+        uv: [f32; 2],
+        screen: (f32, f32),
+        clip: &QuadClip,
+        opacity: f32,
+    ) -> Self {
         Self {
             position: ndc,
             uv,
             clip_pos: clip.place(screen.0, screen.1),
             clip_rect: clip.rect,
             clip_params: clip.radii,
-            clip_curvature: [clip.curvature, 0.0, 0.0, 0.0],
+            curvature_opacity: [clip.curvature, opacity, 0.0, 0.0],
         }
     }
 
@@ -161,7 +172,7 @@ impl TexturedVertex {
                     shader_location: 4,
                     format: VertexFormat::Float32x4,
                 },
-                // clip_curvature
+                // curvature_opacity
                 VertexAttribute {
                     offset: 56,
                     shader_location: 5,

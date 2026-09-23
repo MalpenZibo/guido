@@ -25,6 +25,7 @@ pub struct RenderNode {
     pub local_transform: Transform,          // Transform relative to parent
     pub parent_position: Transform,          // Position set by parent (for cache reuse)
     pub pivot: Pivot,                        // What rotation and scale act about
+    pub opacity: f32,                        // Multiplied into this subtree's every draw
     pub commands: SmallVec<[Rc<DrawCommand>; 2]>,        // Draw commands (shapes, text, images)
     pub children: Vec<Rc<RenderNode>>,       // Child nodes, Rc-shared with the paint cache
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
@@ -177,6 +178,26 @@ let world_transform = parent_world_transform.then(&local_centered);
 ```
 
 The transform origin is resolved from the node's bounds and used to center the transform operation.
+
+### Opacity
+
+A node's `opacity` travels down beside the world transform: each node multiplies
+its own into what it inherits, and every command it emits carries the product
+as `FlattenedCommand::opacity`. The renderer multiplies it into each colour of
+that one draw — the five colours of a `ShapeInstance` on the CPU
+(`ShapeInstance::faded`), glyphon's vertex colour for upright text, a vertex
+attribute of the textured quad for images and transformed text, and a uniform of
+the backdrop composite and contour.
+
+That is *modulation*: each draw faded on its own, so where two children
+overlap the overlap shows through. The alternative — drawing the subtree into
+an offscreen target and compositing it once, as CSS and Flutter's `Opacity` do
+— is correct for overlaps and a render pass of its own; it is not built, and
+the `opacity` a container declares is where it would go.
+
+A transformed text and an image take the opacity on the vertex rather than into
+their texture, because both textures are cached by content — a fade folded into
+the colour would rasterise the text again on every frame of it.
 
 ### RenderLayer Ordering
 
@@ -420,8 +441,8 @@ The output of tree flattening:
 pub struct FlattenedCommand {
     pub command: Rc<DrawCommand>,   // Shared with the render node — no deep clone
     pub world_transform: Transform,
-    pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
+    pub opacity: f32,               // Every opacity from the root down, multiplied
     pub clip: Option<ClipRef>,      // The clip it is cut to, named rather than copied
 }
 ```
@@ -513,6 +534,7 @@ pub struct CachedFlatten {
     pub commands: Vec<FlattenedCommand>,  // Flattened output from this subtree
     pub clips: Vec<CachedClip>,           // The clips this subtree placed
     pub world_transform: Transform,       // World transform at time of caching
+    pub opacity: f32,                     // Opacity the subtree inherited then
 }
 ```
 
@@ -522,11 +544,18 @@ reuses cached commands with a (dx, dy) offset instead of recursing into
 children. After a full flatten, results are cached back onto the node for next
 frame.
 
-`CachedFlatten::replay_offset` is the whole of the rule for *using* an entry,
-and a translation is the whole of what it asks. It used to ask a second
-question — whether the clip inherited from above had made the same journey the
-content did — which is what excluded every scrolling subtree, and what #441
-removed by removing the copy the question was about.
+`CachedFlatten::replay_offset` is the whole of the rule for *using* an entry
+where the transform is concerned, and a translation is the whole of what it
+asks. It used to ask a second question — whether the clip inherited from above
+had made the same journey the content did — which is what excluded every
+scrolling subtree, and what #441 removed by removing the copy the question was
+about.
+
+`CachedFlatten::replay_fade` is the same question about opacity: a fading
+ancestor repaints and the subtree under it comes back clean, with the old
+inherited opacity multiplied into its commands, so a replay multiplies each by
+the ratio of the new to the old. An entry made under an opacity of zero holds
+nothing that ratio could recover, and is flattened again instead.
 
 Whether an entry is worth *making* is a second rule, and it is the paint
 cache's: an entry is collected only for a subtree with nothing culled under it.
