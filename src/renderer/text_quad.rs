@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::util::DeviceExt;
 use wgpu::{
@@ -24,6 +24,7 @@ use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
+use crate::widgets::{Rect, TextAlign};
 
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
@@ -37,7 +38,21 @@ const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
 /// same text in different buffers and break their lines in different places.
 /// A frosted text's coverage mask has to be shaped in whichever of the two will
 /// draw the glyphs over it — see [`text_mask`](super::text_mask).
-pub(super) fn shaping_buffer(rect: crate::widgets::Rect, effective_scale: f32) -> (f32, f32) {
+///
+/// An aligned text is shaped at exactly its box's width instead, since that is
+/// the width cosmic-text aligns its lines across; the texture keeps the margin
+/// either way — see [`texture_room`] — as room for the ink.
+pub(super) fn shaping_buffer(rect: Rect, effective_scale: f32, align: TextAlign) -> (f32, f32) {
+    let (width, height) = texture_room(rect, effective_scale);
+    match align {
+        TextAlign::Start => (width, height),
+        _ => (rect.width * effective_scale, height),
+    }
+}
+
+/// The room a transformed text is rasterized into, before padding: its box
+/// widened by [`TEXT_MARGIN`], whatever its alignment.
+fn texture_room(rect: Rect, effective_scale: f32) -> (f32, f32) {
     (
         rect.width * effective_scale * TEXT_MARGIN,
         rect.height * effective_scale * TEXT_MARGIN,
@@ -82,6 +97,7 @@ struct TextCacheKey {
     font_size_bits: u32,
     weight: u16,
     family: crate::widgets::FontFamily,
+    align: TextAlign,
     color: [u8; 4],
     tex_width: u32,
     tex_height: u32,
@@ -190,10 +206,10 @@ impl TextQuadRenderer {
 
         // Texture dimensions are deterministic from the entry, so they can
         // key the cache before any shaping happens
-        let (buffer_width, buffer_height) = shaping_buffer(entry.rect, effective_scale);
+        let (room_width, room_height) = texture_room(entry.rect, effective_scale);
         let padding = TEXT_TEXTURE_PADDING * effective_scale;
-        let tex_width = ((buffer_width + padding * 2.0).ceil() as u32).max(1);
-        let tex_height = ((buffer_height + padding * 2.0).ceil() as u32).max(1);
+        let tex_width = ((room_width + padding * 2.0).ceil() as u32).max(1);
+        let tex_height = ((room_height + padding * 2.0).ceil() as u32).max(1);
 
         let weight = if entry.font_weight == FontWeight::default() {
             FontWeight::NORMAL
@@ -206,6 +222,7 @@ impl TextQuadRenderer {
             font_size_bits: scaled_font_size.to_bits(),
             weight: weight.0,
             family: entry.font_family,
+            align: entry.align,
             color: [
                 (entry.color.r * 255.0) as u8,
                 (entry.color.g * 255.0) as u8,
@@ -231,24 +248,15 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
-        let (size, line_height) =
-            crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
-        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
-        buffer.set_size(
-            &mut self.font_system,
-            Some(buffer_width),
-            Some(buffer_height),
-        );
-        buffer.set_text(
+        let buffer = super::text::shape(
             &mut self.font_system,
             &entry.text,
-            &Attrs::new()
-                .family(entry.font_family.to_cosmic())
-                .weight(weight.to_cosmic()),
-            Shaping::Advanced,
-            None,
+            scaled_font_size,
+            entry.font_family,
+            entry.font_weight,
+            entry.align,
+            shaping_buffer(entry.rect, effective_scale, entry.align),
         );
-        buffer.shape_until_scroll(&mut self.font_system, true);
 
         // Create offscreen texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -517,7 +525,7 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
 #[cfg(test)]
 mod shaping_buffer_tests {
     use super::{TEXT_MARGIN, shaping_buffer};
-    use crate::widgets::Rect;
+    use crate::widgets::{Rect, TextAlign};
 
     /// No floor on this path — a transformed text is rasterized into a texture
     /// of its own size — and the margin is a factor on the box, not a border
@@ -527,15 +535,15 @@ mod shaping_buffer_tests {
     fn the_margin_is_a_factor_on_the_box_and_the_scale_multiplies_both() {
         let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
         assert_eq!(
-            shaping_buffer(rect, 1.0),
+            shaping_buffer(rect, 1.0, TextAlign::Start),
             (100.0 * TEXT_MARGIN, 40.0 * TEXT_MARGIN)
         );
         assert_eq!(
-            shaping_buffer(rect, 4.0),
+            shaping_buffer(rect, 4.0, TextAlign::Start),
             (400.0 * TEXT_MARGIN, 160.0 * TEXT_MARGIN)
         );
         // A tiny box stays tiny: nothing floors it up to 200 the way the
         // untransformed path does.
-        assert!(shaping_buffer(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0).0 < 20.0);
+        assert!(shaping_buffer(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0, TextAlign::Start).0 < 20.0);
     }
 }

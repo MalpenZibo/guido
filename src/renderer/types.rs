@@ -2,7 +2,7 @@
 
 use crate::transform::Transform;
 use crate::widgets::font::{FontFamily, FontWeight};
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -137,6 +137,10 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// Where each line sits across `rect`. Anything but `Start` is shaped at
+    /// exactly the box's width, since that is the width the lines are aligned
+    /// in.
+    pub align: TextAlign,
     /// The clip this text was flattened under, as the shape it is rather than
     /// the box around it. The quad path cuts in the clip's own space; the
     /// glyphon path asks for the box, because `TextBounds` is four integers.

@@ -11,7 +11,7 @@ use crate::tree::{Tree, WidgetId};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Painting context for the renderer.
 ///
@@ -403,6 +403,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        align: TextAlign,
     ) {
         if text.is_empty() || radius <= 0.0 {
             return;
@@ -417,6 +418,7 @@ impl<'a> PaintContext<'a> {
                 font_size,
                 font_family,
                 font_weight,
+                align,
             }));
     }
 
@@ -454,6 +456,28 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
     ) {
+        self.push_text(
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+            TextAlign::Start,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        color: Color,
+        font_size: f32,
+        font_family: FontFamily,
+        font_weight: FontWeight,
+        align: TextAlign,
+    ) {
         // Skip empty text
         if text.is_empty() {
             return;
@@ -465,6 +489,7 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            align,
         }));
     }
 
@@ -483,6 +508,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        align: TextAlign,
         stroke: Option<TextStroke>,
         shadow: Option<TextShadow>,
     ) {
@@ -497,31 +523,41 @@ impl<'a> PaintContext<'a> {
         // passing, while an animated shadow colour leaves transparent.
         if let Some(shadow) = shadow.filter(|s| s.color.a > 0.0) {
             for (dx, dy, sample_color) in shadow.samples() {
-                self.draw_text_styled(
+                self.push_text(
                     text,
                     rect.offset(dx, dy),
                     sample_color,
                     font_size,
                     font_family,
                     font_weight,
+                    align,
                 );
             }
         }
 
         if let Some(stroke) = stroke.filter(|s| s.width > 0.0) {
             for (dx, dy) in stroke.samples() {
-                self.draw_text_styled(
+                self.push_text(
                     text,
                     rect.offset(dx, dy),
                     stroke.color,
                     font_size,
                     font_family,
                     font_weight,
+                    align,
                 );
             }
         }
 
-        self.draw_text_styled(text, rect, color, font_size, font_family, font_weight);
+        self.push_text(
+            text,
+            rect,
+            color,
+            font_size,
+            font_family,
+            font_weight,
+            align,
+        );
     }
 
     // -------------------------------------------------------------------------

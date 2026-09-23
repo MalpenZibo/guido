@@ -24,6 +24,27 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
     from_stroke.max(from_shadow)
 }
 
+/// Where each line of a text sits across the text's own box.
+///
+/// The box is the one layout gave the text: as wide as its widest line unless
+/// something stretched it, so a wrapped label centres every line against the
+/// longest of them, and a stretched one centres against the stretch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TextAlign {
+    /// Where the text's direction begins: the left for Latin, the right for
+    /// Arabic or Hebrew.
+    #[default]
+    Start,
+    /// Each line centred.
+    Center,
+    /// Where the text's direction ends.
+    End,
+    /// Every line but a paragraph's last stretched to the full width, the
+    /// extra room shared between its spaces. A last line starts where `Start`
+    /// would put it.
+    Justified,
+}
+
 /// A run of text.
 ///
 /// Style is declared here — see `declares_text_style` — because this is the
@@ -336,6 +357,7 @@ impl Widget for Text {
                 self.backdrop_blur.get(),
             )
         };
+        let align = TextAlign::Start;
         // A frosted text takes its stroke as a contour instead: drawn from the
         // same coverage mask, outside the letter rather than under it, so the
         // glass keeps what the frost put in it.
@@ -349,6 +371,7 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
+                align,
             );
         }
         ctx.draw_text_decorated(
@@ -358,6 +381,7 @@ impl Widget for Text {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            align,
             if frosted { None } else { stroke },
             shadow,
         );
