@@ -368,12 +368,18 @@ impl TextRenderState {
                     top: scaled_top,
                     scale: 1.0, // Buffer is already scaled, no additional scaling needed
                     bounds,
-                    default_color: GlyphonColor::rgba(
-                        (entry.color.r * 255.0) as u8,
-                        (entry.color.g * 255.0) as u8,
-                        (entry.color.b * 255.0) as u8,
-                        (entry.color.a * 255.0) as u8,
-                    ),
+                    // The fade goes into the colour here: glyphon's atlas
+                    // holds coverage and the colour rides each glyph's
+                    // vertices, so a new alpha rasterises nothing.
+                    default_color: {
+                        let color = entry.color.scale_alpha(entry.opacity);
+                        GlyphonColor::rgba(
+                            (color.r * 255.0) as u8,
+                            (color.g * 255.0) as u8,
+                            (color.b * 255.0) as u8,
+                            (color.a * 255.0) as u8,
+                        )
+                    },
                     custom_glyphs: &[],
                 }
             });
@@ -409,7 +415,7 @@ impl TextRenderState {
 ///
 /// Shared by every test module that needs one — `text_quad`'s sets its own
 /// `text` on top — rather than written out per module:
-/// `TextEntry` has eight public fields and no constructor, so a builder per
+/// `TextEntry` has nine public fields and no constructor, so a builder per
 /// module is a field list per module to keep in step.
 #[cfg(test)]
 pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> TextEntry {
@@ -420,6 +426,7 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_size: 16.0,
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
+        opacity: 1.0,
         clip: None,
         transform,
     }

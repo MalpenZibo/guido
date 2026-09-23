@@ -137,6 +137,11 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// How opaque it is drawn, on top of `color`'s own alpha. Kept apart from
+    /// the colour because the transformed-text path caches its rasterised
+    /// texture by colour, and a fade folded into the colour would rasterise
+    /// the text again on every frame of it.
+    pub opacity: f32,
     /// The clip this text was flattened under, as the shape it is rather than
     /// the box around it. The quad path cuts in the clip's own space; the
     /// glyphon path asks for the box, because `TextBounds` is four integers.

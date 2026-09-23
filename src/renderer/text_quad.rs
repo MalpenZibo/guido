@@ -431,7 +431,7 @@ impl TextQuadRenderer {
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
         let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {
             let (x, y) = screen_corners[i];
-            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip)
+            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip, entry.opacity)
         });
 
         // Create vertex buffer with the vertices already initialized

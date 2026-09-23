@@ -308,6 +308,26 @@ impl ShapeInstance {
         };
         self
     }
+
+    /// Multiply `opacity` into every colour the shape draws with — the fill,
+    /// both ends of a gradient, the border and the shadow — each on its own.
+    ///
+    /// On the CPU and into the colours, rather than as one more field the
+    /// shader multiplies at the end: the fragment shader composites the
+    /// border over the fill and both over the shadow, and a fade is defined as
+    /// each of those colours at a fraction of its alpha.
+    pub fn faded(mut self, opacity: f32) -> Self {
+        for colour in [
+            &mut self.fill_color,
+            &mut self.border_color,
+            &mut self.shadow_color,
+            &mut self.gradient_start,
+            &mut self.gradient_end,
+        ] {
+            colour[3] *= opacity;
+        }
+        self
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +359,40 @@ mod tests {
             [1.0, 0.0, 0.0, 0.5],
             "the colour is not a length"
         );
+    }
+
+    /// Every colour an instance draws with is faded, and nothing else is.
+    #[test]
+    fn a_faded_instance_keeps_its_colours_and_scales_their_alpha() {
+        let colours = [
+            [1.0, 0.0, 0.0, 0.8],
+            [0.0, 1.0, 0.0, 0.6],
+            [0.0, 0.0, 1.0, 0.4],
+            [1.0, 1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0, 0.2],
+        ];
+        let solid = ShapeInstance {
+            fill_color: colours[0],
+            border_color: colours[1],
+            shadow_color: colours[2],
+            gradient_start: colours[3],
+            gradient_end: colours[4],
+            shadow_blur: 7.0,
+            ..ShapeInstance::default()
+        };
+        let faded = solid.faded(0.5);
+        let drawn = [
+            faded.fill_color,
+            faded.border_color,
+            faded.shadow_color,
+            faded.gradient_start,
+            faded.gradient_end,
+        ];
+        for (before, after) in colours.iter().zip(drawn) {
+            assert_eq!(after[..3], before[..3], "the colour is left alone");
+            assert_eq!(after[3], before[3] * 0.5, "its alpha is halved");
+        }
+        assert_eq!(faded.shadow_blur, 7.0, "and a fade is not a length");
     }
 
     #[test]
