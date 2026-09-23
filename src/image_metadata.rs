@@ -5,8 +5,6 @@
 
 use std::path::Path;
 
-use image::GenericImageView;
-
 use crate::widgets::image::ImageSource;
 
 /// Get the intrinsic dimensions of an image source without loading the full image.
@@ -19,9 +17,13 @@ use crate::widgets::image::ImageSource;
 pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
     match source {
         ImageSource::Path(path) => image::image_dimensions(path).ok(),
-        ImageSource::Bytes(bytes) => image::load_from_memory(bytes)
-            .ok()
-            .map(|img| img.dimensions()),
+        // The header, not the image: a full decode here would put back on the
+        // frame exactly what `image_decode` takes off it.
+        ImageSource::Bytes(bytes) => image::ImageReader::new(std::io::Cursor::new(&bytes[..]))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok(),
         ImageSource::Rgba { width, height, .. } => Some((*width, *height)),
         ImageSource::SvgPath(path) => get_svg_size_from_file(path),
         ImageSource::SvgBytes(bytes) => get_svg_size_from_bytes(bytes),

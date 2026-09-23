@@ -748,7 +748,30 @@ impl Headless {
             RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
         }
     }
+
+    /// Hold this application's image decodes until the hold is released or
+    /// dropped, so a frame can be stepped while a raster source is still
+    /// pending — which otherwise depends on how fast the worker is.
+    pub fn hold_image_decodes(&self) -> DecodeHold {
+        crate::image_decode::hold()
+    }
+
+    /// Block until every image decode this application started has finished
+    /// and queued its result. The result is applied by the next
+    /// [`step`](Self::step), as the loop applies any background write.
+    ///
+    /// Panics if the decodes are held.
+    pub fn wait_for_image_decodes(&self) {
+        crate::image_decode::wait();
+    }
+
+    /// How many image decodes this application has started.
+    pub fn image_decodes_started(&self) -> u64 {
+        crate::image_decode::started()
+    }
 }
+
+pub use crate::image_decode::DecodeHold;
 
 #[cfg(test)]
 mod the_two_refusals_the_loop_cannot_reach {

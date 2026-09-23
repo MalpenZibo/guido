@@ -7,6 +7,10 @@ pub mod compositor;
 mod deferred;
 pub(crate) mod finite;
 pub mod heap;
+// Read by the renderer and the image widget, which the next two commits
+// connect to it.
+#[allow(dead_code)]
+mod image_decode;
 pub mod image_metadata;
 mod ingress;
 mod jobs;
