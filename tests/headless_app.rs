@@ -2247,3 +2247,52 @@ fn an_output_that_leaves_mid_lock_is_asked_for_nothing_further() {
         "its cover was taken away instead, and the one that stayed kept its own"
     );
 }
+
+/// The pointer arriving over a surface at a point, as `wl_pointer.enter` says
+/// it: an enter, then the move that places it.
+fn pointer_enters(app: &mut Headless, surface: SurfaceId) {
+    let at = Instant::now();
+    let point = Point::new(10.0, 10.0);
+    app.event_at(surface, Event::MouseEnter { at: Some(point) }, at);
+    app.event_at(surface, Event::mouse_move(point.x, point.y), at);
+}
+
+/// A shape is bound to the enter it was set against, and the compositor draws
+/// nothing until one is. A surface that never asks for a cursor still owes the
+/// pointer the arrow: `Default` is a shape like any other, not the absence of
+/// one — which is what dropping it as "no change" made it (#479).
+#[test]
+fn a_surface_that_never_sets_a_cursor_asks_for_the_arrow_on_enter() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    assert_eq!(app.cursors_asked(), [], "no pointer has entered yet");
+
+    pointer_enters(&mut app, surface);
+    app.step();
+
+    assert_eq!(app.cursors_asked(), [CursorIcon::Default]);
+}
+
+/// Each enter is a new serial and a cursor left undefined until it is set
+/// against that one — so going to another surface and back asks again every
+/// time, even though the shape itself never changed.
+#[test]
+fn every_enter_asks_for_the_shape_again() {
+    let Some(mut app) = headless() else { return };
+    let left = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+    let right = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+    app.configure(left, 200, 50, 1.0);
+    app.configure(right, 200, 50, 1.0);
+    app.step();
+
+    for surface in [left, right, left] {
+        pointer_enters(&mut app, surface);
+        app.step();
+        app.event_at(surface, Event::MouseLeave, Instant::now());
+        app.step();
+    }
+
+    assert_eq!(app.cursors_asked(), [CursorIcon::Default; 3]);
+}
