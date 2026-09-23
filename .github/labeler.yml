@@ -1,6 +1,22 @@
+# The labels a pull request gets without anybody remembering them. The version
+# of the next release reads them — `.github/next-version.sh` — so `feature` on a
+# `feat/` branch is what turns a patch into a minor.
+#
+# Each label is applied when any one of its entries matches.
+
 documentation:
   - changed-files:
       - any-glob-to-any-file: ['docs/**', 'book/**', '**/*.md']
+  - head-branch: ['^docs/']
+
+bug:
+  - head-branch: ['^fix/']
+
+feature:
+  - head-branch: ['^feat/', '^feature/']
+
+chore:
+  - head-branch: ['^chore/']
 
 ci:
   - changed-files:
@@ -9,3 +25,4 @@ ci:
 dependencies:
   - changed-files:
       - any-glob-to-any-file: ['Cargo.toml', 'Cargo.lock']
+  - head-branch: ['^dependabot/']
