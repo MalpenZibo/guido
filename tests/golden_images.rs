@@ -435,14 +435,9 @@ fn assert_golden(name: &str, adapter: &str, actual: Pixels) {
     }
 }
 
-/// Render one scenario and hold it against its golden.
-fn golden(
-    name: &str,
-    logical: (f32, f32),
-    scale: f32,
-    clear: Color,
-    widget: impl Widget + 'static,
-) {
+/// The device a scenario draws with, or `None` where it has to skip — and it
+/// has to skip only where skipping is allowed.
+fn rasterizer(name: &str) -> Option<&'static GpuContext> {
     let required = std::env::var_os("GUIDO_GOLDEN_REQUIRED").is_some();
 
     let Some(ctx) = ctx() else {
@@ -453,7 +448,7 @@ fn golden(
              installed, or VK_ICD_FILENAMES does not point at it."
         );
         eprintln!("skipping golden `{name}`: no Vulkan adapter on this machine");
-        return;
+        return None;
     };
 
     // A golden holds only against the rasterizer it was blessed on, so running
@@ -472,8 +467,23 @@ fn golden(
             "skipping golden `{name}`: `{adapter}` is not the rasterizer these \
              were blessed on. Point VK_ICD_FILENAMES at lavapipe to run them."
         );
-        return;
+        return None;
     }
+    Some(ctx)
+}
+
+/// Render one scenario and hold it against its golden.
+fn golden(
+    name: &str,
+    logical: (f32, f32),
+    scale: f32,
+    clear: Color,
+    widget: impl Widget + 'static,
+) {
+    let Some(ctx) = rasterizer(name) else {
+        return;
+    };
+    let adapter = &ctx.adapter_info.name;
 
     // The font registry is thread-local and is read once, when a font system
     // is first built. So it is filled on this thread, before the renderer that
@@ -1597,6 +1607,209 @@ fn text_wraps_where_the_box_ends_at_scale_2x() {
         BACKDROP,
         view,
     );
+}
+
+/// Texts aligned across their own boxes, each box painted behind its text so
+/// the picture says what the line was aligned against.
+///
+/// Every box is narrower than the 200 logical pixels the renderer otherwise
+/// shapes in, which is the case that matters: a line centred in that floor
+/// rather than in its box sits visibly right of centre, and a line never
+/// aligned hangs from the left edge. The cells, top to bottom on the left:
+/// a wrapped text, whose box is its widest line; two paragraphs split by an
+/// explicit newline; a single line stretched wider than itself, centred and
+/// then at the end; and a justified one. On the right, the two other paths a
+/// text is shaped by — a frosted text, whose frost is shaped apart from its
+/// letters and has to break and align its lines where they do, and a turned
+/// card, which is drawn as a quad.
+fn aligned_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+
+    // A box that hugs its text, so its background is the text's own box.
+    let hugged = |label: Text| container().background(INK).child(label);
+    // A box the text is stretched across, which is the text's box too.
+    let stretched = |label: Text| {
+        container()
+            .width(170.0)
+            .background(INK)
+            .layout(Flex::column().cross_alignment(CrossAlignment::Stretch))
+            .child(label)
+    };
+    let centred = |content: &str| label(content, 16.0).align(TextAlign::Center);
+
+    let left = container()
+        .width(180.0)
+        .layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Center),
+        )
+        .child(
+            container()
+                .width(150.0)
+                .child(hugged(centred("every line of this one is centred"))),
+        )
+        .child(hugged(centred("one paragraph\nand then two")))
+        .child(stretched(centred("centred")))
+        .child(stretched(label("at the end", 16.0).align(TextAlign::End)))
+        .child(stretched(
+            label("justified from edge to edge of it", 16.0).align(TextAlign::Justified),
+        ));
+
+    let turned = container()
+        .width(150.0)
+        .rotate(12.0)
+        .child(hugged(centred("turned, and still centred")));
+
+    // Upright bars, where `stripes` lays them flat: a frost that slid along
+    // its line would blur the same flat bar it blurred before, and only bars
+    // standing across the line tell the two places apart.
+    let bars: Vec<AnyWidget> = (0..16)
+        .map(|i| {
+            let colour = if i % 2 == 0 {
+                Color::rgb(0.85, 0.35, 0.30)
+            } else {
+                Color::rgb(0.15, 0.45, 0.85)
+            };
+            swatch(10.0, 110.0, colour).into_any()
+        })
+        .collect();
+    let frosted = container()
+        .width(160.0)
+        .height(110.0)
+        .layout(ZStack::new())
+        .child(container().layout(Flex::row()).children(bars))
+        .child(
+            container()
+                .width(160.0)
+                .height(fill())
+                .layout(
+                    Flex::column()
+                        .main_alignment(MainAlignment::Center)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(
+                    container().width(150.0).child(
+                        label("frost under each of its lines", 22.0)
+                            .align(TextAlign::Center)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(10.0),
+                    ),
+                ),
+        );
+
+    container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::row().spacing(16.0))
+        .child(left)
+        .child(
+            container()
+                .layout(
+                    Flex::column()
+                        .spacing(30.0)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .padding([14.0, 0.0])
+                // The frost first: a turned card with a background drawn
+                // before a frosted text takes the frost away, which is a
+                // defect of its own and not this scenario's.
+                .child(frosted)
+                .child(turned),
+        )
+}
+
+#[test]
+fn text_aligns_within_its_own_box() {
+    golden(
+        "text_aligns_within_its_own_box",
+        (380.0, 290.0),
+        1.0,
+        BACKDROP,
+        aligned_labels(),
+    );
+}
+
+/// The same at a scale the buffer's width is not a whole multiple of, where a
+/// box shaped at exactly its own width is most likely to break a line the
+/// measurer did not.
+#[test]
+fn text_aligns_within_its_own_box_at_scale_1_5x() {
+    golden(
+        "text_aligns_within_its_own_box_at_scale_1_5x",
+        (380.0, 290.0),
+        1.5,
+        BACKDROP,
+        aligned_labels(),
+    );
+}
+
+/// A text whose box fits its only line is drawn the same whatever its
+/// alignment: there is no room for a line to move into.
+///
+/// Held against the start-aligned picture rather than a file, because the claim
+/// is that the two are the same — on every path a text can take, which is why
+/// one of them is turned.
+#[test]
+fn an_alignment_moves_nothing_in_a_box_that_fits() {
+    let Some(ctx) = rasterizer("an_alignment_moves_nothing_in_a_box_that_fits") else {
+        return;
+    };
+    guido::load_font(FONT.to_vec());
+
+    let view = |align: TextAlign| {
+        container()
+            .background(BACKDROP)
+            .padding(12.0)
+            // Not stretched: a stretched box is wider than its line, which is
+            // the case the property is for.
+            .layout(
+                Flex::column()
+                    .spacing(12.0)
+                    .cross_alignment(CrossAlignment::Start),
+            )
+            .child(label("fits", 18.0).align(align))
+            .child(
+                container()
+                    .rotate(20.0)
+                    .child(label("fits, turned", 18.0).align(align)),
+            )
+    };
+    let draw = |align| {
+        let mut renderer = Renderer::new(ctx.device.clone(), ctx.queue.clone(), FORMAT);
+        render_pixels(
+            ctx,
+            &mut renderer,
+            view(align),
+            (180.0, 110.0),
+            1.0,
+            BACKDROP,
+        )
+    };
+
+    let start = draw(TextAlign::Start);
+    for align in [TextAlign::Center, TextAlign::End, TextAlign::Justified] {
+        let other = draw(align);
+        let moved = start
+            .data
+            .iter()
+            .zip(&other.data)
+            .filter(|(a, b)| a.abs_diff(**b) > TOLERANCE)
+            .count();
+        if moved > 0 {
+            let dir = failures_dir();
+            write_png(&dir.join("fits.start.png"), &start);
+            write_png(&dir.join(format!("fits.{align:?}.png")), &other);
+            write_png(
+                &dir.join(format!("fits.{align:?}.diff.png")),
+                &diff_image(&start, &other),
+            );
+        }
+        assert_eq!(
+            moved, 0,
+            "{align:?} moved {moved} channels of a text that fits"
+        );
+    }
 }
 
 /// The same composition at scale 2. Every radius, border width and shadow
