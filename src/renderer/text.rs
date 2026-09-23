@@ -409,7 +409,7 @@ impl TextRenderState {
 ///
 /// Shared by every test module that needs one — `text_quad`'s sets its own
 /// `text` on top — rather than written out per module:
-/// `TextEntry` has nine public fields and no constructor, so a builder per
+/// `TextEntry` has eight public fields and no constructor, so a builder per
 /// module is a field list per module to keep in step.
 #[cfg(test)]
 pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> TextEntry {
@@ -422,7 +422,6 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_weight: FontWeight::default(),
         clip: None,
         transform,
-        transform_origin: None,
     }
 }
 

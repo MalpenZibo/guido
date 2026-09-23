@@ -73,7 +73,6 @@ mod tests {
                 curvature: 1.0,
             }),
             world_transform: Default::default(),
-            world_transform_origin: None,
             layer: Default::default(),
             clip: None,
         };

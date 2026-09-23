@@ -420,7 +420,6 @@ The output of tree flattening:
 pub struct FlattenedCommand {
     pub command: Rc<DrawCommand>,   // Shared with the render node — no deep clone
     pub world_transform: Transform,
-    pub world_transform_origin: Option<(f32, f32)>,
     pub layer: RenderLayer,
     pub clip: Option<ClipRef>,      // The clip it is cut to, named rather than copied
 }

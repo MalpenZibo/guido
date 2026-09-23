@@ -935,7 +935,6 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_weight: *font_weight,
             clip: cmd.clip(),
             transform: cmd.world_transform,
-            transform_origin: cmd.world_transform_origin,
         }),
         _ => None,
     }
@@ -962,7 +961,6 @@ mod tests {
                 font_weight: Default::default(),
             }),
             world_transform: transform,
-            world_transform_origin: None,
             layer: RenderLayer::Backdrop,
             clip: None,
         }
@@ -1244,7 +1242,6 @@ mod tests {
                 gradient: None,
             }),
             world_transform: Transform::IDENTITY,
-            world_transform_origin: None,
             layer: RenderLayer::Shapes,
             clip: None,
         };

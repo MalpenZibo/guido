@@ -44,8 +44,6 @@ pub struct FlattenedCommand {
     pub command: Rc<DrawCommand>,
     /// World transform (composed from all ancestors)
     pub world_transform: Transform,
-    /// World transform origin in screen coordinates
-    pub world_transform_origin: Option<(f32, f32)>,
     /// Render layer for ordering
     pub layer: RenderLayer,
     /// The clip this command is cut to, if any — named rather than copied, so
@@ -601,7 +599,7 @@ pub fn flatten_root_into(
     layers.clear();
     scratch.clear();
 
-    flatten_node(root, Transform::IDENTITY, None, None, scratch);
+    flatten_node(root, Transform::IDENTITY, None, scratch);
 
     let carried = scratch.carried;
     scratch.drain_into(commands, layers);
@@ -625,13 +623,9 @@ pub struct RegionsCarried {
 fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
-    parent_world_origin: Option<(f32, f32)>,
     parent_clip: Option<ClipIndex>,
     out: &mut FlattenScratch,
 ) -> bool {
-    // Compute this node's world transform
-    let (origin_x, origin_y) = node.pivot.resolve(node.bounds);
-
     // Compose transforms: parent first, then local about its own pivot
     let local_centered = if node.local_transform.is_identity() {
         Transform::IDENTITY
@@ -686,14 +680,6 @@ fn flatten_node(
         .is_translation_only()
         .then(|| (out.mark(), out.clips.mark()));
 
-    // Compute world transform origin (for shapes that need it)
-    let world_origin = if !node.local_transform.is_identity() {
-        let (world_ox, world_oy) = parent_world_transform.transform_point(origin_x, origin_y);
-        Some((world_ox, world_oy))
-    } else {
-        parent_world_origin
-    };
-
     // This node's clip, placed under the one it inherits. The intersection is
     // still computed here and once — what changed is where it is written: into
     // the frame's clip tree, which every command below names, instead of into
@@ -737,7 +723,6 @@ fn flatten_node(
         out.push(FlattenedCommand {
             command: Rc::clone(cmd),
             world_transform,
-            world_transform_origin: world_origin,
             layer,
             clip: effective_clip.clone(),
         });
@@ -746,7 +731,7 @@ fn flatten_node(
     // Recurse to children with effective clip
     let mut subtree_partial = node.partial;
     for child in &node.children {
-        subtree_partial |= flatten_node(child, world_transform, world_origin, clip_index, out);
+        subtree_partial |= flatten_node(child, world_transform, clip_index, out);
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.
@@ -773,7 +758,6 @@ fn flatten_node(
             out.push(FlattenedCommand {
                 command: Rc::clone(cmd),
                 world_transform,
-                world_transform_origin: world_origin,
                 layer: RenderLayer::Overlay,
                 clip: overlay_clip.clone(),
             });
@@ -1011,7 +995,6 @@ mod tests {
         FlattenedCommand {
             command: Rc::new(DrawCommand::rounded_rect(rect, Color::WHITE, 0.0)),
             world_transform: Transform::IDENTITY,
-            world_transform_origin: None,
             layer,
             clip: None,
         }

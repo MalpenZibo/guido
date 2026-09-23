@@ -143,8 +143,6 @@ pub struct TextEntry {
     pub clip: Option<crate::shape::PlacedShape>,
     /// Transform to apply to this text
     pub transform: Transform,
-    /// Custom transform origin in logical screen coordinates, if any
-    pub transform_origin: Option<(f32, f32)>,
 }
 
 /// The two halves of "how far a shadow reaches", checked against each other.
