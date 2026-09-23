@@ -276,8 +276,8 @@ fn a_hover_in_flight_is_cleared_when_the_container_collapses() {
 }
 
 /// And for a widget that hit-tests on its own bounds rather than through the
-/// container's `HitContext` — a text input keeps a hover flag and an I-beam
-/// cursor of its own, and both have to fall when the box holding it does.
+/// container's `HitContext` — a text input says its I-beam from its own
+/// bounds, and it has to stop saying it when the box holding it collapses.
 ///
 /// This is the half a `Some(at)` pattern silently drops: an arm that only
 /// matches a positioned move is never entered by a positionless one, so the
@@ -295,20 +295,25 @@ fn a_text_input_inside_a_collapsing_container_stops_being_hovered() {
         400.0,
         200.0,
     );
+    // Declared going in and read coming out, as `dispatch_events` does: the
+    // declaration belongs to one event, and `send_at` ends it on the way out.
+    let cursor_under = |h: &mut Harness, x: f32, y: f32| {
+        h.tree.set_event_instant(Some(std::time::Instant::now()));
+        h.send(Event::mouse_move(x, y));
+        h.tree.cursor_under_the_point().get_untracked()
+    };
 
-    h.send(Event::mouse_move(5.0, 5.0));
     assert_eq!(
-        guido::reactive::cursor::get_current_cursor(),
-        CursorIcon::Text,
+        cursor_under(&mut h, 5.0, 5.0),
+        Some(CursorIcon::Text),
         "the pointer is over the field while the box is open"
     );
 
     open.set(false);
     h.lay_out(400.0, 200.0);
-    h.send(Event::mouse_move(5.0, 5.0));
     assert_eq!(
-        guido::reactive::cursor::get_current_cursor(),
-        CursorIcon::Default,
+        cursor_under(&mut h, 5.0, 5.0),
+        None,
         "and over nothing once it has collapsed"
     );
 }

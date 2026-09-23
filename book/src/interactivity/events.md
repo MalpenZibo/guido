@@ -172,6 +172,63 @@ pointer pipeline as the mouse, so `on_click`, `when_hovered`,
 tap is a click; lifting the finger clears hover state. No code changes
 are needed.
 
+## Cursor Shape
+
+A container says which shape the pointer takes over it:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = || {};
+container()
+    .cursor(CursorIcon::Pointer)
+    .on_click(open)
+# ;
+# }
+```
+
+After every pointer event the shape is resolved from where the pointer is: the
+innermost widget under it that declares one wins, and with none the pointer is
+the arrow. A text input declares the I-beam the same way, so a field inside a
+clickable row shows `Text` over itself and `Pointer` over the rest of the row,
+with nothing to reset when the pointer moves between them:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = || {};
+let query = create_signal(String::new());
+
+container()
+    .cursor(CursorIcon::Pointer)
+    .on_click(open)
+    .child(text_input(query))
+# ;
+# }
+```
+
+Like any other property it takes a signal, and a change reaches the screen
+without the pointer having to move. A shape that is about a whole surface —
+busy while something loads — is a `cursor` on its root:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let loading = create_signal(false);
+
+container().cursor(move || {
+    if loading.get() { CursorIcon::Wait } else { CursorIcon::Default }
+})
+# ;
+# }
+```
+
+A container declared with `takes_input(false)` claims no cursor: the
+compositor is not giving it the pointer, so whatever is beneath it answers.
+
 ## Combining Events
 
 A container can have multiple event handlers:
@@ -278,5 +335,8 @@ impl Container {
         self,
         handler: impl Fn(f32, f32, ScrollSource) + 'static
     ) -> Self;
+
+    /// The pointer's shape over this container
+    pub fn cursor<M>(self, cursor: impl IntoSignal<CursorIcon, M>) -> Self;
 }
 ```

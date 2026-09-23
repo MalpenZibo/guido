@@ -26,6 +26,7 @@
 use smallvec::SmallVec;
 
 use crate::layout::{Constraints, Size};
+use crate::reactive::{CursorIcon, Prop};
 use crate::widgets::{Rect, Widget};
 
 /// Inline capacity for children. Most widgets have 0–4 children,
@@ -328,6 +329,24 @@ pub struct Tree {
     /// Cleared before every event, like the claim above it, so what it means
     /// is *this* move.
     drag_claimed_by_a_scroller: bool,
+    /// The cursor the widget under the point of the event being dispatched
+    /// declares, if any widget there declares one.
+    ///
+    /// Said on the way down by every widget the point is inside, and a widget
+    /// is always asked before its children — so the last to say it is the
+    /// innermost one, and the resolution needs no walk of its own: it is the
+    /// dispatch's hit test, read at the end. CSS resolves `cursor` from the
+    /// hit-test target up through its ancestors, which is the same answer
+    /// wherever siblings do not overlap.
+    ///
+    /// Where they do, it is not quite: a sibling drawn over another that
+    /// declares nothing leaves the one beneath it standing, and a press the
+    /// one beneath consumes never reaches the one above. That is the
+    /// dispatch's own order, and the cursor follows it rather than walking a
+    /// second one.
+    ///
+    /// Cleared before every event, like the two claims above it.
+    cursor_under_the_point: Prop<CursorIcon>,
 }
 
 impl Tree {
@@ -344,6 +363,7 @@ impl Tree {
             event_instant: None,
             focus_claimed_the_press: false,
             drag_claimed_by_a_scroller: false,
+            cursor_under_the_point: Prop::Unset,
         }
     }
 
@@ -441,20 +461,45 @@ impl Tree {
         self.drag_claimed_by_a_scroller
     }
 
+    /// Say which cursor the point of the event being dispatched should show,
+    /// because it is inside this widget.
+    ///
+    /// Called from a widget's own event handling, where the point is already
+    /// in its coordinates, and only for a point inside it. Whoever says it last
+    /// wins, and the dispatch order makes that the innermost widget — see
+    /// [`cursor_under_the_point`](Self::cursor_under_the_point). Public for
+    /// the same reason
+    /// [`keep_the_focus_this_press_landed_on`](Self::keep_the_focus_this_press_landed_on)
+    /// is: a widget written outside this crate has to be able to say it.
+    pub fn point_shows_cursor(&mut self, cursor: Prop<CursorIcon>) {
+        self.cursor_under_the_point = cursor;
+    }
+
+    /// The cursor the innermost widget under the point declared during the
+    /// event just dispatched, or `Unset` where nothing there declares one.
+    ///
+    /// `dispatch_events` reads it after every positioned pointer event and
+    /// hands it to the loop; a test driving a tree without one reads it
+    /// directly.
+    pub fn cursor_under_the_point(&self) -> Prop<CursorIcon> {
+        self.cursor_under_the_point
+    }
+
     /// Declare when the event about to be dispatched happened, or `None` when
     /// the dispatch is over.
     ///
     /// `dispatch_events` is the caller in the loop; a test that wants to place
     /// an event in time is the other one.
     ///
-    /// It also forgets what the previous event was claimed by — the focus, and
-    /// a scroller dragging its content — which is what makes a claim mean
-    /// *this* one. See
+    /// It also forgets what the previous event was claimed by — the focus, a
+    /// scroller dragging its content, and the cursor under its point — which
+    /// is what makes a claim mean *this* one. See
     /// [`keep_the_focus_this_press_landed_on`](Self::keep_the_focus_this_press_landed_on).
     pub fn set_event_instant(&mut self, at: Option<std::time::Instant>) {
         self.event_instant = at;
         self.focus_claimed_the_press = false;
         self.drag_claimed_by_a_scroller = false;
+        self.cursor_under_the_point = Prop::Unset;
     }
 
     /// Declare the instant of the frame about to run, or `None` when it is

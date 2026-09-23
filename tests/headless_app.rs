@@ -2296,3 +2296,177 @@ fn every_enter_asks_for_the_shape_again() {
 
     assert_eq!(app.cursors_asked(), [CursorIcon::Default; 3]);
 }
+
+// ---------------------------------------------------------------------------
+// The cursor, resolved from the point after every pointer event (#496)
+// ---------------------------------------------------------------------------
+
+/// A move to a point on a surface, now.
+fn pointer_moves(app: &mut Headless, surface: SurfaceId, x: f32, y: f32) {
+    app.event_at(surface, Event::mouse_move(x, y), Instant::now());
+    app.step();
+}
+
+/// A bar whose left 120 pixels are `left`, and whose rest declares nothing.
+fn left_of_a_bar(left: Container) -> Container {
+    container()
+        .width(fill())
+        .height(fill())
+        .layout(Flex::row())
+        .child(left.width(120.0).height(fill()))
+}
+
+#[test]
+fn hovering_a_container_that_declares_a_cursor_asks_for_it_and_leaving_asks_for_the_arrow() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        left_of_a_bar(container().cursor(CursorIcon::Pointer))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Pointer]);
+
+    pointer_moves(&mut app, surface, 160.0, 10.0);
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer, CursorIcon::Default]
+    );
+}
+
+/// The innermost declaration under the point wins, and the one around it
+/// takes over again the moment the pointer is only over that — which is what
+/// an imperative `set_cursor(Default)` on the field's leave could never say.
+#[test]
+fn a_field_inside_a_clickable_row_shows_its_own_cursor_and_hands_the_row_its_back() {
+    let Some(mut app) = headless() else { return };
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || {
+        left_of_a_bar(
+            container()
+                .cursor(CursorIcon::Pointer)
+                .child(text_input(value)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Text], "over the field");
+
+    pointer_moves(&mut app, surface, 10.0, 40.0);
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Text, CursorIcon::Pointer],
+        "over the row, below the field"
+    );
+
+    pointer_moves(&mut app, surface, 160.0, 40.0);
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Text, CursorIcon::Pointer, CursorIcon::Default],
+        "outside the row"
+    );
+}
+
+#[test]
+fn a_cursor_given_by_a_signal_changes_while_the_pointer_stays_still() {
+    let Some(mut app) = headless() else { return };
+    let busy = create_signal(false);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).cursor(move || {
+            if busy.get() {
+                CursorIcon::Wait
+            } else {
+                CursorIcon::Default
+            }
+        })
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Default]);
+
+    busy.set(true);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Default, CursorIcon::Wait]);
+
+    busy.set(false);
+    app.step();
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Default, CursorIcon::Wait, CursorIcon::Default]
+    );
+}
+
+/// A declaration on a hole in the surface's input is a declaration over a
+/// place the pointer is not being given: it claims nothing, and the container
+/// beneath it answers.
+#[test]
+fn a_container_that_takes_no_input_leaves_the_cursor_to_the_one_beneath_it() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .width(fill())
+            .height(fill())
+            .cursor(CursorIcon::Pointer)
+            .child(
+                container()
+                    .width(120.0)
+                    .height(fill())
+                    .takes_input(false)
+                    .cursor(CursorIcon::Crosshair),
+            )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Pointer]);
+}
+
+/// The declaration under a still pointer can go away with its widget, and
+/// what its closure read does not go with it. A write to that afterwards is
+/// not a shape to show — it used to reach the closure's corpse and panic.
+#[test]
+fn a_cursor_closure_whose_widget_is_gone_is_not_read_again() {
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(true);
+    let loading = create_signal(false);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(move || {
+            shown.get().then(|| {
+                container().width(fill()).height(fill()).cursor(move || {
+                    if loading.get() {
+                        CursorIcon::Wait
+                    } else {
+                        CursorIcon::Pointer
+                    }
+                })
+            })
+        })
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Pointer]);
+
+    shown.set(false);
+    app.step();
+    loading.set(true);
+    app.step();
+
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer],
+        "nothing is asked for a declaration that is no longer there"
+    );
+}
