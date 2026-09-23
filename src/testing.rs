@@ -433,8 +433,13 @@ impl Headless {
     /// `None` where there is no GPU adapter at all — a frame has to land
     /// somewhere, and the somewhere is a texture this allocates.
     pub fn new() -> Option<Self> {
+        let gpu = shared_device()?;
+        // The application's own scope, as `App::run` makes one: what outlives
+        // every widget — a decoded image's entry, a global signal — is filed
+        // under it rather than under whichever widget asked first.
+        reactive::create_root_owner();
         Some(Self {
-            gpu: shared_device()?,
+            gpu,
             tree: Tree::new(),
             renderer: None,
             surfaces: SurfaceManager::new(),
