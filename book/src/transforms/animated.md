@@ -100,11 +100,13 @@ that removes the child happens.
 While it leaves, the child is inert. A click over it reaches whatever is under
 it, the focus it held is released, and a signal it read no longer relays out or
 repaints it — its item may already be gone. An effect created while building it
-is not a widget, though: it lives until the child is disposed, and runs if what
-it reads changes. In a `keyed(..)` list, a key that comes back while its row is
-leaving gets that row back: the exit is cancelled and it travels home from
-wherever it had got to. The row itself is not rebuilt; a `.child(move || ..)`
-inside it is re-run, as it would be for any change it read.
+is paused with it — a memo too, which keeps the value it had at removal: a
+write to what the effect read does not run it, and it is
+disposed with the child when the exit settles. In a `keyed(..)` list, a key that
+comes back while its row is leaving gets that row back: the exit is cancelled
+and it travels home from wherever it had got to. The row itself is not rebuilt;
+a `.child(move || ..)` inside it is re-run, as it would be for any change it
+read, and an effect that missed a write while the row was leaving runs once.
 
 Only the removed widget's own properties are waited on. An exit declared on
 something inside it plays when *that* is the widget removed, and a container

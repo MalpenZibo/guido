@@ -357,17 +357,27 @@ pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: Widget
 ///
 /// Every widget in it is detached — its subscriptions cleared, and what it
 /// reads while its exit paints subscribing nothing — its deadlines are
-/// cancelled, and the focus is released if it was inside. Its owner scope
-/// lives on with the widget: disposing it here would leave paint reading
-/// state that no longer exists, and nothing in the subtree can reach that
-/// state any more except by being painted. The second half is
-/// [`teardown_widget_subtree`], when the exit settles.
+/// cancelled, the effects in the scopes it owns are paused, and the focus is
+/// released if it was inside. Its owner scope lives on with the widget:
+/// disposing it here would leave paint reading state that no longer exists,
+/// and nothing in the subtree can reach that state any more except by being
+/// painted. The second half is [`teardown_widget_subtree`], when the exit
+/// settles.
 pub(crate) fn detach_widget_subtree(tree: &crate::tree::Tree, root: WidgetId) {
     for id in tree.collect_subtree_post_order(root) {
         detach_widget(id);
         cancel_scheduled_jobs(id);
+        if let Some(scope) = owned_scope(tree, id) {
+            crate::reactive::owner::pause_owner(scope);
+        }
     }
     crate::reactive::release_focus_if_within(root);
+}
+
+/// The reactive scope the widget at `id` owns, if it owns one.
+fn owned_scope(tree: &crate::tree::Tree, id: WidgetId) -> Option<crate::reactive::OwnerId> {
+    tree.with_widget(id, |widget| widget.owned_scope())
+        .flatten()
 }
 
 /// Undo a detach: a leaving child that was asked for again.
@@ -375,10 +385,19 @@ pub(crate) fn detach_widget_subtree(tree: &crate::tree::Tree, root: WidgetId) {
 /// The subscriptions the detach cleared are not restored, they are read
 /// again — every widget in the subtree lays out, paints and reconciles every
 /// dynamic segment it holds on the next frame, which is where each of them
-/// was made in the first place.
+/// was made in the first place. The effects the detach paused are not read
+/// again but resumed: one a write reached while it was paused runs now, once.
 pub(crate) fn reattach_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
+    // One batch, so what missed a run runs once the whole subtree is resumed.
+    crate::reactive::runtime::batch(|| reattach_each(tree, root));
+}
+
+fn reattach_each(tree: &mut crate::tree::Tree, root: WidgetId) {
     for id in tree.collect_subtree_post_order(root) {
         reattach_widget(id);
+        if let Some(scope) = owned_scope(tree, id) {
+            crate::reactive::owner::resume_owner(scope);
+        }
         mark_every_segment_dirty(id);
         request_job(id, JobRequest::Reconcile);
         request_job(id, JobRequest::Layout);
