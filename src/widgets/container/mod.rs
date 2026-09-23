@@ -28,6 +28,7 @@ use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
+use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
@@ -1131,6 +1132,11 @@ impl Container {
 
     /// Displace this container from where it was laid out.
     ///
+    /// In logical pixels, or in fractions of the container's own size with
+    /// [`Translate::relative`], which is what a slide by its own width wants
+    /// rather than a width read back through a
+    /// [`WidgetRef`]; `Translate::relative` says why.
+    ///
     /// Paint-only, like the other two: the space the layout gave it does not
     /// move, so nothing around it shifts.
     ///
@@ -1145,6 +1151,7 @@ impl Container {
     /// # let refusals = create_signal(0u32);
     /// # let nod = || Keyframes::new(200.0).at(0.0, Translate::NONE).at(0.5, Translate::new(0.0, 4.0)).at(1.0, Translate::NONE);
     /// container().translate((20.0, 10.0));
+    /// container().translate(Translate::relative(-1.0, 0.0));
     /// container().translate(move || Translate::new(offset.get(), 0.0));
     /// container().translate(target.transition(SpringConfig::SNAPPY));
     /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)));
@@ -1385,7 +1392,16 @@ impl Widget for Container {
         // This is for one hidden while it runs, which before now went on
         // asking for a frame every vsync and repainting a surface showing
         // nothing (#351).
-        let is_visible = with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
+        //
+        // A leaving container skips the question: its exit is what disposes
+        // it, so it plays whether or not anything can see it.
+        let leaving = self.is_leaving();
+        if !leaving && is_detached(id) {
+            // Inside a child that is leaving: only the exit moves.
+            return false;
+        }
+        let is_visible =
+            leaving || with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
         if !is_visible {
             return false;
         }
@@ -1434,7 +1450,61 @@ impl Widget for Container {
         // (the declared animations, the ripple, the kinetic scroll) handles its
         // own continuation
 
+        // The last exit has settled: the container that holds this one
+        // disposes it, and is asked to in this frame.
+        if leaving
+            && !self.is_exiting()
+            && let Some(parent) = tree.get_parent(id)
+        {
+            request_job(parent, JobRequest::Reconcile);
+        }
+
         any_animating
+    }
+
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        let Some(declared) = self.anims.as_deref_mut() else {
+            return false;
+        };
+        if !declared.slots().any(AnimSlot::declares_exit) {
+            return false;
+        }
+        let now = tree.frame_instant();
+        let mut moves_the_box = false;
+        for slot in declared.slots_mut() {
+            if slot.begin_exit(now) {
+                moves_the_box |= slot.moves_the_box();
+            }
+        }
+        let follow_up = if moves_the_box {
+            RequiredJob::Layout
+        } else {
+            RequiredJob::Paint
+        };
+        request_job(id, JobRequest::Animation(follow_up));
+        true
+    }
+
+    fn is_exiting(&self) -> bool {
+        self.anims.as_deref().is_some_and(|declared| {
+            declared
+                .slots()
+                .any(|slot| slot.is_leaving() && slot.is_animating())
+        })
+    }
+
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
+        let Some(declared) = self.anims.as_deref_mut() else {
+            return;
+        };
+        for slot in declared.slots_mut() {
+            slot.cancel_exit();
+        }
+        // Sent home now, from where each property is, rather than by the
+        // Animation job of the next frame: the frame the key came back is the
+        // frame the return begins. A size is sent home by the layout its
+        // reattach asks for, in this frame too.
+        self.advance_declared_animations(id, tree.frame_instant());
     }
 
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
@@ -1614,10 +1684,11 @@ impl Widget for Container {
             return EventResponse::Ignored;
         }
 
+        let bounds = tree.get_bounds(id).unwrap_or_default();
         let hit = HitContext {
-            bounds: tree.get_bounds(id).unwrap_or_default(),
+            bounds,
             corners: self.animated_corners(id),
-            transform: self.animated_transform(id),
+            transform: self.animated_transform(id, bounds),
             pivot: self.resolved_pivot(id),
         };
 
@@ -1696,6 +1767,11 @@ impl Widget for Container {
         let mut a_child_took_it = false;
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {
+                // A child playing its exit is drawn and takes nothing: the
+                // event goes on to whatever is under it.
+                if is_detached(child_id) {
+                    continue;
+                }
                 if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
                     child.event(tree, child_id, &child_event)
                 }) && response == EventResponse::Handled
@@ -1757,7 +1833,7 @@ impl Widget for Container {
             self.animated_background(id),
             self.animated_corners(id),
             self.animated_shadow(id),
-            self.animated_transform(id),
+            self.animated_transform(id, bounds),
             self.resolved_pivot(id),
             self.animated_border_width(id),
             self.animated_border_color(id),
@@ -2042,9 +2118,13 @@ fn declared_seed<T: Clone + 'static>(prop: &Prop<T>) -> T {
 /// check in `resync_animation_targets` could never speak for.
 fn install<T: Animatable>(seed: T, motion: Motion<T>) -> AnimationState<T> {
     match motion {
-        Motion::Ease { config, enter_from } => {
-            AnimationState::new(seed, config).with_enter_from(enter_from)
-        }
+        Motion::Ease {
+            config,
+            enter_from,
+            exit_to,
+        } => AnimationState::new(seed, config)
+            .with_enter_from(enter_from)
+            .with_exit_to(exit_to),
         Motion::Play { keyframes } => {
             AnimationState::new(seed, instant_transition()).with_timeline(keyframes)
         }
@@ -2087,17 +2167,29 @@ fn declare_size<M>(
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
     let resolved = |length: Length| length.exact_size().or(length.min()).unwrap_or(0.0);
-    let installed = ease.map(|(config, enter_from)| {
+    let installed = ease.map(|(config, enter_from, exit_to)| {
         install(
             resolved(declared_seed(&prop)),
             Motion::Ease {
                 config,
                 enter_from: enter_from.map(resolved),
+                exit_to: exit_to.map(|exit_to| {
+                    Box::new(move || resolved(exit_to())) as crate::animation::ExitTo<f32>
+                }),
             },
         )
     });
     put(anims, kind, into_slot, installed);
     prop
+}
+
+impl Container {
+    /// Whether an exit has begun here: removed, and still in the tree.
+    pub(super) fn is_leaving(&self) -> bool {
+        self.anims
+            .as_deref()
+            .is_some_and(|declared| declared.slots().any(AnimSlot::is_leaving))
+    }
 }
 
 pub fn container() -> Container {

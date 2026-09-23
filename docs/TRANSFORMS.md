@@ -13,6 +13,35 @@ container()
     .translate((20.0, 10.0))  // Move 20px right, 10px down
 ```
 
+### Relative Translation
+
+A translate can also be a fraction of the widget's own size — CSS's
+`translateX(-100%)`:
+
+```rust
+container().translate(Translate::relative(-1.0, 0.0))  // one own width left
+container().translate(Translate { x: 8.0, ..Translate::relative(-1.0, 0.0) }) // calc(8px - 100%)
+```
+
+`Translate` carries four numbers: `x` and `y` in pixels, `relative_x` and
+`relative_y` in widths and heights. The fractions are stored as fractions and
+resolved with `Translate::resolve` against the container's own laid-out bounds
+where the translate is used — in `animated_transform`, which paint and hit
+testing share, and in `max_transform_reach`, which sizes what the parent culls
+against. That is the pattern `Pivot::percent` already follows.
+
+It is resolved there, and not when the value is declared, because of what has
+to animate. The animation interpolates the four numbers component by component,
+as CSS interpolates `calc(px + %)`, so a transition or an `entering_from`
+between relative offsets never needs a width — which is what lets an
+`entering_from` play on the first frame, before layout has measured anything.
+And a width change under a relative translate changes no target, so the box is
+at its new distance on the frame that lays it out, with nothing animating.
+
+`Transform::compose` takes the translate as a pixel pair rather than a
+`Translate`, so an unresolved one does not compile: `Translate::resolve` is how
+a `Translate` becomes that pair.
+
 ### Rotation
 
 Rotate a widget about its pivot, in degrees, clockwise:

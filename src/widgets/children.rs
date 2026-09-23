@@ -11,17 +11,27 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 use super::Widget;
 use super::widget::{Event, EventResponse};
 
+/// What a dynamic segment runs to learn its rows — told which of its keys
+/// are still leaving.
+type ItemsFn = dyn Fn(&Leaving) -> Vec<DynItem>;
+
 /// Segment metadata - tracks what kind of source each segment is
 enum SegmentType {
     /// Static widgets - just a count (widget IDs stored in merged)
     Static(usize),
     /// Dynamic source with keyed reconciliation
     Dynamic {
-        items_fn: Rc<dyn Fn() -> Vec<DynItem>>,
-        /// Cached widget IDs by key (for reuse during reconciliation)
+        items_fn: Rc<ItemsFn>,
+        /// Widget IDs by key while one reconciliation matches them against
+        /// what was asked for. Empty between passes.
         cached: FxHashMap<u64, WidgetId>,
-        /// Current keys in display order
+        /// Current keys in display order — a leaving row's among them, in the
+        /// place it held, so this and the segment's run of `merged` line up.
         current_keys: Vec<u64>,
+        /// The rows that were removed and are playing their exit, by key.
+        /// Findable here until they are disposed, which is what lets a key
+        /// that comes back mid-exit reclaim its row instead of building one.
+        leaving: FxHashMap<u64, WidgetId>,
         /// Whether items_fn has run at least once. After the first run the
         /// segment only re-runs when a signal it tracks is written
         /// (per-segment dirty marking in the invalidation registry).
@@ -126,12 +136,18 @@ impl ChildrenSource {
         }
     }
 
-    /// Add a dynamic children source
-    pub fn add_dynamic(&mut self, items_fn: impl Fn() -> Vec<DynItem> + 'static) {
+    /// Add a dynamic children source.
+    ///
+    /// `items_fn` is told which of the keys it returned before are still
+    /// leaving, so a source whose keys mean something across runs — `keyed`,
+    /// and not the closure forms, which mint a key every run — can hand one of
+    /// them back and have its row returned rather than rebuilt.
+    pub fn add_dynamic(&mut self, items_fn: impl Fn(&Leaving) -> Vec<DynItem> + 'static) {
         self.segments.push(SegmentType::Dynamic {
             items_fn: Rc::new(items_fn),
             cached: FxHashMap::default(),
             current_keys: Vec::new(),
+            leaving: FxHashMap::default(),
             has_run: false,
         });
     }
@@ -148,37 +164,54 @@ impl ChildrenSource {
     /// Each dynamic segment re-runs its items_fn only when a signal it read
     /// was written (per-segment dirty marking) or on its first run. Reads
     /// during the run are tracked to this (container, segment) pair.
+    ///
+    /// A segment holding a leaving row whose exit has settled is rebuilt too,
+    /// whether or not it re-ran: that is where the row is disposed.
     fn reconcile(&mut self, tree: &mut Tree, parent_id: WidgetId) {
         let dirty = crate::reactive::invalidation::take_dirty_segments(parent_id);
 
-        // First pass: re-run dirty segments and collect those whose keys changed
-        let mut segments_with_changes: Vec<(usize, Vec<DynItem>)> = Vec::new();
+        // First pass: re-run dirty segments and collect those whose rows
+        // change — new keys, or a leaving row to dispose (`None`).
+        let mut segments_with_changes: Vec<(usize, Option<Vec<DynItem>>)> = Vec::new();
 
         for (idx, segment) in self.segments.iter_mut().enumerate() {
             if let SegmentType::Dynamic {
                 items_fn,
                 current_keys,
+                leaving,
                 has_run,
                 ..
             } = segment
             {
-                let needs_run =
-                    !*has_run || dirty.as_ref().is_some_and(|d| d.contains(&(idx as u32)));
-                if !needs_run {
-                    continue;
+                let needs_run = !*has_run
+                    || dirty.as_ref().is_some_and(|d| {
+                        d.contains(&(idx as u32))
+                            || d.contains(&crate::reactive::invalidation::EVERY_SEGMENT)
+                    });
+                let settled = leaving.values().any(|&id| !is_exiting(tree, id));
+                if needs_run {
+                    let items_fn = Rc::clone(items_fn);
+                    let new_items = crate::reactive::invalidation::with_segment_tracking(
+                        parent_id,
+                        idx as u32,
+                        || items_fn(&Leaving(leaving)),
+                    );
+                    *has_run = true;
+
+                    let new_keys = new_items.iter().map(|i| i.key);
+                    let unchanged = if leaving.is_empty() {
+                        new_keys.eq(current_keys.iter().copied())
+                    } else {
+                        let live = current_keys.iter().filter(|k| !leaving.contains_key(k));
+                        new_keys.eq(live.copied())
+                    };
+                    if !unchanged {
+                        segments_with_changes.push((idx, Some(new_items)));
+                        continue;
+                    }
                 }
-
-                let items_fn = Rc::clone(items_fn);
-                let new_items = crate::reactive::invalidation::with_segment_tracking(
-                    parent_id,
-                    idx as u32,
-                    || items_fn(),
-                );
-                *has_run = true;
-
-                let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
-                if new_keys != *current_keys {
-                    segments_with_changes.push((idx, new_items));
+                if settled {
+                    segments_with_changes.push((idx, None));
                 }
             }
         }
@@ -209,6 +242,7 @@ impl ChildrenSource {
                 SegmentType::Dynamic {
                     cached,
                     current_keys,
+                    leaving,
                     ..
                 } => {
                     // Check if this segment has changes
@@ -216,53 +250,25 @@ impl ChildrenSource {
                         && segments_with_changes[change_idx].0 == idx;
 
                     if has_changes {
-                        // Keys changed - reconcile using pre-computed items
                         let (_, new_items) = std::mem::take(&mut segments_with_changes[change_idx]);
                         change_idx += 1;
 
-                        let new_keys: Vec<u64> = new_items.iter().map(|i| i.key).collect();
-
-                        // Move current widget IDs to cache
-                        for key in current_keys.drain(..) {
-                            if let Some(widget_id) = old_merged_iter.next() {
-                                cached.insert(key, widget_id);
-                            }
+                        let old: Vec<(u64, WidgetId)> = current_keys
+                            .drain(..)
+                            .filter_map(|key| old_merged_iter.next().map(|id| (key, id)))
+                            .collect();
+                        let mut rows = Rows {
+                            tree: &mut *tree,
+                            parent_id,
+                            cached,
+                            keys: current_keys,
+                            leaving,
+                            merged: &mut new_merged,
+                        };
+                        match new_items {
+                            Some(new_items) => rows.replace(old, new_items),
+                            None => rows.dispose_settled(old),
                         }
-
-                        // Build new widgets list by reusing or creating
-                        for item in new_items {
-                            if let Some(widget_id) = cached.remove(&item.key) {
-                                // Reuse existing widget (preserves state!)
-                                new_merged.push(widget_id);
-                            } else {
-                                // Create new widget and register in tree
-                                let widget = (item.widget_fn)();
-                                // Register this widget - tree assigns the ID
-                                let widget_id = tree.register(widget);
-                                tree.set_parent(widget_id, parent_id);
-                                new_merged.push(widget_id);
-
-                                // Recursively register children with the newly assigned widget ID
-                                tree.with_widget_mut(widget_id, |widget, id, tree| {
-                                    widget.register_children(tree, id);
-                                });
-                            }
-                        }
-
-                        // Update current keys
-                        *current_keys = new_keys;
-
-                        // Discard replaced widgets: the WHOLE subtree comes out of
-                        // the tree synchronously (subscribers + dirty segments
-                        // cleared, children first). The root's exclusive owner is
-                        // disposed by its Drop right here, so any state it owned
-                        // (memos captured by descendant closures) dies with it —
-                        // a descendant left behind for deferred cleanup could
-                        // still reconcile this batch and read that disposed state.
-                        for old_id in cached.values() {
-                            crate::jobs::teardown_widget_subtree(tree, *old_id);
-                        }
-                        cached.clear();
                     } else {
                         // Keys unchanged - just move widget IDs from old merged to new merged
                         for _ in 0..current_keys.len() {
@@ -336,6 +342,155 @@ impl ChildrenSource {
     /// Get the number of children
     pub fn len(&self) -> usize {
         self.merged.len()
+    }
+}
+
+/// The keys of a dynamic segment's rows that are leaving — removed, and still
+/// playing their exit.
+///
+/// Handed to the segment's items function on every run. A key it returns that
+/// is in here gets its leaving row back, exit cancelled, instead of a new one
+/// built; a source that cannot promise its keys mean the same row across runs
+/// ignores it.
+pub struct Leaving<'a>(&'a FxHashMap<u64, WidgetId>);
+
+impl Leaving<'_> {
+    /// Whether the row this key named is still leaving.
+    pub fn contains(&self, key: u64) -> bool {
+        self.0.contains_key(&key)
+    }
+}
+
+/// Whether the widget at `id` is still playing its exit.
+fn is_exiting(tree: &Tree, id: WidgetId) -> bool {
+    tree.with_widget(id, |widget| widget.is_exiting())
+        .unwrap_or(false)
+}
+
+/// One dynamic segment's rows, while a reconciliation rewrites them.
+struct Rows<'a> {
+    tree: &'a mut Tree,
+    parent_id: WidgetId,
+    cached: &'a mut FxHashMap<u64, WidgetId>,
+    keys: &'a mut Vec<u64>,
+    leaving: &'a mut FxHashMap<u64, WidgetId>,
+    merged: &'a mut Vec<WidgetId>,
+}
+
+impl Rows<'_> {
+    /// The segment's rows become `new_items`, in their order: a key it had is
+    /// reused (a leaving one reclaimed), a key it did not have is built, and a
+    /// row nothing asked for again leaves — from the place it held, if it
+    /// declared an exit, and in this pass if it did not.
+    fn replace(&mut self, old: Vec<(u64, WidgetId)>, new_items: Vec<DynItem>) {
+        let start = self.merged.len();
+        for &(key, id) in &old {
+            self.cached.insert(key, id);
+        }
+
+        for item in new_items {
+            let widget_id = match self.cached.remove(&item.key) {
+                Some(widget_id) => {
+                    // Reuse existing widget (preserves state!) — and a leaving
+                    // one comes back from wherever its exit had taken it.
+                    if self.leaving.remove(&item.key).is_some() {
+                        self.tree.with_widget_mut(widget_id, |widget, id, tree| {
+                            widget.cancel_exit(tree, id)
+                        });
+                        crate::jobs::reattach_widget_subtree(self.tree, widget_id);
+                    }
+                    widget_id
+                }
+                None => {
+                    // Create new widget and register in tree
+                    let widget = (item.widget_fn)();
+                    let widget_id = self.tree.register(widget);
+                    self.tree.set_parent(widget_id, self.parent_id);
+                    // Recursively register children with the newly assigned widget ID
+                    self.tree.with_widget_mut(widget_id, |widget, id, tree| {
+                        widget.register_children(tree, id);
+                    });
+                    widget_id
+                }
+            };
+            self.keys.push(item.key);
+            self.merged.push(widget_id);
+        }
+
+        // What was not asked for again, in the order it stood.
+        for (position, (key, id)) in old.into_iter().enumerate() {
+            if self.cached.remove(&key).is_none() {
+                continue;
+            }
+            let was_leaving = self.leaving.contains_key(&key);
+            let stays = if was_leaving {
+                is_exiting(self.tree, id)
+            } else {
+                self.begin_leaving(id)
+            };
+            if stays {
+                // It keeps its slot, so its siblings move when it is gone
+                // rather than when it starts to go.
+                self.leaving.insert(key, id);
+                let at = position.min(self.keys.len());
+                self.keys.insert(at, key);
+                self.merged.insert(start + at, id);
+            } else if was_leaving {
+                self.leaving.remove(&key);
+                crate::jobs::teardown_widget_subtree(self.tree, id);
+            } else {
+                // No exit: the WHOLE subtree comes out of the tree
+                // synchronously (subscribers + dirty segments cleared, children
+                // first). The root's exclusive owner is disposed by its Drop
+                // right here, so any state it owned (memos captured by
+                // descendant closures) dies with it — a descendant left behind
+                // for deferred cleanup could still reconcile this batch and
+                // read that disposed state.
+                crate::jobs::teardown_widget_subtree(self.tree, id);
+            }
+        }
+    }
+
+    /// Nothing was asked for: the rows stay as they are, less the leaving
+    /// ones whose exit has settled, which are disposed.
+    fn dispose_settled(&mut self, old: Vec<(u64, WidgetId)>) {
+        for (key, id) in old {
+            if self.leaving.contains_key(&key) && !is_exiting(self.tree, id) {
+                self.leaving.remove(&key);
+                crate::jobs::teardown_widget_subtree(self.tree, id);
+            } else {
+                self.keys.push(key);
+                self.merged.push(id);
+            }
+        }
+    }
+
+    /// Start the exit a removed row declared, if it declared one, and detach
+    /// it while it plays: nothing in it runs again, and its owner lives as
+    /// long as the widget does. The teardown's comment above is why that is
+    /// still safe — a live descendant could read state its owner had
+    /// disposed, and a detached one is never asked to.
+    ///
+    /// An exit that begins already where it was going has nothing to play,
+    /// and is a teardown like no exit at all.
+    fn begin_leaving(&mut self, id: WidgetId) -> bool {
+        let began = self
+            .tree
+            .with_widget_mut(id, |widget, id, tree| widget.begin_exit(tree, id))
+            .unwrap_or(false);
+        if !began || !is_exiting(self.tree, id) {
+            return false;
+        }
+        // The pointer goes as the focus does: a card removed under the cursor
+        // does not play its exit hovered, or pressed. Before the detach, which
+        // is what makes the subtree refuse events.
+        crate::reactive::diagnostics::snapshot_zone(|| {
+            self.tree.with_widget_mut(id, |widget, id, tree| {
+                widget.event(tree, id, &Event::MouseLeave)
+            })
+        });
+        crate::jobs::detach_widget_subtree(self.tree, id);
+        true
     }
 }
 
@@ -556,6 +711,18 @@ impl Widget for OwnedWidget {
 
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         self.inner.reconcile_children(tree, id)
+    }
+
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.inner.begin_exit(tree, id)
+    }
+
+    fn is_exiting(&self) -> bool {
+        self.inner.is_exiting()
+    }
+
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
+        self.inner.cancel_exit(tree, id)
     }
 
     /// Registration is reactive work, so it happens under this widget's own

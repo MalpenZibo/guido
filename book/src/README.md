@@ -41,11 +41,7 @@ fn main() {
             move || {
                 container()
                     .height(fill())
-                    .layout(
-                        Flex::row()
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().center())
                     .child(
                         container()
                             .padding(16.0)

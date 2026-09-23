@@ -119,6 +119,8 @@ Two methods are required, the rest default:
 - `event(&mut self, tree, id, event) -> EventResponse` — defaults to `Ignored`
 - `advance_animations`, `reconcile_children`, `layout_hints`,
   `register_children` — defaults
+- `begin_exit`, `is_exiting`, `cancel_exit` — defaults: what the reconciler
+  asks a removed widget, and `Container` is the one that answers
 - `refresh_paint_bounds` — a default too, and the one a widget that transforms
   itself has to override: a parent narrows its children to the visible rect
   before painting them, by their laid-out bounds, so a widget that draws
@@ -224,6 +226,14 @@ there.
 container().background(theme.surface.transition(200.0).entering_from(Color::TRANSPARENT))
 ```
 
+`.exiting_to(..)` is its mirror: where the property goes when the widget is
+removed from a dynamic children list. It is asked at removal, not at build —
+the caller knows the direction only then — and a removed child that declares
+one is *detached* rather than torn down: it keeps its slot, takes no input and
+subscribes to nothing, and is disposed when its last exit settles. Detach and
+dispose are the two halves of `teardown_widget_subtree` in `src/jobs.rs`, and
+a `keyed(..)` key that comes back mid-exit reclaims its row.
+
 The take lives on `AnimationState`, not in the initialiser that seeds most
 properties — there are four of those, and an enter asked for in one of them
 compiles on every setter and works on half. That is #303's own defect, and the
@@ -252,7 +262,7 @@ or `none` for `width` and `height`, whose target the layout supplies —
 whether moving it re-measures the box, and its own test recipe. Everything
 else is emitted from that: the store, the seed, the drift check, the advance,
 the timeline start, and the test that asks the property whether it enters,
-eases, adopts a write and plays.
+eases, adopts a write, leaves and plays.
 
 It used to be five lists, and was really nine. Missing one made the property
 silently never play, never wake, or keep whatever value the builder happened

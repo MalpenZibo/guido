@@ -1127,11 +1127,7 @@ fn frosted_cards() -> Container {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(110.0, 70.0)
                     .corners(16.0)
@@ -1240,11 +1236,7 @@ fn scrollers() -> Container {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(104.0, 104.0)
                     .corners(Corners::rounded(34.0))
@@ -1321,21 +1313,13 @@ fn frosted_text_is_cut_by_its_scroller() {
         container()
             .width(180.0)
             .height(180.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(84.0, 84.0)
                     .corners(corners)
                     .overflow(Overflow::Hidden)
                     .rotate(degrees)
-                    .layout(
-                        Flex::row()
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().center())
                     .child(
                         container()
                             .width(150.0)
@@ -1398,11 +1382,7 @@ fn backdrop_blur_follows_every_curvature() {
         container()
             .width(150.0)
             .height(150.0)
-            .layout(
-                Flex::row()
-                    .main_alignment(MainAlignment::Center)
-                    .cross_alignment(CrossAlignment::Center),
-            )
+            .layout(Flex::row().center())
             .child(
                 box_of(110.0, 110.0)
                     .corners(corners)
@@ -1469,11 +1449,7 @@ fn frosted_labels() -> Container {
             container()
                 .width(96.0)
                 .height(180.0)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(label.nowrap()),
         )
         .into_any()
@@ -1490,11 +1466,7 @@ fn frosted_labels() -> Container {
             container()
                 .width(96.0)
                 .height(180.0)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(container().width(72.0).child(label.wrap(true))),
         )
         .into_any()
@@ -1511,21 +1483,13 @@ fn frosted_labels() -> Container {
     let scrolled = container()
         .width(96.0)
         .height(180.0)
-        .layout(
-            Flex::row()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::row().center())
         .child(
             container()
                 .width(58.0)
                 .height(30.0)
                 .overflow(Overflow::Hidden)
-                .layout(
-                    Flex::row()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::row().center())
                 .child(frosted().nowrap()),
         );
 
@@ -1790,12 +1754,7 @@ fn text_at_right_angles() {
         .background(BACKDROP)
         .width(360.0)
         .height(220.0)
-        .layout(
-            Flex::row()
-                .spacing(40.0)
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::row().spacing(40.0).center())
         .child(card(90.0))
         .child(card(270.0));
 

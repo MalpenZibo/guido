@@ -3,7 +3,7 @@ use crate::reactive::Signal;
 use crate::tree::LayoutCtx;
 
 use crate::animation::{
-    Animatable, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
+    Animatable, ExitTo, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
 };
 
 /// A sequence a property plays, and what decides when it runs.
@@ -93,6 +93,15 @@ pub struct AnimationState<T: Animatable> {
     /// `Shadow` inline here would widen all twelve to carry a value almost
     /// none of them has and none of them keeps past the first layout.
     enter_from: Option<Box<T>>,
+    /// Where this property goes when the widget is removed, asked at removal —
+    /// see [`Animated::exiting_to`](crate::animation::Animated::exiting_to).
+    /// Boxed twice for the reason `enter_from` is boxed once: a closure is a
+    /// wide pointer, and almost no declaration has one.
+    exit_to: Option<Box<ExitTo<T>>>,
+    /// Whether an exit has begun: the property is heading for the value
+    /// `exit_to` gave at removal, and nothing retargets it until the exit is
+    /// cancelled or the widget is disposed.
+    exiting: bool,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
     /// default: most declared properties ease to a target and never carry one,
     /// so they pay a pointer rather than the struct.
@@ -123,6 +132,8 @@ impl<T: Animatable> AnimationState<T> {
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
             enter_from: None,
+            exit_to: None,
+            exiting: false,
             timeline: None,
         }
     }
@@ -131,6 +142,62 @@ impl<T: Animatable> AnimationState<T> {
     pub(crate) fn with_enter_from(mut self, from: Option<T>) -> Self {
         self.enter_from = from.map(Box::new);
         self
+    }
+
+    /// Declare where this property goes when the widget is removed.
+    pub(crate) fn with_exit_to(mut self, to: Option<ExitTo<T>>) -> Self {
+        self.exit_to = to.map(Box::new);
+        self
+    }
+
+    /// Begin the exit this property declared, if it declared one, and answer
+    /// whether it did.
+    ///
+    /// The value is asked for now, not at build: the caller knows which way a
+    /// child leaves only when the change that removes it happens. Forward
+    /// whichever way it travels, for the reason [`begin_enter`](Self::begin_enter)
+    /// gives, and from wherever the property is — a spring keeps its momentum.
+    /// A sequence playing stops speaking for the property: it is leaving.
+    pub(crate) fn begin_exit(&mut self, now: FrameInstant) -> bool {
+        let Some(exit_to) = self.exit_to.as_deref() else {
+            return false;
+        };
+        // Read for the moment of removal, like an event handler reads — not a
+        // place to subscribe from.
+        let to = crate::reactive::diagnostics::snapshot_zone(exit_to);
+        self.exiting = true;
+        if let Some(timeline) = self.timeline.as_deref_mut() {
+            timeline.playing = None;
+        }
+        self.using_reverse = false;
+        if to == self.current && self.spring_state.is_none() {
+            // Declared, but already there: nothing to wait for.
+            self.target = to;
+            self.start = to;
+            self.progress = 1.0;
+            return true;
+        }
+        let carried = self.carried_velocity(&to);
+        self.target = to;
+        self.begin_segment(self.current, carried, now);
+        true
+    }
+
+    /// Whether this property declared somewhere to go when it is removed.
+    pub(crate) fn declares_exit(&self) -> bool {
+        self.exit_to.is_some()
+    }
+
+    /// Whether an exit has begun on this property — settled or not. Playing
+    /// is `is_animating`; this stays true once it has landed.
+    pub(crate) fn is_leaving(&self) -> bool {
+        self.exiting
+    }
+
+    /// Stop leaving. The property is retargeted to its declared value by the
+    /// next advance, from wherever the exit had taken it.
+    pub(crate) fn cancel_exit(&mut self) {
+        self.exiting = false;
     }
 
     /// Begin the enter this property declared, if it declared one, and answer
@@ -1082,7 +1149,7 @@ mod tests {
     /// back. An angle has no midpoint that is not an angle.
     #[test]
     fn a_half_turn_does_not_collapse_the_widget() {
-        use crate::transform::{Scale, Transform, Translate};
+        use crate::transform::{Scale, Transform};
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
@@ -1091,7 +1158,7 @@ mod tests {
         let mut smallest = f32::INFINITY;
         for frame in 0..=25 {
             at(&mut anim, frame * 4);
-            let composed = Transform::compose(Translate::NONE, *anim.current(), Scale::NONE);
+            let composed = Transform::compose((0.0, 0.0), *anim.current(), Scale::NONE);
             smallest = smallest.min(composed.extract_scale());
         }
 

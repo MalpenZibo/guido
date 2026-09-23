@@ -488,6 +488,14 @@ pub trait Widget {
     /// Reconcile dynamic children. Returns true if children changed.
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
+    /// Removed from a dynamic list: play the exit it declared, if any, and
+    /// say whether it did. `false` is torn down in the same pass.
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
+    /// Whether that exit is still playing; once not, it is disposed.
+    fn is_exiting(&self) -> bool { false }
+    /// Its key came back mid-exit: stay, and go home from where it is.
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {}
+
     /// Publish how far this widget's paint lands outside its bounds, before
     /// anything decides whether to paint it. Called from the Paint job, and by
     /// the layout entry point after every layout — both inside this widget's

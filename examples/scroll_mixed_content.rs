@@ -319,15 +319,7 @@ fn main() {
                                                             .corners(8.0)
                                                             .when_hovered(|s| s.lighter(0.1))
                                                             .when_pressed(|s| s.ripple())
-                                                            .layout(
-                                                                Flex::column()
-                                                                    .main_alignment(
-                                                                        MainAlignment::Center,
-                                                                    )
-                                                                    .cross_alignment(
-                                                                        CrossAlignment::Center,
-                                                                    ),
-                                                            )
+                                                            .layout(Flex::column().center())
                                                             .child(
                                                                 container()
                                                                     .width(32.0)
