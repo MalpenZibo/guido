@@ -29,6 +29,7 @@ mod textured_vertex;
 pub(crate) mod tree;
 mod types;
 
+pub use crate::image_decode::DecodedImage;
 pub use clip::ClipRef;
 pub use commands::{Border, CornerRadii, DrawCommand};
 // `RenderLayer` is exported because `FlattenScratch`'s documentation links to

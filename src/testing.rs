@@ -433,8 +433,13 @@ impl Headless {
     /// `None` where there is no GPU adapter at all — a frame has to land
     /// somewhere, and the somewhere is a texture this allocates.
     pub fn new() -> Option<Self> {
+        let gpu = shared_device()?;
+        // The application's own scope, as `App::run` makes one: what outlives
+        // every widget — a decoded image's entry, a global signal — is filed
+        // under it rather than under whichever widget asked first.
+        reactive::create_root_owner();
         Some(Self {
-            gpu: shared_device()?,
+            gpu,
             tree: Tree::new(),
             renderer: None,
             surfaces: SurfaceManager::new(),
@@ -748,7 +753,44 @@ impl Headless {
             RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
         }
     }
+
+    /// Hold this application's image decodes until the hold is released or
+    /// dropped, so a frame can be stepped while a raster source is still
+    /// pending — which otherwise depends on how fast the worker is.
+    pub fn hold_image_decodes(&self) -> DecodeHold {
+        crate::image_decode::hold()
+    }
+
+    /// Block until every image decode this application started has finished
+    /// and queued its result. The result is applied by the next
+    /// [`step`](Self::step), as the loop applies any background write.
+    ///
+    /// Panics if the decodes are held.
+    pub fn wait_for_image_decodes(&self) {
+        crate::image_decode::wait();
+    }
+
+    /// How many image decodes this application has started.
+    pub fn image_decodes_started(&self) -> u64 {
+        crate::image_decode::started()
+    }
+
+    /// How many bytes of decoded pixels the image cache is holding — the
+    /// pixels waiting for the renderer, which lets go of them once uploaded.
+    pub fn image_bytes_held(&self) -> usize {
+        crate::image_decode::held_bytes()
+    }
+
+    /// Drop every image texture the renderer holds, as eviction would, so a
+    /// test can ask what happens when one that was uploaded is needed again.
+    pub fn forget_image_textures(&mut self) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.forget_image_textures();
+        }
+    }
 }
+
+pub use crate::image_decode::DecodeHold;
 
 #[cfg(test)]
 mod the_two_refusals_the_loop_cannot_reach {
@@ -820,6 +862,10 @@ impl Drop for Headless {
         // an owner disposed after the arena is wiped names somebody else's
         // signals.
         drop(std::mem::take(&mut self.surfaces));
+        // And the renderer, whose textures report their eviction to the image
+        // cache as they go: dropped after the reset, those reports would be
+        // left for the next application on this thread to act on.
+        drop(self.renderer.take());
         crate::reset_thread_state(&mut self.tree);
     }
 }

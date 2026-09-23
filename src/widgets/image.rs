@@ -6,8 +6,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::image_decode::{DecodeHandle, DecodeState};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{IntoSignal, Prop, Signal};
+use crate::reactive::{IntoSignal, Prop, Signal, create_memo};
 use crate::renderer::PaintContext;
 use crate::tree::LayoutCtx;
 
@@ -114,6 +115,10 @@ pub struct Image {
     intrinsic_size: Option<(u32, u32)>,
     /// Cached source for change detection
     cached_source: Option<ImageSource>,
+    /// The decode cache's entry for the source, held while it is shown so the
+    /// decoded pixels go when the last image showing them does. `None` for a
+    /// source that needs no decode.
+    decode: Option<DecodeHandle>,
 }
 
 impl Image {
@@ -125,6 +130,7 @@ impl Image {
             cached_content_fit: ContentFit::default(),
             intrinsic_size: None,
             cached_source: None,
+            decode: None,
         }
     }
 
@@ -132,6 +138,31 @@ impl Image {
     pub fn content_fit<M>(mut self, fit: impl IntoSignal<ContentFit, M>) -> Self {
         self.content_fit = fit.into_prop();
         self
+    }
+
+    /// Whether the image can be drawn: true once its source is decoded, and
+    /// from the start for a source that needs no decode (`Rgba`, SVG).
+    ///
+    /// A raster `Path` or `Bytes` source is decoded off the frame, so the first
+    /// frame lays the box out at the image's size and draws nothing in it. This
+    /// is what an application fades it in with — the image itself does not:
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// let wallpaper = image("./wallpaper.png").content_fit(ContentFit::Cover);
+    /// let ready = wallpaper.ready();
+    /// container()
+    ///     .opacity((move || if ready.get() { 1.0 } else { 0.0 }).transition(200.0))
+    ///     .child(wallpaper);
+    /// ```
+    ///
+    /// It follows the source: a new source is not ready until it is decoded.
+    /// A source whose decode failed is never ready.
+    pub fn ready(&self) -> Signal<bool> {
+        let source = self.source;
+        // A memo, so the lookup runs when the source or its decode moves and
+        // not on every read of whatever fades with it.
+        create_memo(move || crate::image_decode::is_ready(&source.get())).into_signal()
     }
 
     /// Get the current intrinsic size if known.
@@ -222,8 +253,17 @@ impl Widget for Image {
             .map(|cached| cached != &current_source)
             .unwrap_or(true);
 
+        if source_changed {
+            // Taken before the old one is let go, so a source that did not
+            // really change keeps its entry rather than dropping and remaking
+            // it. The header came with the entry; only the pixels are pending.
+            self.decode = crate::image_decode::acquire(&current_source);
+        }
         if source_changed || self.intrinsic_size.is_none() {
-            self.intrinsic_size = crate::image_metadata::get_intrinsic_size(&current_source);
+            self.intrinsic_size = match &self.decode {
+                Some(decode) => decode.size(),
+                None => crate::image_metadata::get_intrinsic_size(&current_source),
+            };
         }
 
         // Update cached source
@@ -239,7 +279,20 @@ impl Widget for Image {
         if let Some(ref source) = self.cached_source {
             let size = tree.cached_size(id).unwrap_or_default();
             let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
-            ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit);
+            match &self.decode {
+                // The held entry's own signal: a paint does no lookup.
+                Some(decode) => {
+                    if let (DecodeState::Ready, decoded) = decode.state() {
+                        ctx.push_image(
+                            source.clone(),
+                            Some(decoded),
+                            local_bounds,
+                            self.cached_content_fit,
+                        );
+                    }
+                }
+                None => ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit),
+            }
         }
     }
 }

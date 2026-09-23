@@ -146,12 +146,95 @@ SVGs are rasterized at an effective scale that accounts for:
 
 This ensures SVGs remain crisp when scaled up via transforms.
 
+## Decoding Off the Frame
+
+A raster `ImageSource::Path` or `ImageSource::Bytes` is decoded on a worker
+thread, never on the render path (`src/image_decode.rs`). A 2912×1632 PNG takes
+about 140 ms to decode; done inside the first frame, that frame is held back
+until it finishes, which a lock screen shows as the compositor's "locker has
+not drawn" colour.
+
+- **One entry per source, one signal per entry.** The application's decode
+  cache (`AppState::decoded_images`) is keyed by the source — a path, or the
+  bytes, sampled for the hash and compared in full for equality — and each
+  entry holds an `RwSignal<DecodeState>`: `Pending`, `Ready` or `Failed`. The
+  pixels are not in the signal: they wait in the entry's `DecodedImage`, a
+  handle the entry, the worker's job and every draw command share.
+- **The header, synchronously.** Making an entry reads the intrinsic size from
+  the header (`image_metadata::get_intrinsic_size`, which for bytes too reads
+  only the header), so the first layout gives the box its size. A header that
+  cannot be read makes the entry `Failed` at once, and no worker is involved.
+- **The worker.** One `guido-image-decode` thread per application, spawned by
+  the first decode and ended when the application is dropped (its channel
+  closes). It puts the pixels in the entry's `DecodedImage` and writes `Ready`
+  through the entry's `WriteSignal`, so the
+  write rides the background-write queue: it wakes the loop through the ingress
+  channel and is applied at the flush point like any other background write.
+  A std thread rather than the service runtime, because that runtime is one
+  current-thread tokio runtime driving every service: a 140 ms decode on it
+  would stall them all.
+- **Paint subscribes.** The `Image` widget reads its held entry's signal while
+  painting (a widget written outside the crate gets the same through
+  `PaintContext::draw_image`, which looks the entry up by source). A pending or
+  failed source draws nothing; a ready one pushes a
+  `DrawCommand::Image` carrying the `DecodedImage`. The read happens inside the widget's paint scope, so the write
+  that completes the decode repaints exactly the widgets that read the entry —
+  on the next frame, with no input from the application.
+- **The upload drops the pixels.** The renderer gets the pixels only by
+  `DecodedImage::take`, which empties the handle: once uploaded, the texture is
+  the image and the cache holds no RGBA — iced's raster cache turning
+  `Memory::Host` into `Memory::Device`. The renderer is one per application
+  and shared by every surface, so one upload serves them all. No surface can
+  draw from dropped pixels, because the only way to them is to take them.
+- **A texture that is gone.** When a frame draws a ready source whose texture
+  is not there (evicted from the 64-entry cache, or its renderer dropped) and
+  whose pixels were already taken, the renderer draws nothing and reports it.
+  The source goes back to `Pending` and to the worker, and comes back through
+  the same repaint as the first time. `ready()` is false in between.
+- **Reports are settled by the loop.** The renderer and the widgets never write
+  the cache's signals: a texture missing or evicted, and an image letting go of
+  its entry, are `ImageEvent`s in a deferred queue (`AppState::image_events`)
+  that the loop settles once per pass, next to the owner disposals.
+- **Lifetime.** An `Image` widget holds its source's entry (`DecodeHandle`)
+  while it shows it. An entry nobody holds stays while its texture does — so an
+  image mounted again is drawn from it with no decode — and goes when the
+  renderer evicts that texture, or at once if it never had one; pixels that
+  land after that are dropped on arrival. An entry made by a bare `draw_image`
+  from a widget written outside the crate is held by nobody, so nothing
+  releases it: it goes with its texture's eviction, and if it is decoded but
+  never drawn it keeps its pixels as long as the application.
+- **Eviction spares what is in view.** The texture cache holds 64 textures,
+  but never evicts one a frame drew within the last second: a raster texture
+  is the only copy of its pixels, so evicting an image still in view would
+  blank it and send it back to the worker every frame. Past 64 live textures
+  the cache grows instead.
+- **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
+  is decoded, true from the start for `Rgba` and SVG, never for a failed one.
+  There is no built-in fade — Flutter's frameBuilder shape rather than a
+  fade inside the widget — so an application fades in with `opacity`:
+
+```rust
+let wallpaper = image("./wallpaper.png").content_fit(ContentFit::Cover);
+let ready = wallpaper.ready();
+container()
+    .opacity((move || if ready.get() { 1.0 } else { 0.0 }).transition(200.0))
+    .child(wallpaper)
+```
+
+SVG rasterisation stays synchronous, on the render path, until somebody
+measures it as slow. `ImageSource::Rgba` needs no decode and is the way to have
+an image in the first frame.
+
+`tests/image_decode.rs` holds the worker (`Headless::hold_image_decodes`) to
+make "not yet decoded" deterministic, and is a binary of its own because the
+background-write queue is process-wide.
+
 ## Texture Caching
 
 The image texture renderer includes LRU caching:
 - Raster images cached by source hash
 - SVGs cached by source hash + render scale
-- Maximum 64 cached textures
+- 64 cached textures, growing past that only while more than 64 are in view
 - Automatic eviction of least-recently-used entries
 
 ## Reactive Sources

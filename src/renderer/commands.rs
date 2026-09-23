@@ -2,6 +2,7 @@
 
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
+use crate::image_decode::DecodedImage;
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
@@ -342,6 +343,12 @@ pub enum DrawCommand {
     Image {
         /// Image source (path or bytes)
         source: ImageSource,
+        /// Where a raster `Path` or `Bytes` source's decoded pixels wait,
+        /// off the frame, until the renderer takes them to upload — after
+        /// which it is empty and the texture is the image. The renderer never
+        /// decodes on the render path; `None` for a source that needs no
+        /// decode.
+        decoded: Option<DecodedImage>,
         /// Bounding rectangle in local coordinates
         rect: Rect,
         /// How the image content fits within the rect

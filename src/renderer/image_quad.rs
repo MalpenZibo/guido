@@ -3,8 +3,10 @@
 //! This module renders images as textured quads with full transform support
 //! (rotation, scale, translate). Textures are cached for performance.
 
+use std::cell::Cell;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 use wgpu::util::DeviceExt;
@@ -14,17 +16,18 @@ use wgpu::{
 };
 
 use super::commands::DrawCommand;
-use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
+use super::constants::SVG_QUALITY_MULTIPLIER;
 use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
+use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
 /// A prepared image quad ready for rendering.
 pub struct PreparedImageQuad {
     #[allow(dead_code)] // Kept alive for GPU usage
-    texture: Arc<CachedTexture>,
+    texture: Rc<CachedTexture>,
     bind_group: BindGroup,
     /// Vertex buffer with pre-computed vertices in NDC
     vertex_buffer: WgpuBuffer,
@@ -48,8 +51,20 @@ struct CachedTexture {
     /// Original intrinsic dimensions
     intrinsic_width: u32,
     intrinsic_height: u32,
-    /// Last frame this texture was used
-    last_used_frame: u64,
+    /// When a frame last drew it. A `Cell` because the frame that draws it
+    /// holds it through an `Rc` already.
+    last_used: Cell<Instant>,
+    /// The raster source it was uploaded from, whose decoded pixels went with
+    /// the upload: the decode cache is told when this texture goes.
+    decoded_from: Option<DecodeKey>,
+}
+
+impl Drop for CachedTexture {
+    fn drop(&mut self) {
+        if let Some(key) = self.decoded_from.take() {
+            crate::image_decode::texture_evicted(key);
+        }
+    }
 }
 
 /// Cache key for image textures.
@@ -84,17 +99,26 @@ pub struct ImageQuadRenderer {
     quad: TexturedQuadPipeline,
 
     // Texture cache
-    texture_cache: FxHashMap<CacheKey, Arc<CachedTexture>>,
-    current_frame: u64,
+    texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
+    /// When the frame being prepared started: what a texture drawn in it is
+    /// stamped with.
+    frame_started: Instant,
     max_cache_size: usize,
 }
+
+/// How long a texture no frame has drawn is kept once the cache is past its
+/// size. One drawn more recently is never evicted — the cache grows past its
+/// size instead — because a raster texture's pixels went with its upload: an
+/// image still in view whose texture was evicted is blank until it is decoded
+/// again, and evicting it every frame would decode it every frame.
+const KEEP_UNUSED: Duration = Duration::from_secs(1);
 
 impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
             texture_cache: FxHashMap::default(),
-            current_frame: 0,
+            frame_started: Instant::now(),
             max_cache_size: 64,
         }
     }
@@ -106,7 +130,7 @@ impl ImageQuadRenderer {
 
     /// Begin a new frame (for cache management).
     pub fn begin_frame(&mut self) {
-        self.current_frame += 1;
+        self.frame_started = Instant::now();
 
         // Evict old entries if cache is too large
         if self.texture_cache.len() > self.max_cache_size {
@@ -114,37 +138,35 @@ impl ImageQuadRenderer {
         }
     }
 
-    /// Evict the least recently used entries until under the limit.
+    /// Drop every texture, as eviction does, and say so as eviction does.
+    #[cfg(feature = "testing")]
+    pub(crate) fn forget_textures(&mut self) {
+        self.texture_cache.clear();
+    }
+
+    /// Evict the least recently used entries until under the limit — of those
+    /// no frame has drawn for [`KEEP_UNUSED`].
     fn evict_oldest(&mut self) {
         let target_size = self.max_cache_size / 2;
         while self.texture_cache.len() > target_size {
-            let oldest_key = self
+            let oldest = self
                 .texture_cache
                 .iter()
-                .min_by_key(|(_, v)| v.last_used_frame)
+                .min_by_key(|(_, v)| v.last_used.get())
+                .filter(|(_, v)| {
+                    self.frame_started
+                        .saturating_duration_since(v.last_used.get())
+                        > KEEP_UNUSED
+                })
                 .map(|(k, _)| k.clone());
 
-            if let Some(key) = oldest_key {
-                self.texture_cache.remove(&key);
-            } else {
-                break;
+            match oldest {
+                Some(key) => {
+                    self.texture_cache.remove(&key);
+                }
+                None => break,
             }
         }
-    }
-
-    /// Hash bytes with improved sampling for collision resistance.
-    fn hash_bytes(bytes: &[u8], hasher: &mut impl Hasher) {
-        bytes.len().hash(hasher);
-        if bytes.len() < 1024 {
-            bytes.hash(hasher);
-            return;
-        }
-        // Sample: first + middle + last bytes for collision resistance
-        let sample = IMAGE_HASH_SAMPLE_SIZE;
-        bytes[..sample].hash(hasher);
-        let mid = bytes.len() / 2 - sample / 2;
-        bytes[mid..mid + sample].hash(hasher);
-        bytes[bytes.len() - sample..].hash(hasher);
     }
 
     /// Hash an image source for cache lookup.
@@ -159,7 +181,7 @@ impl ImageQuadRenderer {
             }
             ImageSource::Bytes(bytes) => {
                 "bytes".hash(&mut hasher);
-                Self::hash_bytes(bytes, &mut hasher);
+                hash_sampled(bytes, &mut hasher);
             }
             ImageSource::Rgba {
                 width,
@@ -169,7 +191,7 @@ impl ImageQuadRenderer {
                 "rgba".hash(&mut hasher);
                 width.hash(&mut hasher);
                 height.hash(&mut hasher);
-                Self::hash_bytes(pixels, &mut hasher);
+                hash_sampled(pixels, &mut hasher);
             }
             ImageSource::SvgPath(path) => {
                 "svg_path".hash(&mut hasher);
@@ -177,7 +199,7 @@ impl ImageQuadRenderer {
             }
             ImageSource::SvgBytes(bytes) => {
                 "svg_bytes".hash(&mut hasher);
-                Self::hash_bytes(bytes, &mut hasher);
+                hash_sampled(bytes, &mut hasher);
             }
         }
 
@@ -196,16 +218,11 @@ impl ImageQuadRenderer {
         device: &Device,
         queue: &Queue,
         source: &ImageSource,
-        transform_scale: f32,
-        scale_factor: f32,
+        render_scale: f32,
         svg_target: Option<(f32, f32)>,
-    ) -> Option<Arc<CachedTexture>> {
+        decoded: Option<&DecodedImage>,
+    ) -> Option<Rc<CachedTexture>> {
         let is_svg = source.is_svg();
-        let render_scale = if is_svg {
-            transform_scale * scale_factor * SVG_QUALITY_MULTIPLIER
-        } else {
-            1.0
-        };
 
         // Quantize scale to reduce cache entries (round to 0.25 increments)
         let quantized_scale = (render_scale * 4.0).round() as u32;
@@ -228,23 +245,31 @@ impl ImageQuadRenderer {
         };
 
         // Check if we already have this texture cached
-        if let Some(cached) = self.texture_cache.get_mut(&key) {
-            // Update last used frame via Arc::get_mut if possible
-            if let Some(inner) = Arc::get_mut(cached) {
-                inner.last_used_frame = self.current_frame;
-            }
+        if let Some(cached) = self.texture_cache.get(&key) {
+            cached.last_used.set(self.frame_started);
             return Some(cached.clone());
         }
 
         // Load and create texture
-        let texture = self.load_texture(device, queue, source, render_scale, svg_target)?;
+        let mut texture =
+            self.load_texture(device, queue, source, render_scale, svg_target, decoded)?;
+        if decoded.is_some() {
+            texture.decoded_from = DecodeKey::of(source);
+        }
 
-        let cached = Arc::new(texture);
+        let cached = Rc::new(texture);
         self.texture_cache.insert(key, cached.clone());
         Some(cached)
     }
 
     /// Load and upload a texture to the GPU.
+    ///
+    /// A raster `Path` or `Bytes` source arrives already decoded — the worker
+    /// in `image_decode` did that off the frame — so this only uploads, and
+    /// taking the pixels to upload them is what drops them from the cache.
+    /// Pixels that were already taken are gone: this draws nothing and reports
+    /// the texture missing, which sends the source back to the worker.
+    /// Decoding here instead is the stall that module exists to remove.
     fn load_texture(
         &self,
         device: &Device,
@@ -252,37 +277,25 @@ impl ImageQuadRenderer {
         source: &ImageSource,
         render_scale: f32,
         svg_target: Option<(f32, f32)>,
+        decoded: Option<&DecodedImage>,
     ) -> Option<CachedTexture> {
         // Use Rgba8Unorm to pass colors through without sRGB conversion
         let format = TextureFormat::Rgba8Unorm;
 
         match source {
-            ImageSource::Path(path) => {
-                // Decode failures must be loud: a missing decoder feature
-                // (e.g. `webp` disabled) or a bad file otherwise degrades to
-                // a silently empty box.
-                let img = match image::open(path) {
-                    Ok(img) => img,
-                    Err(e) => {
-                        log::warn!("Failed to decode image {}: {e}", path.display());
-                        return None;
-                    }
+            ImageSource::Path(_) | ImageSource::Bytes(_) => {
+                let Some(pixels) = decoded.and_then(DecodedImage::take) else {
+                    crate::image_decode::texture_missing(source);
+                    return None;
                 };
-                let rgba = img.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
-            }
-            ImageSource::Bytes(bytes) => {
-                let img = match image::load_from_memory(bytes) {
-                    Ok(img) => img,
-                    Err(e) => {
-                        log::warn!("Failed to decode in-memory image: {e}");
-                        return None;
-                    }
-                };
-                let rgba = img.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
+                self.upload_raster(
+                    device,
+                    queue,
+                    &format,
+                    pixels.width,
+                    pixels.height,
+                    &pixels.rgba,
+                )
             }
             ImageSource::Rgba {
                 width,
@@ -376,7 +389,8 @@ impl ImageQuadRenderer {
             view,
             intrinsic_width: width,
             intrinsic_height: height,
-            last_used_frame: self.current_frame,
+            last_used: Cell::new(self.frame_started),
+            decoded_from: None,
         })
     }
 
@@ -489,7 +503,8 @@ impl ImageQuadRenderer {
             view,
             intrinsic_width,
             intrinsic_height,
-            last_used_frame: self.current_frame,
+            last_used: Cell::new(self.frame_started),
+            decoded_from: None,
         })
     }
 
@@ -521,12 +536,13 @@ impl ImageQuadRenderer {
         cmd: &FlattenedCommand,
         scale_factor: f32,
     ) -> Option<PreparedImageQuad> {
-        let (source, rect, content_fit) = match &*cmd.command {
+        let (source, decoded, rect, content_fit) = match &*cmd.command {
             DrawCommand::Image {
                 source,
+                decoded,
                 rect,
                 content_fit,
-            } => (source, rect, content_fit),
+            } => (source, decoded, rect, content_fit),
             _ => return None,
         };
 
@@ -538,13 +554,21 @@ impl ImageQuadRenderer {
         let svg_target = (*content_fit != ContentFit::None).then_some((rect.width, rect.height));
 
         // Get or create the texture
+        // An SVG is rasterised at the scale it is shown at; a raster image is
+        // uploaded at its own size.
+        let render_scale = if source.is_svg() {
+            transform_scale * scale_factor * SVG_QUALITY_MULTIPLIER
+        } else {
+            1.0
+        };
+
         let cached = self.get_or_create_texture(
             device,
             queue,
             source,
-            transform_scale,
-            scale_factor,
+            render_scale,
             svg_target,
+            decoded.as_ref(),
         )?;
 
         // Create bind group

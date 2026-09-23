@@ -34,6 +34,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::deferred::{DeferredQueue, DeferredSlot};
+use crate::image_decode::{DecodeEntry, DecodeKey, Decoder, ImageEvent};
 use crate::jobs::{JobQueues, ScheduledJob};
 use crate::reactive::cursor::CursorIcon;
 use crate::reactive::{OwnerId, Prop};
@@ -130,6 +131,19 @@ pub(crate) struct AppState {
     /// Whether a font system already took the list, so a late load can say it
     /// came too late.
     pub(crate) fonts_consumed: Cell<bool>,
+
+    // --- Images ------------------------------------------------------------
+    /// One entry per raster source being shown, each holding the signal its
+    /// decode is written through — read by every image widget's paint, none of
+    /// which is handed the others. See `src/image_decode.rs`.
+    pub(crate) decoded_images: RefCell<FxHashMap<DecodeKey, DecodeEntry>>,
+    /// The thread those decodes run on, spawned by the first one. Forgetting it
+    /// closes its channel, which is what ends the thread.
+    pub(crate) image_decoder: RefCell<Option<Decoder>>,
+    /// What the renderer and the image widgets reported about those entries —
+    /// a texture missing or evicted, an entry let go — for the loop to settle
+    /// where a signal may be written.
+    pub(crate) image_events: DeferredQueue<ImageEvent>,
 }
 
 /// Forget everything this `App` put here, so the next one on this thread
@@ -166,6 +180,9 @@ pub(crate) fn reset() {
             custom_fonts,
             custom_font_hashes,
             fonts_consumed,
+            decoded_images,
+            image_decoder,
+            image_events,
         } = app;
 
         // `take` rather than a value per line: the struct derives `Default`,
@@ -205,5 +222,9 @@ pub(crate) fn reset() {
         custom_fonts.take();
         custom_font_hashes.take();
         fonts_consumed.take();
+
+        image_events.clear();
+        decoded_images.take();
+        image_decoder.take();
     });
 }

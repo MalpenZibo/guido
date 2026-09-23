@@ -312,6 +312,12 @@ impl Renderer {
         }
     }
 
+    /// Drop every image texture, as eviction does.
+    #[cfg(feature = "testing")]
+    pub(crate) fn forget_image_textures(&mut self) {
+        self.image_quad_renderer.forget_textures();
+    }
+
     /// Draw into whatever this surface points at, and hand it over.
     ///
     /// `false` means nothing reached the target and the frame should be drawn
