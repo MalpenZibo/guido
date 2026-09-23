@@ -298,6 +298,29 @@ It is also the cheapest field there is. A blinking caret is the one thing a stil
 screen redraws on its own, twice a second, for as long as it is focused; without
 one an idle surface asks the loop for nothing at all.
 
+## Pointer Shape
+
+A field shows the I-beam under the pointer unless it says otherwise, and it takes
+the same `cursor` a container does — a value, a closure or a signal:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_signal(String::new());
+text_input(password)
+    .password(true)
+    .no_caret()
+    .cursor(CursorIcon::Hidden)
+# ;
+# }
+```
+
+A masked field with no caret has nothing a click could place, so on a lock screen
+whose root hides the pointer the I-beam would promise editing that is not there.
+The field is the innermost widget under the pointer, so a shape declared around it
+never reaches it: this is the one place to say it.
+
 ## Callbacks
 
 ### On Change
@@ -492,6 +515,7 @@ impl TextInput {
     pub fn autofocus(self) -> Self;
     pub fn caret<M>(self, caret: impl IntoSignal<bool, M>) -> Self;
     pub fn no_caret(self) -> Self;  // Shorthand for caret(false)
+    pub fn cursor<M>(self, cursor: impl IntoSignal<CursorIcon, M>) -> Self;  // Text by default
     pub fn placeholder<M>(self, text: impl IntoSignal<String, M>) -> Self;
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;

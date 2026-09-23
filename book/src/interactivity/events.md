@@ -243,6 +243,10 @@ container()
 # }
 ```
 
+A text input's I-beam is the innermost claim over it, so it shows even there; a
+field that should not show it says so with its own `cursor` — see
+[Pointer Shape](../building-ui/text-input.md#pointer-shape).
+
 A container declared with `takes_input(false)` claims no cursor: the
 compositor is not giving it the pointer, so whatever is beneath it answers.
 
