@@ -87,7 +87,8 @@ pub(crate) struct AppState {
 
     // --- What the platform last said, and what we last told it -------------
     /// The last shape `set_cursor` was asked for, so asking again for the same
-    /// one sends nothing; widget code that calls it has no platform.
+    /// one sends nothing; widget code that calls it has no platform. A pointer
+    /// entering a surface sends it anyway, through `resend_cursor`.
     pub(crate) current_cursor: Cell<CursorIcon>,
     /// What a copy in a handler put there, readable by a paste in another.
     pub(crate) clipboard: RefCell<Option<String>>,
