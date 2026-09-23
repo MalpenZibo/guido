@@ -344,6 +344,6 @@ fn main() {
   is the image. If the texture is later evicted, the image is decoded again the
   next time it is drawn
 - Images are cached as GPU textures
-- The cache holds up to 64 textures with LRU eviction
+- The cache holds 64 textures with LRU eviction, and never evicts one drawn in the last second
 - SVGs are re-rasterized when their display scale changes significantly
 - Texture uploads happen once per unique image/scale combination

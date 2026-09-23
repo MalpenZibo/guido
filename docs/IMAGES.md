@@ -200,8 +200,14 @@ not drawn" colour.
   image mounted again is drawn from it with no decode — and goes when the
   renderer evicts that texture, or at once if it never had one; pixels that
   land after that are dropped on arrival. An entry made by a bare `draw_image`
-  from a widget written outside the crate is held by nobody and follows the
-  same rule.
+  from a widget written outside the crate is held by nobody, so nothing
+  releases it: it goes with its texture's eviction, and if it is decoded but
+  never drawn it keeps its pixels as long as the application.
+- **Eviction spares what is in view.** The texture cache holds 64 textures,
+  but never evicts one a frame drew within the last second: a raster texture
+  is the only copy of its pixels, so evicting an image still in view would
+  blank it and send it back to the worker every frame. Past 64 live textures
+  the cache grows instead.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
   is decoded, true from the start for `Rgba` and SVG, never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
@@ -228,7 +234,7 @@ background-write queue is process-wide.
 The image texture renderer includes LRU caching:
 - Raster images cached by source hash
 - SVGs cached by source hash + render scale
-- Maximum 64 cached textures
+- 64 cached textures, growing past that only while more than 64 are in view
 - Automatic eviction of least-recently-used entries
 
 ## Reactive Sources
