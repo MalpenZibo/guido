@@ -774,6 +774,20 @@ impl Headless {
     pub fn image_decodes_started(&self) -> u64 {
         crate::image_decode::started()
     }
+
+    /// How many bytes of decoded pixels the image cache is holding — the
+    /// pixels waiting for the renderer, which lets go of them once uploaded.
+    pub fn image_bytes_held(&self) -> usize {
+        crate::image_decode::held_bytes()
+    }
+
+    /// Drop every image texture the renderer holds, as eviction would, so a
+    /// test can ask what happens when one that was uploaded is needed again.
+    pub fn forget_image_textures(&mut self) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.forget_image_textures();
+        }
+    }
 }
 
 pub use crate::image_decode::DecodeHold;

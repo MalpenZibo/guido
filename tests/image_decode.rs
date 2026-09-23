@@ -202,3 +202,134 @@ fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
     assert!(is_red(app.read_pixel(surface, 10, 10)));
     assert_eq!(app.image_decodes_started(), 0);
 }
+
+/// Once the renderer has uploaded an image the cache lets go of its pixels —
+/// iced's `Memory::Host` becoming `Memory::Device` — and the image is still
+/// ready and still drawn.
+///
+/// Red before: the entry kept the decoded RGBA for as long as an image showed
+/// it, 19 MB for a 2912×1632 wallpaper, next to the texture holding the same.
+#[test]
+fn the_pixels_go_once_the_renderer_has_uploaded_them() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let path = png_file("uploaded-then-dropped.png", [255, 0, 0]);
+    let (surface, ready) = surface(&mut app, vec![ImageSource::Path(path)]);
+
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "the image is drawn"
+    );
+    assert!(ready.get_untracked(), "and ready");
+    assert_eq!(
+        app.image_bytes_held(),
+        0,
+        "the decoded pixels went with the upload"
+    );
+}
+
+/// A source whose pixels went to the renderer is still one decode: an image of
+/// it mounted afterwards — here in place of the first, so nothing holds the
+/// entry in between — is drawn on its first frame, from the texture.
+///
+/// Red before: the entry went with the last image that held it, so the
+/// second one started a decode of its own and drew nothing until it landed.
+#[test]
+fn an_image_mounted_after_the_upload_is_drawn_from_the_texture() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let path = png_file("mounted-after-upload.png", [255, 0, 0]);
+    let generation = create_signal(0u32);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            container().child(move || {
+                let _ = generation.get();
+                container()
+                    .width(20.0)
+                    .height(20.0)
+                    .child(image(path.clone()).content_fit(ContentFit::Fill))
+            })
+        },
+    );
+    app.configure(surface, 60, 20, 1.0);
+
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "the first is drawn"
+    );
+
+    generation.set(1);
+    app.step();
+
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "the second is drawn on its first frame, got {:?}",
+        app.read_pixel(surface, 10, 10)
+    );
+    assert_eq!(app.image_decodes_started(), 1, "and decoded nothing");
+}
+
+/// A texture that is gone when its image is drawn again sends the source back
+/// to pending and to the worker, and the image comes back through the same
+/// repaint as the first time. In between nothing is drawn: there are no
+/// pixels left to draw from.
+#[test]
+fn an_image_whose_texture_is_gone_is_decoded_again() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let path = png_file("texture-gone.png", [255, 0, 0]);
+    let backdrop = create_signal(BACKDROP);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(fill())
+                .height(fill())
+                .background(backdrop)
+                .child(
+                    container()
+                        .width(20.0)
+                        .height(20.0)
+                        .child(image(path).content_fit(ContentFit::Fill)),
+                )
+        },
+    );
+    app.configure(surface, 60, 20, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(is_red(app.read_pixel(surface, 10, 10)));
+
+    app.forget_image_textures();
+    // Something else asks for a frame, which draws the image again.
+    backdrop.set(Color::rgb(0.0, 0.0, 0.9));
+    app.step();
+    app.step();
+    assert!(
+        !is_red(app.read_pixel(surface, 10, 10)),
+        "nothing to draw until the decode lands again"
+    );
+
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "drawn again, got {:?}",
+        app.read_pixel(surface, 10, 10)
+    );
+    assert_eq!(app.image_decodes_started(), 2, "one decode more");
+    assert_eq!(app.image_bytes_held(), 0, "and let go of again");
+}

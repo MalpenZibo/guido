@@ -15,6 +15,15 @@
 //! the widgets that read the entry. Two widgets on one source read one entry,
 //! so they share one decode.
 //!
+//! The pixels are not in the signal. They wait in the entry's
+//! [`DecodedImage`] until the renderer takes them to upload, and taking them
+//! is what drops them: from then on the texture is the image, as iced's cache
+//! turns `Memory::Host` into `Memory::Device`. A texture that is gone when it
+//! is needed again — evicted, or its renderer dropped — has nothing left to be
+//! drawn from, so the renderer reports it and the source goes back to pending
+//! and to the worker. No surface can draw from pixels that were dropped,
+//! because the only way to the pixels is to take them.
+//!
 //! The box does not wait for the pixels: the intrinsic size comes from the
 //! header, read synchronously when the entry is made, which costs a few bytes
 //! rather than the whole image.
@@ -22,45 +31,97 @@
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::app_state::with_app_state;
 use crate::reactive::owner::with_root_owner;
 use crate::reactive::{OwnerId, RwSignal, WriteSignal, create_signal, dispose_owner, with_owner};
 use crate::widgets::image::ImageSource;
 
-/// Decoded RGBA8 pixels, row-major, `width * height * 4` bytes.
+/// Where one source's decoded pixels wait for the renderer.
 ///
-/// The pixels are shared rather than copied: the cache entry, the draw command
-/// that carries them to the renderer and the paint cache that keeps that
-/// command all hold the same buffer.
-#[derive(Clone, Debug)]
-pub struct DecodedImage {
-    /// Width in pixels.
-    pub width: u32,
-    /// Height in pixels.
-    pub height: u32,
-    /// The pixels, `width * height * 4` bytes.
-    pub pixels: Arc<[u8]>,
+/// A handle: the entry, the job decoding into it and every draw command
+/// painted from it hold the same one, and the pixels in it are there only
+/// until the renderer takes them to upload. A paint cache
+/// that keeps the command keeps an empty handle, not a copy of the image.
+#[derive(Clone, Debug, Default)]
+pub struct DecodedImage(Arc<Mutex<Slot>>);
+
+#[derive(Debug, Default)]
+enum Slot {
+    /// No pixels: the decode has not landed, or its texture was evicted.
+    #[default]
+    Waiting,
+    /// Decoded, waiting for the renderer.
+    Filled(Pixels),
+    /// The renderer took the pixels, so a texture of them exists — until it
+    /// says it evicted it.
+    Uploaded,
+    /// Nobody will draw them: pixels that arrive now are dropped on arrival.
+    Abandoned,
 }
 
-/// Two decodes are the same when they are the same buffer. Comparing the bytes
-/// would read megabytes to learn what the pointer already says.
+/// Decoded RGBA8 pixels, row-major, `width * height * 4` bytes.
+#[derive(Debug)]
+pub(crate) struct Pixels {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
+}
+
+impl DecodedImage {
+    fn slot(&self) -> MutexGuard<'_, Slot> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The pixels, for the renderer to upload — once. What was taken is gone
+    /// from here, which is the drop the upload is.
+    pub(crate) fn take(&self) -> Option<Pixels> {
+        let mut slot = self.slot();
+        match std::mem::take(&mut *slot) {
+            Slot::Filled(pixels) => {
+                *slot = Slot::Uploaded;
+                Some(pixels)
+            }
+            other => {
+                *slot = other;
+                None
+            }
+        }
+    }
+
+    /// How many bytes of pixels are waiting here: zero once uploaded.
+    pub fn byte_size(&self) -> usize {
+        match &*self.slot() {
+            Slot::Filled(pixels) => pixels.rgba.len(),
+            _ => 0,
+        }
+    }
+
+    fn fill(&self, pixels: Pixels) {
+        let mut slot = self.slot();
+        if !matches!(*slot, Slot::Abandoned) {
+            *slot = Slot::Filled(pixels);
+        }
+    }
+}
+
+/// Two handles are the same when they are the same slot.
 impl PartialEq for DecodedImage {
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width
-            && self.height == other.height
-            && Arc::ptr_eq(&self.pixels, &other.pixels)
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
 /// Where the decode of one source has got to.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DecodeState {
     /// Queued or running on the worker.
     Pending,
-    /// Decoded; the renderer uploads it on the next frame that draws it.
-    Ready(DecodedImage),
+    /// Decoded: the pixels wait for the renderer, or are already a texture.
+    Ready,
     /// The header or the decode failed, and said why once, in the log.
     Failed,
 }
@@ -77,7 +138,7 @@ pub(crate) enum DecodeKey {
 }
 
 impl DecodeKey {
-    fn of(source: &ImageSource) -> Option<Self> {
+    pub(crate) fn of(source: &ImageSource) -> Option<Self> {
         match source {
             ImageSource::Path(path) => Some(Self::Path(path.clone())),
             ImageSource::Bytes(bytes) => Some(Self::Bytes(bytes.clone())),
@@ -136,10 +197,12 @@ pub(crate) fn hash_sampled(bytes: &[u8], hasher: &mut impl Hasher) {
 }
 
 /// One source's entry in [`AppState::decoded_images`](crate::app_state::AppState).
+#[derive(Clone)]
 pub(crate) struct DecodeEntry {
     state: RwSignal<DecodeState>,
-    /// The scope the signal lives in, under the root: disposed when the last
-    /// image showing the source lets go of it.
+    /// Where the pixels wait for the renderer.
+    pixels: DecodedImage,
+    /// The scope the signal lives in, under the root, disposed with the entry.
     scope: OwnerId,
     /// Read from the header when the entry was made.
     size: Option<(u32, u32)>,
@@ -149,15 +212,11 @@ pub(crate) struct DecodeEntry {
 
 /// The entry for `key`, made — and its decode started — if there is none,
 /// with `users` more holders than it had.
-fn entry(
-    key: DecodeKey,
-    source: &ImageSource,
-    users: u32,
-) -> (RwSignal<DecodeState>, Option<(u32, u32)>) {
+fn entry(key: DecodeKey, source: &ImageSource, users: u32) -> DecodeEntry {
     let found = with_app_state(|app| {
         app.decoded_images.borrow_mut().get_mut(&key).map(|entry| {
             entry.users += users;
-            (entry.state, entry.size)
+            entry.clone()
         })
     });
     if let Some(found) = found {
@@ -174,24 +233,22 @@ fn entry(
         DecodeState::Failed
     };
     // Under the root, in a scope of its own: the entry outlives whichever
-    // widget happened to ask first, and goes when the last one lets go.
+    // widget happened to ask first.
     let (state, scope) = with_root_owner(|| with_owner(|| create_signal(initial)));
-    let job = size.is_some().then(|| key.clone());
-    with_app_state(|app| {
-        app.decoded_images.borrow_mut().insert(
-            key,
-            DecodeEntry {
-                state,
-                scope,
-                size,
-                users,
-            },
-        );
-    });
-    if let Some(key) = job {
-        decode_later(key, state.writer());
+    let entry = DecodeEntry {
+        state,
+        pixels: DecodedImage::default(),
+        scope,
+        size,
+        users,
+    };
+    if size.is_some() {
+        decode_later(key.clone(), &entry);
     }
-    (state, size)
+    with_app_state(|app| {
+        app.decoded_images.borrow_mut().insert(key, entry.clone());
+    });
+    entry
 }
 
 fn describe(key: &DecodeKey) -> String {
@@ -202,49 +259,54 @@ fn describe(key: &DecodeKey) -> String {
 }
 
 /// Where the decode of `source` has got to, read so that the reader is told
-/// when it moves — or `None` for a source that needs no decode: its pixels
-/// are already there (`Rgba`) or are rasterised when drawn (SVG).
+/// when it moves, and where its pixels wait — or `None` for a source that
+/// needs no decode: its pixels are already there (`Rgba`) or are rasterised
+/// when drawn (SVG).
 ///
 /// Makes the entry and starts its decode if nobody has asked before. An entry
-/// made here rather than by an [`acquire`] is held by nobody, and lives as
-/// long as the application.
-pub(crate) fn state(source: &ImageSource) -> Option<DecodeState> {
+/// made here rather than by an [`acquire`] is held by nobody: it lives while
+/// its texture does.
+pub(crate) fn state(source: &ImageSource) -> Option<(DecodeState, DecodedImage)> {
     let key = DecodeKey::of(source)?;
-    Some(entry(key, source, 0).0.get())
+    let entry = entry(key, source, 0);
+    Some((entry.state.get(), entry.pixels))
 }
 
 /// Whether `source` can be drawn now: decoded, or needing no decode.
 pub(crate) fn is_ready(source: &ImageSource) -> bool {
     !matches!(
         state(source),
-        Some(DecodeState::Pending | DecodeState::Failed)
+        Some((DecodeState::Pending | DecodeState::Failed, _))
     )
 }
 
 /// Hold the entry for `source`, starting its decode if it has none — or `None`
 /// for a source that needs no decode.
-///
-/// The entry lives while somebody holds it: the decoded pixels are as large
-/// as the image, and an application that showed a wallpaper once should not
-/// keep it in memory for good.
 pub(crate) fn acquire(source: &ImageSource) -> Option<DecodeHandle> {
     let key = DecodeKey::of(source)?;
-    let (state, size) = entry(key.clone(), source, 1);
-    Some(DecodeHandle { key, state, size })
+    let entry = entry(key.clone(), source, 1);
+    Some(DecodeHandle {
+        key,
+        state: entry.state,
+        pixels: entry.pixels,
+        size: entry.size,
+    })
 }
 
 /// A claim on one source's entry, given back when dropped.
 pub(crate) struct DecodeHandle {
     key: DecodeKey,
     state: RwSignal<DecodeState>,
+    pixels: DecodedImage,
     size: Option<(u32, u32)>,
 }
 
 impl DecodeHandle {
     /// Where the decode has got to, read so that the reader is told when it
-    /// moves. The holder's own signal: no lookup, no hashing.
-    pub(crate) fn state(&self) -> DecodeState {
-        self.state.get()
+    /// moves, and where the pixels wait. The holder's own: no lookup, no
+    /// hashing.
+    pub(crate) fn state(&self) -> (DecodeState, DecodedImage) {
+        (self.state.get(), self.pixels.clone())
     }
 
     /// The size the header gave, or `None` where it could not be read.
@@ -253,32 +315,117 @@ impl DecodeHandle {
     }
 }
 
+/// Letting go is settled by the loop, like what the renderer reports: a drop
+/// happens wherever a widget is torn down, and what the last one may lead to —
+/// an entry removed, its readers told — is a signal write.
 impl Drop for DecodeHandle {
     fn drop(&mut self) {
-        let released = with_app_state(|app| {
-            let mut map = app.decoded_images.borrow_mut();
-            let entry = map.get_mut(&self.key)?;
-            entry.users = entry.users.saturating_sub(1);
-            if entry.users > 0 {
-                return None;
+        with_app_state(|app| {
+            let last = app
+                .decoded_images
+                .borrow_mut()
+                .get_mut(&self.key)
+                .is_some_and(|entry| {
+                    entry.users = entry.users.saturating_sub(1);
+                    entry.users == 0
+                });
+            if last {
+                app.image_events
+                    .push(ImageEvent::Released(self.key.clone()));
             }
-            map.remove(&self.key).map(|entry| entry.scope)
         });
-        // A decode still running for it writes into a disposed signal, and
-        // that write is dropped where the queue is flushed.
-        if let Some(scope) = released {
-            dispose_owner(scope);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the renderer and the widgets report, settled once per pass
+// ---------------------------------------------------------------------------
+
+/// Something that happened to an entry where no signal may be written: in the
+/// renderer, or in a widget's drop.
+pub(crate) enum ImageEvent {
+    /// A frame drew the source, its texture was not there, and its pixels had
+    /// already gone to an upload.
+    Missing(DecodeKey),
+    /// The renderer evicted the source's texture.
+    Evicted(DecodeKey),
+    /// The last image holding the entry let go of it.
+    Released(DecodeKey),
+}
+
+/// The renderer drew `source`, found no texture and no pixels.
+pub(crate) fn texture_missing(source: &ImageSource) {
+    if let Some(key) = DecodeKey::of(source) {
+        with_app_state(|app| app.image_events.push(ImageEvent::Missing(key)));
+    }
+}
+
+/// The renderer evicted the texture of the source `key` names.
+pub(crate) fn texture_evicted(key: DecodeKey) {
+    with_app_state(|app| app.image_events.push(ImageEvent::Evicted(key)));
+}
+
+/// Settle what the renderer and the widgets reported since the last pass.
+///
+/// - A **missing** texture of a ready source sends it back to pending and to
+///   the worker: its readers repaint to nothing, and again when it lands.
+/// - An entry nobody holds goes when nothing is left to be drawn from — its
+///   texture **evicted**, or never made when the last holder was
+///   **released**. An uploaded one stays while its texture does, so an image
+///   mounted again is drawn from it without a decode.
+pub(crate) fn settle_image_events() {
+    for event in with_app_state(|app| app.image_events.drain()) {
+        let key = match &event {
+            ImageEvent::Missing(key) | ImageEvent::Evicted(key) | ImageEvent::Released(key) => key,
+        };
+        let Some(entry) = with_app_state(|app| app.decoded_images.borrow().get(key).cloned())
+        else {
+            continue;
+        };
+        match event {
+            ImageEvent::Missing(key) => {
+                let gone = !matches!(*entry.pixels.slot(), Slot::Filled(_));
+                if gone && entry.state.get_untracked() == DecodeState::Ready {
+                    entry.state.set(DecodeState::Pending);
+                    decode_later(key, &entry);
+                }
+            }
+            ImageEvent::Evicted(key) => {
+                {
+                    let mut slot = entry.pixels.slot();
+                    if matches!(*slot, Slot::Uploaded) {
+                        *slot = Slot::Waiting;
+                    }
+                }
+                remove_if_unheld(&key, entry);
+            }
+            ImageEvent::Released(key) => remove_if_unheld(&key, entry),
         }
     }
+}
+
+/// Remove an entry nobody holds and that has no texture to be drawn from.
+///
+/// Its readers are told, so a paint that looked it up by source looks again
+/// and finds a fresh one; pixels still on their way are dropped on arrival.
+fn remove_if_unheld(key: &DecodeKey, entry: DecodeEntry) {
+    if entry.users > 0 || matches!(*entry.pixels.slot(), Slot::Uploaded) {
+        return;
+    }
+    with_app_state(|app| app.decoded_images.borrow_mut().remove(key));
+    *entry.pixels.slot() = Slot::Abandoned;
+    entry.state.set_always(DecodeState::Pending);
+    dispose_owner(entry.scope);
 }
 
 // ---------------------------------------------------------------------------
 // The worker
 // ---------------------------------------------------------------------------
 
-/// A source to decode, and where to write what it decoded to.
+/// A source to decode, where to put the pixels, and the signal that says so.
 struct DecodeJob {
     key: DecodeKey,
+    pixels: DecodedImage,
     write: WriteSignal<DecodeState>,
 }
 
@@ -324,7 +471,14 @@ impl Decoder {
                     drop(worker.changed.wait_while(worker.lock(), |state| state.held));
                     // Queued before the count goes down, so whoever waits for
                     // the count finds the write already in the queue.
-                    job.write.set(decode(&job.key));
+                    let state = match decode(&job.key) {
+                        Some(pixels) => {
+                            job.pixels.fill(pixels);
+                            DecodeState::Ready
+                        }
+                        None => DecodeState::Failed,
+                    };
+                    job.write.set(state);
                     worker.lock().in_flight -= 1;
                     worker.changed.notify_all();
                 }
@@ -346,15 +500,18 @@ fn with_decoder<R>(f: impl FnOnce(&Decoder) -> R) -> Option<R> {
     })
 }
 
-/// Hand `key` to the worker, which writes the outcome through `write`.
-fn decode_later(key: DecodeKey, write: WriteSignal<DecodeState>) {
+/// Hand `key` to the worker, which fills the entry's pixels and writes its
+/// state.
+fn decode_later(key: DecodeKey, entry: &DecodeEntry) {
+    let write = entry.state.writer();
+    let pixels = entry.pixels.clone();
     let sent = with_decoder(|decoder| {
         {
             let mut progress = decoder.progress.lock();
             progress.in_flight += 1;
             progress.started += 1;
         }
-        decoder.jobs.send(DecodeJob { key, write }).is_ok()
+        decoder.jobs.send(DecodeJob { key, pixels, write }).is_ok()
     });
     // No worker to decode it: the entry is failed rather than pending for ever.
     if sent != Some(true) {
@@ -364,7 +521,9 @@ fn decode_later(key: DecodeKey, write: WriteSignal<DecodeState>) {
 
 /// Decode on the worker. A failure is loud, once: a missing decoder feature
 /// (`webp` disabled) or a bad file would otherwise be a silently empty box.
-fn decode(key: &DecodeKey) -> DecodeState {
+/// An empty image is a failure too — there is nothing to upload, and a ready
+/// entry the renderer cannot upload would be sent back to the worker for ever.
+fn decode(key: &DecodeKey) -> Option<Pixels> {
     let decoded = match key {
         DecodeKey::Path(path) => image::open(path),
         DecodeKey::Bytes(bytes) => image::load_from_memory(bytes),
@@ -373,15 +532,19 @@ fn decode(key: &DecodeKey) -> DecodeState {
         Ok(image) => {
             let rgba = image.into_rgba8();
             let (width, height) = rgba.dimensions();
-            DecodeState::Ready(DecodedImage {
+            if width == 0 || height == 0 {
+                log::warn!("{} decodes to an empty image", describe(key));
+                return None;
+            }
+            Some(Pixels {
                 width,
                 height,
-                pixels: rgba.into_raw().into(),
+                rgba: rgba.into_raw(),
             })
         }
         Err(e) => {
             log::warn!("Failed to decode {}: {e}", describe(key));
-            DecodeState::Failed
+            None
         }
     }
 }
@@ -449,6 +612,18 @@ pub(crate) fn wait() {
     );
 }
 
+/// How many bytes of decoded pixels this application's cache is holding.
+#[cfg(feature = "testing")]
+pub(crate) fn held_bytes() -> usize {
+    with_app_state(|app| {
+        app.decoded_images
+            .borrow()
+            .values()
+            .map(|entry| entry.pixels.byte_size())
+            .sum()
+    })
+}
+
 /// How many decodes this application has started.
 #[cfg(any(test, feature = "testing"))]
 pub(crate) fn started() -> u64 {
@@ -468,8 +643,8 @@ mod tests {
         with_app_state(|app| app.decoded_images.borrow().len())
     }
 
-    /// An entry lives while an image holds it and goes with the last one, so a
-    /// wallpaper shown once is not kept decoded for good.
+    /// An entry that never became a texture lives while an image holds it and
+    /// goes with the last one.
     ///
     /// A file that is not there, so the header fails where the entry is made
     /// and no worker is started: what a worker writes lands in the
@@ -482,12 +657,17 @@ mod tests {
         let first = acquire(&source).expect("a raster source has an entry");
         let second = acquire(&source).expect("and the same one again");
         assert_eq!(entries(), before + 1, "one entry for one source");
-        assert_eq!(state(&source), Some(DecodeState::Failed));
+        assert_eq!(
+            state(&source).map(|(state, _)| state),
+            Some(DecodeState::Failed)
+        );
         assert_eq!(first.size(), None, "the header could not be read");
 
         drop(first);
+        settle_image_events();
         assert_eq!(entries(), before + 1, "still held by the second");
         drop(second);
+        settle_image_events();
         assert_eq!(entries(), before, "gone with the last");
         assert_eq!(started(), 0, "and nothing was handed to a worker");
     }

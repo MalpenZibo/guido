@@ -18,7 +18,7 @@ use super::constants::SVG_QUALITY_MULTIPLIER;
 use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
-use crate::image_decode::{DecodedImage, hash_sampled};
+use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
@@ -51,6 +51,17 @@ struct CachedTexture {
     intrinsic_height: u32,
     /// Last frame this texture was used
     last_used_frame: u64,
+    /// The raster source it was uploaded from, whose decoded pixels went with
+    /// the upload: the decode cache is told when this texture goes.
+    decoded_from: Option<DecodeKey>,
+}
+
+impl Drop for CachedTexture {
+    fn drop(&mut self) {
+        if let Some(key) = self.decoded_from.take() {
+            crate::image_decode::texture_evicted(key);
+        }
+    }
 }
 
 /// Cache key for image textures.
@@ -113,6 +124,12 @@ impl ImageQuadRenderer {
         if self.texture_cache.len() > self.max_cache_size {
             self.evict_oldest();
         }
+    }
+
+    /// Drop every texture, as eviction does, and say so as eviction does.
+    #[cfg(feature = "testing")]
+    pub(crate) fn forget_textures(&mut self) {
+        self.texture_cache.clear();
     }
 
     /// Evict the least recently used entries until under the limit.
@@ -218,8 +235,11 @@ impl ImageQuadRenderer {
         }
 
         // Load and create texture
-        let texture =
+        let mut texture =
             self.load_texture(device, queue, source, render_scale, svg_target, decoded)?;
+        if decoded.is_some() {
+            texture.decoded_from = DecodeKey::of(source);
+        }
 
         let cached = Arc::new(texture);
         self.texture_cache.insert(key, cached.clone());
@@ -229,9 +249,11 @@ impl ImageQuadRenderer {
     /// Load and upload a texture to the GPU.
     ///
     /// A raster `Path` or `Bytes` source arrives already decoded — the worker
-    /// in `image_decode` did that off the frame — so this only uploads. Without
-    /// the pixels there is nothing to draw, and decoding here instead is the
-    /// stall that module exists to remove.
+    /// in `image_decode` did that off the frame — so this only uploads, and
+    /// taking the pixels to upload them is what drops them from the cache.
+    /// Pixels that were already taken are gone: this draws nothing and reports
+    /// the texture missing, which sends the source back to the worker.
+    /// Decoding here instead is the stall that module exists to remove.
     fn load_texture(
         &self,
         device: &Device,
@@ -246,14 +268,17 @@ impl ImageQuadRenderer {
 
         match source {
             ImageSource::Path(_) | ImageSource::Bytes(_) => {
-                let decoded = decoded?;
+                let Some(pixels) = decoded.and_then(DecodedImage::take) else {
+                    crate::image_decode::texture_missing(source);
+                    return None;
+                };
                 self.upload_raster(
                     device,
                     queue,
                     &format,
-                    decoded.width,
-                    decoded.height,
-                    &decoded.pixels,
+                    pixels.width,
+                    pixels.height,
+                    &pixels.rgba,
                 )
             }
             ImageSource::Rgba {
@@ -349,6 +374,7 @@ impl ImageQuadRenderer {
             intrinsic_width: width,
             intrinsic_height: height,
             last_used_frame: self.current_frame,
+            decoded_from: None,
         })
     }
 
@@ -462,6 +488,7 @@ impl ImageQuadRenderer {
             intrinsic_width,
             intrinsic_height,
             last_used_frame: self.current_frame,
+            decoded_from: None,
         })
     }
 

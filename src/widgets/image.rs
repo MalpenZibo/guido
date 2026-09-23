@@ -282,7 +282,7 @@ impl Widget for Image {
             match &self.decode {
                 // The held entry's own signal: a paint does no lookup.
                 Some(decode) => {
-                    if let DecodeState::Ready(decoded) = decode.state() {
+                    if let (DecodeState::Ready, decoded) = decode.state() {
                         ctx.push_image(
                             source.clone(),
                             Some(decoded),

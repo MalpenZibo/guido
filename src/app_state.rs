@@ -34,7 +34,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::deferred::{DeferredQueue, DeferredSlot};
-use crate::image_decode::{DecodeEntry, DecodeKey, Decoder};
+use crate::image_decode::{DecodeEntry, DecodeKey, Decoder, ImageEvent};
 use crate::jobs::{JobQueues, ScheduledJob};
 use crate::reactive::cursor::CursorIcon;
 use crate::reactive::{OwnerId, Prop};
@@ -140,6 +140,10 @@ pub(crate) struct AppState {
     /// The thread those decodes run on, spawned by the first one. Forgetting it
     /// closes its channel, which is what ends the thread.
     pub(crate) image_decoder: RefCell<Option<Decoder>>,
+    /// What the renderer and the image widgets reported about those entries —
+    /// a texture missing or evicted, an entry let go — for the loop to settle
+    /// where a signal may be written.
+    pub(crate) image_events: DeferredQueue<ImageEvent>,
 }
 
 /// Forget everything this `App` put here, so the next one on this thread
@@ -178,6 +182,7 @@ pub(crate) fn reset() {
             fonts_consumed,
             decoded_images,
             image_decoder,
+            image_events,
         } = app;
 
         // `take` rather than a value per line: the struct derives `Default`,
@@ -218,6 +223,7 @@ pub(crate) fn reset() {
         custom_font_hashes.take();
         fonts_consumed.take();
 
+        image_events.clear();
         decoded_images.take();
         image_decoder.take();
     });

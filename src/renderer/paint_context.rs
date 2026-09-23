@@ -602,8 +602,8 @@ impl<'a> PaintContext<'a> {
         // decode lands — and until then draws nothing.
         let decoded = match crate::image_decode::state(&source) {
             None => None,
-            Some(DecodeState::Ready(decoded)) => Some(decoded),
-            Some(DecodeState::Pending | DecodeState::Failed) => return,
+            Some((DecodeState::Ready, decoded)) => Some(decoded),
+            Some((DecodeState::Pending | DecodeState::Failed, _)) => return,
         };
         self.push_image(source, decoded, rect, content_fit);
     }

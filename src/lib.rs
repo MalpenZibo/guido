@@ -2461,6 +2461,10 @@ fn iterate<P: Platform>(
     // here: no user closure is on the stack.
     reactive::owner::flush_pending_disposals();
 
+    // What the renderer said about image textures last pass, and which images
+    // let go of their decodes — settled here, where a signal may be written.
+    image_decode::settle_image_events();
+
     // Process dynamic surface commands
     if !process_surface_commands(surface_manager, wayland_state, tree) {
         return Some(ExitReason::Quit);
