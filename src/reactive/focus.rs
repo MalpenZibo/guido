@@ -94,6 +94,11 @@ pub fn focus_path() -> FocusPath {
 /// Takes the tree because the ancestor path is resolved here, once, rather
 /// than by every reader later — see the module docs.
 pub fn request_focus(tree: &Tree, id: WidgetId) {
+    // A child playing its exit is leaving: it gave the focus up at removal
+    // and cannot take it back.
+    if super::invalidation::is_detached(id) {
+        return;
+    }
     let old = focus().get_untracked();
     if old.widget() == Some(id) {
         return;
