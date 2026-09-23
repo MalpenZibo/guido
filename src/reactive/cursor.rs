@@ -50,6 +50,9 @@ pub enum CursorIcon {
     Wait,
     /// Progress cursor (arrow with spinner).
     Progress,
+    /// No cursor at all: the pointer is still there and still reaches
+    /// widgets, but nothing is drawn for it. CSS's `cursor: none`.
+    Hidden,
 }
 
 /// Show the shape the widget under the point declares, and go on showing it
