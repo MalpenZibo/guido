@@ -23,8 +23,12 @@ pub struct Transition {
     pub delay_ms: f32,
     /// Called once when an animation driven by this transition settles.
     /// Direction-specific by construction: a callback on the `reverse`
-    /// transition fires exactly when the closing animation completes —
-    /// the lifecycle hook for "animate out, then destroy".
+    /// transition fires exactly when the closing animation completes.
+    ///
+    /// A completion callback, not deferred disposal: a surface or popup that
+    /// animates closed keeps itself mounted, runs the transition, and closes
+    /// from here. A child of a dynamic list does not need it — declare
+    /// [`Animated::exiting_to`] and the container keeps it until it has left.
     pub on_complete: Option<std::rc::Rc<dyn Fn()>>,
 }
 

@@ -147,7 +147,9 @@ impl<T: Clone + 'static> Animated<T> {
     /// `.children(move || ..)` or `keyed(..)` — it keeps that widget in its
     /// container, where it stood, until every exit it declared has settled.
     /// While it leaves it is inert: it takes no pointer input and no focus,
-    /// and nothing it reads wakes it.
+    /// and nothing it reads relays out, repaints or reconciles it. Effects
+    /// created while building it are not widgets, and live until it is
+    /// disposed.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -173,6 +175,8 @@ impl<T: Clone + 'static> Animated<T> {
     ///
     /// A `keyed(..)` row whose key comes back while it is leaving is not
     /// rebuilt: its exit is cancelled and it travels back from where it is.
+    /// The dynamic children inside it re-run, since what they read while it
+    /// was away was not watched.
     ///
     /// Only a container's own properties leave, and only the removed widget's:
     /// an exit declared on something inside it plays when that is the widget
