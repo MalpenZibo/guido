@@ -32,7 +32,9 @@ use smallvec::SmallVec;
 use smithay_client_toolkit::reexports::calloop::ping::Ping;
 
 use crate::app_state::with_app_state;
-use crate::reactive::invalidation::clear_widget_subscribers;
+use crate::reactive::invalidation::{
+    clear_widget_subscribers, detach_widget, mark_every_segment_dirty, reattach_widget,
+};
 use crate::tree::{Tree, WidgetId};
 
 /// Job queue with O(1) dedup via HashSet + Vec for ordered iteration.
@@ -321,19 +323,9 @@ pub(crate) fn cancel_scheduled_jobs(widget_id: WidgetId) {
     });
 }
 
-/// Resolve job ownership: sort the inbox into per-surface queues.
-///
-/// This is the ONLY place where a job's owning surface is determined
-/// (topmost ancestor walk — parent links are complete between loop phases,
-/// which is when this runs). `active_roots` is the set of live surface
-/// roots: jobs resolving anywhere else — widget already gone, surface
-/// destroyed, never parented — go to the orphan lane. Queues whose root is
-/// no longer active are retired into the orphan lane too, so a closed
-/// surface's deferred Unregister jobs still run and nothing keeps
-/// `has_pending_jobs` true forever.
 /// Synchronously tear down a widget subtree: clear each widget's signal
-/// subscribers (and dirty segments) and unregister it from the tree,
-/// children first.
+/// subscribers (and dirty segments), cancel its deadlines and unregister it
+/// from the tree, children first.
 ///
 /// Used wherever a subtree is discarded while the app keeps running — a
 /// closed surface, or an old dynamic/keyed child replaced during
@@ -342,6 +334,11 @@ pub(crate) fn cancel_scheduled_jobs(widget_id: WidgetId) {
 /// but its descendants would stay in the tree (subscribers live, queued
 /// reconciles runnable) until their deferred jobs ran — and a reconcile
 /// executing in that window reads owner-disposed state and panics.
+///
+/// A removed child that declared an exit is taken down in two halves: it is
+/// detached by [`detach_widget_subtree`] when it is removed, and disposed by
+/// this when its exit settles — what this repeats of the detach is a no-op by
+/// then, and the unregister is what is left.
 ///
 /// Children-first order means each widget Drop's deferred Unregister
 /// requests target already-removed ids and no-op; stale queued jobs no-op
@@ -354,6 +351,51 @@ pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: Widget
     }
 }
 
+/// The first half of a teardown, for a child that is leaving but still
+/// playing its exit: nothing in the subtree runs again, and it stays in the
+/// tree.
+///
+/// Every widget in it is detached — its subscriptions cleared, and what it
+/// reads while its exit paints subscribing nothing — its deadlines are
+/// cancelled, and the focus is released if it was inside. Its owner scope
+/// lives on with the widget: disposing it here would leave paint reading
+/// state that no longer exists, and nothing in the subtree can reach that
+/// state any more except by being painted. The second half is
+/// [`teardown_widget_subtree`], when the exit settles.
+pub(crate) fn detach_widget_subtree(tree: &crate::tree::Tree, root: WidgetId) {
+    for id in tree.collect_subtree_post_order(root) {
+        detach_widget(id);
+        cancel_scheduled_jobs(id);
+    }
+    crate::reactive::release_focus_if_within(root);
+}
+
+/// Undo a detach: a leaving child that was asked for again.
+///
+/// The subscriptions the detach cleared are not restored, they are read
+/// again — every widget in the subtree lays out, paints and reconciles every
+/// dynamic segment it holds on the next frame, which is where each of them
+/// was made in the first place.
+pub(crate) fn reattach_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
+    for id in tree.collect_subtree_post_order(root) {
+        reattach_widget(id);
+        mark_every_segment_dirty(id);
+        request_job(id, JobRequest::Reconcile);
+        request_job(id, JobRequest::Layout);
+        request_job(id, JobRequest::Paint);
+    }
+}
+
+/// Resolve job ownership: sort the inbox into per-surface queues.
+///
+/// This is the ONLY place where a job's owning surface is determined
+/// (topmost ancestor walk — parent links are complete between loop phases,
+/// which is when this runs). `active_roots` is the set of live surface
+/// roots: jobs resolving anywhere else — widget already gone, surface
+/// destroyed, never parented — go to the orphan lane. Queues whose root is
+/// no longer active are retired into the orphan lane too, so a closed
+/// surface's deferred Unregister jobs still run and nothing keeps
+/// `has_pending_jobs` true forever.
 pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetId>) {
     with_app_state(|app| {
         let mut jobs = app.pending_jobs.borrow_mut();
@@ -906,6 +948,33 @@ mod tests {
         assert!(
             next_deadline().is_none(),
             "a caret that no longer exists must not keep the loop on a timer"
+        );
+    }
+
+    /// A child that starts leaving keeps its place in the tree but not its
+    /// deadlines: a caret in a row playing its exit does not blink on.
+    #[test]
+    fn a_widget_that_starts_leaving_stops_waking_the_loop() {
+        clear_pending_jobs();
+        clear_scheduled_jobs();
+        let (mut tree, ..) = two_surface_tree();
+        let widget = tree.register(Box::new(TestWidget));
+        request_job_at(
+            widget,
+            JobRequest::Paint,
+            Instant::now() + Duration::from_secs(60),
+        );
+
+        detach_widget_subtree(&tree, widget);
+
+        assert!(tree.contains(widget), "detached, not disposed");
+        assert!(next_deadline().is_none());
+
+        teardown_widget_subtree(&mut tree, widget);
+        assert!(!tree.contains(widget));
+        assert!(
+            !crate::reactive::invalidation::is_detached(widget),
+            "and nothing of the detach outlives the widget"
         );
     }
 

@@ -192,9 +192,22 @@ pub(crate) struct SubscriberRegistry {
     /// list — O(N²) per frame for a signal read by N widgets (e.g. a theme
     /// color). With it, an already-registered read is one hash lookup.
     active: FxHashSet<(usize, Subscriber)>,
+    /// Widgets taken out of the reactive graph while they stay in the tree: a
+    /// child playing its exit. What they read registers nothing, so paint can
+    /// go on reading their properties without subscribing them again. Empty
+    /// unless something is leaving, which is what keeps the check off the
+    /// read path's cost.
+    detached: FxHashSet<WidgetId>,
 }
 
 impl SubscriberRegistry {
+    /// Whether a widget is detached — see [`detach_widget`]. The emptiness
+    /// check first, because that is the answer on every read but the ones
+    /// made while something is leaving.
+    fn is_detached(&self, widget_id: WidgetId) -> bool {
+        !self.detached.is_empty() && self.detached.contains(&widget_id)
+    }
+
     /// Ensure the forward index has capacity for the given signal ID.
     fn ensure_signal_capacity(&mut self, signal_id: SignalId) {
         if signal_id.index() >= self.signal_to_widgets.len() {
@@ -233,6 +246,9 @@ fn register_subscriber_in(
 ) {
     let mut reg = reactive.subscribers.borrow_mut();
 
+    if reg.is_detached(widget_id) {
+        return;
+    }
     let sub = Subscriber {
         widget_id,
         job_type,
@@ -266,13 +282,7 @@ pub fn notify_signal_change(signal_id: SignalId) {
         };
         for sub in subs {
             if let Some(segment) = sub.segment {
-                with_app_state(|app| {
-                    let mut d = app.dirty_segments.borrow_mut();
-                    let dirty = d.entry(sub.widget_id).or_default();
-                    if !dirty.contains(&segment) {
-                        dirty.push(segment);
-                    }
-                });
+                mark_segment_dirty(sub.widget_id, segment);
             }
             let request = match sub.job_type {
                 JobType::Layout => JobRequest::Layout,
@@ -306,12 +316,67 @@ pub fn clear_signal_subscribers(signal_id: SignalId) {
     });
 }
 
+/// Take a widget out of the reactive graph while it stays in the tree: clear
+/// what it subscribed to, and let nothing it reads subscribe it again until
+/// [`reattach_widget`] or [`clear_widget_subscribers`].
+///
+/// What a child playing its exit is: it still paints, and paint reads, but a
+/// write to anything it read must not wake it — its item may be gone.
+pub(crate) fn detach_widget(widget_id: WidgetId) {
+    clear_widget_subscribers(widget_id);
+    with_reactive(|reactive| {
+        reactive.subscribers.borrow_mut().detached.insert(widget_id);
+    });
+}
+
+/// Put a detached widget back: what it reads subscribes it again.
+///
+/// Nothing it subscribed to before survived the detach, so whoever calls this
+/// owes it the passes that read them again.
+pub(crate) fn reattach_widget(widget_id: WidgetId) {
+    with_reactive(|reactive| {
+        reactive
+            .subscribers
+            .borrow_mut()
+            .detached
+            .remove(&widget_id);
+    });
+}
+
+/// Whether a widget has been detached — see [`detach_widget`].
+pub(crate) fn is_detached(widget_id: WidgetId) -> bool {
+    with_reactive(|reactive| reactive.subscribers.borrow().is_detached(widget_id))
+}
+
+/// A segment index no container has: marking it dirty re-runs every dynamic
+/// segment the widget holds. What a reattached subtree needs, since the
+/// subscriptions that would have said which ones went with the detach.
+pub(crate) const EVERY_SEGMENT: u32 = u32::MAX;
+
+/// Re-run every dynamic segment of `widget_id` at its next reconcile.
+pub(crate) fn mark_every_segment_dirty(widget_id: WidgetId) {
+    mark_segment_dirty(widget_id, EVERY_SEGMENT);
+}
+
+/// Re-run one dynamic segment of `widget_id` at its next reconcile.
+fn mark_segment_dirty(widget_id: WidgetId, segment: u32) {
+    with_app_state(|app| {
+        let mut dirty = app.dirty_segments.borrow_mut();
+        let segments = dirty.entry(widget_id).or_default();
+        if !segments.contains(&segment) {
+            segments.push(segment);
+        }
+    });
+}
+
 /// Remove a widget from all signal subscriber sets.
 /// Called when a widget is unregistered to prevent stale subscribers
-/// from causing wasted job creation.
+/// from causing wasted job creation — and it forgets a detach too, since a
+/// widget leaving the tree has nothing left to be detached from.
 pub fn clear_widget_subscribers(widget_id: WidgetId) {
     with_reactive(|reactive| {
         let mut reg = reactive.subscribers.borrow_mut();
+        reg.detached.remove(&widget_id);
         // Use reverse index: only touch the signals this widget actually subscribes to
         if let Some(signal_ids) = reg.widget_to_signals.remove(&widget_id) {
             for signal_id in signal_ids {
@@ -513,6 +578,53 @@ mod tests {
         });
 
         // Clean up
+        clear_signal_subscribers(sid);
+    }
+
+    /// Whether `wid` is subscribed to `sid` for anything.
+    fn subscribed(wid: WidgetId, sid: SignalId) -> bool {
+        with_reactive(|reactive| {
+            reactive
+                .subscribers
+                .borrow()
+                .signal_to_widgets
+                .get(sid.index())
+                .is_some_and(|subs| subs.iter().any(|s| s.widget_id == wid))
+        })
+    }
+
+    /// A detached widget loses what it had subscribed to, and what it reads
+    /// while detached — a leaving child still paints — subscribes it to
+    /// nothing. Reattached, its next read subscribes it again; unregistered,
+    /// nothing of the detach is left behind.
+    #[test]
+    fn a_detached_widget_reads_without_subscribing() {
+        let wid = widget_id(410);
+        let sid = signal_id(60);
+        let read = || with_signal_tracking(wid, JobType::Paint, || record_signal_read(sid));
+
+        read();
+        assert!(subscribed(wid, sid), "the control: a read subscribes");
+
+        detach_widget(wid);
+        assert!(!subscribed(wid, sid), "the detach clears it");
+        read();
+        assert!(
+            !subscribed(wid, sid),
+            "and a read while detached registers nothing"
+        );
+        assert!(is_detached(wid));
+
+        reattach_widget(wid);
+        read();
+        assert!(subscribed(wid, sid), "reattached, reading subscribes again");
+
+        detach_widget(wid);
+        clear_widget_subscribers(wid);
+        assert!(
+            !is_detached(wid),
+            "a widget leaving the tree forgets its detach"
+        );
         clear_signal_subscribers(sid);
     }
 

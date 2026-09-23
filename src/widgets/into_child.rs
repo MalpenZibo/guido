@@ -40,7 +40,7 @@ use crate::reactive::invalidation::suspend_widget_tracking;
 use crate::reactive::{OwnerId, dispose_owner_now, with_owner};
 
 use super::Widget;
-use super::children::{ChildrenSource, DynItem, OwnedWidget, SharedOwner};
+use super::children::{ChildrenSource, DynItem, Leaving, OwnedWidget, SharedOwner};
 
 /// Marker type for a static child (widget value)
 pub struct StaticChild;
@@ -130,7 +130,9 @@ where
         }));
         let child_fn = Rc::new(self);
 
-        let items_fn = move || {
+        // Every run mints a new key, so nothing it returns can name a row
+        // that is leaving: the new child is new.
+        let items_fn = move |_: &Leaving| {
             let mut st = state.borrow_mut();
 
             // Defensive: a widget stashed by a previous pass that was never
@@ -245,7 +247,8 @@ where
         }));
         let list_fn = Rc::new(self);
 
-        let items_fn = move || {
+        // Keys are minted per run, as the single child's are.
+        let items_fn = move |_: &Leaving| {
             let mut st = state.borrow_mut();
             // Defensive: unadopted rows from a previous pass (their shared
             // owner guard was dropped with the unadopted factories).
@@ -397,6 +400,12 @@ fn add_keyed_children<T, I, K, W>(
     /// tuples, which is exactly what this signature invites.
     struct KeyedState<T, K> {
         rows: FxHashMap<K, Row<T>>,
+        /// Rows dropped from the data whose widget may still be playing its
+        /// exit. A key that comes back with an equal item takes its generation
+        /// back from here, and the reconciler hands it the leaving row rather
+        /// than building one; a row the reconciler no longer holds is
+        /// forgotten on the next run.
+        departed: FxHashMap<K, Row<T>>,
         next_generation: u64,
         /// Widgets built eagerly this pass, awaiting adoption by the
         /// reconciler's factory calls (keyed by generation).
@@ -409,13 +418,17 @@ fn add_keyed_children<T, I, K, W>(
     // input, which is the condition SipHash is there for.
     let state = Rc::new(RefCell::new(KeyedState::<T, K> {
         rows: FxHashMap::default(),
+        departed: FxHashMap::default(),
         next_generation: 0,
         pending: FxHashMap::default(),
     }));
 
-    let items_fn = move || {
+    let items_fn = move |leaving: &Leaving| {
         let items = data_fn(); // tracked: runs inside the segment scope
         let mut st = state.borrow_mut();
+        let st = &mut *st;
+        st.departed
+            .retain(|_, row| leaving.contains(row.generation));
 
         // Defensive: widgets stashed by a previous pass that were never
         // adopted would leak their owner scopes.
@@ -456,6 +469,14 @@ fn add_keyed_children<T, I, K, W>(
 
             let generation = match st.rows.get(&key) {
                 Some(row) if row.item == item => row.generation,
+                // Back mid-exit, unchanged: the same generation, so the same
+                // row.
+                None if st.departed.get(&key).is_some_and(|row| row.item == item) => {
+                    let row = st.departed.remove(&key).expect("just looked up");
+                    let generation = row.generation;
+                    st.rows.insert(key.clone(), row);
+                    generation
+                }
                 _ => {
                     let generation = st.next_generation;
                     st.next_generation += 1;
@@ -484,7 +505,10 @@ fn add_keyed_children<T, I, K, W>(
                 OwnedWidget::new(widget, owner_id)
             }));
         }
-        st.rows.retain(|key, _| seen.contains_key(key));
+        // Kept rather than dropped, in case the reconciler lets them play an
+        // exit — the next run forgets any it did not.
+        st.departed
+            .extend(st.rows.extract_if(|key, _| !seen.contains_key(key)));
         out
     };
 

@@ -873,6 +873,34 @@ pub trait Widget {
         false
     }
 
+    /// Begin leaving: this widget has been removed from a dynamic children
+    /// list, and plays whatever exit it declared before it is disposed.
+    ///
+    /// Returns whether it declared one. `false` — the default, and every
+    /// widget that declares none — is torn down in the same pass, as a removed
+    /// child always was. `true` keeps it in the tree, inert, until
+    /// [`is_exiting`](Self::is_exiting) says the exit has settled.
+    ///
+    /// Only the removed widget itself is asked: an exit declared further down
+    /// plays when *that* widget is the one removed.
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        let _ = (tree, id);
+        false
+    }
+
+    /// Whether an exit begun by [`begin_exit`](Self::begin_exit) is still
+    /// playing. Once it answers `false` the widget is disposed.
+    fn is_exiting(&self) -> bool {
+        false
+    }
+
+    /// Stop leaving: the key this widget was built for came back while its
+    /// exit played, so it stays, and whatever the exit moved travels back to
+    /// its declared value from where it is.
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
+        let _ = (tree, id);
+    }
+
     /// Publish how far this widget's paint will land outside its own bounds,
     /// before anything decides whether to paint it.
     ///
@@ -1009,6 +1037,15 @@ impl Widget for Box<dyn Widget> {
     }
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         (**self).reconcile_children(tree, id)
+    }
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        (**self).begin_exit(tree, id)
+    }
+    fn is_exiting(&self) -> bool {
+        (**self).is_exiting()
+    }
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
+        (**self).cancel_exit(tree, id)
     }
     fn layout_hints(&self) -> LayoutHints {
         (**self).layout_hints()

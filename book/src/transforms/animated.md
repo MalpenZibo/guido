@@ -64,6 +64,52 @@ resize or a state change is not an appearance and does not replay it. It needs a
 transition to travel with, so declaring one on a timeline is a panic rather than
 a value quietly ignored — a timeline already says where it starts.
 
+## Leaving
+
+`exiting_to` is the other half: where a property goes when its widget is
+removed. A child of `.child(move || ..)`, `.children(move || ..)` or `keyed(..)`
+that declares one is not torn down when it is removed. It stays where it stood,
+travels to its exit with the transition already named, and is disposed when it
+arrives.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let step = create_signal(1.0f32);
+# let name = create_signal(String::from("default"));
+# const WIDTH: f32 = 120.0;
+# let slide = Transition::new(200.0, TimingFunction::EaseOut);
+container().child(move || {
+    container().child(text(name.get())).translate(
+        Translate::NONE
+            .transition(slide.clone())
+            .entering_from(Translate::new(step.get_untracked() * WIDTH, 0.0))
+            .exiting_to(move || Translate::new(-step.get() * WIDTH, 0.0)),
+    )
+})
+# ;
+# }
+```
+
+A picker that slides the old name out one way as the new one slides in from the
+other. The exit is asked for when the child is removed, not when it was built,
+which is why it takes a closure: the direction is only known when the change
+that removes the child happens.
+
+While it leaves, the child is inert. A click over it reaches whatever is under
+it, the focus it held is released, and a signal it read no longer relays out or
+repaints it — its item may already be gone. An effect created while building it
+is not a widget, though: it lives until the child is disposed, and runs if what
+it reads changes. In a `keyed(..)` list, a key that comes back while its row is
+leaving gets that row back: the exit is cancelled and it travels home from
+wherever it had got to. The row itself is not rebuilt; a `.child(move || ..)`
+inside it is re-run, as it would be for any change it read.
+
+Only the removed widget's own properties are waited on. An exit declared on
+something inside it plays when *that* is the widget removed, and a container
+removed with no exit of its own takes a leaving child with it at once.
+
 ## Duration-Based Animation
 
 Standard easing curve transitions:
@@ -291,6 +337,9 @@ impl Container {
 
 // Where a property starts the one time its widget appears.
 Animated::entering_from(self, from: T) -> Animated<T>
+
+// Where it goes when its widget is removed, asked at removal.
+Animated::exiting_to(self, to: impl IntoSignal<T, M>) -> Animated<T>
 
 // Duration-based
 Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition

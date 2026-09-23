@@ -38,7 +38,9 @@ dynamic-children segment rather than the whole of it.
 
 `Widget` has two required methods. Everything else — `event`,
 `advance_animations`, `reconcile_children`, `layout_hints`,
-`register_children`, `refresh_paint_bounds` — has a default.
+`register_children`, `refresh_paint_bounds`, and the three a removed widget is
+asked about its exit, `begin_exit`, `is_exiting` and `cancel_exit` — has a
+default.
 
 One of those defaults is worth knowing about if your widget draws outside the
 box it was given. A parent narrows its children to the visible region before
