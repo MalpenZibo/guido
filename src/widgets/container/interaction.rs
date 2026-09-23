@@ -152,6 +152,22 @@ impl Container {
         }
     }
 
+    /// Say this container's cursor for a point inside its shape.
+    ///
+    /// Before the children, so that one of them declaring its own says it
+    /// later and wins. A container that does not take input claims nothing:
+    /// the compositor is not giving it the pointer, so whatever is beneath it
+    /// answers.
+    pub(super) fn claim_the_cursor(&self, tree: &mut Tree, hit: &HitContext, event: &Event) {
+        if let Some(ix) = self.interaction.as_deref()
+            && ix.cursor.is_set()
+            && self.takes_input.get_or_untracked(true)
+            && hit.contains(event.coords())
+        {
+            tree.point_shows_cursor(ix.cursor);
+        }
+    }
+
     /// Update hover state and fire the pointer-move callback, before children
     /// get the event: a child that handles a `MouseMove` must not stop its
     /// ancestors from tracking their own hover.

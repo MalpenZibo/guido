@@ -30,7 +30,7 @@ use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
-    IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
+    CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
@@ -285,6 +285,9 @@ pub(super) struct InteractionState {
     /// the ancestry is folded once, at registration, into a signal.
     pub(super) declared_enabled: Prop<bool>,
     pub(super) enabled: Prop<bool>,
+    /// The pointer's shape over this container — see
+    /// [`cursor`](Container::cursor).
+    pub(super) cursor: Prop<CursorIcon>,
     pub(super) ripple: RippleState,
 }
 
@@ -305,6 +308,7 @@ impl Default for InteractionState {
             declares_transform: Moves::default(),
             declared_enabled: Prop::Unset,
             enabled: Prop::Unset,
+            cursor: Prop::Unset,
             ripple: RippleState::new(),
         }
     }
@@ -830,6 +834,42 @@ impl Container {
     /// the moment the container stops painting.
     pub fn takes_input<M>(mut self, takes: impl IntoSignal<bool, M>) -> Self {
         self.takes_input = takes.into_prop();
+        self
+    }
+
+    /// The shape the pointer takes over this container.
+    ///
+    /// Resolved from the point after every pointer event: the innermost
+    /// widget under it that declares a cursor wins, and with none the pointer
+    /// is the arrow. So a clickable row says `Pointer` once, and a field
+    /// inside it still shows its I-beam over itself and hands the row's shape
+    /// back the moment the pointer leaves it:
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # let open = || {};
+    /// # let query = create_signal(String::new());
+    /// container()
+    ///     .cursor(CursorIcon::Pointer)
+    ///     .on_click(open)
+    ///     .child(text_input(query));
+    /// ```
+    ///
+    /// A shape that is about the whole surface rather than one place on it —
+    /// busy while something loads — is this, on the root:
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # let loading = create_signal(false);
+    /// container().cursor(move || {
+    ///     if loading.get() { CursorIcon::Wait } else { CursorIcon::Default }
+    /// });
+    /// ```
+    ///
+    /// A container that does not [take input](Self::takes_input) claims
+    /// nothing, and whatever is beneath it answers instead.
+    pub fn cursor<M>(mut self, cursor: impl IntoSignal<CursorIcon, M>) -> Self {
+        self.interact_mut().cursor = cursor.into_prop();
         self
     }
 
@@ -1703,6 +1743,10 @@ impl Widget for Container {
             ),
             _ => Cow::Borrowed(event),
         };
+
+        // Before anything below can return: a point over this container's
+        // scrollbar is still a point over this container.
+        self.claim_the_cursor(tree, &hit, &local_event);
 
         let at = tree.event_instant();
 
