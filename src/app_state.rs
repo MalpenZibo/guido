@@ -36,6 +36,7 @@ use smallvec::SmallVec;
 use crate::deferred::{DeferredQueue, DeferredSlot};
 use crate::jobs::{JobQueues, ScheduledJob};
 use crate::reactive::cursor::CursorIcon;
+use crate::reactive::{OwnerId, Prop};
 use crate::renderer::TextMeasurer;
 use crate::session_lock::{LockData, LockRequest};
 use crate::surface::{SurfaceCommand, SurfaceId};
@@ -86,10 +87,16 @@ pub(crate) struct AppState {
     pub(crate) lock_request: DeferredSlot<LockRequest>,
 
     // --- What the platform last said, and what we last told it -------------
-    /// The last shape `set_cursor` was asked for, so asking again for the same
-    /// one sends nothing; widget code that calls it has no platform. A pointer
-    /// entering a surface sends it anyway, through `resend_cursor`.
+    /// The last shape handed to the loop, so resolving the same one again
+    /// sends nothing. A pointer entering a surface sends it anyway, through
+    /// `resend_cursor`.
     pub(crate) current_cursor: Cell<CursorIcon>,
+    /// The declaration the pointer last came to rest over, so the same one
+    /// again — every move across a button — is recognised as nothing new.
+    pub(crate) pointed_cursor: Cell<Prop<CursorIcon>>,
+    /// The scope of the effect watching `pointed_cursor` when it is a signal,
+    /// disposed when the pointer finds another declaration.
+    pub(crate) cursor_watch: Cell<Option<OwnerId>>,
     /// What a copy in a handler put there, readable by a paste in another.
     pub(crate) clipboard: RefCell<Option<String>>,
     /// The compositor's selection, prefetched so a paste in a handler can
@@ -145,6 +152,8 @@ pub(crate) fn reset() {
             pending_focus,
             lock_request,
             current_cursor,
+            pointed_cursor,
+            cursor_watch,
             clipboard,
             system_clipboard,
             primary,
@@ -184,6 +193,8 @@ pub(crate) fn reset() {
         pending_focus.take();
 
         current_cursor.take();
+        pointed_cursor.take();
+        cursor_watch.take();
         clipboard.take();
         system_clipboard.take();
         primary.take();

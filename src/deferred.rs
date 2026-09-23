@@ -14,7 +14,7 @@
 //! thread-locals belonging to the main thread, so a producer calling from a
 //! background thread queues into its own thread's copy, which nothing drains
 //! — the wakeup fires and the value is lost. The public gestures that reach
-//! them (`set_cursor`, `clipboard_copy`, `primary_copy`, `dispose_owner`) are
+//! them (`clipboard_copy`, `primary_copy`, `dispose_owner`) are
 //! main-thread API for that reason; a background thread reaches the UI through
 //! `WriteSignal`, which is the one queue built to cross threads.
 //!

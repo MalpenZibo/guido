@@ -191,7 +191,7 @@ pub mod prelude {
         Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
         WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
         create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
-        provide_context, provide_signal_context, set_cursor, use_context, with_context,
+        provide_context, provide_signal_context, use_context, with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
@@ -664,6 +664,12 @@ fn dispatch_events(
         reactive::diagnostics::snapshot_zone(|| {
             let response =
                 tree.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
+
+            // The dispatch just asked every widget under the point, and the
+            // innermost one that declares a cursor said so last.
+            if event.coords().is_some() {
+                reactive::cursor::point_at(tree.cursor_under_the_point());
+            }
 
             // A press nobody claimed is a press on nothing, and the keyboard
             // goes with it. This is the only place that can tell: a widget is

@@ -166,6 +166,19 @@ fn untracked_derived<T: Clone + 'static>(id: SignalId) -> T {
 
 impl_signal_id_traits!(Signal);
 
+impl<T> Signal<T> {
+    /// Whether the scope that made this signal still holds it.
+    ///
+    /// For a reader that outlives the declaration it watches — the cursor's,
+    /// which stays on what the pointer last rested over after that widget is
+    /// gone. A derived one is the case that bites: its closure is disposed
+    /// with its scope, but the signals the closure read are not, and a write
+    /// to one of them still reaches the reader.
+    pub(crate) fn is_live(&self) -> bool {
+        has_signal(self.id)
+    }
+}
+
 impl<T: Clone + 'static> Signal<T> {
     /// Get the current value (tracks as dependency for effects)
     #[cfg_attr(debug_assertions, track_caller)]

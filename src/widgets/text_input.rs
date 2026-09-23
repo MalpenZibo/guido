@@ -18,7 +18,7 @@ use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
     CursorIcon, IntoSignal, Prop, RwSignal, clipboard_copy, clipboard_paste, has_focus,
-    primary_copy, primary_paste, release_focus, request_focus, set_cursor,
+    primary_copy, primary_paste, release_focus, request_focus,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
@@ -366,17 +366,16 @@ impl TextInput {
         }
     }
 
-    /// Give up the hover, and the cursor icon that goes with it.
+    /// Give up the hover.
     ///
     /// Two events mean the same thing — the pointer moved out of the bounds, or
-    /// it left the surface — and both used to spell the three lines out. The
+    /// it left the surface — and both used to spell it out. The
     /// guard lives here rather than at the call sites so that neither can
     /// forget it: an unchanged pointer move must not cost a signal write.
     fn release_pointer(&mut self) {
         if self.is_hovered {
             self.is_hovered = false;
             self.hover.set(false);
-            set_cursor(CursorIcon::Default);
         }
     }
 
@@ -1497,6 +1496,11 @@ impl Widget for TextInput {
         // Get bounds from Tree for hit testing
         let bounds = tree.get_bounds(id).unwrap_or_default();
 
+        let pointed_at = bounds.contains_at(event.coords());
+        if pointed_at {
+            tree.point_shows_cursor(Prop::Const(CursorIcon::Text));
+        }
+
         match event {
             Event::MouseDown {
                 at: Some(at),
@@ -1523,14 +1527,10 @@ impl Widget for TextInput {
             // about where a selection has got to, so the drag keeps what it
             // had rather than being dragged to the start of the line.
             Event::MouseMove { at, .. } => {
-                let in_bounds = bounds.contains_at(*at);
-
-                // Update hover state and cursor
-                if in_bounds && !self.is_hovered {
+                if pointed_at && !self.is_hovered {
                     self.is_hovered = true;
                     self.hover.set(true);
-                    set_cursor(CursorIcon::Text);
-                } else if !in_bounds {
+                } else if !pointed_at {
                     self.release_pointer();
                 }
 
