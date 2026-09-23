@@ -64,7 +64,9 @@ use crate::widgets::Corners;
 ///   becomes a value of its type, a container built around the declaration, a
 ///   probe reading that number back off the painted frame, and the three
 ///   numbers it moves between — where it enters from, where it lands, and
-///   where a later write sends it — and `base`, the value a timeline is
+///   where a later write sends it; `from` is where it leaves to as well, when
+///   the container is removed from the one holding it — and `base`, the value
+///   a timeline is
 ///   declared at, which is `from` for every row but `shadow`'s, for the reason
 ///   written there.
 ///
@@ -160,27 +162,24 @@ macro_rules! animated_properties {
                 timeline: yes,
                 test {
                     value: |k| Translate::new(k, 0.0),
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).translate(v)),
-                    probe: |h: &mut H| h.paint().children[0].local_transform.tx(),
+                    declared_as: |v| container().width(200.0).height(100.0).translate(v),
+                    probe: |h: &mut H| h.paint().local_transform.tx(),
                     from: 5.0, to: 50.0, then: 20.0, base: 5.0,
                 };
             rotate: f32 as f32, target: effective_rotate_target, layout: no,
                 timeline: yes,
                 test {
                     value: |k| k,
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).rotate(v)),
-                    probe: |h: &mut H| turned_degrees(&h.paint().children[0]),
+                    declared_as: |v| container().width(200.0).height(100.0).rotate(v),
+                    probe: |h: &mut H| turned_degrees(&h.paint()),
                     from: 4.0, to: 40.0, then: 16.0, base: 4.0,
                 };
             scale: Scale as Scale, target: effective_scale_target, layout: no,
                 timeline: yes,
                 test {
                     value: |k| Scale::uniform(k),
-                    declared_as: |v| container().child(
-                        container().width(200.0).height(100.0).scale(v)),
-                    probe: |h: &mut H| h.paint().children[0].local_transform.data[0],
+                    declared_as: |v| container().width(200.0).height(100.0).scale(v),
+                    probe: |h: &mut H| h.paint().local_transform.data[0],
                     from: 0.5, to: 2.0, then: 1.25, base: 0.5,
                 };
         }

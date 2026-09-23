@@ -1638,6 +1638,13 @@ fn pump(h: &mut H) -> bool {
     let mut layout_roots = Vec::new();
     jobs::process_jobs(&drained, &mut h.tree, &mut layout_roots);
     jobs::recycle_job_buffer(drained);
+    // And the follow-ups those jobs asked for, as `run_jobs` takes them in the
+    // same frame: a child whose exit settled asks its container to reconcile,
+    // and the loop does that before it lays anything out.
+    jobs::distribute_jobs(&h.tree, &roots);
+    let followup = jobs::drain_surface_non_animation_jobs(h.root);
+    jobs::process_jobs(&followup, &mut h.tree, &mut layout_roots);
+    jobs::recycle_job_buffer(followup);
     jobs::recycle_job_buffer(jobs::drain_orphan_jobs());
     animating
 }
@@ -4119,6 +4126,376 @@ fn an_enter_on_a_timeline_refuses() {
         .entering_from(0.0);
 }
 
+// ---------------------------------------------------------------------------
+// Leaving: an exit rides with the value, as an enter does
+// ---------------------------------------------------------------------------
+
+/// A 200 ms linear slide, the transition every exit below travels with.
+fn slide() -> Transition {
+    Transition::new(200.0, TimingFunction::Linear)
+}
+
+/// The horizontal translate `id` was painted at in `node`, one level down —
+/// where a container paints its children — or `None` if it did not paint.
+fn painted_x(node: &RenderNode, id: WidgetId) -> Option<f32> {
+    node.children
+        .iter()
+        .find(|child| child.id == id.as_u64())
+        .map(|child| child.local_transform.tx())
+}
+
+/// A card that slides out to `-100` when it is taken away.
+fn leaving_card() -> Container {
+    container().width(100.0).height(50.0).translate(
+        Translate::NONE
+            .transition(slide())
+            .exiting_to(Translate::new(-100.0, 0.0)),
+    )
+}
+
+/// The frame after `t` by `ms`.
+fn after(t: std::time::Instant, ms: u64) -> std::time::Instant {
+    t + std::time::Duration::from_millis(ms)
+}
+
+/// A removed child that declares an exit stays in the container, painted part
+/// of the way there, until the exit settles — and then it is gone from the
+/// tree, not merely from the list.
+#[test]
+fn a_removed_child_with_an_exit_stays_until_the_exit_settles() {
+    let step = create_signal(0u32);
+    let mut h = H::new(container().child(move || {
+        step.get();
+        leaving_card()
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(
+        h.children().len(),
+        2,
+        "the leaving child and the new one are both there"
+    );
+    assert!(h.children().contains(&first));
+
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+    let midway = painted_x(&h.paint(), first).expect("the leaving child still paints");
+    assert!(
+        (midway + 50.0).abs() < 0.5,
+        "half of a linear 200 ms from rest to -100 is -50, got {midway}"
+    );
+
+    frame_at(&mut h, after(t0, 210), 400.0, 400.0);
+    assert_eq!(h.children().len(), 1, "the exit has settled");
+    assert!(
+        !h.tree.contains(first),
+        "and the leaving child left the tree with it"
+    );
+}
+
+/// The same child with no exit declared leaves in the pass that removed it,
+/// exactly as it always has.
+#[test]
+fn a_removed_child_without_an_exit_is_gone_in_the_same_pass() {
+    let step = create_signal(0u32);
+    let mut h = H::new(container().child(move || {
+        step.get();
+        container()
+            .width(100.0)
+            .height(50.0)
+            .translate(Translate::NONE.transition(slide()))
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(h.children().len(), 1);
+    assert!(!h.tree.contains(first));
+}
+
+/// The direction is known when the change happens, not when the child was
+/// built, so the exit is read at removal.
+#[test]
+fn an_exit_is_read_when_the_child_is_removed() {
+    let step = create_signal(0u32);
+    let direction = create_signal(1.0f32);
+    let mut h = H::new(container().child(move || {
+        step.get();
+        container().width(100.0).height(50.0).translate(
+            Translate::NONE
+                .transition(slide())
+                .exiting_to(move || Translate::new(direction.get() * 100.0, 0.0)),
+        )
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+
+    // Built heading right; removed heading left.
+    direction.set(-1.0);
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+    let midway = painted_x(&h.paint(), first).expect("the leaving child still paints");
+    assert!(
+        (midway + 50.0).abs() < 0.5,
+        "the exit goes where the signal said at removal: got {midway}"
+    );
+}
+
+/// A leaving child is inert: a click over it reaches the child drawn above it
+/// or nothing, the focus it held goes at removal, and it cannot take it back.
+#[test]
+fn a_leaving_child_takes_no_pointer_and_holds_no_focus() {
+    use crate::layout::ZStack;
+    use crate::reactive::focus::focus_path;
+    use crate::reactive::request_focus;
+
+    let step = create_signal(0u32);
+    let clicks = create_signal(Vec::<u32>::new());
+    let mut h = H::new(container().layout(ZStack::new()).child(move || {
+        let n = step.get();
+        leaving_card()
+            .background(Color::RED)
+            .when_hovered(|s| s.background(Color::BLUE))
+            .on_click(move || clicks.update(|c| c.push(n)))
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+    request_focus(&h.tree, first);
+    assert!(focus_path().contains(first), "the setup needs it focused");
+    h.send(Event::mouse_move(20.0, 20.0));
+    let painted = |h: &mut H| {
+        let node = h.paint();
+        let leaving = node.children.iter().find(|c| c.id == first.as_u64());
+        leaving.and_then(|c| rects(c).first().map(|(_, color)| *color))
+    };
+    assert_eq!(
+        painted(&mut h),
+        Some(Color::BLUE),
+        "the setup needs it hovered"
+    );
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert!(h.tree.contains(first), "it is leaving, not gone");
+    assert!(
+        !focus_path().contains(first),
+        "the focus goes when the child is removed, not when it is disposed"
+    );
+    request_focus(&h.tree, first);
+    assert!(
+        !focus_path().contains(first),
+        "and a leaving child cannot take it back"
+    );
+    assert_eq!(
+        painted(&mut h),
+        Some(Color::RED),
+        "the pointer goes with the focus: it does not leave hovered"
+    );
+
+    for event in click_at(20.0, 20.0) {
+        h.send(event);
+    }
+    assert_eq!(
+        clicks.get_untracked(),
+        vec![1],
+        "the click belongs to the child that is arriving, not the one leaving"
+    );
+}
+
+/// A leaving child does not react: a signal it read, written after it was
+/// removed, queues nothing for it — not even after it has painted again.
+#[test]
+fn a_signal_read_inside_a_leaving_child_queues_nothing_for_it() {
+    let step = create_signal(0u32);
+    let tint = create_signal(0.0f32);
+    let mut h = H::new(container().child(move || {
+        step.get();
+        leaving_card().background(move || Color::rgb(tint.get(), 0.0, 0.0))
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    h.paint();
+    let first = h.children()[0];
+    assert!(
+        jobs_for(&mut h, first, || tint.set(0.1)).contains(&JobType::Paint),
+        "the control: before removal the write repaints it"
+    );
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 50), 400.0, 400.0);
+    h.paint();
+    assert!(h.tree.contains(first), "it is leaving, and painting");
+    let queued = jobs_for(&mut h, first, || tint.set(0.5));
+    assert!(
+        queued.is_empty(),
+        "a leaving child must not be woken by what it read, got {queued:?}"
+    );
+}
+
+/// The job types a write queues for one widget.
+fn jobs_for(h: &mut H, id: WidgetId, write: impl FnOnce()) -> Vec<JobType> {
+    h.drain_jobs();
+    write();
+    jobs::queued_job_types(id)
+}
+
+/// A key that comes back mid-exit gets its row back: the same widget, not
+/// rebuilt, travelling home from wherever the exit had taken it.
+#[test]
+fn a_key_that_comes_back_mid_exit_reclaims_its_row() {
+    use std::cell::Cell;
+
+    let items = create_signal(vec![1u32, 2, 3]);
+    let builds = Rc::new(Cell::new(0u32));
+    let counted = builds.clone();
+    let mut h = H::new(container().children(crate::widgets::keyed(
+        move || items.get(),
+        |k| *k,
+        move |_| {
+            counted.set(counted.get() + 1);
+            leaving_card()
+        },
+    )));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let second = h.children()[1];
+    assert_eq!(builds.get(), 3);
+
+    items.set(vec![1, 3]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+    let halfway = painted_x(&h.paint(), second).expect("leaving, and painting");
+    assert!((halfway + 50.0).abs() < 0.5, "half way out, got {halfway}");
+
+    items.set(vec![1, 2, 3]);
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+    assert!(
+        h.children().contains(&second),
+        "the row that was leaving is the row that came back"
+    );
+    assert_eq!(h.children().len(), 3, "and nothing was built beside it");
+    assert_eq!(builds.get(), 3, "its builder did not run again");
+
+    frame_at(&mut h, after(t0, 210), 400.0, 400.0);
+    let returning = painted_x(&h.paint(), second).expect("back in the list");
+    assert!(
+        returning < -1.0 && returning > -49.0,
+        "on its way home from -50, neither snapped back nor restarted: got \
+         {returning}"
+    );
+
+    frame_at(&mut h, after(t0, 500), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 510), 400.0, 400.0);
+    assert!(
+        h.tree.contains(second),
+        "and it is not disposed later either"
+    );
+    assert_eq!(painted_x(&h.paint(), second), Some(0.0), "home");
+}
+
+/// The picker that asked for this: a slide changed twice within one exit. The
+/// first leaving child goes on where it was going; it is not rebuilt, and it
+/// does not jump back to the centre to start again.
+#[test]
+fn a_slide_changed_twice_within_one_exit_leaves_the_first_where_it_was_going() {
+    use crate::layout::ZStack;
+
+    let step = create_signal(0u32);
+    let mut h = H::new(container().layout(ZStack::new()).child(move || {
+        step.get();
+        leaving_card()
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+
+    step.set(2);
+    frame_at(&mut h, after(t0, 110), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 160), 400.0, 400.0);
+    let x = painted_x(&h.paint(), first).expect("still leaving");
+    assert!(
+        (x + 75.0).abs() < 0.5,
+        "three quarters of the way out, as if nothing had happened: got {x}"
+    );
+    assert_eq!(h.children().len(), 3, "two leaving, one arriving");
+}
+
+/// An exit is written in every spelling the property takes — a value, a
+/// closure, a signal — including the widenings an enter takes.
+#[test]
+fn an_exit_takes_what_the_property_takes() {
+    let angle = create_signal(0.0f32);
+    let _ = container()
+        .rotate(45.0f32.transition(200.0).exiting_to(0i32))
+        .scale(Scale::uniform(1.0).transition(200.0).exiting_to(0.0f64))
+        .width(120.0f32.transition(200.0).exiting_to(0u16))
+        .corners(4.0.transition(200.0).exiting_to(move || angle.get()))
+        .padding(
+            Padding::all(2.0)
+                .transition(200.0)
+                .exiting_to(Padding::all(0.0)),
+        )
+        .shadow(Shadow::none().transition(200.0).exiting_to(Shadow::none()));
+    let _ = container().rotate(0.0f32.transition(200.0).exiting_to(angle));
+}
+
+/// A timeline plays a sequence of its own, so an exit on one would be dropped
+/// in silence. It says so instead.
+#[test]
+#[should_panic(expected = "a timeline plays a sequence of its own")]
+fn an_exit_on_a_timeline_refuses() {
+    let plays = create_signal(0u32);
+    let _ = 0.0f32
+        .timeline(Keyframes::new(100.0).at(1.0, 1.0).played_by(plays))
+        .exiting_to(0.0);
+}
+
+/// An exit never delays anything but its own removal: the container around a
+/// leaving child, taken away without an exit of its own, takes it along at
+/// once.
+#[test]
+fn an_ancestor_taken_away_takes_a_leaving_child_with_it() {
+    let outer = create_signal(true);
+    let step = create_signal(0u32);
+    let mut h = H::new(container().child(move || {
+        outer.get().then(|| {
+            container().child(move || {
+                step.get();
+                leaving_card()
+            })
+        })
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let host = h.children()[0];
+    let first = h.tree.get_children(host)[0];
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert!(h.tree.contains(first), "leaving");
+
+    outer.set(false);
+    frame_at(&mut h, after(t0, 20), 400.0, 400.0);
+    assert!(!h.tree.contains(host));
+    assert!(
+        !h.tree.contains(first),
+        "taken with the container it was in"
+    );
+}
+
 /// Every `BackdropBlur` radius drawn by a node./// Every `BackdropBlur` radius drawn by a node.
 fn blur_radii(node: &RenderNode) -> Vec<f32> {
     node.commands
@@ -6093,10 +6470,11 @@ fn turned_degrees(node: &RenderNode) -> f32 {
 
 /// The jobs a write queues anywhere in the tree, rather than on the root.
 ///
-/// The per-property tests declare some properties on a child — a transform is
-/// read off the matrix its parent wrote — so the widget that asks for the
-/// frame is not always the root. What is asserted of every property is that
-/// the write asks *somebody* for one: a declared value's only subscription is
+/// Every property in the table is declared on the root now — a removed
+/// widget's exit plays only on its own properties, so the recipe declares on
+/// the widget it would remove — but what is asserted of every property is
+/// still only that the write asks *somebody* for a frame: a declared value's
+/// only subscription is
 /// the read the drift check makes of it, and without that read the write
 /// reaches the next frame somebody else happened to want.
 fn jobs_anywhere(h: &mut H, write: impl FnOnce()) -> Vec<JobType> {
@@ -6130,6 +6508,15 @@ fn run_to(
         frame_at(h, at.min(start + span), 400.0, 400.0);
     }
     probe(h)
+}
+
+/// A probe read off `id` rather than the harness's root: the child a
+/// container holds, which the probes cannot name — they read `h.root`.
+fn probe_of(h: &mut H, id: WidgetId, probe: impl Fn(&mut H) -> f32) -> f32 {
+    let root = std::mem::replace(&mut h.root, id);
+    let read = probe(h);
+    h.root = root;
+    read
 }
 
 /// What a write underneath a property has to have queued.
@@ -6214,12 +6601,13 @@ macro_rules! emit_timeline_test {
 /// A property's own test, written once and emitted for every row of
 /// [`animated_properties!`].
 ///
-/// Four things have to hold for each of them, and each is a different one of
+/// Five things have to hold for each of them, and each is a different one of
 /// the sites the table generates: it **enters** from where it was declared to
 /// (the seed), it is **halfway at half the duration** (the advance), a write
 /// underneath it **wakes the container** (the drift check, which is the only
-/// subscription that write has), and the ease that follows lands **where the
-/// write sent it** (the retarget).
+/// subscription that write has), the ease that follows lands **where the
+/// write sent it** (the retarget), and removed, it **leaves** to where its exit
+/// was declared to before it is disposed (the exit).
 ///
 /// Checked alone on its container, which is the shape the two shadow tests
 /// above had to be written by hand for: a `||` chain over nine slots drifts
@@ -6354,6 +6742,52 @@ macro_rules! emit_property_tests {
                         "{}: a constant declaration must claim no slot, and a \
                          closure must claim one — got {constant} against \
                          {reactive}",
+                        stringify!($name),
+                    );
+                }
+
+                /// It leaves: removed from the container holding it, it
+                /// travels to where its exit was declared to, is halfway there
+                /// at half the duration, and is disposed when it lands.
+                ///
+                /// The probe is read off the leaving widget, which is no
+                /// longer anybody's root; the recipe's declaration is the
+                /// removed widget itself, so the exit is on the widget that
+                /// is removed.
+                #[test]
+                fn it_leaves_to_where_its_exit_was_declared() {
+                    let value = $value;
+                    let probe = $probe;
+                    let shown = create_signal(true);
+                    let mut h = H::new(container().child(move || {
+                        shown.get().then(|| {
+                            ($declared_as)(value($to)
+                                .transition(Transition::new(100.0, TimingFunction::Linear))
+                                .exiting_to(value($from)))
+                        })
+                    }));
+
+                    let t0 = std::time::Instant::now();
+                    frame_at(&mut h, t0, 400.0, 400.0);
+                    let leaving = h.children()[0];
+
+                    shown.set(false);
+                    frame_at(&mut h, t0, 400.0, 400.0);
+                    let halfway = run_to(&mut h, t0, HALF, |h| probe_of(h, leaving, probe));
+                    let midpoint = ($to + $from) / 2.0;
+                    assert!(
+                        (halfway - midpoint).abs() < 0.01,
+                        "{}: half of a linear hundred milliseconds is half the \
+                         way out: got {halfway}, wanted {midpoint}",
+                        stringify!($name),
+                    );
+
+                    // Frames to the end, with nothing to probe on the last:
+                    // by then there is nothing to probe.
+                    run_to(&mut h, t0 + HALF, HALF, |_| 0.0);
+                    assert!(
+                        !h.tree.contains(leaving),
+                        "{}: an exit that has landed is disposed",
                         stringify!($name),
                     );
                 }

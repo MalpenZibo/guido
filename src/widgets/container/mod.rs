@@ -28,6 +28,7 @@ use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
+use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
@@ -1352,7 +1353,16 @@ impl Widget for Container {
         // This is for one hidden while it runs, which before now went on
         // asking for a frame every vsync and repainting a surface showing
         // nothing (#351).
-        let is_visible = with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
+        //
+        // A leaving container skips the question: its exit is what disposes
+        // it, so it plays whether or not anything can see it.
+        let leaving = self.is_leaving();
+        if !leaving && is_detached(id) {
+            // Inside a child that is leaving: only the exit moves.
+            return false;
+        }
+        let is_visible =
+            leaving || with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
         if !is_visible {
             return false;
         }
@@ -1401,7 +1411,61 @@ impl Widget for Container {
         // (the declared animations, the ripple, the kinetic scroll) handles its
         // own continuation
 
+        // The last exit has settled: the container that holds this one
+        // disposes it, and is asked to in this frame.
+        if leaving
+            && !self.is_exiting()
+            && let Some(parent) = tree.get_parent(id)
+        {
+            request_job(parent, JobRequest::Reconcile);
+        }
+
         any_animating
+    }
+
+    fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        let Some(declared) = self.anims.as_deref_mut() else {
+            return false;
+        };
+        if !declared.slots().any(AnimSlot::declares_exit) {
+            return false;
+        }
+        let now = tree.frame_instant();
+        let mut moves_the_box = false;
+        for slot in declared.slots_mut() {
+            if slot.begin_exit(now) {
+                moves_the_box |= slot.moves_the_box();
+            }
+        }
+        let follow_up = if moves_the_box {
+            RequiredJob::Layout
+        } else {
+            RequiredJob::Paint
+        };
+        request_job(id, JobRequest::Animation(follow_up));
+        true
+    }
+
+    fn is_exiting(&self) -> bool {
+        self.anims.as_deref().is_some_and(|declared| {
+            declared
+                .slots()
+                .any(|slot| slot.is_leaving() && slot.is_animating())
+        })
+    }
+
+    fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {
+        let Some(declared) = self.anims.as_deref_mut() else {
+            return;
+        };
+        for slot in declared.slots_mut() {
+            slot.cancel_exit();
+        }
+        // Sent home now, from where each property is, rather than by the
+        // Animation job of the next frame: the frame the key came back is the
+        // frame the return begins. A size is sent home by the layout its
+        // reattach asks for, in this frame too.
+        self.advance_declared_animations(id, tree.frame_instant());
     }
 
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
@@ -1663,6 +1727,11 @@ impl Widget for Container {
         let mut a_child_took_it = false;
         if !skip_child_dispatch {
             for &child_id in self.children_source.get() {
+                // A child playing its exit is drawn and takes nothing: the
+                // event goes on to whatever is under it.
+                if is_detached(child_id) {
+                    continue;
+                }
                 if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
                     child.event(tree, child_id, &child_event)
                 }) && response == EventResponse::Handled

@@ -138,6 +138,71 @@ impl<T> Animated<T> {
     }
 }
 
+impl<T: Clone + 'static> Animated<T> {
+    /// Leave somewhere else when the widget is removed, travelling there with
+    /// the transition already named, and be disposed when it arrives.
+    ///
+    /// The other half of [`entering_from`](Self::entering_from). Declared on
+    /// the removed widget's own properties — a child of `.child(move || ..)`,
+    /// `.children(move || ..)` or `keyed(..)` — it keeps that widget in its
+    /// container, where it stood, until every exit it declared has settled.
+    /// While it leaves it is inert: it takes no pointer input and no focus,
+    /// and nothing it reads wakes it.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let step = create_signal(1.0f32);
+    /// # let name = create_signal(String::new());
+    /// # const WIDTH: f32 = 120.0;
+    /// # let slide = Transition::new(200.0, TimingFunction::EaseOut);
+    /// container().child(move || {
+    ///     container().child(text(name.get())).translate(
+    ///         Translate::NONE
+    ///             .transition(slide.clone())
+    ///             .entering_from(Translate::new(step.get_untracked() * WIDTH, 0.0))
+    ///             .exiting_to(move || Translate::new(-step.get() * WIDTH, 0.0)),
+    ///     )
+    /// });
+    /// ```
+    ///
+    /// **Asked at removal, not at build.** An enter is resolved when the
+    /// widget is built; an exit is not, because which way a child leaves is
+    /// known only when the change that removes it happens — with two items,
+    /// next and previous land on the same one. So a closure passed here runs
+    /// when the widget is removed, and reads the direction as it is then.
+    ///
+    /// A `keyed(..)` row whose key comes back while it is leaving is not
+    /// rebuilt: its exit is cancelled and it travels back from where it is.
+    ///
+    /// Only a container's own properties leave, and only the removed widget's:
+    /// an exit declared on something inside it plays when that is the widget
+    /// removed.
+    ///
+    /// Panics if a timeline was declared instead of a transition, for the
+    /// reason `entering_from` does.
+    pub fn exiting_to<M>(mut self, to: impl IntoSignal<T, M>) -> Self {
+        let to = to.into_prop();
+        match self.motion.as_deref_mut() {
+            Some(Motion::Ease { exit_to, .. }) => {
+                *exit_to = Some(Box::new(move || {
+                    to.get_untracked()
+                        .expect("a declared exit always carries a value")
+                }))
+            }
+            Some(Motion::Play { .. }) => panic!(
+                "`exiting_to` needs a transition to travel with, and a timeline \
+                 plays a sequence of its own — declare the exit on a \
+                 `transition(..)` value instead"
+            ),
+            None => unreachable!(
+                "an `Animated<T>` with no motion is only made by `into_animated`, \
+                 inside the setter that immediately consumes it"
+            ),
+        }
+        self
+    }
+}
+
 /// An eased motion taken apart: the transition, where it enters from and
 /// where it exits to.
 pub(crate) type Eased<T> = (TransitionConfig, Option<T>, Option<ExitTo<T>>);
@@ -158,7 +223,7 @@ pub(crate) enum Motion<T> {
         /// for almost every declaration; see [`Animated::entering_from`].
         enter_from: Option<T>,
         /// Where it goes when the widget is removed, asked then. `None` for
-        /// almost every declaration; asked when the widget is removed.
+        /// almost every declaration; see [`Animated::exiting_to`].
         exit_to: Option<ExitTo<T>>,
     },
     /// Play a sequence whenever the trigger changes, and rest on the declared
