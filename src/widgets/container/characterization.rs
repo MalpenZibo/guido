@@ -4483,6 +4483,116 @@ fn a_key_that_comes_back_mid_exit_reclaims_its_row() {
     assert_eq!(painted_x(&h.paint(), second), Some(0.0), "home");
 }
 
+/// A keyed list whose rows each build an effect that counts its runs and reads
+/// `watched`, and slide out when removed. Returns the harness and row 2's count.
+fn rows_with_an_effect(
+    items: crate::reactive::RwSignal<Vec<u32>>,
+    watched: crate::reactive::RwSignal<u32>,
+) -> (H, Rc<std::cell::Cell<u32>>) {
+    let runs = Rc::new(std::cell::Cell::new(0u32));
+    let counted = runs.clone();
+    let h = H::new(container().children(crate::widgets::keyed(
+        move || items.get(),
+        |k| *k,
+        move |k| {
+            if k == 2 {
+                let counted = counted.clone();
+                crate::reactive::create_effect(move || {
+                    watched.get();
+                    counted.set(counted.get() + 1);
+                });
+            }
+            leaving_card()
+        },
+    )));
+    (h, runs)
+}
+
+/// A leaving row does not react, and an effect its builder made is part of it:
+/// a signal the effect read, written mid-exit, does not run it.
+#[test]
+fn an_effect_inside_a_leaving_row_does_not_run() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let watched = create_signal(0u32);
+    let (mut h, runs) = rows_with_an_effect(items, watched);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    watched.set(1);
+    assert_eq!(runs.get(), 2, "the control: a live row's effect runs");
+
+    items.set(vec![1, 3]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    watched.set(2);
+    watched.set(3);
+    frame_at(&mut h, after(t0, 60), 400.0, 400.0);
+    assert_eq!(
+        runs.get(),
+        2,
+        "an effect in a row that is leaving must not run"
+    );
+}
+
+/// A row reclaimed mid-exit comes back with its effect working: what it missed
+/// while it was leaving runs once, not once per write, and not never.
+#[test]
+fn a_reclaimed_row_runs_what_it_missed_once() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let watched = create_signal(0u32);
+    let (mut h, runs) = rows_with_an_effect(items, watched);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    assert_eq!(runs.get(), 1);
+
+    items.set(vec![1, 3]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    watched.set(1);
+    watched.set(2);
+
+    items.set(vec![1, 2, 3]);
+    frame_at(&mut h, after(t0, 60), 400.0, 400.0);
+    assert_eq!(runs.get(), 2, "the write it missed runs it once on reclaim");
+
+    watched.set(3);
+    assert_eq!(runs.get(), 3, "and it is live again afterwards");
+}
+
+/// A row reclaimed with nothing missed does not run on the way back.
+#[test]
+fn a_reclaimed_row_that_missed_nothing_does_not_run() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let watched = create_signal(0u32);
+    let (mut h, runs) = rows_with_an_effect(items, watched);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+
+    items.set(vec![1, 3]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    items.set(vec![1, 2, 3]);
+    frame_at(&mut h, after(t0, 60), 400.0, 400.0);
+    assert_eq!(runs.get(), 1);
+}
+
+/// Once the exit settles the row is disposed, and its effect with it.
+#[test]
+fn an_effect_inside_a_leaving_row_is_disposed_when_the_exit_settles() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let watched = create_signal(0u32);
+    let (mut h, runs) = rows_with_an_effect(items, watched);
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let second = h.children()[1];
+
+    items.set(vec![1, 3]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    watched.set(1);
+    frame_at(&mut h, after(t0, 220), 400.0, 400.0);
+    frame_at(&mut h, after(t0, 230), 400.0, 400.0);
+    assert!(!h.tree.contains(second), "the exit has settled");
+
+    watched.set(2);
+    assert_eq!(runs.get(), 1, "a disposed row's effect never runs again");
+}
+
 /// The picker that asked for this: a slide changed twice within one exit. The
 /// first leaving child goes on where it was going; it is not rebuilt, and it
 /// does not jump back to the centre to start again.

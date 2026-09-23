@@ -699,7 +699,8 @@ a `keyed(..)` row can be asked for again before then. So its scopes are
 scope below it, and an effect whose scope is paused does not run — a write to
 what it read marks it as having missed a run instead. `resume_owner`, when the
 row is reclaimed, clears the mark and runs each effect that missed a run, once.
-A scope opened under a paused one starts paused. Disposal is unchanged: a
+A memo is an effect too, so one in a paused scope holds the value it had when
+the scope was paused. A scope opened under a paused one starts paused. Disposal is unchanged: a
 paused scope disposed takes its effects with it, and what they missed never
 runs. This is Svelte 5's `pause_effect` and `resume_effect` (the `INERT` flag).
 
