@@ -203,7 +203,7 @@ impl Renderer {
     ) -> RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Renderer Pipeline Layout"),
-            bind_group_layouts: &[bind_group_layout],
+            bind_group_layouts: &[Some(bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -345,17 +345,14 @@ impl Renderer {
         #[cfg(not(any(test, feature = "testing")))]
         let RenderTarget::Swapchain(surface) = target;
         let output = match surface.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Lost => {
                 surface.resize(surface.width(), surface.height());
                 return false;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("Out of GPU memory");
-                return false;
-            }
-            Err(e) => {
-                log::error!("Surface error: {:?}", e);
+            other => {
+                log::error!("Surface error: {:?}", other);
                 return false;
             }
         };
@@ -755,6 +752,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         font_size,
         font_family,
         font_weight,
+        fit,
         align,
     } = &*cmd.command
     else {
@@ -826,6 +824,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            fit: *fit,
             align: *align,
             // Shaped by whichever path will draw the glyphs over the frost:
             // the two break their lines in different places, and the frost has
@@ -935,6 +934,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size,
             font_family,
             font_weight,
+            fit,
             align,
         } => Some(TextEntry {
             text: text.clone(),
@@ -943,6 +943,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            fit: *fit,
             align: *align,
             opacity: cmd.opacity,
             clip: cmd.clip(),
@@ -971,6 +972,7 @@ mod tests {
                 font_size: 20.0,
                 font_family: FontFamily::default(),
                 font_weight: Default::default(),
+                fit: None,
                 align: Default::default(),
             }),
             world_transform: transform,

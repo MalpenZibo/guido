@@ -82,7 +82,7 @@ does not exist.
 
 The failure mode is not a missing chapter, it is a code sample that no longer
 compiles against the library it documents — and until #294 nothing compiled
-them, so a rename was invisible here. It is CI's job now, but 15% are `ignore`
+them, so a rename was invisible here. It is CI's job now, but 14% are `ignore`
 and CI is silent about those: when you change a signature, grep `book/` for the
 old spelling rather than trusting the green tick. Under a third of those are
 `book/src/architecture/`; the rest each say on their first line why they cannot

@@ -1,5 +1,6 @@
 //! Draw command definitions for the render tree.
 
+use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
@@ -256,6 +257,9 @@ pub enum DrawCommand {
         font_weight: FontWeight,
         /// Where each line sits across `rect`.
         align: TextAlign,
+        /// The lines it is cut to, when it is cut. `None` draws it whole in
+        /// its box.
+        fit: Option<LineFit>,
     },
 
     /// Where pointer and touch input reaches this surface, or stops reaching
@@ -330,6 +334,8 @@ pub enum DrawCommand {
         /// Where each line sits across `rect` — the frost has to put its
         /// lines where the letters put theirs.
         align: TextAlign,
+        /// The lines the text it frosts is cut to, so the mask is cut there too.
+        fit: Option<LineFit>,
     },
 
     /// Draw an image.

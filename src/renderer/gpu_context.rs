@@ -30,9 +30,9 @@ impl GpuContext {
     /// when there is no GPU to be had: a test that skips itself, a tool that
     /// reports. The reason is logged at error level either way.
     pub fn try_new() -> Option<Self> {
-        let instance = Instance::new(&wgpu::InstanceDescriptor {
+        let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
 
         let adapter =
@@ -81,7 +81,9 @@ impl GpuContext {
     {
         let surface = unsafe {
             self.instance
-                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&window).unwrap())
+                .create_surface_unsafe(
+                    wgpu::SurfaceTargetUnsafe::from_display_and_window(&window, &window).unwrap(),
+                )
                 .expect("Failed to create surface")
         };
 

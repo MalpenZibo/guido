@@ -33,7 +33,7 @@ pub use scroll::{Scroll, ScrollbarVisibility};
 pub use state_layer::{
     BackgroundOverride, BorderOverride, RippleConfig, StateStyle, StateWhen, Stateful,
 };
-pub use text::{Text, TextAlign, text};
+pub use text::{Text, TextAlign, TextOverflow, text};
 pub use text_input::{Selection, TextInput, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle};
 pub use widget::{

@@ -58,6 +58,8 @@ pub struct MaskSpec<'a> {
     pub font_size: f32,
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
+    /// The lines the text is cut to, when it is cut.
+    pub fit: Option<super::text_measurer::LineFit>,
     /// Where each line sits across the buffer, as the letters over the frost
     /// have it.
     pub align: TextAlign,
@@ -97,6 +99,8 @@ struct MaskKey {
     /// The glyph origin inside the frame, in quarter texels. Quantised because
     /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
+    /// The cut, which decides which letters the mask holds at all.
+    fit: Option<super::text_measurer::LineFitKey>,
 }
 
 struct CachedMask {
@@ -213,6 +217,7 @@ impl TextMaskRenderer {
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
             ),
+            fit: spec.fit.map(|fit| fit.key()),
         };
 
         if let Some(cached) = self.masks.get(&key) {
@@ -234,7 +239,9 @@ impl TextMaskRenderer {
             spec.font_family,
             spec.font_weight,
             spec.align,
-            spec.buffer,
+            (Some(spec.buffer.0), Some(spec.buffer.1)),
+            spec.fit,
+            spec.density,
         );
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {

@@ -2131,3 +2131,117 @@ fn opacity_fades_a_frost_and_a_turned_text() {
         view,
     );
 }
+
+/// Text cut to its lines, through every path that draws one.
+///
+/// Each label sits in a tinted box of its own width, so where the cut lands
+/// is judged against where the box ends. From the top: a text that fits and
+/// is drawn as it would be without a limit; one line ending in `…`; two
+/// wrapped lines, the second ending in `…`; the same two clipped, with no
+/// mark; an unwrapped line in a narrow box ending in `…`; the mark at the
+/// start and in the middle. Then the two paths that shape a text apart from
+/// glyphon: a turned label, which the quad draws, and a frosted one, whose
+/// mask has to be cut where its letters are or the frost holds a word they
+/// do not.
+fn cut_to_lines() -> Container {
+    const LONG: &str = "a title far longer than the box it has to sit in";
+    let tint = Color::rgb(0.20, 0.30, 0.45);
+    let row = |width: f32, label: Text| container().width(width).background(tint).child(label);
+
+    container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::row().spacing(20.0))
+        .child(
+            container()
+                .layout(Flex::column().spacing(8.0))
+                .child(row(
+                    180.0,
+                    label("fits", 16.0)
+                        .max_lines(1)
+                        .overflow(TextOverflow::Ellipsis),
+                ))
+                .child(row(
+                    180.0,
+                    label(LONG, 16.0)
+                        .max_lines(1)
+                        .overflow(TextOverflow::Ellipsis),
+                ))
+                .child(row(
+                    180.0,
+                    label(LONG, 16.0)
+                        .max_lines(2)
+                        .overflow(TextOverflow::Ellipsis),
+                ))
+                .child(row(180.0, label(LONG, 16.0).max_lines(2)))
+                .child(row(
+                    120.0,
+                    label(LONG, 16.0).nowrap().overflow(TextOverflow::Ellipsis),
+                ))
+                .child(row(
+                    180.0,
+                    label(LONG, 16.0)
+                        .max_lines(1)
+                        .overflow(TextOverflow::EllipsisStart),
+                ))
+                .child(row(
+                    180.0,
+                    label(LONG, 16.0)
+                        .max_lines(1)
+                        .overflow(TextOverflow::EllipsisMiddle),
+                )),
+        )
+        .child(
+            container()
+                .layout(Flex::column().spacing(24.0))
+                .child(
+                    container().padding([16.0, 0.0]).child(
+                        row(
+                            160.0,
+                            label(LONG, 16.0)
+                                .max_lines(1)
+                                .overflow(TextOverflow::Ellipsis),
+                        )
+                        .rotate(-12.0),
+                    ),
+                )
+                .child(
+                    container()
+                        .width(180.0)
+                        .height(90.0)
+                        .layout(ZStack::new())
+                        .child(stripes(180.0, 6, 15.0))
+                        .child(
+                            label(LONG, 28.0)
+                                .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                                .backdrop_blur(8.0)
+                                .max_lines(2)
+                                .overflow(TextOverflow::Ellipsis),
+                        ),
+                ),
+        )
+}
+
+#[test]
+fn text_cut_to_its_lines() {
+    golden(
+        "text_cut_to_its_lines",
+        (420.0, 250.0),
+        1.0,
+        BACKDROP,
+        cut_to_lines(),
+    );
+}
+
+/// The same at scale 2, where every path shapes at twice the width and twice
+/// the size, and has to put the cut where the measurer did at one.
+#[test]
+fn text_cut_to_its_lines_at_scale_2x() {
+    golden(
+        "text_cut_to_its_lines_at_scale_2x",
+        (420.0, 250.0),
+        2.0,
+        BACKDROP,
+        cut_to_lines(),
+    );
+}

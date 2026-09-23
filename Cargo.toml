@@ -45,10 +45,10 @@ gif = ["image/gif"]
 
 [dependencies]
 guido-macros = { workspace = true }
-wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "29.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
-glyphon = "0.10"
-cosmic-text = "0.17"
+glyphon = "0.11"
+cosmic-text = "0.18"
 smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 # Staging protocols not wrapped by sctk (ext-background-effect-v1 for blur)
@@ -70,7 +70,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # The golden-image tests own their render target, so they speak to wgpu
 # directly. Same version and features as the dependency above, so the test
 # and the library share one wgpu and its types line up.
-wgpu = { version = "28.0", features = ["fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "29.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 pollster = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

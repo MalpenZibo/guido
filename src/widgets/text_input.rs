@@ -1450,6 +1450,7 @@ impl Widget for TextInput {
             crate::widgets::TextAlign::Start,
             stroke,
             shadow,
+            None,
         );
 
         // The caret, and the wake that keeps it blinking.

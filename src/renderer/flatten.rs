@@ -1409,6 +1409,7 @@ mod tests {
             font_family: crate::widgets::FontFamily::default(),
             font_weight: crate::widgets::FontWeight::default(),
             align: Default::default(),
+            fit: None,
         }));
         node
     }

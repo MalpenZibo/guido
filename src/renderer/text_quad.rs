@@ -101,6 +101,8 @@ struct TextCacheKey {
     color: [u8; 4],
     tex_width: u32,
     tex_height: u32,
+    /// The cut, which decides what is drawn at all.
+    fit: Option<super::text_measurer::LineFitKey>,
 }
 
 /// Renderer for transformed text as textured quads.
@@ -231,6 +233,7 @@ impl TextQuadRenderer {
             ],
             tex_width,
             tex_height,
+            fit: entry.fit.map(|fit| fit.key()),
         };
 
         if let Some(cached) = self.text_cache.get(&cache_key) {
@@ -248,6 +251,8 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
+        let (buffer_width, buffer_height) =
+            shaping_buffer(entry.rect, effective_scale, entry.align);
         let buffer = super::text::shape(
             &mut self.font_system,
             &entry.text,
@@ -255,7 +260,9 @@ impl TextQuadRenderer {
             entry.font_family,
             entry.font_weight,
             entry.align,
-            shaping_buffer(entry.rect, effective_scale, entry.align),
+            (Some(buffer_width), Some(buffer_height)),
+            entry.fit,
+            effective_scale,
         );
 
         // Create offscreen texture
