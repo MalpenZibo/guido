@@ -546,14 +546,16 @@ frame.
 
 `CachedFlatten::replay_offset` is the whole of the rule for *using* an entry
 where the transform is concerned, and a translation is the whole of what it
-asks. `CachedFlatten::replay_fade` is the same question about opacity: a fading
+asks. It used to ask a second question — whether the clip inherited from above
+had made the same journey the content did — which is what excluded every
+scrolling subtree, and what #441 removed by removing the copy the question was
+about.
+
+`CachedFlatten::replay_fade` is the same question about opacity: a fading
 ancestor repaints and the subtree under it comes back clean, with the old
 inherited opacity multiplied into its commands, so a replay multiplies each by
 the ratio of the new to the old. An entry made under an opacity of zero holds
-nothing that ratio could recover, and is flattened again instead. It used to ask a second
-question — whether the clip inherited from above had made the same journey the
-content did — which is what excluded every scrolling subtree, and what #441
-removed by removing the copy the question was about.
+nothing that ratio could recover, and is flattened again instead.
 
 Whether an entry is worth *making* is a second rule, and it is the paint
 cache's: an entry is collected only for a subtree with nothing culled under it.
