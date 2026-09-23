@@ -269,6 +269,9 @@ pub struct TextInput {
     caret: Prop<bool>,
     cached_caret: bool,
 
+    /// See [`cursor`](Self::cursor).
+    cursor: Prop<CursorIcon>,
+
     /// Handle for application code to reach this input — to focus it, mostly.
     widget_ref: Option<WidgetRef>,
     /// Shown while the value is empty. Reactive: a prompt that changes — PAM
@@ -346,6 +349,7 @@ impl TextInput {
             readonly: Prop::Unset,
             caret: Prop::Unset,
             cached_caret: true,
+            cursor: Prop::Const(CursorIcon::Text),
             widget_ref: None,
             placeholder: Prop::Unset,
             autofocus_pending: false,
@@ -502,6 +506,32 @@ impl TextInput {
     /// to stop drawing one without being rebuilt and losing its focus.
     pub fn caret<M>(mut self, caret: impl IntoSignal<bool, M>) -> Self {
         self.caret = caret.into_prop();
+        self
+    }
+
+    /// The shape the pointer takes over the field: the I-beam unless said
+    /// otherwise.
+    ///
+    /// It is claimed on every pointer event inside the field, a press as well
+    /// as a move, and the field is inside whatever declared a shape around it,
+    /// so this is the one place a field's shape can be changed. A masked field
+    /// with no caret has nothing a click could place, and on a surface with no
+    /// pointer it should not bring one back:
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # let secret = create_signal(String::new());
+    /// text_input(secret)
+    ///     .password(true)
+    ///     .no_caret()
+    ///     .cursor(CursorIcon::Hidden);
+    /// ```
+    ///
+    /// It takes a signal, as [`Container::cursor`](crate::widgets::Container::cursor)
+    /// does, and a shape that changes under a still pointer goes out without
+    /// waiting for it to move.
+    pub fn cursor<M>(mut self, cursor: impl IntoSignal<CursorIcon, M>) -> Self {
+        self.cursor = cursor.into_prop();
         self
     }
 
@@ -1498,7 +1528,7 @@ impl Widget for TextInput {
 
         let pointed_at = bounds.contains_at(event.coords());
         if pointed_at {
-            tree.point_shows_cursor(Prop::Const(CursorIcon::Text));
+            tree.point_shows_cursor(self.cursor);
         }
 
         match event {

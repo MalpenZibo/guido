@@ -842,8 +842,9 @@ impl Container {
     /// Resolved from the point after every pointer event: the innermost
     /// widget under it that declares a cursor wins, and with none the pointer
     /// is the arrow. So a clickable row says `Pointer` once, and a field
-    /// inside it still shows its I-beam over itself and hands the row's shape
-    /// back the moment the pointer leaves it:
+    /// inside it still shows its I-beam over itself — or whatever its own
+    /// [`cursor`](crate::widgets::TextInput::cursor) says — and hands the
+    /// row's shape back the moment the pointer leaves it:
     ///
     /// ```
     /// # use guido::prelude::*;

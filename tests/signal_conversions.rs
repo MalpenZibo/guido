@@ -149,6 +149,16 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = text_input(create_signal(String::new())).readonly(move || !live.get());
     let _ = text_input(create_signal(String::new())).readonly(live);
 
+    // Every spelling, a memo among them: the field's shape is declared the way
+    // `Container::cursor` is (#502).
+    let shape = create_signal(CursorIcon::Hidden);
+    let chosen = create_memo(move || shape.get());
+    let _ = text_input(create_signal(String::new())).cursor(CursorIcon::Hidden);
+    let _ = text_input(create_signal(String::new())).cursor(move || shape.get());
+    let _ = text_input(create_signal(String::new())).cursor(shape);
+    let _ = text_input(create_signal(String::new())).cursor(shape.read_only());
+    let _ = text_input(create_signal(String::new())).cursor(chosen);
+
     let _ = container().layout(Flex::new(Axis::Horizontal));
     let _ = container().layout(Flex::new(move || axis.get()));
     let _ = container().layout(Flex::new(axis));
