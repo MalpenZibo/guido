@@ -831,10 +831,11 @@ See `examples/popup_example.rs`.
 ## Session Lock (Lock Screens)
 
 `lock_session` asks the compositor to lock the session
-(`ext-session-lock-v1`). Once granted, guido creates one lock surface
-per output using your widget factory — the compositor blanks every
-output, shows the lock surfaces, and routes all input to them, so a
-`text_input` password field works out of the box:
+(`ext-session-lock-v1`) and, without waiting for the answer, creates
+one lock surface per output using your widget factory, as the protocol
+asks. Once the compositor grants the lock it blanks every output, shows
+the lock surfaces, and routes all input to them, so a `text_input`
+password field works out of the box:
 
 ```rust,no_run
 # extern crate guido;
@@ -868,11 +869,12 @@ text(move || format!("{:?}", lock_state().get()))
 
 Details worth knowing:
 
-- Outputs plugged in **while locked** get a lock surface automatically
-  (the factory is called again); the compositor blanks any output
-  without one.
+- Outputs plugged in **while locking or locked** get a lock surface
+  automatically (the factory is called again); the compositor blanks
+  any output without one.
 - If the compositor refuses the lock (no protocol support, or another
-  lock client is active), `lock_state` returns to `Unlocked`.
+  lock client is active), `lock_state` returns to `Unlocked` and the
+  lock surfaces already made are dropped.
 - Unlike ordinary surfaces, closing lock surfaces never exits the app:
   a lock daemon whose only surfaces are lock surfaces keeps running
   after unlocking, idle until the next `lock_session` call.

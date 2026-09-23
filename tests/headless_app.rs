@@ -2149,12 +2149,18 @@ fn lock_screen(output: OutputInfo) -> Text {
     text(format!("locked: {}", output.id.raw()))
 }
 
-/// A lock covers every connected monitor exactly once, and unlocking takes
-/// every cover away.
+/// A lock covers every connected monitor exactly once, as soon as it is asked
+/// for, and unlocking takes every cover away.
 ///
 /// The whole of `src/session_lock.rs` had nothing watching it: `Recorder` took
 /// the trait's defaults for all four lock methods, so a test could call
 /// `lock_session` and the loop would find a compositor that refuses.
+///
+/// The covers come before the grant: ext-session-lock-v1 wants them first,
+/// niri holds `locked` until they have drawn and gives up after a second, and
+/// Hyprland waits for them and sends `finished` after five. Asking only once
+/// `Locked` arrived was a second of the compositor's no-frame colour on niri,
+/// and a lock refused outright on Hyprland (#514).
 #[test]
 fn a_lock_covers_each_connected_output_exactly_once() {
     let Some(mut app) = headless() else { return };
@@ -2169,9 +2175,12 @@ fn a_lock_covers_each_connected_output_exactly_once() {
         LockState::Locking,
         "asked for, and nothing has answered yet"
     );
-    assert!(
-        app.lock_surface_requests().is_empty(),
-        "so no monitor has been asked to be covered"
+    let (covers, screens): (Vec<SurfaceId>, Vec<OutputId>) =
+        app.lock_surfaces_created().into_iter().unzip();
+    assert_eq!(
+        screens,
+        [laptop, external],
+        "every monitor is covered already, once"
     );
 
     app.grant_lock();
@@ -2183,12 +2192,10 @@ fn a_lock_covers_each_connected_output_exactly_once() {
         LockState::Locked,
         "and the application knows it"
     );
-    let (covers, screens): (Vec<SurfaceId>, Vec<OutputId>) =
-        app.lock_surfaces_created().into_iter().unzip();
     assert_eq!(
-        screens,
-        [laptop, external],
-        "one cover per monitor, and only one"
+        app.lock_surface_requests().len(),
+        2,
+        "the grant asks for no second set of covers"
     );
 
     unlock_session();
@@ -2202,6 +2209,98 @@ fn a_lock_covers_each_connected_output_exactly_once() {
     let mut taken = app.surfaces_destroyed().to_vec();
     taken.sort_by_key(|id| id.raw());
     assert_eq!(taken, covers, "both covers were taken away");
+}
+
+/// A lock the compositor refuses takes down the covers made while it was
+/// being asked for.
+///
+/// With the covers made during `Locking`, `finished` in place of `locked` is
+/// the path that has them to tear down: left behind, they would be surfaces
+/// the application goes on laying out and drawing with no lock under them.
+#[test]
+fn a_refused_lock_takes_down_the_covers_made_while_locking() {
+    let Some(mut app) = headless() else { return };
+    app.connect_output("eDP-1");
+    app.connect_output("DP-2");
+
+    lock_session(lock_screen);
+    app.step();
+    let (mut covers, _): (Vec<SurfaceId>, Vec<OutputId>) =
+        app.lock_surfaces_created().into_iter().unzip();
+    assert_eq!(covers.len(), 2, "both monitors covered while locking");
+
+    app.finish_lock();
+    app.step();
+
+    assert_eq!(lock_state().get_untracked(), LockState::Unlocked);
+    let mut taken = app.surfaces_destroyed().to_vec();
+    taken.sort_by_key(|id| id.raw());
+    covers.sort_by_key(|id| id.raw());
+    assert_eq!(taken, covers, "every cover went with the refusal");
+    assert!(
+        app.surfaces_live().is_empty(),
+        "and the application holds none of them"
+    );
+}
+
+/// Unlocking before the compositor has answered takes down the covers made
+/// while locking, as a refusal does.
+#[test]
+fn an_unlock_before_the_grant_takes_down_the_covers_made_while_locking() {
+    let Some(mut app) = headless() else { return };
+    app.connect_output("eDP-1");
+    app.connect_output("DP-2");
+
+    lock_session(lock_screen);
+    app.step();
+    let (mut covers, _): (Vec<SurfaceId>, Vec<OutputId>) =
+        app.lock_surfaces_created().into_iter().unzip();
+    assert_eq!(covers.len(), 2, "both monitors covered while locking");
+
+    unlock_session();
+    app.step();
+
+    assert_eq!(lock_state().get_untracked(), LockState::Unlocked);
+    let mut taken = app.surfaces_destroyed().to_vec();
+    taken.sort_by_key(|id| id.raw());
+    covers.sort_by_key(|id| id.raw());
+    assert_eq!(taken, covers, "every cover went with the unlock");
+    assert!(app.surfaces_live().is_empty());
+}
+
+/// A monitor plugged in while the lock is being asked for is covered too, and
+/// so is one plugged in after it is granted.
+#[test]
+fn an_output_connected_while_locking_or_locked_is_covered() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+
+    lock_session(lock_screen);
+    app.step();
+    let external = app.connect_output("DP-2");
+    app.step();
+
+    assert_eq!(lock_state().get_untracked(), LockState::Locking);
+    let screens = |app: &Headless| -> Vec<OutputId> {
+        let (_, screens): (Vec<SurfaceId>, _) = app.lock_surfaces_created().into_iter().unzip();
+        screens
+    };
+    assert_eq!(
+        screens(&app),
+        [laptop, external],
+        "the monitor that arrived mid-request is covered before the grant"
+    );
+
+    app.grant_lock();
+    app.step();
+    let late = app.connect_output("HDMI-A-1");
+    app.step();
+
+    assert_eq!(
+        screens(&app),
+        [laptop, external, late],
+        "and one that arrives after it is covered as well"
+    );
 }
 
 /// A monitor unplugged while the session is locked is asked for nothing
