@@ -862,6 +862,10 @@ impl Drop for Headless {
         // an owner disposed after the arena is wiped names somebody else's
         // signals.
         drop(std::mem::take(&mut self.surfaces));
+        // And the renderer, whose textures report their eviction to the image
+        // cache as they go: dropped after the reset, those reports would be
+        // left for the next application on this thread to act on.
+        drop(self.renderer.take());
         crate::reset_thread_state(&mut self.tree);
     }
 }
