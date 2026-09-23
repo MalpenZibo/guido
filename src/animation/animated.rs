@@ -117,9 +117,13 @@ impl<T> Animated<T> {
     /// not exist. That bound is what makes this a narrowing rather than a
     /// value quietly dropped, and relaxing it would have to bring a spelling
     /// for a timeline on a size with it.
-    pub(crate) fn into_eased(self) -> (Prop<T>, Option<(TransitionConfig, Option<T>)>) {
+    pub(crate) fn into_eased(self) -> (Prop<T>, Option<Eased<T>>) {
         let ease = match self.motion.map(|motion| *motion) {
-            Some(Motion::Ease { config, enter_from }) => Some((config, enter_from)),
+            Some(Motion::Ease {
+                config,
+                enter_from,
+                exit_to,
+            }) => Some((config, enter_from, exit_to)),
             None => None,
             // Loud rather than `None`, because the thing that makes this
             // unreachable is a bound three types away: silently dropping a
@@ -134,6 +138,14 @@ impl<T> Animated<T> {
     }
 }
 
+/// An eased motion taken apart: the transition, where it enters from and
+/// where it exits to.
+pub(crate) type Eased<T> = (TransitionConfig, Option<T>, Option<ExitTo<T>>);
+
+/// Where a property goes when its widget is removed — a closure, because it is
+/// asked at removal rather than at build.
+pub(crate) type ExitTo<T> = Box<dyn Fn() -> T>;
+
 /// The two ways a value can move. An implementation detail: `motion` already
 /// means a pointer event here and scrolling calls its own `momentum`, so a
 /// public name about easing would sit between two unrelated meanings.
@@ -145,6 +157,9 @@ pub(crate) enum Motion<T> {
         /// Where the property starts the one time the widget appears. `None`
         /// for almost every declaration; see [`Animated::entering_from`].
         enter_from: Option<T>,
+        /// Where it goes when the widget is removed, asked then. `None` for
+        /// almost every declaration; asked when the widget is removed.
+        exit_to: Option<ExitTo<T>>,
     },
     /// Play a sequence whenever the trigger changes, and rest on the declared
     /// value in between.
@@ -177,6 +192,7 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
             motion: Some(Box::new(Motion::Ease {
                 config: transition.into(),
                 enter_from: None,
+                exit_to: None,
             })),
         }
     }

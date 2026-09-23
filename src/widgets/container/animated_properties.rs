@@ -343,6 +343,35 @@ macro_rules! emit_slot_facts {
                     $(AnimSlot::$name(anim) => anim.is_animating(),)*
                 }
             }
+
+            /// Whether it declared somewhere to go when the widget is
+            /// removed.
+            pub(crate) fn declares_exit(&self) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.declares_exit(),)*
+                }
+            }
+
+            /// Begin the exit it declared, if it declared one.
+            pub(crate) fn begin_exit(&mut self, now: FrameInstant) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.begin_exit(now),)*
+                }
+            }
+
+            /// Whether an exit has begun on it, settled or not.
+            pub(crate) fn is_leaving(&self) -> bool {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.is_leaving(),)*
+                }
+            }
+
+            /// Stop leaving; the next advance sends it home.
+            pub(crate) fn cancel_exit(&mut self) {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.cancel_exit(),)*
+                }
+            }
         }
     };
 }
@@ -466,7 +495,10 @@ macro_rules! emit_passes {
                 let Some(declared) = self.anims.as_deref() else {
                     return;
                 };
-                if !declared.slots().any(AnimSlot::follows_a_signal) {
+                // A container that is leaving has nowhere to drift to: its
+                // exits are heading where removal sent them, and it reads
+                // nothing that could wake it.
+                if !declared.slots().any(AnimSlot::follows_a_signal) || self.is_leaving() {
                     return;
                 }
 
@@ -513,11 +545,17 @@ macro_rules! emit_passes {
                 let mut anims = self.anims.take();
                 let mut any_animating = false;
                 if let Some(declared) = anims.as_deref_mut() {
+                    // Leaving, nothing is retargeted: the exits are going where
+                    // removal sent them, and the rest stay where they were
+                    // rather than read a target whose item may be gone.
+                    let leaving = declared.slots().any(AnimSlot::is_leaving);
                     crate::reactive::diagnostics::snapshot_zone(|| {
                         for slot in declared.slots_mut() {
                             match slot {
                                 $(AnimSlot::$name(anim) => {
-                                    retarget!($target, anim, self, id, now);
+                                    if !leaving {
+                                        retarget!($target, anim, self, id, now);
+                                    }
                                     if anim.is_animating() {
                                         any_animating = true;
                                         let required =

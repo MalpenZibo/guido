@@ -2006,9 +2006,13 @@ fn declared_seed<T: Clone + 'static>(prop: &Prop<T>) -> T {
 /// check in `resync_animation_targets` could never speak for.
 fn install<T: Animatable>(seed: T, motion: Motion<T>) -> AnimationState<T> {
     match motion {
-        Motion::Ease { config, enter_from } => {
-            AnimationState::new(seed, config).with_enter_from(enter_from)
-        }
+        Motion::Ease {
+            config,
+            enter_from,
+            exit_to,
+        } => AnimationState::new(seed, config)
+            .with_enter_from(enter_from)
+            .with_exit_to(exit_to),
         Motion::Play { keyframes } => {
             AnimationState::new(seed, instant_transition()).with_timeline(keyframes)
         }
@@ -2051,17 +2055,29 @@ fn declare_size<M>(
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
     let resolved = |length: Length| length.exact_size().or(length.min()).unwrap_or(0.0);
-    let installed = ease.map(|(config, enter_from)| {
+    let installed = ease.map(|(config, enter_from, exit_to)| {
         install(
             resolved(declared_seed(&prop)),
             Motion::Ease {
                 config,
                 enter_from: enter_from.map(resolved),
+                exit_to: exit_to.map(|exit_to| {
+                    Box::new(move || resolved(exit_to())) as crate::animation::ExitTo<f32>
+                }),
             },
         )
     });
     put(anims, kind, into_slot, installed);
     prop
+}
+
+impl Container {
+    /// Whether an exit has begun here: removed, and still in the tree.
+    pub(super) fn is_leaving(&self) -> bool {
+        self.anims
+            .as_deref()
+            .is_some_and(|declared| declared.slots().any(AnimSlot::is_leaving))
+    }
 }
 
 pub fn container() -> Container {
