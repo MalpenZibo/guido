@@ -283,12 +283,7 @@ fn main() {
             move || {
                 container()
                     .height(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(16.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center)
-                    )
+                    .layout(Flex::row().spacing(16.0).center())
                     .child(
                         container()
                             .padding([8.0, 16.0])
@@ -946,12 +941,7 @@ fn main() {
             || {
                 container()
                     .height(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(8.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center)
-                    )
+                    .layout(Flex::row().spacing(8.0).center())
                     .children([
                         dock_icon("terminal"),
                         dock_icon("browser"),

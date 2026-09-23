@@ -95,11 +95,7 @@ async fn main() {
                                 .on_click(move || svc.send(WorkspaceCmd::Switch(id)))
                                 .child(
                                     container()
-                                        .layout(
-                                            Flex::row()
-                                                .main_alignment(MainAlignment::Center)
-                                                .cross_alignment(CrossAlignment::Center),
-                                        )
+                                        .layout(Flex::row().center())
                                         .child(text(format!("{}", id)).color(Color::WHITE)),
                                 )
                         }),

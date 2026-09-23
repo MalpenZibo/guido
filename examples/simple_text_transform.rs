@@ -4,12 +4,7 @@ use guido::prelude::*;
 
 fn main() {
     let view = container()
-        .layout(
-            Flex::row()
-                .spacing(50.0)
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::row().spacing(50.0).center())
         .padding(50.0)
         .children([
             // No transform - should use glyphon directly
@@ -18,11 +13,7 @@ fn main() {
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.6, 0.3, 0.8))
                 .corners(8.0)
-                .layout(
-                    Flex::column()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::column().center())
                 .child(text("No Transform").font_size(14.0).color(Color::WHITE)),
             // With rotation - should use texture
             container()
@@ -30,11 +21,7 @@ fn main() {
                 .height(60.0)
                 .background(Color::rgba(0.3, 0.3, 0.8, 0.8))
                 .corners(8.0)
-                .layout(
-                    Flex::column()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::column().center())
                 .rotate(15.0)
                 .child(text("Rotated 15").font_size(14.0).color(Color::WHITE)),
             // With scale - should use texture
@@ -43,11 +30,7 @@ fn main() {
                 .height(60.0)
                 .background(Color::rgba(0.8, 0.5, 0.3, 0.8))
                 .corners(8.0)
-                .layout(
-                    Flex::column()
-                        .main_alignment(MainAlignment::Center)
-                        .cross_alignment(CrossAlignment::Center),
-                )
+                .layout(Flex::column().center())
                 .scale(1.2)
                 .child(text("Scale 1.2").font_size(14.0).color(Color::WHITE)),
         ]);

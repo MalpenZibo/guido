@@ -66,11 +66,7 @@ fn main() {
                                     .background(Color::rgba(0.8, 0.3, 0.3, 0.3))
                                     .corners(8.0)
                                     .rotate(20.0)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(make_box(
                                         "Nested",
                                         Color::rgb(0.8, 0.8, 0.3),
@@ -83,11 +79,7 @@ fn main() {
                                     .background(Color::rgba(0.3, 0.8, 0.3, 0.3))
                                     .corners(8.0)
                                     .scale(1.3)
-                                    .layout(
-                                        Flex::column()
-                                            .main_alignment(MainAlignment::Center)
-                                            .cross_alignment(CrossAlignment::Center),
-                                    )
+                                    .layout(Flex::column().center())
                                     .child(
                                         make_box(
                                             "Nest+Rot",
@@ -118,10 +110,6 @@ fn make_box(label: &'static str, base_color: Color, click_count: RwSignal<i32>) 
         .when_hovered(|s| s.lighter(0.15))
         .when_pressed(|s| s.ripple())
         .on_click(move || click_count.update(|c| *c += 1))
-        .layout(
-            Flex::column()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().center())
         .child(text(label).font_size(10.0).color(Color::WHITE).nowrap())
 }

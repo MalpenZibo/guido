@@ -26,11 +26,7 @@ fn main() {
                 container()
                     .width(fill())
                     .height(fill())
-                    .layout(
-                        Flex::row()
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().center())
                     .child(
                         container()
                             .takes_input(true)
