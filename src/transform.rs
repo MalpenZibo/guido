@@ -12,25 +12,75 @@
 //! same reason: with no declared order, two declarations that read the same
 //! would mean different things.
 
-/// How far a widget is displaced, in logical pixels.
+/// How far a widget is displaced: in logical pixels, in fractions of its own
+/// size, or both.
+///
+/// The fraction is CSS's `translateX(-100%)`. It is resolved against the
+/// widget's own laid-out size at paint time, not when the value is declared,
+/// so `Translate::relative(-1.0, 0.0)` is one width left before the first
+/// layout has measured anything and after every layout that changes the width.
+/// A value holding both is their sum, CSS's `calc(8px - 100%)`:
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// let _ = Translate { x: 8.0, ..Translate::relative(-1.0, 0.0) };
+/// ```
 ///
 /// Unaffected by [`Pivot`](crate::pivot::Pivot): moving a box is the same
 /// movement wherever the pivot sits.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Translate {
-    /// Rightward displacement.
+    /// Rightward displacement, in logical pixels.
     pub x: f32,
-    /// Downward displacement.
+    /// Downward displacement, in logical pixels.
     pub y: f32,
+    /// Rightward displacement, in widths of the widget itself: `-1.0` is one
+    /// width left.
+    pub relative_x: f32,
+    /// Downward displacement, in heights of the widget itself.
+    pub relative_y: f32,
 }
 
 impl Translate {
     /// No displacement.
-    pub const NONE: Self = Self { x: 0.0, y: 0.0 };
+    pub const NONE: Self = Self::new(0.0, 0.0);
 
-    /// A displacement of `(x, y)`.
+    /// A displacement of `(x, y)` logical pixels.
     pub const fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
+        Self {
+            x,
+            y,
+            relative_x: 0.0,
+            relative_y: 0.0,
+        }
+    }
+
+    /// A displacement of `x` of the widget's own widths and `y` of its own
+    /// heights — `relative(-1.0, 0.0)` slides it exactly its own width left,
+    /// at whatever width it is laid out.
+    ///
+    /// Animates like the pixel form, and the fraction is what animates: a
+    /// width change under it moves the widget at once, because the offset it
+    /// declares has not changed. That, and an `entering_from` that plays
+    /// before the first layout has measured anything, are why a slide wants
+    /// this rather than a width read back through a
+    /// [`WidgetRef`](crate::widget_ref::WidgetRef).
+    pub const fn relative(x: f32, y: f32) -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            relative_x: x,
+            relative_y: y,
+        }
+    }
+
+    /// The displacement in pixels, `(x, y)`, for a widget laid out in
+    /// `bounds` — only its size counts, since a displacement has no origin.
+    pub fn resolve(&self, bounds: crate::widgets::Rect) -> (f32, f32) {
+        (
+            self.x + self.relative_x * bounds.width,
+            self.y + self.relative_y * bounds.height,
+        )
     }
 }
 
@@ -73,12 +123,12 @@ macro_rules! from_pairs {
     ($t:ty $(, $n:ty)*) => {$(
         impl From<($n, $n)> for $t {
             fn from((x, y): ($n, $n)) -> Self {
-                Self { x: x as f32, y: y as f32 }
+                Self::new(x as f32, y as f32)
             }
         }
         impl From<[$n; 2]> for $t {
             fn from([x, y]: [$n; 2]) -> Self {
-                Self { x: x as f32, y: y as f32 }
+                Self::new(x as f32, y as f32)
             }
         }
     )*};
@@ -888,6 +938,19 @@ mod tests {
         let (x2, y2) = t.transform_point(5.0, 5.0);
         assert!(approx_eq(x2, 15.0));
         assert!(approx_eq(y2, 25.0));
+    }
+
+    /// The fraction is of the box's size and not its position, and it adds
+    /// to the pixels rather than replacing them.
+    #[test]
+    fn a_relative_translate_resolves_against_the_size_of_its_bounds() {
+        let bounds = crate::widgets::Rect::new(30.0, 40.0, 200.0, 50.0);
+        let calc = Translate {
+            x: 8.0,
+            ..Translate::relative(-1.0, 0.5)
+        };
+        assert_eq!(calc.resolve(bounds), (-192.0, 25.0));
+        assert_eq!(Translate::new(3.0, 4.0).resolve(bounds), (3.0, 4.0));
     }
 
     #[test]
