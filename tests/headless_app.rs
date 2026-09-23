@@ -2523,3 +2523,92 @@ fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving()
         "over the root alone"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A text input says which cursor it shows (#502)
+// ---------------------------------------------------------------------------
+
+/// A lock screen's password field: the surface has no pointer, and neither
+/// does the field. The press is what the input handles itself, and a claim
+/// made only on a move would give the I-beam back on every click.
+#[test]
+fn a_text_input_that_hides_the_cursor_claims_hidden_on_moves_and_on_presses() {
+    let Some(mut app) = headless() else { return };
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || {
+        left_of_a_bar(
+            container().child(
+                text_input(value)
+                    .password(true)
+                    .no_caret()
+                    .cursor(CursorIcon::Hidden),
+            ),
+        )
+        .cursor(CursorIcon::Pointer)
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Hidden], "over the field");
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Hidden],
+        "a click in the field asks for nothing else"
+    );
+
+    pointer_moves(&mut app, surface, 160.0, 10.0);
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Hidden, CursorIcon::Pointer],
+        "and the root's shape comes back beside it"
+    );
+}
+
+#[test]
+fn a_text_input_that_declares_no_cursor_still_shows_the_i_beam() {
+    let Some(mut app) = headless() else { return };
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || {
+        left_of_a_bar(container().child(text_input(value))).cursor(CursorIcon::Hidden)
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    app.click(surface, 10.0, 10.0);
+    app.step();
+
+    assert_eq!(app.cursors_asked(), [CursorIcon::Text]);
+}
+
+#[test]
+fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still() {
+    let Some(mut app) = headless() else { return };
+    let value = create_signal(String::new());
+    let waiting = create_signal(false);
+    let surface = app.surface(fixed_bar(), move || {
+        left_of_a_bar(container().child(text_input(value).cursor(move || {
+            if waiting.get() {
+                CursorIcon::Wait
+            } else {
+                CursorIcon::Text
+            }
+        })))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Text]);
+
+    waiting.set(true);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Text, CursorIcon::Wait]);
+}
