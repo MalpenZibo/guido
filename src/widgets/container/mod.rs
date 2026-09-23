@@ -185,22 +185,27 @@ pub enum Overflow {
     Hidden,
 }
 
-/// The three transform components and the point they act about. Boxed and
+/// What the renderer applies to a container's subtree as a whole: the three
+/// transform components, the point they act about, and the opacity. Boxed and
 /// absent by default, like `anims` and `interaction`.
 ///
-/// Four property fields on every container in every tree, and the
+/// Five property fields on every container in every tree, and the
 /// overwhelming majority declare none — so they live behind a pointer, and a
-/// container that declares no transform does not follow it.
+/// container that declares none of them does not follow it. The grouping is
+/// the one Compose's `graphicsLayer` and Core Animation's `CALayer` make: each
+/// is a property of the layer a subtree is drawn as, not of anything drawn in
+/// it.
 #[derive(Default)]
-pub(super) struct TransformProps {
+pub(super) struct LayerProps {
     pub(super) translate: Prop<Translate>,
     pub(super) rotate: Prop<f32>,
     pub(super) scale: Prop<Scale>,
     pub(super) pivot: Prop<Pivot>,
+    pub(super) opacity: Prop<f32>,
 }
 
 /// The two decorations a container rarely has. Boxed and absent by default,
-/// for the reason [`TransformProps`] above is.
+/// for the reason [`LayerProps`] above is.
 ///
 /// What earns a place here is being **both large and rarely declared**. A
 /// `LinearGradient` is two colours and a direction and a `Shadow` is an offset,
@@ -452,7 +457,7 @@ pub struct Container {
     /// frame while the animation went on running.
     pub(super) shadow_reach: Cell<f32>,
     pub(super) visible: Prop<bool>,
-    pub(super) transform: Option<Box<TransformProps>>,
+    pub(super) layer: Option<Box<LayerProps>>,
     pub(super) decoration: Option<Box<DecorationProps>>,
 
     // Interaction state (callbacks, hover/press, state styles, ripple)
@@ -513,7 +518,7 @@ impl Container {
             overflow_resolved: Cell::new(Overflow::Visible),
             shadow_reach: Cell::new(0.0),
             visible: Prop::Unset,
-            transform: None,
+            layer: None,
             decoration: None,
             interaction: None,
             widget_ref: None,
@@ -594,9 +599,9 @@ impl Container {
             .expect("scroll_data not set")
     }
 
-    /// Get or create the transform components.
-    fn transform_mut(&mut self) -> &mut TransformProps {
-        self.transform.get_or_insert_with(Box::default)
+    /// Get or create the layer properties.
+    fn layer_mut(&mut self) -> &mut LayerProps {
+        self.layer.get_or_insert_with(Box::default)
     }
 
     /// Get or create the decoration group.
@@ -615,21 +620,23 @@ impl Container {
     }
 
     pub(super) fn translate_prop(&self) -> Prop<Translate> {
-        self.transform
-            .as_deref()
-            .map_or(Prop::Unset, |t| t.translate)
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.translate)
     }
 
     pub(super) fn rotate_prop(&self) -> Prop<f32> {
-        self.transform.as_deref().map_or(Prop::Unset, |t| t.rotate)
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.rotate)
     }
 
     pub(super) fn scale_prop(&self) -> Prop<Scale> {
-        self.transform.as_deref().map_or(Prop::Unset, |t| t.scale)
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.scale)
     }
 
     pub(super) fn pivot_prop(&self) -> Prop<Pivot> {
-        self.transform.as_deref().map_or(Prop::Unset, |t| t.pivot)
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.pivot)
+    }
+
+    pub(super) fn opacity_prop(&self) -> Prop<f32> {
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.opacity)
     }
 
     /// Get or create interaction state
@@ -1151,7 +1158,7 @@ impl Container {
     /// ```
     pub fn translate<M>(mut self, t: impl IntoAnimated<Translate, M>) -> Self {
         let declared = animated_properties::declare::translate(&mut self.anims, t);
-        self.transform_mut().translate = declared;
+        self.layer_mut().translate = declared;
         self
     }
 
@@ -1186,7 +1193,7 @@ impl Container {
     /// use one curve both ways.
     pub fn rotate<M>(mut self, degrees: impl IntoAnimated<f32, M>) -> Self {
         let declared = animated_properties::declare::rotate(&mut self.anims, degrees);
-        self.transform_mut().rotate = declared;
+        self.layer_mut().rotate = declared;
         self
     }
 
@@ -1207,14 +1214,40 @@ impl Container {
     /// ```
     pub fn scale<M>(mut self, factor: impl IntoAnimated<Scale, M>) -> Self {
         let declared = animated_properties::declare::scale(&mut self.anims, factor);
-        self.transform_mut().scale = declared;
+        self.layer_mut().scale = declared;
+        self
+    }
+
+    /// How opaque this container and everything in it is drawn, from `0.0`
+    /// (invisible) to `1.0` (as declared, the default).
+    ///
+    /// Paint-only, like the transforms beside it: the space the layout gave
+    /// the container does not change, and it still takes input — a container
+    /// faded to nothing is still there to be clicked.
+    ///
+    /// Nested opacities multiply, so a half inside a half is drawn at a
+    /// quarter. The opacity is multiplied into every colour the subtree draws
+    /// — backgrounds, borders, shadows, text, images and frost alike — each on
+    /// its own, so where two children overlap, the overlap shows through
+    /// darker rather than fading as one flat layer.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let shown = create_signal(true);
+    /// container().opacity(0.5);
+    /// container().opacity(move || if shown.get() { 1.0 } else { 0.0 });
+    /// container().opacity(1.0.transition(200.0).entering_from(0.0));
+    /// ```
+    pub fn opacity<M>(mut self, opacity: impl IntoAnimated<f32, M>) -> Self {
+        let declared = animated_properties::declare::opacity(&mut self.anims, opacity);
+        self.layer_mut().opacity = declared;
         self
     }
 
     /// The point [`rotate`](Self::rotate) turns about and [`scale`](Self::scale)
     /// grows from. The centre of the container by default.
     pub fn pivot<M>(mut self, origin: impl IntoSignal<Pivot, M>) -> Self {
-        self.transform_mut().pivot = origin.into_prop();
+        self.layer_mut().pivot = origin.into_prop();
         self
     }
 
@@ -1795,6 +1828,7 @@ impl Widget for Container {
             backdrop_blur,
             takes_input,
             overflow,
+            opacity,
         ) = (
             self.animated_background(id),
             self.animated_corners(id),
@@ -1807,6 +1841,7 @@ impl Widget for Container {
             self.backdrop_blur.get(),
             self.takes_input.get(),
             self.overflow.get_or(Overflow::Visible),
+            self.animated_opacity(id),
         );
         self.overflow_resolved.set(overflow);
 
@@ -1823,6 +1858,7 @@ impl Widget for Container {
         if !user_transform.is_identity() {
             ctx.apply_transform_with_pivot(user_transform, pivot);
         }
+        ctx.set_opacity(opacity);
 
         // Before the decoration: the container paints over its own blurred
         // backdrop, and the effect must read a target that does not yet include

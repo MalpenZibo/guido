@@ -140,6 +140,12 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.scale.get())
     }
 
+    /// The declared opacity. No state layer overrides one, so the declaration
+    /// is the whole of it.
+    pub(super) fn effective_opacity_target(&self, id: WidgetId) -> f32 {
+        self.opacity_prop().get_finite_or(1.0, id, "opacity")
+    }
+
     /// How far past its own bounds the deepest shadow this container can cast
     /// reaches, and the number its damage rect is sized by.
     ///
@@ -450,6 +456,12 @@ impl Container {
     pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
         get_animated_value(self.anims.as_ref().and_then(|a| a.border_width()), || {
             self.effective_border_width_target(id)
+        })
+    }
+
+    pub(super) fn animated_opacity(&self, id: WidgetId) -> f32 {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.opacity()), || {
+            self.effective_opacity_target(id)
         })
     }
 

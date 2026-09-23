@@ -2167,7 +2167,7 @@ fn a_container_whose_declared_animation_is_running_asks_for_another_frame() {
 
 /// A container that declares no motion carries no animation box.
 ///
-/// `ContainerAnims` holds eleven `AnimationState`s and is boxed precisely so
+/// `ContainerAnims` holds twelve `AnimationState`s and is boxed precisely so
 /// that the overwhelming majority of containers — every one that only sets a
 /// background — do not pay for it. Writing the absence of a motion is a real
 /// write, so it has to skip the container that has nothing to write it into,
@@ -2197,7 +2197,7 @@ fn declaring_no_motion_allocates_no_animation_box() {
     );
 }
 
-/// A container pays for the animations it declared, not for the eleven it
+/// A container pays for the animations it declared, not for the twelve it
 /// could have.
 ///
 /// The struct of eleven `Option<AnimationState<T>>`s this replaced measured
@@ -2228,7 +2228,7 @@ fn a_container_carries_one_slot_per_declared_animation() {
     assert!(
         std::mem::size_of::<ContainerAnims>()
             <= 2 * std::mem::size_of::<AnimSlot>() + 2 * std::mem::size_of::<usize>(),
-        "the store is sized by what a container declares, not by the eleven \
+        "the store is sized by what a container declares, not by the twelve \
          properties it could declare: {} bytes",
         std::mem::size_of::<ContainerAnims>()
     );
@@ -6791,9 +6791,9 @@ macro_rules! emit_property_tests {
                 /// allocated, so a constant that reaches `alloc_slot` shows up
                 /// whether or not it is later disposed.
                 ///
-                /// Over the table rather than once, because the eleven
+                /// Over the table rather than once, because the twelve
                 /// properties do not share a setter — `width` and `height` go
-                /// through `declare_size` and the other nine through
+                /// through `declare_size` and the other ten through
                 /// `declare_anim`, and a constant that stays free in one is no
                 /// evidence about the other.
                 #[test]
@@ -6885,7 +6885,7 @@ crate::widgets::container::animated_properties::animated_properties!(emit_proper
 
 /// Seven constant properties on a container cost what the bare container costs.
 ///
-/// The per-property test above asks one question of each of the eleven; this
+/// The per-property test above asks one question of each of the twelve; this
 /// asks the question #450 was opened about, which is what a *row of a list*
 /// costs. Six is the number the ablation in that issue measured — 194 MB
 /// against 149 MB at twenty thousand rows, and the 45 MB between them was
@@ -7022,4 +7022,64 @@ fn an_unbounded_axis_survives_a_length_that_declares_no_maximum() {
         "a fraction of an unbounded axis sizes to content: there is no share \
          to take of a space nobody has measured"
     );
+}
+
+/// `opacity(0.0.transition(..).entering_from(1.0))` fades the container out as
+/// it appears — and everything in it with it, which the table's own test
+/// cannot see: it reads the container's node, and a child is drawn at its own
+/// node's opacity times every ancestor's, which only the flattened frame says.
+#[test]
+fn an_entering_opacity_fades_the_whole_subtree() {
+    const FILL: Color = Color::rgb(0.9, 0.1, 0.1);
+    const INSIDE: Color = Color::rgb(0.1, 0.1, 0.9);
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .background(FILL)
+            .opacity(
+                0.0.transition(Transition::new(100.0, TimingFunction::Linear))
+                    .entering_from(1.0),
+            )
+            .child(container().width(10.0).height(10.0).background(INSIDE)),
+    );
+    // What each of the two boxes is drawn at, read off the flattened frame.
+    let drawn = |h: &mut H| -> f32 {
+        let node = h.paint();
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        let _ = crate::renderer::flatten_root_into(
+            &node,
+            &mut commands,
+            &mut layers,
+            &mut crate::renderer::FlattenScratch::default(),
+        );
+        let at = |fill: Color| {
+            commands
+                .iter()
+                .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { color, .. } if *color == fill))
+                .expect("the box is drawn")
+                .opacity
+        };
+        assert_eq!(
+            at(FILL),
+            at(INSIDE),
+            "the box inside is drawn at the container's opacity"
+        );
+        at(INSIDE)
+    };
+
+    frame_at(&mut h, t0, 400.0, 400.0);
+    assert_eq!(
+        drawn(&mut h),
+        1.0,
+        "it enters from where it was declared to"
+    );
+    let halfway = run_to(&mut h, t0, std::time::Duration::from_millis(50), drawn);
+    assert!(
+        (halfway - 0.5).abs() < 0.01,
+        "half faded at half the time: {halfway}"
+    );
+    let done = run_to(&mut h, t0, std::time::Duration::from_millis(100), drawn);
+    assert_eq!(done, 0.0, "and gone at the end");
 }

@@ -13,8 +13,9 @@ struct VertexInput {
     @location(2) clip_pos: vec2<f32>,
     @location(3) clip_rect: vec4<f32>,
     @location(4) clip_params: vec4<f32>,
-    // clip curvature, _pad, _pad, _pad
-    @location(5) clip_curvature: vec4<f32>,
+    // clip curvature, opacity, _pad, _pad — the opacity is multiplied into
+    // every texel's alpha
+    @location(5) curvature_opacity: vec4<f32>,
 }
 
 // === Vertex Output ===
@@ -26,6 +27,7 @@ struct VertexOutput {
     @location(2) clip_rect: vec4<f32>,
     @location(3) clip_radii: vec4<f32>,
     @location(4) @interpolate(flat) clip_curvature: f32,
+    @location(5) @interpolate(flat) opacity: f32,
 }
 
 // === Texture Bindings ===
@@ -43,7 +45,8 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_pos = in.clip_pos;
     out.clip_rect = in.clip_rect;
     out.clip_radii = in.clip_params;
-    out.clip_curvature = in.clip_curvature.x;
+    out.clip_curvature = in.curvature_opacity.x;
+    out.opacity = in.curvature_opacity.y;
     return out;
 }
 
@@ -154,7 +157,8 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var color = textureSample(t_texture, s_sampler, in.uv);
+    let sampled = textureSample(t_texture, s_sampler, in.uv);
+    var color = vec4<f32>(sampled.rgb, sampled.a * in.opacity);
 
     // Apply clipping if enabled (negative width/height = no clip sentinel)
     if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
