@@ -340,7 +340,9 @@ fn main() {
 ## Performance Notes
 
 - Raster files and bytes are decoded off the frame, once per source, and the
-  decoded pixels are kept only while an image showing them exists
+  decoded pixels are dropped once they are uploaded: after that the GPU texture
+  is the image. If the texture is later evicted, the image is decoded again the
+  next time it is drawn
 - Images are cached as GPU textures
 - The cache holds up to 64 textures with LRU eviction
 - SVGs are re-rasterized when their display scale changes significantly

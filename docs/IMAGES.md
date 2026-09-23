@@ -157,16 +157,17 @@ not drawn" colour.
 - **One entry per source, one signal per entry.** The application's decode
   cache (`AppState::decoded_images`) is keyed by the source — a path, or the
   bytes, sampled for the hash and compared in full for equality — and each
-  entry holds an `RwSignal<DecodeState>`: `Pending`, `Ready(DecodedImage)` or
-  `Failed`. `DecodedImage` carries the RGBA8 pixels as an `Arc<[u8]>`, so the
-  signal, the draw command and the paint cache share one buffer.
+  entry holds an `RwSignal<DecodeState>`: `Pending`, `Ready` or `Failed`. The
+  pixels are not in the signal: they wait in the entry's `DecodedImage`, a
+  handle the entry, the worker's job and every draw command share.
 - **The header, synchronously.** Making an entry reads the intrinsic size from
   the header (`image_metadata::get_intrinsic_size`, which for bytes too reads
   only the header), so the first layout gives the box its size. A header that
   cannot be read makes the entry `Failed` at once, and no worker is involved.
 - **The worker.** One `guido-image-decode` thread per application, spawned by
   the first decode and ended when the application is dropped (its channel
-  closes). It writes the result through the entry's `WriteSignal`, so the
+  closes). It puts the pixels in the entry's `DecodedImage` and writes `Ready`
+  through the entry's `WriteSignal`, so the
   write rides the background-write queue: it wakes the loop through the ingress
   channel and is applied at the flush point like any other background write.
   A std thread rather than the service runtime, because that runtime is one
@@ -176,14 +177,31 @@ not drawn" colour.
   painting (a widget written outside the crate gets the same through
   `PaintContext::draw_image`, which looks the entry up by source). A pending or
   failed source draws nothing; a ready one pushes a
-  `DrawCommand::Image` carrying the `DecodedImage`, and the renderer uploads
-  those pixels. The read happens inside the widget's paint scope, so the write
+  `DrawCommand::Image` carrying the `DecodedImage`. The read happens inside the widget's paint scope, so the write
   that completes the decode repaints exactly the widgets that read the entry —
   on the next frame, with no input from the application.
+- **The upload drops the pixels.** The renderer gets the pixels only by
+  `DecodedImage::take`, which empties the handle: once uploaded, the texture is
+  the image and the cache holds no RGBA — iced's raster cache turning
+  `Memory::Host` into `Memory::Device`. The renderer is one per application
+  and shared by every surface, so one upload serves them all. No surface can
+  draw from dropped pixels, because the only way to them is to take them.
+- **A texture that is gone.** When a frame draws a ready source whose texture
+  is not there (evicted from the 64-entry cache, or its renderer dropped) and
+  whose pixels were already taken, the renderer draws nothing and reports it.
+  The source goes back to `Pending` and to the worker, and comes back through
+  the same repaint as the first time. `ready()` is false in between.
+- **Reports are settled by the loop.** The renderer and the widgets never write
+  the cache's signals: a texture missing or evicted, and an image letting go of
+  its entry, are `ImageEvent`s in a deferred queue (`AppState::image_events`)
+  that the loop settles once per pass, next to the owner disposals.
 - **Lifetime.** An `Image` widget holds its source's entry (`DecodeHandle`)
-  while it shows it; the entry and its pixels go with the last holder. An entry
-  made by a bare `draw_image` from a widget written outside the crate is held
-  by nobody and lives as long as the application.
+  while it shows it. An entry nobody holds stays while its texture does — so an
+  image mounted again is drawn from it with no decode — and goes when the
+  renderer evicts that texture, or at once if it never had one; pixels that
+  land after that are dropped on arrival. An entry made by a bare `draw_image`
+  from a widget written outside the crate is held by nobody and follows the
+  same rule.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
   is decoded, true from the start for `Rgba` and SVG, never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
