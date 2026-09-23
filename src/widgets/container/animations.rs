@@ -89,8 +89,8 @@ pub struct AnimationState<T: Animatable> {
     /// first layout takes it. `None` for almost every declaration — see
     /// [`Animated::entering_from`](crate::animation::Animated::entering_from)
     /// — and boxed for the reason `timeline` below is: this struct is held
-    /// eleven times over by every container that animates anything, and a
-    /// `Shadow` inline here would widen all eleven to carry a value almost
+    /// twelve times over by every container that animates anything, and a
+    /// `Shadow` inline here would widen all twelve to carry a value almost
     /// none of them has and none of them keeps past the first layout.
     enter_from: Option<Box<T>>,
     /// A sequence to play on demand, and what plays it. Boxed and absent by
