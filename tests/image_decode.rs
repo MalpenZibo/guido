@@ -333,3 +333,61 @@ fn an_image_whose_texture_is_gone_is_decoded_again() {
     assert_eq!(app.image_decodes_started(), 2, "one decode more");
     assert_eq!(app.image_bytes_held(), 0, "and let go of again");
 }
+
+/// More images in view than the renderer's texture cache holds stay drawn,
+/// and are decoded once each.
+///
+/// Red before: eviction took the least recently used textures whether or not
+/// the frame before had drawn them. While the pixels stayed in the cache that
+/// cost an upload; once an upload drops them, every evicted image in view went
+/// blank and back to the worker, frame after frame, for as long as anything
+/// asked for frames.
+#[test]
+fn more_images_in_view_than_the_texture_cache_holds_stay_drawn() {
+    const IMAGES: u8 = 70;
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let backdrop = create_signal(BACKDROP);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(4)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(fill())
+                .height(fill())
+                .background(backdrop)
+                .layout(Flex::row())
+                .children((0..IMAGES).map(|i| {
+                    let source = ImageSource::Bytes(png([200, i, 0]).into());
+                    container()
+                        .width(4.0)
+                        .height(4.0)
+                        .child(image(source).content_fit(ContentFit::Fill))
+                }))
+        },
+    );
+    app.configure(surface, u32::from(IMAGES) * 4, 4, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    for frame in 0..4 {
+        backdrop.set(Color::rgb(0.0, 0.0, if frame % 2 == 0 { 0.9 } else { 1.0 }));
+        app.step();
+        app.wait_for_image_decodes();
+        app.step();
+        let blank: Vec<u32> = (0..u32::from(IMAGES))
+            .filter(|i| app.read_pixel(surface, i * 4 + 2, 2)[2] > 150)
+            .collect();
+        assert!(
+            blank.is_empty(),
+            "frame {frame}: images {blank:?} went blank"
+        );
+    }
+    assert_eq!(
+        app.image_decodes_started(),
+        u64::from(IMAGES),
+        "each decoded once"
+    );
+}

@@ -93,7 +93,8 @@ impl DecodedImage {
     }
 
     /// How many bytes of pixels are waiting here: zero once uploaded.
-    pub fn byte_size(&self) -> usize {
+    #[cfg(feature = "testing")]
+    pub(crate) fn byte_size(&self) -> usize {
         match &*self.slot() {
             Slot::Filled(pixels) => pixels.rgba.len(),
             _ => 0,

@@ -3,8 +3,10 @@
 //! This module renders images as textured quads with full transform support
 //! (rotation, scale, translate). Textures are cached for performance.
 
+use std::cell::Cell;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 use wgpu::util::DeviceExt;
@@ -25,7 +27,7 @@ use crate::widgets::image::{ContentFit, ImageSource};
 /// A prepared image quad ready for rendering.
 pub struct PreparedImageQuad {
     #[allow(dead_code)] // Kept alive for GPU usage
-    texture: Arc<CachedTexture>,
+    texture: Rc<CachedTexture>,
     bind_group: BindGroup,
     /// Vertex buffer with pre-computed vertices in NDC
     vertex_buffer: WgpuBuffer,
@@ -49,8 +51,9 @@ struct CachedTexture {
     /// Original intrinsic dimensions
     intrinsic_width: u32,
     intrinsic_height: u32,
-    /// Last frame this texture was used
-    last_used_frame: u64,
+    /// When a frame last drew it. A `Cell` because the frame that draws it
+    /// holds it through an `Rc` already.
+    last_used: Cell<Instant>,
     /// The raster source it was uploaded from, whose decoded pixels went with
     /// the upload: the decode cache is told when this texture goes.
     decoded_from: Option<DecodeKey>,
@@ -96,17 +99,26 @@ pub struct ImageQuadRenderer {
     quad: TexturedQuadPipeline,
 
     // Texture cache
-    texture_cache: FxHashMap<CacheKey, Arc<CachedTexture>>,
-    current_frame: u64,
+    texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
+    /// When the frame being prepared started: what a texture drawn in it is
+    /// stamped with.
+    frame_started: Instant,
     max_cache_size: usize,
 }
+
+/// How long a texture no frame has drawn is kept once the cache is past its
+/// size. One drawn more recently is never evicted — the cache grows past its
+/// size instead — because a raster texture's pixels went with its upload: an
+/// image still in view whose texture was evicted is blank until it is decoded
+/// again, and evicting it every frame would decode it every frame.
+const KEEP_UNUSED: Duration = Duration::from_secs(1);
 
 impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
             texture_cache: FxHashMap::default(),
-            current_frame: 0,
+            frame_started: Instant::now(),
             max_cache_size: 64,
         }
     }
@@ -118,7 +130,7 @@ impl ImageQuadRenderer {
 
     /// Begin a new frame (for cache management).
     pub fn begin_frame(&mut self) {
-        self.current_frame += 1;
+        self.frame_started = Instant::now();
 
         // Evict old entries if cache is too large
         if self.texture_cache.len() > self.max_cache_size {
@@ -132,20 +144,27 @@ impl ImageQuadRenderer {
         self.texture_cache.clear();
     }
 
-    /// Evict the least recently used entries until under the limit.
+    /// Evict the least recently used entries until under the limit — of those
+    /// no frame has drawn for [`KEEP_UNUSED`].
     fn evict_oldest(&mut self) {
         let target_size = self.max_cache_size / 2;
         while self.texture_cache.len() > target_size {
-            let oldest_key = self
+            let oldest = self
                 .texture_cache
                 .iter()
-                .min_by_key(|(_, v)| v.last_used_frame)
+                .min_by_key(|(_, v)| v.last_used.get())
+                .filter(|(_, v)| {
+                    self.frame_started
+                        .saturating_duration_since(v.last_used.get())
+                        > KEEP_UNUSED
+                })
                 .map(|(k, _)| k.clone());
 
-            if let Some(key) = oldest_key {
-                self.texture_cache.remove(&key);
-            } else {
-                break;
+            match oldest {
+                Some(key) => {
+                    self.texture_cache.remove(&key);
+                }
+                None => break,
             }
         }
     }
@@ -202,7 +221,7 @@ impl ImageQuadRenderer {
         render_scale: f32,
         svg_target: Option<(f32, f32)>,
         decoded: Option<&DecodedImage>,
-    ) -> Option<Arc<CachedTexture>> {
+    ) -> Option<Rc<CachedTexture>> {
         let is_svg = source.is_svg();
 
         // Quantize scale to reduce cache entries (round to 0.25 increments)
@@ -226,11 +245,8 @@ impl ImageQuadRenderer {
         };
 
         // Check if we already have this texture cached
-        if let Some(cached) = self.texture_cache.get_mut(&key) {
-            // Update last used frame via Arc::get_mut if possible
-            if let Some(inner) = Arc::get_mut(cached) {
-                inner.last_used_frame = self.current_frame;
-            }
+        if let Some(cached) = self.texture_cache.get(&key) {
+            cached.last_used.set(self.frame_started);
             return Some(cached.clone());
         }
 
@@ -241,7 +257,7 @@ impl ImageQuadRenderer {
             texture.decoded_from = DecodeKey::of(source);
         }
 
-        let cached = Arc::new(texture);
+        let cached = Rc::new(texture);
         self.texture_cache.insert(key, cached.clone());
         Some(cached)
     }
@@ -373,7 +389,7 @@ impl ImageQuadRenderer {
             view,
             intrinsic_width: width,
             intrinsic_height: height,
-            last_used_frame: self.current_frame,
+            last_used: Cell::new(self.frame_started),
             decoded_from: None,
         })
     }
@@ -487,7 +503,7 @@ impl ImageQuadRenderer {
             view,
             intrinsic_width,
             intrinsic_height,
-            last_used_frame: self.current_frame,
+            last_used: Cell::new(self.frame_started),
             decoded_from: None,
         })
     }
