@@ -178,6 +178,47 @@ container()
 # }
 ```
 
+### Sliding by Its Own Width
+
+A relative translate animates like a pixel one, and what animates is the
+fraction. So a panel can slide in from exactly its own width without anybody
+knowing the width — `entering_from` plays it on the first frame, before a pixel
+of it has been measured:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .translate(
+        Translate::NONE
+            .transition(Transition::new(250.0, TimingFunction::EaseOut))
+            .entering_from(Translate::relative(-1.0, 0.0)),
+    )
+# ;
+# }
+```
+
+And a slide out is a signal holding where it should be:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let open = create_signal(true);
+
+container()
+    .translate(
+        (move || if open.get() { Translate::NONE } else { Translate::relative(-1.0, 0.0) })
+            .transition(Transition::new(250.0, TimingFunction::EaseInOut)),
+    )
+# ;
+# }
+```
+
+If the width changes while it is out, it stays exactly one width out, at once:
+the declared offset did not change, so there is nothing to animate.
+
 ## When to Use Each Type
 
 ### Duration-Based

@@ -1124,6 +1124,11 @@ impl Container {
 
     /// Displace this container from where it was laid out.
     ///
+    /// In logical pixels, or in fractions of the container's own size with
+    /// [`Translate::relative`], which is what a slide by its own width wants
+    /// rather than a width read back through a
+    /// [`WidgetRef`]; `Translate::relative` says why.
+    ///
     /// Paint-only, like the other two: the space the layout gave it does not
     /// move, so nothing around it shifts.
     ///
@@ -1138,6 +1143,7 @@ impl Container {
     /// # let refusals = create_signal(0u32);
     /// # let nod = || Keyframes::new(200.0).at(0.0, Translate::NONE).at(0.5, Translate::new(0.0, 4.0)).at(1.0, Translate::NONE);
     /// container().translate((20.0, 10.0));
+    /// container().translate(Translate::relative(-1.0, 0.0));
     /// container().translate(move || Translate::new(offset.get(), 0.0));
     /// container().translate(target.transition(SpringConfig::SNAPPY));
     /// container().translate(Translate::NONE.timeline(nod().played_by(refusals)));

@@ -28,6 +28,42 @@ container()
 # }
 ```
 
+### By Its Own Size
+
+`Translate::relative` moves a widget by fractions of its own size — CSS's
+`translateX(-100%)`. `-1.0` is one of its own widths:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .translate(Translate::relative(-1.0, 0.0))  // exactly its own width left
+# ;
+# }
+```
+
+The fraction is resolved against the size the container is laid out at, every
+time it is painted, so it stays one width at any width — including one that
+changes, and including the first frame, before anything has been measured.
+Pixels and a fraction add, like CSS's `calc(8px - 100%)`:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .translate(Translate { x: 8.0, ..Translate::relative(-1.0, 0.0) })
+# ;
+# }
+```
+
+Reading the width back through a [`WidgetRef`](../advanced/widget-ref.md) and
+translating by it is the other way to spell this, and the wrong one for a
+slide: the width is still zero when an `entering_from` plays, and a width
+change under a `transition` animates an offset that never changed. See
+[animated transforms](animated.md#sliding-by-its-own-width).
+
 ## Rotation
 
 Rotate a widget around its center (default):
@@ -210,6 +246,7 @@ A pair builds either one; a bare number builds a uniform `Scale`.
 # fn main() {
 Translate::NONE;                  // no displacement
 Translate::new(20.0, 10.0);       // or just (20.0, 10.0)
+Translate::relative(-1.0, 0.0);   // one of its own widths left
 
 Scale::NONE;                      // unscaled — 1.0 on both axes
 Scale::uniform(1.5);              // or just 1.5
