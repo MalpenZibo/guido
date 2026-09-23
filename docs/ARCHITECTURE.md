@@ -210,7 +210,7 @@ live beside their state rather than all in one file.
 | File | Concern |
 |------|---------|
 | `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
-| `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape, key repeat |
+| `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
 | `platform/selections.rs` | Clipboard and primary selection, async prefetch |
 | `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |

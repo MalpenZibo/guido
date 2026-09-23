@@ -226,6 +226,23 @@ container().cursor(move || {
 # }
 ```
 
+`CursorIcon::Hidden` is a shape like the others: the pointer is still there and
+still reaches widgets, but nothing is drawn for it. A surface with no pointer —
+a lock screen, a kiosk — is `Hidden` on its root, and a widget inside can still
+claim a visible shape, because the innermost claim wins:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let unlock = || {};
+container()
+    .cursor(CursorIcon::Hidden)
+    .child(container().cursor(CursorIcon::Pointer).on_click(unlock))
+# ;
+# }
+```
+
 A container declared with `takes_input(false)` claims no cursor: the
 compositor is not giving it the pointer, so whatever is beneath it answers.
 
