@@ -44,6 +44,11 @@ jobs:
         run: .github/required-context.sh
       - name: Check the ruleset reader
         run: .github/required-context.test.sh
+      # The version a release PR carries is read from labels by this script,
+      # and it runs only on a push to main, where nothing waits on it; its
+      # table is checked here, where a pull request that breaks it is red.
+      - name: Check the release version reader
+        run: .github/next-version.test.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
