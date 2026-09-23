@@ -1,7 +1,10 @@
 use crate::app_state::with_app_state;
 use crate::layout::Size;
+use crate::widgets::TextOverflow;
 use crate::widgets::font::{FontFamily, FontWeight};
-use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping};
+use cosmic_text::{
+    Attrs, Buffer, Ellipsize, EllipsizeHeightLimit, FontSystem, Metrics, Shaping, Wrap,
+};
 use rustc_hash::FxHashMap;
 
 /// The smallest font size guido will hand to the shaper.
@@ -36,6 +39,197 @@ pub(crate) fn shapeable_metrics(font_size: f32) -> (f32, f32) {
 const LINE_HEIGHT_RATIO: f32 = 1.2;
 use std::hash::{Hash, Hasher};
 
+/// How a text is cut to the lines it may take, decided by layout and carried to
+/// every path that shapes it.
+///
+/// Carried rather than re-derived, because the measurer and the three draw
+/// paths each shape the text for themselves, and a text that one of them cuts
+/// at another width or line is measured one line high and drawn two. The width
+/// is the one it was laid out in, not the box it came back as: a wrapped text
+/// is measured at the width it was offered, and shaped anywhere narrower it
+/// breaks its lines somewhere else.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineFit {
+    /// The width the lines are laid out in, in logical pixels, or `None` for
+    /// as wide as they run.
+    pub width: Option<f32>,
+    /// The most lines drawn; at least one.
+    pub max_lines: u32,
+    /// What marks the cut.
+    pub overflow: TextOverflow,
+    /// Whether the text wraps at `width` or runs on as one line per paragraph.
+    pub wrap: bool,
+}
+
+/// A [`LineFit`] as something a cache can key by: the width by its bits.
+pub(crate) type LineFitKey = (Option<u32>, u32, TextOverflow, bool);
+
+impl LineFit {
+    /// The fit as something a cache can key by.
+    pub(crate) fn key(&self) -> LineFitKey {
+        (
+            self.width.map(f32::to_bits),
+            self.max_lines,
+            self.overflow,
+            self.wrap,
+        )
+    }
+}
+
+/// What cosmic-text is asked to mark a one-line cut with. `None` for a cut
+/// nothing marks.
+fn ellipsize(overflow: TextOverflow) -> Option<Ellipsize> {
+    let limit = EllipsizeHeightLimit::Lines(1);
+    match overflow {
+        TextOverflow::Clip => None,
+        TextOverflow::Ellipsis => Some(Ellipsize::End(limit)),
+        TextOverflow::EllipsisStart => Some(Ellipsize::Start(limit)),
+        TextOverflow::EllipsisMiddle => Some(Ellipsize::Middle(limit)),
+    }
+}
+
+/// Shape `text` at `font_size`: in a box of `size`, or, when the text is
+/// cut, to the lines `fit` allows at `scale` device pixels per logical one.
+///
+/// The one place a text is shaped, for the measurer and the three draw paths
+/// alike. Each keeps the box it always shaped an uncut text in; a cut text
+/// is shaped at the width it was laid out in and nothing else, so the line
+/// the ellipsis lands on is the line the measurer counted.
+///
+/// A cut text is given the height of the lines it keeps, which is where every
+/// reader of its lines stops and where shaping stops too. Half a line short of
+/// the next one, so a line whose glyphs are taller than the line box neither
+/// loses the last line kept nor lets the first one cut back in. That height is
+/// the whole of an unmarked cut; a marked one is finished by [`cut_to_lines`].
+pub(crate) fn shape_text(
+    font_system: &mut FontSystem,
+    font_size: f32,
+    text: &str,
+    attrs: &Attrs,
+    size: (Option<f32>, Option<f32>),
+    fit: Option<LineFit>,
+    scale: f32,
+) -> Buffer {
+    let (size_px, line_height) = shapeable_metrics(font_size);
+    let mut buffer = Buffer::new(font_system, Metrics::new(size_px, line_height));
+    let Some(fit) = fit else {
+        buffer.set_size(font_system, size.0, size.1);
+        buffer.set_text(font_system, text, attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(font_system, true);
+        return buffer;
+    };
+    let lines = fit.max_lines.max(1) as usize;
+    buffer.set_size(
+        font_system,
+        fit.width.map(|w| w * scale),
+        Some((lines as f32 - 0.5) * line_height),
+    );
+    if !fit.wrap {
+        buffer.set_wrap(font_system, Wrap::None);
+    }
+    buffer.set_text(font_system, text, attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, true);
+    if let Some(mark) = ellipsize(fit.overflow) {
+        cut_to_lines(font_system, &mut buffer, lines, mark);
+    }
+    buffer
+}
+
+/// Cut a shaped buffer to `max_lines` lines across all its paragraphs, and
+/// mark the cut.
+///
+/// By hand around cosmic-text's own ellipsis rather than through it, for two
+/// reasons. Its limit is per paragraph — a `\n` starts the count again, and a
+/// cut that lands on a line break has no mark, because the paragraph before it
+/// fit. And a mark it puts on any line but the first starts that line at the
+/// blank the wrap broke on, so the last line sits a space to the right of the
+/// ones above it — in 0.19 as in 0.18.
+///
+/// So the last line kept is made a paragraph of its own, split off where it
+/// begins, and cosmic-text is asked to mark only that one line, which is the
+/// case it gets right. When the cut fell after it rather than inside it, the
+/// line is given a `…` of its own to end in. An unwrapped line wider than the
+/// box is marked the same way wherever it is: it is one line already.
+///
+/// `mark` is what the cut line is marked with, as [`ellipsize`] gave it.
+fn cut_to_lines(
+    font_system: &mut FontSystem,
+    buffer: &mut Buffer,
+    max_lines: usize,
+    mark: Ellipsize,
+) {
+    let width = buffer.size().0.unwrap_or(f32::INFINITY);
+    let mut remaining = max_lines;
+    let mut i = 0;
+    while i < buffer.lines.len() {
+        let layout = buffer.line_layout(font_system, i).unwrap_or_default();
+        let count = layout.len();
+        let kept = count.min(remaining);
+        let last = kept.checked_sub(1).and_then(|at| layout.get(at));
+        let too_wide = last.is_some_and(|line| line.w > width);
+        let begins_at = last.map_or(0, |line| {
+            line.glyphs.iter().map(|g| g.start).min().unwrap_or(0)
+        });
+        let ends_here = count >= remaining;
+        let more_inside = count > remaining;
+        let more_after = ends_here && i + 1 < buffer.lines.len();
+
+        if !(more_inside || more_after || too_wide) {
+            if ends_here {
+                return;
+            }
+            remaining -= count;
+            i += 1;
+            continue;
+        }
+
+        if ends_here {
+            buffer.lines.truncate(i + 1);
+        }
+        if kept > 1 {
+            let rest = buffer.lines[i].split_off(begins_at);
+            buffer.lines.insert(i + 1, rest);
+            // The lines above the cut, laid out again as they were: a line
+            // that has none is where every reader of the buffer stops.
+            buffer.line_layout(font_system, i);
+            i += 1;
+        }
+        let mark = if more_inside || too_wide {
+            mark
+        } else {
+            let line = &mut buffer.lines[i];
+            let marked = format!("{}\u{2026}", line.text());
+            let (ending, attrs) = (line.ending(), line.attrs_list().clone());
+            line.set_text(marked, ending, attrs);
+            Ellipsize::End(EllipsizeHeightLimit::Lines(1))
+        };
+        let (fits_in, wrap, font_size) =
+            (buffer.size().0, buffer.wrap(), buffer.metrics().font_size);
+        let (mono, tab, hinting) = (
+            buffer.monospace_width(),
+            buffer.tab_width(),
+            buffer.hinting(),
+        );
+        let line = &mut buffer.lines[i];
+        line.reset_layout();
+        line.layout(
+            font_system,
+            font_size,
+            fits_in,
+            wrap,
+            mark,
+            mono,
+            tab,
+            hinting,
+        );
+        if ends_here {
+            return;
+        }
+        remaining -= kept;
+        i += 1;
+    }
+}
+
 /// Cache key for measurement results.
 ///
 /// The text and font family are folded into a 64-bit hash (plus the text
@@ -51,6 +245,8 @@ struct MeasureCacheKey {
     font_size_bits: u32,
     font_weight: FontWeight,
     max_width_bits: Option<u32>,
+    /// The cut, when there is one.
+    fit: Option<LineFitKey>,
 }
 
 impl MeasureCacheKey {
@@ -60,6 +256,7 @@ impl MeasureCacheKey {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        fit: Option<LineFit>,
     ) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
         text.hash(&mut hasher);
@@ -70,6 +267,7 @@ impl MeasureCacheKey {
             font_size_bits: font_size.to_bits(),
             font_weight,
             max_width_bits: max_width.map(|w| w.to_bits()),
+            fit: fit.map(|f| f.key()),
         }
     }
 }
@@ -124,7 +322,7 @@ impl TextMeasurer {
         font_family: FontFamily,
         font_weight: FontWeight,
     ) -> Size {
-        self.measure_full(text, font_size, max_width, font_family, font_weight)
+        self.measure_full(text, font_size, max_width, font_family, font_weight, None)
             .size
     }
 
@@ -132,6 +330,9 @@ impl TextMeasurer {
     ///
     /// Both come out of the same shaping pass and share one cache entry — a
     /// baseline is not worth re-shaping for.
+    ///
+    /// A text cut by `fit` is measured as the lines it keeps, at the width the
+    /// fit carries rather than `max_width`.
     pub fn measure_full(
         &mut self,
         text: &str,
@@ -139,8 +340,11 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        fit: Option<LineFit>,
     ) -> Measured {
-        let cache_key = MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight);
+        let max_width = fit.map_or(max_width, |f| f.width);
+        let cache_key =
+            MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight, fit);
 
         // Check cache first (no allocation on this path)
         if let Some(&cached) = self.measure_cache.get(&cache_key) {
@@ -148,7 +352,7 @@ impl TextMeasurer {
         }
 
         let measured = {
-            let buffer = self.shape(text, font_size, max_width, font_family, font_weight);
+            let buffer = self.shape(text, font_size, max_width, font_family, font_weight, fit);
 
             let mut width = 0.0f32;
             let mut height = 0.0f32;
@@ -195,23 +399,19 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        fit: Option<LineFit>,
     ) -> Buffer {
-        let (size, line_height) = shapeable_metrics(font_size);
-        let metrics = Metrics::new(size, line_height);
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-
-        buffer.set_size(&mut self.font_system, max_width, None);
-        buffer.set_text(
+        shape_text(
             &mut self.font_system,
+            font_size,
             text,
             &Attrs::new()
                 .family(font_family.to_cosmic())
                 .weight(font_weight.to_cosmic()),
-            Shaping::Advanced,
-            None,
-        );
-        buffer.shape_until_scroll(&mut self.font_system, true);
-        buffer
+            (max_width, None),
+            fit,
+            1.0,
+        )
     }
 
     /// Compute the cumulative x position of every character boundary by
@@ -245,7 +445,7 @@ impl TextMeasurer {
         }
         char_index_at_byte[text.len()] = char_count;
 
-        let buffer = self.shape(text, font_size, None, font_family, font_weight);
+        let buffer = self.shape(text, font_size, None, font_family, font_weight, None);
 
         let mut total_width = 0.0f32;
         let mut any_glyphs = false;
@@ -405,15 +605,17 @@ pub fn measure_text_styled(
     with_measurer(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
 }
 
-/// Measure text and report where its first line sits on the baseline.
+/// Measure text and report where its first line sits on the baseline, as the
+/// lines `fit` keeps when it is cut.
 pub fn measure_text_full(
     text: &str,
     font_size: f32,
     max_width: Option<f32>,
     font_family: FontFamily,
     font_weight: FontWeight,
+    fit: Option<LineFit>,
 ) -> Measured {
-    with_measurer(|m| m.measure_full(text, font_size, max_width, font_family, font_weight))
+    with_measurer(|m| m.measure_full(text, font_size, max_width, font_family, font_weight, fit))
 }
 
 /// Measure text width up to a specific character index (for cursor positioning)
@@ -488,6 +690,7 @@ mod baseline_tests {
                     Some(100.0),
                     FontFamily::default(),
                     FontWeight::NORMAL,
+                    None,
                 );
                 assert!(
                     m.size.width.is_finite() && m.size.height.is_finite(),
@@ -516,6 +719,7 @@ mod baseline_tests {
                 None,
                 FontFamily::default(),
                 FontWeight::NORMAL,
+                None,
             );
             assert!(
                 m.baseline > m.size.height * 0.5 && m.baseline < m.size.height,
@@ -525,5 +729,153 @@ mod baseline_tests {
                 m.size.height
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    const OVERLONG: &str = "a considerable quantity of words, far more than any two \
+                            lines of a narrow box could hold, and then some more";
+
+    fn fit(width: f32, max_lines: u32, overflow: TextOverflow, wrap: bool) -> LineFit {
+        LineFit {
+            width: Some(width),
+            max_lines,
+            overflow,
+            wrap,
+        }
+    }
+
+    /// The lines a text is drawn as, each as the glyph ids it shows, and the
+    /// glyph id `…` is shaped as — so an assertion can say where the mark is
+    /// without knowing the font.
+    fn drawn(text: &str, fit: Option<LineFit>) -> (Vec<Vec<u16>>, u16) {
+        let mut measurer = TextMeasurer::new();
+        let family = FontFamily::default();
+        let lines = measurer
+            .shape(text, 20.0, None, family, FontWeight::NORMAL, fit)
+            .layout_runs()
+            .map(|run| run.glyphs.iter().map(|g| g.glyph_id).collect())
+            .collect();
+        let mark = measurer
+            .shape("\u{2026}", 20.0, None, family, FontWeight::NORMAL, None)
+            .layout_runs()
+            .next()
+            .and_then(|run| run.glyphs.first().map(|g| g.glyph_id))
+            .expect("the ellipsis shapes as a glyph");
+        (lines, mark)
+    }
+
+    #[test]
+    fn one_overlong_line_ends_in_an_ellipsis() {
+        let (lines, mark) = drawn(OVERLONG, Some(fit(120.0, 1, TextOverflow::Ellipsis, true)));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].last(), Some(&mark), "{lines:?}");
+    }
+
+    #[test]
+    fn the_last_of_two_wrapped_lines_ends_in_an_ellipsis() {
+        let (lines, mark) = drawn(OVERLONG, Some(fit(120.0, 2, TextOverflow::Ellipsis, true)));
+        assert_eq!(lines.len(), 2);
+        assert!(!lines[0].contains(&mark), "{lines:?}");
+        assert_eq!(lines[1].last(), Some(&mark), "{lines:?}");
+    }
+
+    /// The marked line starts where the same line starts unmarked.
+    ///
+    /// cosmic-text starts a line it ellipsizes at the blank the wrap broke on,
+    /// so marked through it, the last line sat a space to the right of the
+    /// lines above it.
+    #[test]
+    fn a_marked_line_starts_where_an_unmarked_one_does() {
+        // Short words, so the second line begins at a word the wrap broke
+        // before rather than inside one it had to break by the glyph.
+        const WORDS: &str = "one two three four five six seven eight nine ten eleven";
+        let (marked, _) = drawn(WORDS, Some(fit(150.0, 2, TextOverflow::Ellipsis, true)));
+        let (clipped, _) = drawn(WORDS, Some(fit(150.0, 2, TextOverflow::Clip, true)));
+        assert_eq!(
+            marked[1].first(),
+            clipped[1].first(),
+            "{marked:?} against {clipped:?}"
+        );
+    }
+
+    #[test]
+    fn an_unwrapped_line_in_a_narrow_box_ends_in_an_ellipsis() {
+        let mut measurer = TextMeasurer::new();
+        let cut = measurer.measure_full(
+            OVERLONG,
+            20.0,
+            None,
+            FontFamily::default(),
+            FontWeight::NORMAL,
+            Some(fit(90.0, 1, TextOverflow::Ellipsis, false)),
+        );
+        assert!(cut.size.width <= 90.0, "{:?}", cut.size);
+
+        let (lines, mark) = drawn(OVERLONG, Some(fit(90.0, 1, TextOverflow::Ellipsis, false)));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].last(), Some(&mark), "{lines:?}");
+    }
+
+    /// A cut that lands on a line break is still a cut: the paragraph before it
+    /// fit, so cosmic-text alone would mark nothing.
+    #[test]
+    fn a_cut_at_a_line_break_ends_in_an_ellipsis() {
+        let (lines, mark) = drawn(
+            "one\ntwo\nthree",
+            Some(fit(400.0, 2, TextOverflow::Ellipsis, true)),
+        );
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[1].last(), Some(&mark), "{lines:?}");
+    }
+
+    /// And a paragraph cut inside, after another that fit, is cut at what is
+    /// left of the limit rather than at the whole of it.
+    #[test]
+    fn a_later_paragraph_is_cut_at_what_is_left_of_the_limit() {
+        let text = format!("first\n{OVERLONG}");
+        let (lines, mark) = drawn(&text, Some(fit(120.0, 2, TextOverflow::Ellipsis, true)));
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[1].last(), Some(&mark), "{lines:?}");
+    }
+
+    #[test]
+    fn a_clipped_cut_keeps_its_lines_and_marks_nothing() {
+        let (lines, mark) = drawn(OVERLONG, Some(fit(120.0, 2, TextOverflow::Clip, true)));
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines.iter().all(|l| !l.contains(&mark)), "{lines:?}");
+    }
+
+    #[test]
+    fn the_mark_can_open_the_line_or_stand_in_its_middle() {
+        let (lines, mark) = drawn(
+            OVERLONG,
+            Some(fit(120.0, 1, TextOverflow::EllipsisStart, true)),
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].first(), Some(&mark), "{lines:?}");
+
+        let (lines, mark) = drawn(
+            OVERLONG,
+            Some(fit(120.0, 1, TextOverflow::EllipsisMiddle, true)),
+        );
+        assert_eq!(lines.len(), 1);
+        let at = lines[0].iter().position(|g| *g == mark);
+        assert!(
+            at.is_some_and(|at| at > 0 && at < lines[0].len() - 1),
+            "{lines:?}"
+        );
+    }
+
+    /// Content that fits is drawn as it would be with no limit at all.
+    #[test]
+    fn content_that_fits_is_drawn_unchanged() {
+        let (free, mark) = drawn("short", None);
+        let (limited, _) = drawn("short", Some(fit(400.0, 1, TextOverflow::Ellipsis, true)));
+        assert_eq!(free, limited);
+        assert!(!limited[0].contains(&mark));
     }
 }

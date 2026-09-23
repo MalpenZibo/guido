@@ -30,8 +30,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
@@ -58,6 +58,8 @@ pub struct MaskSpec<'a> {
     pub font_size: f32,
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
+    /// The lines the text is cut to, when it is cut.
+    pub fit: Option<super::text_measurer::LineFit>,
     /// The buffer to shape in, in the same texels as everything else here.
     ///
     /// Handed in rather than derived, because the rule belongs to whichever
@@ -93,6 +95,8 @@ struct MaskKey {
     /// The glyph origin inside the frame, in quarter texels. Quantised because
     /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
+    /// The cut, which decides which letters the mask holds at all.
+    fit: Option<super::text_measurer::LineFitKey>,
 }
 
 struct CachedMask {
@@ -208,6 +212,7 @@ impl TextMaskRenderer {
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
             ),
+            fit: spec.fit.map(|fit| fit.key()),
         };
 
         if let Some(cached) = self.masks.get(&key) {
@@ -222,23 +227,17 @@ impl TextMaskRenderer {
 
         // Shaped the way the on-screen text is shaped, or the hole would not be
         // the shape of the letters that land in it.
-        let (size, line_height) = crate::renderer::text_measurer::shapeable_metrics(font_size);
-        let mut buffer = Buffer::new(&mut shaper.font_system, Metrics::new(size, line_height));
-        buffer.set_size(
+        let buffer = super::text_measurer::shape_text(
             &mut shaper.font_system,
-            Some(spec.buffer.0),
-            Some(spec.buffer.1),
-        );
-        buffer.set_text(
-            &mut shaper.font_system,
+            font_size,
             spec.text,
             &Attrs::new()
                 .family(spec.font_family.to_cosmic())
                 .weight(weight.to_cosmic()),
-            Shaping::Advanced,
-            None,
+            (Some(spec.buffer.0), Some(spec.buffer.1)),
+            spec.fit,
+            spec.density,
         );
-        buffer.shape_until_scroll(&mut shaper.font_system, true);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Text Mask"),

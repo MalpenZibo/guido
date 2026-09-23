@@ -1,8 +1,8 @@
 use std::hash::{Hash, Hasher};
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache,
+    TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue};
@@ -10,6 +10,7 @@ use wgpu::{Device, MultisampleState, Queue};
 use crate::widgets::Rect;
 use crate::widgets::font::FontWeight;
 
+use super::text_measurer::shape_text;
 use super::types::TextEntry;
 
 /// Compute a cache key for a text buffer based on content and styling.
@@ -20,6 +21,7 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
+    entry.fit.map(|fit| fit.key()).hash(&mut hasher);
     ((entry.rect.width.max(200.0)) * scale_factor)
         .to_bits()
         .hash(&mut hasher);
@@ -274,32 +276,23 @@ impl TextRenderState {
             } else {
                 // Cache miss — create and shape a new buffer
                 let scaled_font_size = entry.font_size * scale_factor;
-                let (size, line_height) =
-                    crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
-                let mut buffer =
-                    Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
                 let (buffer_width, buffer_height) = shaping_buffer(entry.rect, scale_factor);
-                buffer.set_size(
-                    &mut self.font_system,
-                    Some(buffer_width),
-                    Some(buffer_height),
-                );
                 let weight = if entry.font_weight == FontWeight::default() {
                     FontWeight::NORMAL
                 } else {
                     entry.font_weight
                 };
-                buffer.set_text(
+                shape_text(
                     &mut self.font_system,
+                    scaled_font_size,
                     &entry.text,
                     &Attrs::new()
                         .family(entry.font_family.to_cosmic())
                         .weight(weight.to_cosmic()),
-                    Shaping::Advanced,
-                    None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, true);
-                buffer
+                    (Some(buffer_width), Some(buffer_height)),
+                    entry.fit,
+                    scale_factor,
+                )
             };
             self.kept.push(idx);
             self.frame_keys.push(key);
@@ -420,6 +413,7 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_size: 16.0,
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
+        fit: None,
         clip: None,
         transform,
         transform_origin: None,

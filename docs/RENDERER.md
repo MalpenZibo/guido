@@ -135,7 +135,7 @@ ctx.draw_circle(cx, cy, radius, color);
 
 // Text
 ctx.draw_text(text, rect, color, font_size);
-ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight);
+ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight, fit);
 
 // Image
 ctx.draw_image(source, rect, content_fit);

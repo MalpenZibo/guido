@@ -1449,6 +1449,7 @@ impl Widget for TextInput {
             self.cached_font_weight,
             stroke,
             shadow,
+            None,
         );
 
         // The caret, and the wake that keeps it blinking.

@@ -751,6 +751,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         font_size,
         font_family,
         font_weight,
+        fit,
     } = &*cmd.command
     else {
         return None;
@@ -821,6 +822,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            fit: *fit,
             // Shaped by whichever path will draw the glyphs over the frost:
             // the two break their lines in different places, and the frost has
             // to break its own where the letters do.
@@ -923,6 +925,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size,
             font_family,
             font_weight,
+            fit,
         } => Some(TextEntry {
             text: text.clone(),
             rect: *rect,
@@ -930,6 +933,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            fit: *fit,
             clip: cmd.clip(),
             transform: cmd.world_transform,
             transform_origin: cmd.world_transform_origin,
@@ -957,6 +961,7 @@ mod tests {
                 font_size: 20.0,
                 font_family: FontFamily::default(),
                 font_weight: Default::default(),
+                fit: None,
             }),
             world_transform: transform,
             world_transform_origin: None,

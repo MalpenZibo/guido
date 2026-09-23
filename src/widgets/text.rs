@@ -24,6 +24,24 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
     from_stroke.max(from_shadow)
 }
 
+/// What a text cut to fewer lines than it holds shows where the rest would
+/// have been.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextOverflow {
+    /// The lines past the limit are not drawn, and the last one is cut where
+    /// the box ends.
+    #[default]
+    Clip,
+    /// The last line drawn ends in `…`.
+    Ellipsis,
+    /// The `…` opens the last line drawn, which shows the end of what it
+    /// holds: a path whose file name is what matters.
+    EllipsisStart,
+    /// The `…` stands in the middle of the last line drawn, which keeps both
+    /// ends.
+    EllipsisMiddle,
+}
+
 /// A run of text.
 ///
 /// Style is declared here — see `declares_text_style` — because this is the
@@ -266,6 +284,7 @@ impl Widget for Text {
             max_width,
             self.cached_font_family,
             self.cached_font_weight,
+            None,
         );
 
         // A parent aligning on the baseline needs this; it comes out of the
@@ -349,6 +368,7 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
+                None,
             );
         }
         ctx.draw_text_decorated(
@@ -360,6 +380,7 @@ impl Widget for Text {
             self.cached_font_weight,
             if frosted { None } else { stroke },
             shadow,
+            None,
         );
     }
 }

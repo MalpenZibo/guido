@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use wgpu::util::DeviceExt;
 use wgpu::{
@@ -85,6 +85,8 @@ struct TextCacheKey {
     color: [u8; 4],
     tex_width: u32,
     tex_height: u32,
+    /// The cut, which decides what is drawn at all.
+    fit: Option<super::text_measurer::LineFitKey>,
 }
 
 /// Renderer for transformed text as textured quads.
@@ -214,6 +216,7 @@ impl TextQuadRenderer {
             ],
             tex_width,
             tex_height,
+            fit: entry.fit.map(|fit| fit.key()),
         };
 
         if let Some(cached) = self.text_cache.get(&cache_key) {
@@ -231,24 +234,17 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
-        let (size, line_height) =
-            crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
-        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
-        buffer.set_size(
+        let buffer = super::text_measurer::shape_text(
             &mut self.font_system,
-            Some(buffer_width),
-            Some(buffer_height),
-        );
-        buffer.set_text(
-            &mut self.font_system,
+            scaled_font_size,
             &entry.text,
             &Attrs::new()
                 .family(entry.font_family.to_cosmic())
                 .weight(weight.to_cosmic()),
-            Shaping::Advanced,
-            None,
+            (Some(buffer_width), Some(buffer_height)),
+            entry.fit,
+            effective_scale,
         );
-        buffer.shape_until_scroll(&mut self.font_system, true);
 
         // Create offscreen texture
         let texture = device.create_texture(&TextureDescriptor {

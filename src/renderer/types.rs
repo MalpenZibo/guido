@@ -137,6 +137,8 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// The lines it is cut to, when it is cut.
+    pub fit: Option<super::text_measurer::LineFit>,
     /// The clip this text was flattened under, as the shape it is rather than
     /// the box around it. The quad path cuts in the clip's own space; the
     /// glyphon path asks for the box, because `TextBounds` is four integers.

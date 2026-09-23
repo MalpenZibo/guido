@@ -3,6 +3,7 @@
 use std::rc::Rc;
 
 use super::commands::{Border, CornerRadii, DrawCommand};
+use super::text_measurer::LineFit;
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
 use crate::pivot::Pivot;
@@ -403,6 +404,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        fit: Option<LineFit>,
     ) {
         if text.is_empty() || radius <= 0.0 {
             return;
@@ -417,6 +419,7 @@ impl<'a> PaintContext<'a> {
                 font_size,
                 font_family,
                 font_weight,
+                fit,
             }));
     }
 
@@ -441,10 +444,13 @@ impl<'a> PaintContext<'a> {
             font_size,
             FontFamily::default(),
             FontWeight::NORMAL,
+            None,
         );
     }
 
-    /// Draw text with custom font family and weight.
+    /// Draw text with custom font family and weight, cut to the lines `fit`
+    /// allows when it is given.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text_styled(
         &mut self,
         text: &str,
@@ -453,6 +459,7 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        fit: Option<LineFit>,
     ) {
         // Skip empty text
         if text.is_empty() {
@@ -465,6 +472,7 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            fit,
         }));
     }
 
@@ -485,6 +493,7 @@ impl<'a> PaintContext<'a> {
         font_weight: FontWeight,
         stroke: Option<TextStroke>,
         shadow: Option<TextShadow>,
+        fit: Option<LineFit>,
     ) {
         if text.is_empty() {
             return;
@@ -504,6 +513,7 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    fit,
                 );
             }
         }
@@ -517,11 +527,12 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    fit,
                 );
             }
         }
 
-        self.draw_text_styled(text, rect, color, font_size, font_family, font_weight);
+        self.draw_text_styled(text, rect, color, font_size, font_family, font_weight, fit);
     }
 
     // -------------------------------------------------------------------------
