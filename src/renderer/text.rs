@@ -408,12 +408,18 @@ impl TextRenderState {
                     top: scaled_top,
                     scale: 1.0, // Buffer is already scaled, no additional scaling needed
                     bounds,
-                    default_color: GlyphonColor::rgba(
-                        (entry.color.r * 255.0) as u8,
-                        (entry.color.g * 255.0) as u8,
-                        (entry.color.b * 255.0) as u8,
-                        (entry.color.a * 255.0) as u8,
-                    ),
+                    // The fade goes into the colour here: glyphon's atlas
+                    // holds coverage and the colour rides each glyph's
+                    // vertices, so a new alpha rasterises nothing.
+                    default_color: {
+                        let color = entry.color.scale_alpha(entry.opacity);
+                        GlyphonColor::rgba(
+                            (color.r * 255.0) as u8,
+                            (color.g * 255.0) as u8,
+                            (color.b * 255.0) as u8,
+                            (color.a * 255.0) as u8,
+                        )
+                    },
                     custom_glyphs: &[],
                 }
             });
@@ -461,9 +467,9 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
         align: Default::default(),
+        opacity: 1.0,
         clip: None,
         transform,
-        transform_origin: None,
     }
 }
 

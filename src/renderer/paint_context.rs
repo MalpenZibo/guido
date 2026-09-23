@@ -184,6 +184,19 @@ impl<'a> PaintContext<'a> {
         );
     }
 
+    /// Draw this node and everything under it at `opacity`, from 0 to 1.
+    ///
+    /// Multiplied into every colour the subtree draws, and into its
+    /// descendants' own opacities, when the tree is flattened — so a child
+    /// that sets one of its own is drawn at the product. Each draw is faded on
+    /// its own: where two children overlap, the overlap shows through.
+    ///
+    /// Clamped here, because a spring overshoots: an opacity past 1 would
+    /// brighten nothing and one below 0 would be a negative alpha.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.node.opacity = opacity.clamp(0.0, 1.0);
+    }
+
     /// Set this node's transform origin.
     pub fn set_pivot(&mut self, origin: Pivot) {
         self.node.pivot = origin;

@@ -29,6 +29,7 @@ fn every_spelling_the_documentation_promises_compiles() {
         .translate((10, 20))
         // named values
         .translate(Translate::new(1.0, 2.0))
+        .translate(Translate::relative(-1.0, 0.0))
         .scale(Scale::uniform(1.2))
         .scale(Scale::NONE)
         // closures — must accept exactly what the constant form accepts
@@ -38,6 +39,7 @@ fn every_spelling_the_documentation_promises_compiles() {
         .scale(move || sig.get())
         .translate(move || (1.0, 2.0))
         .translate(move || Translate::NONE)
+        .translate(move || Translate::relative(sig.get(), 0.0))
         // signals, where the signal already holds the property's own type
         .rotate(sig)
         .pivot(Pivot::TOP_LEFT);
@@ -61,4 +63,5 @@ fn every_spelling_the_documentation_promises_compiles() {
 
     // state layer
     let _ = container().when_pressed(|s| s.scale(0.98).rotate(2.0).translate((1.0, 0.0)));
+    let _ = container().when_hovered(|s| s.translate(Translate::relative(0.0, -0.1)));
 }

@@ -95,6 +95,36 @@ Spring animations are especially good for transforms:
 # }
 ```
 
+## Opacity
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let shown = create_signal(true);
+container()
+    .opacity((move || if shown.get() { 1.0 } else { 0.0 }).transition(200.0))
+# ;
+# }
+```
+
+An opacity fades the container and everything in it, which is what an enter
+wants — a panel that fades in the one time it appears:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().opacity(1.0.transition(200.0).entering_from(0.0))
+# ;
+# }
+```
+
+It is paint-only, like a transform: nothing around the container moves, and a
+container faded to nothing still takes clicks. See
+[Opacity](../building-ui/styling.md#opacity) for what a fade does where children
+overlap.
+
 ## Width and Height
 
 ```rust
@@ -272,6 +302,7 @@ container()
 | Translate | `translate(..)` | Spring or Duration |
 | Rotate | `rotate(..)` | Spring or Duration |
 | Scale | `scale(..)` | Spring or Duration |
+| Opacity | `opacity(..)` | Duration, EaseOut |
 | Width, height | `width(..)`, `height(..)` | Spring |
 | Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |

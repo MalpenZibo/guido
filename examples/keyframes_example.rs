@@ -44,11 +44,7 @@ fn card(label: &'static str, plays: RwSignal<u32>) -> Container {
         .corners(12.0)
         .background(Color::rgb(0.18, 0.18, 0.24))
         .border(1.0, Color::rgb(0.32, 0.32, 0.4))
-        .layout(
-            Flex::column()
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().center())
         // Declared, animated, and quietly stood aside while a sequence runs.
         .when_hovered(|s| s.scale(1.03))
         .scale(Scale::NONE.transition(Transition::spring(SpringConfig::SNAPPY)))

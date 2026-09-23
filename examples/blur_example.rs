@@ -25,12 +25,7 @@ fn main() {
                 container()
                     .width(fill())
                     .height(fill())
-                    .layout(
-                        Flex::column()
-                            .spacing(16.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::column().spacing(16.0).center())
                     .child(
                         // Blurred card: translucent background + blur behind.
                         // Restricted to the compositor's backdrop, since this

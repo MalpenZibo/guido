@@ -43,7 +43,7 @@ pub enum Prop<T> {
 
 /// Written out rather than derived, because the derive would bound `T:
 /// Default` and nothing here needs one: an undeclared property is `Unset`
-/// whatever it would have held. `TransformProps` derives `Default` over four
+/// whatever it would have held. `LayerProps` derives `Default` over five
 /// of these, and `Translate` having a default is beside the point.
 impl<T> Default for Prop<T> {
     fn default() -> Self {

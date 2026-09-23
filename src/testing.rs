@@ -120,6 +120,10 @@ struct Recorder {
     /// agreeing with itself after the real one has changed.
     outputs: OutputRegistry<String>,
     lock: RecordedLock,
+    /// Every cursor shape the seat was handed, oldest first. A list, because a
+    /// shape asked for again on each enter is the thing asserted, and a last
+    /// value cannot count.
+    cursors: Vec<crate::reactive::CursorIcon>,
 }
 
 impl Recorder {
@@ -367,6 +371,10 @@ impl Platform for Recorder {
         // no frame for either to be wrong in.
         self.surfaces.insert(id, RecordedSurface::default());
         true
+    }
+
+    fn set_cursor(&mut self, cursor: crate::reactive::CursorIcon) {
+        self.cursors.push(cursor);
     }
 
     fn take_lock_events(&mut self) -> Vec<LockEvent> {
@@ -686,6 +694,13 @@ impl Headless {
         let mut ids: Vec<SurfaceId> = self.surfaces.ids().collect();
         ids.sort_by_key(SurfaceId::raw);
         ids
+    }
+
+    /// Every cursor shape the seat was asked for, oldest first. The seat's and
+    /// not a surface's: a shape goes out against the pointer's latest enter,
+    /// whichever surface that was.
+    pub fn cursors_asked(&self) -> &[crate::reactive::CursorIcon] {
+        &self.host.cursors
     }
 
     /// Say the compositor granted the lock the application asked for, which is

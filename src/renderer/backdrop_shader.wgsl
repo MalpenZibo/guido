@@ -42,7 +42,8 @@ struct Params {
     to_clip_0: vec4<f32>,
     to_clip_1: vec2<f32>,
     clip_curvature: f32,
-    _pad7: f32,
+    // How opaque the composite and the contour are laid over the target.
+    opacity: f32,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -272,7 +273,7 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa = max(fwidth(distance) * 0.5, 0.0001);
     let mask = 1.0 - smoothstep(-aa, aa, distance);
 
-    return vec4<f32>(blurred.rgb, blurred.a * mask * clip_coverage(in.uv));
+    return vec4<f32>(blurred.rgb, blurred.a * mask * clip_coverage(in.uv) * params.opacity);
 }
 
 // A contour around the coverage, drawn outside it.
@@ -310,7 +311,7 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
     let contour = clamp(dilated - own, 0.0, 1.0);
     return vec4<f32>(
         params.stroke_color.rgb,
-        params.stroke_color.a * contour * clip_coverage(in.uv)
+        params.stroke_color.a * contour * clip_coverage(in.uv) * params.opacity
     );
 }
 
@@ -326,5 +327,5 @@ fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
     let coverage = textureSample(t_mask, s_source, mask_uv(in.uv)).a;
 
-    return vec4<f32>(blurred.rgb, blurred.a * coverage * clip_coverage(in.uv));
+    return vec4<f32>(blurred.rgb, blurred.a * coverage * clip_coverage(in.uv) * params.opacity);
 }

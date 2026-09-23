@@ -74,6 +74,12 @@ impl Container {
                 content.height + lengths.padding.vertical_total(),
             ),
         ];
+        // Leaving, nothing follows the content: a size with an exit goes where
+        // removal sent it, and one without stays where it was rather than
+        // follow a measure of content whose item may be gone.
+        if self.is_leaving() {
+            return;
+        }
         let parent = ctx.tree_ref().get_parent(id);
         let frame_instant = ctx.tree_ref().frame_instant();
         let Some(ref mut anims) = self.anims else {

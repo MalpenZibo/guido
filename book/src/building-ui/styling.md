@@ -92,6 +92,32 @@ container().shadow(Shadow::new((14.0, 0.0), 8.0, 4.0, Color::rgba(0.9, 0.2, 0.3,
 # }
 ```
 
+## Opacity
+
+`opacity` fades a container and everything inside it — its background,
+border and shadow, and its children's text, images and frost — from `1.0`, as
+declared, down to `0.0`, invisible. Nested opacities multiply: a half inside a
+half is a quarter.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .background(Color::rgb(0.2, 0.2, 0.3))
+    .opacity(0.5)
+    .child(text("half as strong"))
+# ;
+# }
+```
+
+Each thing drawn is faded on its own, as if its colour's alpha were scaled.
+Where two children overlap, the overlap shows through darker than either,
+rather than the whole subtree fading as one flat picture. For a subtree whose
+children do not overlap — most of them — the two are the same.
+
+A faded container still takes up its space and still takes input.
+
 ## Padding
 
 ```rust

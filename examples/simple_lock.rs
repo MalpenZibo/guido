@@ -37,12 +37,7 @@ fn lock_screen(output: OutputInfo) -> Container {
         .width(fill())
         .height(fill())
         .background(Color::rgb(0.07, 0.07, 0.1))
-        .layout(
-            Flex::column()
-                .spacing(16.0)
-                .main_alignment(MainAlignment::Center)
-                .cross_alignment(CrossAlignment::Center),
-        )
+        .layout(Flex::column().spacing(16.0).center())
         .child(
             container().child(
                 text(format!(
@@ -102,12 +97,7 @@ fn main() {
             || {
                 container()
                     .width(fill())
-                    .layout(
-                        Flex::row()
-                            .spacing(12.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(12.0).center())
                     .child(
                         container()
                             .padding([6.0, 16.0])

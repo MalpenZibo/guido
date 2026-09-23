@@ -11,11 +11,7 @@ fn main() {
                 .background_color(Color::rgb(0.1, 0.1, 0.15)),
             || {
                 container()
-                    .layout(
-                        Flex::column()
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::column().center())
                     .padding(16.0)
                     .child(
                         container()

@@ -49,6 +49,10 @@ pub struct CachedFlatten {
     pub clips: Vec<CachedClip>,
     /// The world transform at the time of caching.
     pub world_transform: Transform,
+    /// The opacity the subtree inherited at the time of caching — what every
+    /// command in it was multiplied by from above. See
+    /// [`replay_fade`](Self::replay_fade).
+    pub opacity: f32,
 }
 
 impl CachedFlatten {
@@ -71,6 +75,26 @@ impl CachedFlatten {
             world_transform.tx() - self.world_transform.tx(),
             world_transform.ty() - self.world_transform.ty(),
         ))
+    }
+
+    /// What this entry's commands have to be multiplied by to stand in for a
+    /// frame that hands the subtree `opacity` from above — or `None` if they
+    /// cannot be.
+    ///
+    /// The opacity half of the same question [`replay_offset`](Self::replay_offset)
+    /// asks. A fade on an ancestor repaints that ancestor and nothing under
+    /// it, so the subtree below comes back clean under a new inherited
+    /// opacity, and its cached commands carry the old one multiplied in. One
+    /// ratio puts every one of them right, because each is the inherited
+    /// opacity times what the subtree itself declared.
+    ///
+    /// An entry made under an opacity of zero is refused: every command in it
+    /// is zero, and zero says nothing about what the subtree declared.
+    pub fn replay_fade(&self, opacity: f32) -> Option<f32> {
+        if opacity == self.opacity {
+            return Some(1.0);
+        }
+        (self.opacity > 0.0).then(|| opacity / self.opacity)
     }
 }
 
@@ -110,6 +134,14 @@ pub struct RenderNode {
 
     /// Transform origin for local_transform
     pub pivot: Pivot,
+
+    /// How opaque this node and everything under it is drawn, from 0 to 1.
+    ///
+    /// Multiplied down during flatten the way the world transform is composed
+    /// down, and into every colour the subtree draws — each draw on its own,
+    /// so where two children overlap, the overlap shows through. `1.0` by
+    /// default, which multiplies nothing.
+    pub opacity: f32,
 
     /// Bounds in local coordinates (for transform origin resolution)
     pub bounds: Rect,
@@ -168,6 +200,7 @@ impl RenderNode {
             local_transform: Transform::IDENTITY,
             parent_position: Transform::IDENTITY,
             pivot: Pivot::CENTER,
+            opacity: 1.0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             commands: SmallVec::new(),
             children: Vec::new(),
@@ -193,6 +226,7 @@ impl RenderNode {
         self.local_transform = Transform::IDENTITY;
         self.parent_position = Transform::IDENTITY;
         self.pivot = Pivot::CENTER;
+        self.opacity = 1.0;
         self.commands.clear();
         self.children.clear();
         self.overlay_commands.clear();

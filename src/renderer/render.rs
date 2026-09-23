@@ -561,7 +561,7 @@ impl Renderer {
             self.shape_instance_buf.extend(
                 commands[layer.shapes.clone()]
                     .iter()
-                    .filter_map(|c| command_to_instance(c, scale)),
+                    .filter_map(|c| faded_instance(c, scale)),
             );
             let shapes = shapes_start..self.shape_instance_buf.len() as u32;
 
@@ -622,7 +622,7 @@ impl Renderer {
             self.shape_instance_buf.extend(
                 commands[layer.overlay.clone()]
                     .iter()
-                    .filter_map(|c| command_to_instance(c, scale)),
+                    .filter_map(|c| faded_instance(c, scale)),
             );
             let overlay = overlay_start..self.shape_instance_buf.len() as u32;
 
@@ -695,6 +695,7 @@ fn backdrop_region(
         // by the box and then cuts the difference back off per fragment, the
         // same two steps it already takes for the shape.
         clip: cmd.clip(),
+        opacity: cmd.opacity,
     }
 }
 
@@ -842,6 +843,12 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
     })
 }
 
+/// A command's shape instance, at the opacity it was flattened under — faded
+/// here, once, so no arm below can forget to.
+fn faded_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
+    command_to_instance(cmd, scale).map(|instance| instance.faded(cmd.opacity))
+}
+
 /// Convert a single flattened command to a shape instance.
 fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
     match &*cmd.command {
@@ -937,9 +944,9 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_family: *font_family,
             font_weight: *font_weight,
             align: *align,
+            opacity: cmd.opacity,
             clip: cmd.clip(),
             transform: cmd.world_transform,
-            transform_origin: cmd.world_transform_origin,
         }),
         _ => None,
     }
@@ -967,8 +974,8 @@ mod tests {
                 align: Default::default(),
             }),
             world_transform: transform,
-            world_transform_origin: None,
             layer: RenderLayer::Backdrop,
+            opacity: 1.0,
             clip: None,
         }
     }
@@ -1249,8 +1256,8 @@ mod tests {
                 gradient: None,
             }),
             world_transform: Transform::IDENTITY,
-            world_transform_origin: None,
             layer: RenderLayer::Shapes,
+            opacity: 1.0,
             clip: None,
         };
         let commands: [FlattenedCommand; 5] = std::array::from_fn(|i| box_at(i as f32 * 12.0));

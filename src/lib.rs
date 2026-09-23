@@ -655,6 +655,9 @@ fn dispatch_events(
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
 ) {
     for (at, event) in events {
+        if matches!(event, widgets::Event::MouseEnter { .. }) {
+            reactive::cursor::resend_cursor();
+        }
         // Declared per event, not per pass: they are delivered one at a time
         // and each has its own moment.
         tree.set_event_instant(Some(*at));
@@ -1247,7 +1250,7 @@ pub(crate) trait Platform {
         let _ = text;
     }
 
-    fn set_cursor(&self, cursor: reactive::CursorIcon) {
+    fn set_cursor(&mut self, cursor: reactive::CursorIcon) {
         let _ = cursor;
     }
 
@@ -1468,7 +1471,7 @@ impl Platform for platform::WaylandState {
         self.set_primary(text)
     }
 
-    fn set_cursor(&self, cursor: reactive::CursorIcon) {
+    fn set_cursor(&mut self, cursor: reactive::CursorIcon) {
         self.set_cursor(cursor)
     }
 
