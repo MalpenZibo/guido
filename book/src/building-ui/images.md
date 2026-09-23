@@ -59,6 +59,42 @@ When using a string path with `image()`, the file extension determines the type 
 
 `ImageSource::Rgba` skips decoding entirely — use it for pixel data that never existed in an encoded format, such as tray icon pixmaps or album art received over D-Bus.
 
+## Loading in the Background
+
+A raster `Path` or `Bytes` source is decoded on a background thread, not in the
+frame that first shows it. A large wallpaper takes a noticeable fraction of a
+second to decode, and a frame that waited for it would put nothing on screen
+until then. So the first frame goes out without the picture: the box is laid out
+at the image's size, read from the file's header, and nothing is drawn in it.
+When the decode finishes the image is drawn on the next frame, with nothing from
+your application needed to prompt it. Two images showing the same source share
+one decode.
+
+The image does not fade itself in. It tells you when it is ready, as a signal,
+and a fade is then an `opacity` with a transition on the container around it:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let wallpaper = image("./wallpaper.png").content_fit(ContentFit::Cover);
+let ready = wallpaper.ready();
+
+container()
+    .width(fill())
+    .height(fill())
+    .opacity((move || if ready.get() { 1.0 } else { 0.0 }).transition(200.0))
+    .child(wallpaper)
+# ;
+# }
+```
+
+`ready()` follows the source: when a reactive source changes, it is false until
+the new one is decoded. A source that failed to decode is never ready, and says
+why once in the log. SVGs and `ImageSource::Rgba` are ready from the start —
+`Rgba` is the way to have an image in the very first frame, if you decoded it
+yourself.
+
 ## Sizing
 
 The box comes from the enclosing container, like every other size in guido; the
@@ -303,6 +339,8 @@ fn main() {
 
 ## Performance Notes
 
+- Raster files and bytes are decoded off the frame, once per source, and the
+  decoded pixels are kept only while an image showing them exists
 - Images are cached as GPU textures
 - The cache holds up to 64 textures with LRU eviction
 - SVGs are re-rasterized when their display scale changes significantly
