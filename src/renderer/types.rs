@@ -2,7 +2,7 @@
 
 use crate::transform::Transform;
 use crate::widgets::font::{FontFamily, FontWeight};
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -137,6 +137,10 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// Where each line sits across `rect`. Anything but `Start` is shaped at
+    /// exactly the box's width, since that is the width the lines are aligned
+    /// in.
+    pub align: TextAlign,
     /// How opaque it is drawn, on top of `color`'s own alpha. Kept apart from
     /// the colour because the transformed-text path caches its rasterised
     /// texture by colour, and a fade folded into the colour would rasterise

@@ -4,7 +4,7 @@ use super::types::{Gradient, Shadow};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
-use crate::widgets::{Color, Rect};
+use crate::widgets::{Color, Rect, TextAlign};
 
 /// Border definition for shapes.
 #[derive(Debug, Clone, Copy)]
@@ -254,6 +254,8 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight
         font_weight: FontWeight,
+        /// Where each line sits across `rect`.
+        align: TextAlign,
     },
 
     /// Where pointer and touch input reaches this surface, or stops reaching
@@ -325,6 +327,9 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight.
         font_weight: FontWeight,
+        /// Where each line sits across `rect` — the frost has to put its
+        /// lines where the letters put theirs.
+        align: TextAlign,
     },
 
     /// Draw an image.

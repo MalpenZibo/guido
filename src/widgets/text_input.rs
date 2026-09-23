@@ -1447,6 +1447,7 @@ impl Widget for TextInput {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            crate::widgets::TextAlign::Start,
             stroke,
             shadow,
         );

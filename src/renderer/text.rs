@@ -1,5 +1,6 @@
 use std::hash::{Hash, Hasher};
 
+use glyphon::cosmic_text::Align;
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, ColorMode, FontSystem, Metrics, Resolution,
     Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -7,8 +8,8 @@ use glyphon::{
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue};
 
-use crate::widgets::Rect;
-use crate::widgets::font::FontWeight;
+use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::{Rect, TextAlign};
 
 use super::types::TextEntry;
 
@@ -20,12 +21,10 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
-    ((entry.rect.width.max(200.0)) * scale_factor)
-        .to_bits()
-        .hash(&mut hasher);
-    ((entry.rect.height.max(50.0)) * scale_factor)
-        .to_bits()
-        .hash(&mut hasher);
+    entry.align.hash(&mut hasher);
+    let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
+    width.to_bits().hash(&mut hasher);
+    height.to_bits().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -35,13 +34,84 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
 /// The floors are glyphon's: a buffer narrower than the text it holds wraps it,
 /// and a measured box can come back a hair narrower than the thing it measured.
 ///
+/// An aligned text has no width floor: cosmic-text aligns each line across the
+/// width it is shaped in, so a label narrower than the floor would be centred
+/// in the floor rather than in its own box. A wrapped text's box is its widest
+/// line as layout measured it, so that exact width breaks the lines where
+/// layout did — `text_aligns_within_its_own_box_at_scale_1_5x` is the golden
+/// that would see one break anywhere else.
+///
 /// It is a function and not four inline multiplications because a text's frost
 /// is shaped separately from the text — see [`text_mask`](super::text_mask) —
 /// and two shapings that disagree break their lines in different places, which
 /// puts frost beside a letter that wrapped somewhere else. The sibling for the
 /// transformed path is [`text_quad::shaping_buffer`](super::text_quad::shaping_buffer).
-pub(super) fn shaping_buffer(rect: crate::widgets::Rect, scale: f32) -> (f32, f32) {
-    (rect.width.max(200.0) * scale, rect.height.max(50.0) * scale)
+pub(super) fn shaping_buffer(rect: Rect, scale: f32, align: TextAlign) -> (f32, f32) {
+    let width = match align {
+        TextAlign::Start => rect.width.max(200.0),
+        _ => rect.width,
+    };
+    (width * scale, rect.height.max(50.0) * scale)
+}
+
+/// Shape an untransformed text into a fresh buffer, as glyphon will draw it.
+fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f32) -> Buffer {
+    shape(
+        font_system,
+        &entry.text,
+        entry.font_size * scale_factor,
+        entry.font_family,
+        entry.font_weight,
+        entry.align,
+        shaping_buffer(entry.rect, scale_factor, entry.align),
+    )
+}
+
+/// Shape `text` at `font_size` physical pixels into a buffer of `size`.
+///
+/// One function for the three paths that shape — glyphon's, the transformed
+/// quad's and the frost's mask — because a frost has to break and align its
+/// lines exactly where the letters over it do, and three copies of this are
+/// three places for an option to reach two of.
+pub(super) fn shape(
+    font_system: &mut FontSystem,
+    text: &str,
+    font_size: f32,
+    font_family: FontFamily,
+    font_weight: FontWeight,
+    align: TextAlign,
+    size: (f32, f32),
+) -> Buffer {
+    let (px, line_height) = crate::renderer::text_measurer::shapeable_metrics(font_size);
+    let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
+    buffer.set_size(font_system, Some(size.0), Some(size.1));
+    let weight = if font_weight == FontWeight::default() {
+        FontWeight::NORMAL
+    } else {
+        font_weight
+    };
+    buffer.set_text(
+        font_system,
+        text,
+        &Attrs::new()
+            .family(font_family.to_cosmic())
+            .weight(weight.to_cosmic()),
+        Shaping::Advanced,
+        cosmic_align(align),
+    );
+    buffer.shape_until_scroll(font_system, true);
+    buffer
+}
+
+/// cosmic-text's word for an alignment. `Start` is no word at all, so the
+/// text's own direction decides where its lines begin.
+fn cosmic_align(align: TextAlign) -> Option<Align> {
+    match align {
+        TextAlign::Start => None,
+        TextAlign::Center => Some(Align::Center),
+        TextAlign::End => Some(Align::End),
+        TextAlign::Justified => Some(Align::Justified),
+    }
 }
 
 pub struct TextRenderState {
@@ -269,38 +339,8 @@ impl TextRenderState {
                 .buffer_cache
                 .get_mut(&key)
                 .and_then(|buffers| buffers.pop());
-            let buffer = if let Some(cached) = cached {
-                cached
-            } else {
-                // Cache miss — create and shape a new buffer
-                let scaled_font_size = entry.font_size * scale_factor;
-                let (size, line_height) =
-                    crate::renderer::text_measurer::shapeable_metrics(scaled_font_size);
-                let mut buffer =
-                    Buffer::new(&mut self.font_system, Metrics::new(size, line_height));
-                let (buffer_width, buffer_height) = shaping_buffer(entry.rect, scale_factor);
-                buffer.set_size(
-                    &mut self.font_system,
-                    Some(buffer_width),
-                    Some(buffer_height),
-                );
-                let weight = if entry.font_weight == FontWeight::default() {
-                    FontWeight::NORMAL
-                } else {
-                    entry.font_weight
-                };
-                buffer.set_text(
-                    &mut self.font_system,
-                    &entry.text,
-                    &Attrs::new()
-                        .family(entry.font_family.to_cosmic())
-                        .weight(weight.to_cosmic()),
-                    Shaping::Advanced,
-                    None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, true);
-                buffer
-            };
+            let buffer =
+                cached.unwrap_or_else(|| shape_entry(&mut self.font_system, entry, scale_factor));
             self.kept.push(idx);
             self.frame_keys.push(key);
             self.buffers.push(buffer);
@@ -426,6 +466,7 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_size: 16.0,
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
+        align: Default::default(),
         opacity: 1.0,
         clip: None,
         transform,
@@ -756,7 +797,7 @@ mod laid_out_tests {
 #[cfg(test)]
 mod shaping_buffer_tests {
     use super::shaping_buffer;
-    use crate::widgets::Rect;
+    use crate::widgets::{Rect, TextAlign};
 
     /// The floors are in logical pixels and the scale is applied after them, so
     /// a small box on a HiDPI screen gets the floor at that screen's density
@@ -764,11 +805,11 @@ mod shaping_buffer_tests {
     #[test]
     fn the_floor_is_logical_and_the_scale_comes_after_it() {
         assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0),
+            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0, TextAlign::Start),
             (200.0, 50.0)
         );
         assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0),
+            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0, TextAlign::Start),
             (400.0, 100.0)
         );
     }
@@ -779,17 +820,17 @@ mod shaping_buffer_tests {
     #[test]
     fn a_box_above_the_floor_is_carried_by_the_scale_alone() {
         assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 1.0),
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 1.0, TextAlign::Start),
             (300.0, 80.0)
         );
         assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 2.0),
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 2.0, TextAlign::Start),
             (600.0, 160.0)
         );
         // The floor is logical, so a scale below 1 can carry the buffer under
         // it: 80 clears the floor of 50 and then halves to 40.
         assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 0.5),
+            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 0.5, TextAlign::Start),
             (150.0, 40.0)
         );
     }
@@ -801,9 +842,96 @@ mod shaping_buffer_tests {
     fn the_transformed_shaper_asks_for_something_else() {
         let rect = Rect::new(0.0, 0.0, 72.0, 80.0);
         assert_ne!(
-            shaping_buffer(rect, 4.0),
-            super::super::text_quad::shaping_buffer(rect, 4.0),
+            shaping_buffer(rect, 4.0, TextAlign::Start),
+            super::super::text_quad::shaping_buffer(rect, 4.0, TextAlign::Start),
             "a 72-point box: 400 texels through this one and 317 through the other"
         );
+    }
+}
+
+/// A line is aligned across the text's own box, whatever the renderer's floor.
+///
+/// Shaped with the vendored font alone, so the widths are the font's and not
+/// the machine's. The box is 120 wide — under the 200 the shaper is otherwise
+/// given — and the line is far shorter than that, so a line centred in the
+/// floor instead of the box starts 40 pixels late, and one never aligned at
+/// all starts at nought.
+#[cfg(test)]
+mod a_line_is_aligned_in_its_own_box {
+    use super::{shape_entry, test_entry, text_buffer_key};
+    use crate::transform::Transform;
+    use crate::widgets::{FontFamily, Rect, TextAlign};
+    use glyphon::FontSystem;
+
+    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const BOX: f32 = 120.0;
+
+    fn entry(align: TextAlign) -> super::TextEntry {
+        let mut entry = test_entry(Rect::new(0.0, 0.0, BOX, 20.0), Transform::default());
+        entry.text = "hi".into();
+        entry.font_family = FontFamily::name("DejaVu Sans Mono");
+        entry.align = align;
+        entry
+    }
+
+    /// Where the first line's glyphs begin and how wide the line is, in
+    /// physical pixels.
+    fn first_line(align: TextAlign, scale: f32) -> (f32, f32) {
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(FONT.to_vec());
+        let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        let buffer = shape_entry(&mut font_system, &entry(align), scale);
+        let run = buffer.layout_runs().next().expect("a line");
+        let start = run.glyphs.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
+        (start, run.line_w)
+    }
+
+    #[test]
+    fn a_centred_line_is_centred_in_its_box_and_not_in_the_floor() {
+        for scale in [1.0, 2.0] {
+            let (start, width) = first_line(TextAlign::Center, scale);
+            let expected = (BOX * scale - width) / 2.0;
+            assert!(
+                (start - expected).abs() < 0.5,
+                "at scale {scale} a {width}-pixel line in a {}-pixel box starts at \
+                 {start}, not at {expected}",
+                BOX * scale
+            );
+        }
+    }
+
+    #[test]
+    fn an_end_aligned_line_ends_where_its_box_does() {
+        let (start, width) = first_line(TextAlign::End, 1.0);
+        assert!(
+            (start + width - BOX).abs() < 0.5,
+            "the line ends at {} in a box that ends at {BOX}",
+            start + width
+        );
+    }
+
+    #[test]
+    fn a_start_aligned_line_starts_at_the_box() {
+        let (start, _) = first_line(TextAlign::Start, 1.0);
+        assert!(start.abs() < 0.5, "the line starts at {start}");
+    }
+
+    /// Two texts that differ only in alignment are two different buffers, so
+    /// the cache must not hand one the other's.
+    #[test]
+    fn alignment_is_part_of_the_cache_key() {
+        let keys: Vec<u64> = [
+            TextAlign::Start,
+            TextAlign::Center,
+            TextAlign::End,
+            TextAlign::Justified,
+        ]
+        .map(|align| text_buffer_key(&entry(align), 1.0))
+        .into();
+        for (i, a) in keys.iter().enumerate() {
+            for b in &keys[i + 1..] {
+                assert_ne!(a, b, "two alignments share a cached buffer");
+            }
+        }
     }
 }

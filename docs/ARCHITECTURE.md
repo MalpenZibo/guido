@@ -102,6 +102,7 @@ Text rendering with:
 - Reactive content (static string or `Signal<String>`)
 - Font size, color, weight styling
 - Text wrapping or `nowrap()` mode
+- Line alignment within the text's own box (`TextAlign`)
 
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets

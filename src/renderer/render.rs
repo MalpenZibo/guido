@@ -755,6 +755,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
         font_size,
         font_family,
         font_weight,
+        align,
     } = &*cmd.command
     else {
         return None;
@@ -825,13 +826,14 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            align: *align,
             // Shaped by whichever path will draw the glyphs over the frost:
             // the two break their lines in different places, and the frost has
             // to break its own where the letters do.
             buffer: if cmd.world_transform.is_translation_only() {
-                super::text::shaping_buffer(*rect, density)
+                super::text::shaping_buffer(*rect, density, *align)
             } else {
-                super::text_quad::shaping_buffer(*rect, density)
+                super::text_quad::shaping_buffer(*rect, density, *align)
             },
             size: (width as u32, height as u32),
             offset: (slack * density, slack * density),
@@ -933,6 +935,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size,
             font_family,
             font_weight,
+            align,
         } => Some(TextEntry {
             text: text.clone(),
             rect: *rect,
@@ -940,6 +943,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             font_size: *font_size,
             font_family: *font_family,
             font_weight: *font_weight,
+            align: *align,
             opacity: cmd.opacity,
             clip: cmd.clip(),
             transform: cmd.world_transform,
@@ -967,6 +971,7 @@ mod tests {
                 font_size: 20.0,
                 font_family: FontFamily::default(),
                 font_weight: Default::default(),
+                align: Default::default(),
             }),
             world_transform: transform,
             layer: RenderLayer::Backdrop,
