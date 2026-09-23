@@ -5,9 +5,9 @@ on:
     branches:
       - main
   # Every pull request, whatever it is aimed at. Filtering on `main` left a
-  # pull request stacked on another branch with no checks at all — the two
-  # workflows that do not filter, Labeler and Release Drafter, were the only
-  # thing that ran on it, which looks like a green tick from a distance.
+  # pull request stacked on another branch with no checks at all — Labeler,
+  # the one workflow that does not filter, was the only thing that ran on it,
+  # which looks like a green tick from a distance.
   pull_request:
 
 # A new push supersedes the run already in flight for the same branch. Pull
@@ -44,6 +44,11 @@ jobs:
         run: .github/required-context.sh
       - name: Check the ruleset reader
         run: .github/required-context.test.sh
+      # The version a release PR carries is read from labels by this script,
+      # and it runs only on a push to main, where nothing waits on it; its
+      # table is checked here, where a pull request that breaks it is red.
+      - name: Check the release version reader
+        run: .github/next-version.test.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

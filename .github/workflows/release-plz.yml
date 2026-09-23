@@ -1,0 +1,118 @@
+name: Release
+
+# A release is one pull request and one merge.
+#
+# Every push to main opens or updates the release pull request: the version
+# bump for guido and guido-macros, the lock file, and a CHANGELOG.md section
+# listing what was merged since the last tag. Merging it publishes both crates,
+# tags that commit and creates the GitHub release with that section as its
+# body. release-plz does both halves; `release-plz.toml` says how.
+
+on:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-pr:
+    name: Open the release pull request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    # Two pushes in a row must not race each other onto the same branch.
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+    steps:
+      # PAT_TOKEN, not github.token: a pull request opened or pushed to with
+      # the workflow token does not trigger workflows, so CI would never run on
+      # it and the `CI` context the main ruleset requires would stay pending.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # cargo-semver-checks builds the rustdoc of both versions, and guido
+      # links against these.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+
+      - name: Run release-plz
+        id: release-plz
+        uses: release-plz/action@v0.5.139
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      # release-plz reads versions from semver-checks and from conventional
+      # commit subjects, which guido does not write, so a release of features
+      # is proposed as a patch. The labels of what was merged raise it; the
+      # script's header has the rules.
+      - name: The labels raise the version
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          PR: ${{ steps.release-plz.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch=$(jq -r '.head_branch // empty' <<<"${PR:-null}")
+          if [ -z "$branch" ]; then
+            echo "release-plz opened or updated no release pull request, so there is no version to raise."
+            exit 0
+          fi
+          number=$(jq -r '.number' <<<"$PR")
+          proposed=$(jq -r '.releases[] | select(.package_name == "guido") | .version' <<<"$PR")
+          git fetch origin "$branch"
+          git switch -C "$branch" "origin/$branch"
+
+          next=$(.github/next-version.sh "$proposed")
+          if [ "$next" = "$proposed" ]; then
+            exit 0
+          fi
+
+          # The bare version sets the workspace version both crates inherit,
+          # the guido-macros requirement beside it, the lock file, and the
+          # heading of the CHANGELOG.md section release-plz just wrote.
+          release-plz set-version "$next"
+          git -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -am "The labels merged since the last tag make this release $next" \
+            -m "release-plz proposed $proposed from semver-checks alone. .github/next-version.sh counted the labels of every pull request merged since the last v* tag, and they ask for more."
+          git push origin "HEAD:$branch"
+          # The title and body release-plz wrote name the version it proposed.
+          title=$(yq -p toml -oy '.workspace.pr_name' release-plz.toml)
+          body=$(gh pr view "$number" --json body --jq .body)
+          gh pr edit "$number" --title "${title//'{{ version }}'/$next}" \
+            --body "${body//"$proposed"/$next}"
+
+  release:
+    name: Publish, tag and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # `cargo publish` builds what it uploads.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+
+      # Publishes only from a merged release pull request (`release_always =
+      # false`), and only a version crates.io does not hold yet.
+      - name: Run release-plz
+        uses: release-plz/action@v0.5.139
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}

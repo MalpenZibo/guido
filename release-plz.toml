@@ -1,0 +1,31 @@
+# What `.github/workflows/release-plz.yml` does on a push to main. Anything not
+# written here is release-plz's default: a CHANGELOG.md section per release,
+# the GitHub release created from it, and cargo-semver-checks on.
+
+[workspace]
+# Publish only when a release pull request merges, never because an ordinary
+# push to main happens to carry a version crates.io does not hold.
+release_always = false
+# The label step in the workflow renders this too, when it raises the version.
+pr_name = "v{{ version }} is the next release"
+
+# One version for both crates, as the workspace `version` they inherit already
+# says: guido pins the guido-macros it was built with. One tag, one GitHub
+# release and one CHANGELOG.md, guido's, which lists guido-macros' commits too.
+[[package]]
+name = "guido"
+version_group = "guido"
+git_tag_name = "v{{ version }}"
+changelog_include = ["guido-macros"]
+
+# guido-macros shares guido's changelog rather than keeping its own. A file of
+# its own would get no section in a release it has no commits in, and
+# `release-plz set-version` renames the latest heading of every changelog it
+# is given, so the raise would rename a past release's heading instead.
+[[package]]
+name = "guido-macros"
+version_group = "guido"
+git_tag_enable = false
+git_release_enable = false
+changelog_update = false
+changelog_path = "./CHANGELOG.md"
