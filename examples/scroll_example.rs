@@ -76,11 +76,7 @@ fn main() {
                                                 ))
                                                 .corners(8.0)
                                                 .when_hovered(|s| s.lighter(0.1))
-                                                .layout(
-                                                    Flex::column()
-                                                        .main_alignment(MainAlignment::Center)
-                                                        .cross_alignment(CrossAlignment::Center),
-                                                )
+                                                .layout(Flex::column().center())
                                                 .child(
                                                     text(format!("{}", i + 1)).color(Color::WHITE),
                                                 )

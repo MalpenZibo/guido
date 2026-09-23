@@ -11,12 +11,7 @@ fn main() {
                 .background_color(Color::rgb(0.15, 0.15, 0.2)),
             || {
                 container()
-                    .layout(
-                        Flex::row()
-                            .spacing(40.0)
-                            .main_alignment(MainAlignment::Center)
-                            .cross_alignment(CrossAlignment::Center),
-                    )
+                    .layout(Flex::row().spacing(40.0).center())
                     .padding(16.0)
                     .children([
                         // Normal box

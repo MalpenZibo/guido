@@ -1149,7 +1149,7 @@ mod tests {
     /// back. An angle has no midpoint that is not an angle.
     #[test]
     fn a_half_turn_does_not_collapse_the_widget() {
-        use crate::transform::{Scale, Transform, Translate};
+        use crate::transform::{Scale, Transform};
 
         let mut anim = AnimationState::new(0.0_f32, Transition::new(100.0, TimingFunction::Linear));
         anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
@@ -1158,7 +1158,7 @@ mod tests {
         let mut smallest = f32::INFINITY;
         for frame in 0..=25 {
             at(&mut anim, frame * 4);
-            let composed = Transform::compose(Translate::NONE, *anim.current(), Scale::NONE);
+            let composed = Transform::compose((0.0, 0.0), *anim.current(), Scale::NONE);
             smallest = smallest.min(composed.extract_scale());
         }
 

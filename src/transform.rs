@@ -12,25 +12,75 @@
 //! same reason: with no declared order, two declarations that read the same
 //! would mean different things.
 
-/// How far a widget is displaced, in logical pixels.
+/// How far a widget is displaced: in logical pixels, in fractions of its own
+/// size, or both.
+///
+/// The fraction is CSS's `translateX(-100%)`. It is resolved against the
+/// widget's own laid-out size at paint time, not when the value is declared,
+/// so `Translate::relative(-1.0, 0.0)` is one width left before the first
+/// layout has measured anything and after every layout that changes the width.
+/// A value holding both is their sum, CSS's `calc(8px - 100%)`:
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// let _ = Translate { x: 8.0, ..Translate::relative(-1.0, 0.0) };
+/// ```
 ///
 /// Unaffected by [`Pivot`](crate::pivot::Pivot): moving a box is the same
 /// movement wherever the pivot sits.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Translate {
-    /// Rightward displacement.
+    /// Rightward displacement, in logical pixels.
     pub x: f32,
-    /// Downward displacement.
+    /// Downward displacement, in logical pixels.
     pub y: f32,
+    /// Rightward displacement, in widths of the widget itself: `-1.0` is one
+    /// width left.
+    pub relative_x: f32,
+    /// Downward displacement, in heights of the widget itself.
+    pub relative_y: f32,
 }
 
 impl Translate {
     /// No displacement.
-    pub const NONE: Self = Self { x: 0.0, y: 0.0 };
+    pub const NONE: Self = Self::new(0.0, 0.0);
 
-    /// A displacement of `(x, y)`.
+    /// A displacement of `(x, y)` logical pixels.
     pub const fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
+        Self {
+            x,
+            y,
+            relative_x: 0.0,
+            relative_y: 0.0,
+        }
+    }
+
+    /// A displacement of `x` of the widget's own widths and `y` of its own
+    /// heights — `relative(-1.0, 0.0)` slides it exactly its own width left,
+    /// at whatever width it is laid out.
+    ///
+    /// Animates like the pixel form, and the fraction is what animates: a
+    /// width change under it moves the widget at once, because the offset it
+    /// declares has not changed. That, and an `entering_from` that plays
+    /// before the first layout has measured anything, are why a slide wants
+    /// this rather than a width read back through a
+    /// [`WidgetRef`](crate::widget_ref::WidgetRef).
+    pub const fn relative(x: f32, y: f32) -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            relative_x: x,
+            relative_y: y,
+        }
+    }
+
+    /// The displacement in pixels, `(x, y)`, for a widget laid out in
+    /// `bounds` — only its size counts, since a displacement has no origin.
+    pub fn resolve(&self, bounds: crate::widgets::Rect) -> (f32, f32) {
+        (
+            self.x + self.relative_x * bounds.width,
+            self.y + self.relative_y * bounds.height,
+        )
     }
 }
 
@@ -73,12 +123,12 @@ macro_rules! from_pairs {
     ($t:ty $(, $n:ty)*) => {$(
         impl From<($n, $n)> for $t {
             fn from((x, y): ($n, $n)) -> Self {
-                Self { x: x as f32, y: y as f32 }
+                Self::new(x as f32, y as f32)
             }
         }
         impl From<[$n; 2]> for $t {
             fn from([x, y]: [$n; 2]) -> Self {
-                Self { x: x as f32, y: y as f32 }
+                Self::new(x as f32, y as f32)
             }
         }
     )*};
@@ -174,7 +224,11 @@ impl Transform {
     /// `C·T·R·S·C⁻¹` is `T·(C·R·S·C⁻¹)`: a translation commutes past the
     /// conjugating one. Which is why a `Pivot` moves what `rotate` and `scale`
     /// do and does nothing at all to `translate`.
-    pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
+    ///
+    /// `translate` is in pixels, which is why it is a pair and not a
+    /// [`Translate`]: a relative one is a fraction of a size this is not
+    /// given, and is resolved first with [`Translate::resolve`].
+    pub fn compose(translate: (f32, f32), rotate_degrees: f32, scale: Scale) -> Self {
         // Not about correctness: this runs for every container on every paint
         // and every pointer event, and almost none of them turn.
         let (sin, cos) = if rotate_degrees == 0.0 {
@@ -187,10 +241,10 @@ impl Transform {
             data: [
                 cos * scale.x,
                 -sin * scale.y,
-                translate.x,
+                translate.0,
                 sin * scale.x,
                 cos * scale.y,
-                translate.y,
+                translate.1,
             ],
         }
     }
@@ -890,6 +944,19 @@ mod tests {
         assert!(approx_eq(y2, 25.0));
     }
 
+    /// The fraction is of the box's size and not its position, and it adds
+    /// to the pixels rather than replacing them.
+    #[test]
+    fn a_relative_translate_resolves_against_the_size_of_its_bounds() {
+        let bounds = crate::widgets::Rect::new(30.0, 40.0, 200.0, 50.0);
+        let calc = Translate {
+            x: 8.0,
+            ..Translate::relative(-1.0, 0.5)
+        };
+        assert_eq!(calc.resolve(bounds), (-192.0, 25.0));
+        assert_eq!(Translate::new(3.0, 4.0).resolve(bounds), (3.0, 4.0));
+    }
+
     #[test]
     fn test_rotate() {
         let t = Transform::rotate_degrees(90.0);
@@ -1065,7 +1132,7 @@ mod tests {
         for deg in [0.0f32, 30.0, 45.0, 90.0, 180.0, 200.0, 270.0] {
             for scale in [Scale::NONE, Scale::new(2.0, 0.5), Scale::new(0.5, 2.0)] {
                 assert_reports_its_extents(
-                    Transform::compose(Translate::new(9.0, -4.0), deg, scale),
+                    Transform::compose((9.0, -4.0), deg, scale),
                     &format!("rotate {deg}° with scale ({}, {})", scale.x, scale.y),
                 );
             }
@@ -1096,7 +1163,7 @@ mod tests {
     #[test]
     fn a_rotation_alone_reports_no_scaling() {
         for deg in [0.0f32, 45.0, 180.0, 360.0] {
-            let t = Transform::compose(Translate::NONE, deg, Scale::NONE);
+            let t = Transform::compose((0.0, 0.0), deg, Scale::NONE);
             let (sx, sy) = t.extract_scale_components();
             assert!(
                 approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
@@ -1110,10 +1177,10 @@ mod tests {
     /// worth doing if it agrees with composing it.
     #[test]
     fn compose_is_translate_then_rotate_then_scale() {
-        let (t, deg, s) = (Translate::new(7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
+        let (t, deg, s) = ((7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
 
         let folded = Transform::compose(t, deg, s);
-        let built = Transform::translate(t.x, t.y)
+        let built = Transform::translate(t.0, t.1)
             .then(&Transform::rotate_degrees(deg))
             .then(&Transform::scale_xy(s.x, s.y));
 
@@ -1127,15 +1194,15 @@ mod tests {
     #[test]
     fn each_component_is_neutral_when_it_is_not_declared() {
         assert_eq!(
-            Transform::compose(Translate::NONE, 0.0, Scale::NONE),
+            Transform::compose((0.0, 0.0), 0.0, Scale::NONE),
             Transform::IDENTITY
         );
         assert_eq!(
-            Transform::compose(Translate::new(5.0, 6.0), 0.0, Scale::NONE),
+            Transform::compose((5.0, 6.0), 0.0, Scale::NONE),
             Transform::translate(5.0, 6.0)
         );
         assert_eq!(
-            Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0)),
+            Transform::compose((0.0, 0.0), 0.0, Scale::uniform(2.0)),
             Transform::scale(2.0)
         );
     }
@@ -1145,7 +1212,7 @@ mod tests {
     /// turn itself is still there to interpolate.
     #[test]
     fn a_full_turn_composes_to_the_size_it_started_at() {
-        let full = Transform::compose(Translate::NONE, 360.0, Scale::NONE);
+        let full = Transform::compose((0.0, 0.0), 360.0, Scale::NONE);
         assert!(approx_eq(full.extract_scale(), 1.0));
     }
 

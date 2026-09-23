@@ -224,6 +224,47 @@ container()
 # }
 ```
 
+### Sliding by Its Own Width
+
+A relative translate animates like a pixel one, and what animates is the
+fraction. So a panel can slide in from exactly its own width without anybody
+knowing the width — `entering_from` plays it on the first frame, before a pixel
+of it has been measured:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .translate(
+        Translate::NONE
+            .transition(Transition::new(250.0, TimingFunction::EaseOut))
+            .entering_from(Translate::relative(-1.0, 0.0)),
+    )
+# ;
+# }
+```
+
+And a slide out is a signal holding where it should be:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let open = create_signal(true);
+
+container()
+    .translate(
+        (move || if open.get() { Translate::NONE } else { Translate::relative(-1.0, 0.0) })
+            .transition(Transition::new(250.0, TimingFunction::EaseInOut)),
+    )
+# ;
+# }
+```
+
+If the width changes while it is out, it stays exactly one width out, at once:
+the declared offset did not change, so there is nothing to animate.
+
 ## When to Use Each Type
 
 ### Duration-Based
@@ -260,7 +301,7 @@ fn animated_transforms_demo() -> impl Widget {
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.ripple())
                 .on_click(move || rotation.update(|r| *r += 45.0))
-                .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
+                .layout(Flex::column().center())
                 .child(container().child(text("Rotate").font_size(12.0).color(Color::WHITE))),
 
             // Spring-based scale
@@ -276,7 +317,7 @@ fn animated_transforms_demo() -> impl Widget {
                     is_scaled.update(|s| *s = !*s);
                     scale.set(if is_scaled.get() { 1.3 } else { 1.0 });
                 })
-                .layout(Flex::column().main_alignment(MainAlignment::Center).cross_alignment(CrossAlignment::Center))
+                .layout(Flex::column().center())
                 .child(container().child(text("Scale").font_size(12.0).color(Color::WHITE))),
         ])
 }

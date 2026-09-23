@@ -249,10 +249,16 @@ impl Animatable for crate::renderer::CornerRadii {
 }
 
 impl Animatable for Translate {
+    /// Component by component, the pixels and the fractions apart — CSS
+    /// interpolates `calc(px + %)` the same way — so a slide between two
+    /// relative offsets never has to know the width it will be resolved at.
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        let mix = |a: f32, b: f32| a + (b - a) * t;
         Self {
-            x: from.x + (to.x - from.x) * t,
-            y: from.y + (to.y - from.y) * t,
+            x: mix(from.x, to.x),
+            y: mix(from.y, to.y),
+            relative_x: mix(from.relative_x, to.relative_x),
+            relative_y: mix(from.relative_y, to.relative_y),
         }
     }
 
@@ -261,14 +267,23 @@ impl Animatable for Translate {
     /// `Transform` could not do at all: it compared `extract_scale()`, which a
     /// translation does not move, so every slide read as forward.
     ///
+    /// Pixels and fractions are two distances in two units, and one cannot be
+    /// traded against the other without the size this is never told. So it is
+    /// a reversal when one of them shrinks and the other does not grow, and a
+    /// move that shrinks one while it grows the other is a tie.
+    ///
     /// It ties on a move that keeps its distance — `(200, 0) -> (-200, 0)`, or
     /// anything sliding along a circle. See the trait's note on ties.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.x.hypot(to.y) < from.x.hypot(from.y)
+        let px = |t: &Self| t.x.hypot(t.y);
+        let rel = |t: &Self| t.relative_x.hypot(t.relative_y);
+        let (px_from, px_to) = (px(from), px(to));
+        let (rel_from, rel_to) = (rel(from), rel(to));
+        px_to <= px_from && rel_to <= rel_from && (px_to < px_from || rel_to < rel_from)
     }
 
     fn channels(&self) -> Channels {
-        Channels::from_slice(&[self.x, self.y])
+        Channels::from_slice(&[self.x, self.y, self.relative_x, self.relative_y])
     }
 }
 
@@ -408,6 +423,23 @@ mod tests {
         assert!(!Shadow::is_reverse(&faint, &solid));
     }
 
+    /// A relative translate interpolates its fraction, not a width it was
+    /// never told, and a slide home in fractions is a slide home.
+    #[test]
+    fn a_relative_translate_lerps_its_fraction_and_reverses_home() {
+        let out = Translate::relative(-1.0, 0.0);
+        let mid = Translate::lerp(&Translate::NONE, &out, 0.5);
+        assert_eq!(mid, Translate::relative(-0.5, 0.0));
+
+        assert!(Translate::is_reverse(&out, &Translate::NONE));
+        assert!(!Translate::is_reverse(&Translate::NONE, &out));
+
+        // Pixels traded for a fraction: nothing says which is further.
+        let px = Translate::new(-100.0, 0.0);
+        assert!(!Translate::is_reverse(&px, &out));
+        assert!(!Translate::is_reverse(&out, &px));
+    }
+
     /// Trading one dimension for another is neither larger nor smaller, and the
     /// impl says which ties it chooses to keep.
     #[test]
@@ -463,7 +495,7 @@ mod tests {
     fn channels_are_the_numbers_the_lerp_moves() {
         assert_eq!(Color::WHITE.channels().len(), 4);
         assert_eq!(Padding::all(2.0).channels().len(), 4);
-        assert_eq!(Translate::new(1.0, 2.0).channels().len(), 2);
+        assert_eq!(Translate::new(1.0, 2.0).channels().len(), 4);
         // The widest, and so the one the inline capacity is sized from: two
         // offsets, a blur, a spread and four colour components.
         // `carry_velocity` builds four of these per retarget, so a spilled one
