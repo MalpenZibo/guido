@@ -1,8 +1,8 @@
 //! Session lock (`ext-session-lock-v1`) — build lock screens.
 //!
-//! [`lock_session`] asks the compositor to lock the session and, once the
-//! lock is granted, creates one lock surface per output using the provided
-//! widget factory (new outputs plugged in while locked get one too). The
+//! [`lock_session`] asks the compositor to lock the session and, right away,
+//! creates one lock surface per output using the provided widget factory
+//! (new outputs plugged in while locking or locked get one too). The
 //! compositor blanks all outputs and routes input to the lock surfaces, so
 //! a `text_input` password field works out of the box.
 //!
@@ -40,7 +40,9 @@ pub enum LockState {
     /// No lock held (also after a denied or finished lock).
     #[default]
     Unlocked,
-    /// Lock requested, waiting for the compositor to grant it.
+    /// Lock requested, waiting for the compositor to grant it. The lock
+    /// surfaces already exist: the compositor may wait for them to draw
+    /// before it grants.
     Locking,
     /// Lock granted — lock surfaces are shown on every output.
     Locked,
@@ -50,8 +52,9 @@ type LockWidgetFn = Box<dyn Fn(OutputInfo) -> Box<dyn Widget>>;
 
 #[derive(Default)]
 pub(crate) struct LockData {
-    /// Builds the lock screen widget for an output. Kept for as long as the
-    /// session stays locked, so an output plugged in meanwhile gets a surface.
+    /// Builds the lock screen widget for an output. Kept for as long as a lock
+    /// is held, locking or locked, so an output plugged in meanwhile gets a
+    /// surface.
     factory: Option<LockWidgetFn>,
     /// Lock surface per output.
     surfaces: FxHashMap<OutputId, SurfaceId>,
@@ -108,11 +111,12 @@ pub fn session_locked() -> bool {
 /// Ask the compositor to lock the session.
 ///
 /// `widget_fn` builds the lock screen for each output — it is called once
-/// per connected output when the lock is granted, and again for outputs
-/// plugged in while locked. Does nothing if a lock is already active or
-/// pending. Watch [`lock_state`] for the outcome: `Locking` → `Locked`, or
-/// back to `Unlocked` when the compositor refuses (e.g. no
-/// ext-session-lock-v1, or another lock client is active).
+/// per connected output as the lock is requested, before the compositor
+/// grants it, and again for outputs plugged in while locking or locked. Does
+/// nothing if a lock is already active or pending. Watch [`lock_state`] for
+/// the outcome: `Locking` → `Locked`, or back to `Unlocked` when the
+/// compositor refuses (e.g. no ext-session-lock-v1, or another lock client is
+/// active).
 pub fn lock_session<W, F>(widget_fn: F)
 where
     W: Widget + 'static,
@@ -120,9 +124,9 @@ where
 {
     // `Locking` counts: a second request while the first is in flight is
     // granted here, then refused by the platform on the next iteration — and
-    // the refusal path clears the factory. The compositor's `Locked` then
-    // arrives with nothing to build the lock screen from, which is a locked
-    // session with no way to type a password into it.
+    // the refusal path clears the factory. The lock in flight is then held
+    // with nothing to build a lock screen from for a monitor plugged in
+    // later, which is a locked output with no way to type a password into it.
     //
     // A second request made before the state machine has seen the first needs
     // no guard: it replaces it in the slot, so one request goes out either
@@ -194,9 +198,11 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
         set_state(LockState::Unlocked);
     }
 
-    // 4. While locked: one lock surface per connected output (covers both
-    // the initial grant and hotplug while locked)
-    if state_signal().get_untracked() == LockState::Locked {
+    // 4. While a lock is held, granted or not: one lock surface per connected
+    // output. ext-session-lock-v1 wants them before `locked` — a compositor
+    // may hold the grant until they have drawn — so this covers the request,
+    // the grant, and hotplug on either side of it.
+    if state_signal().get_untracked() != LockState::Unlocked {
         let current = outputs::current_outputs();
 
         // Drop surfaces for disconnected outputs
@@ -243,7 +249,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
                     .map(|f| with_owner(|| f(info.clone())))
             });
             let Some((widget, owner_id)) = widget else {
-                log::error!("Session locked but no lock widget factory is set");
+                log::error!("Lock held but no lock widget factory is set");
                 wayland_state.destroy_surface(id);
                 continue;
             };

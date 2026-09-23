@@ -1,10 +1,11 @@
 //! Session lock (`ext-session-lock-v1`).
 //!
 //! Locking is a grant, not a request that succeeds locally: the compositor
-//! answers asynchronously and may refuse. Until it answers there is no lock,
-//! and the surfaces that cover the outputs cannot be created yet — which is
-//! why the outcome arrives as an event the main loop drains rather than as a
-//! return value.
+//! answers asynchronously and may refuse — which is why the outcome arrives as
+//! an event the main loop drains rather than as a return value. The surfaces
+//! that cover the outputs do not wait for it: they hang on the lock object,
+//! which exists from the request on, and a compositor may hold the grant until
+//! they have drawn.
 
 use smithay_client_toolkit::{
     delegate_session_lock,
@@ -23,18 +24,18 @@ use crate::surface::SurfaceId;
 /// Events from the session-lock protocol, drained by the main loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockEvent {
-    /// The compositor granted the lock; lock surfaces may be created.
+    /// The compositor granted the lock: the session is hidden.
     Locked,
     /// The lock ended: denied outright, or unlocked/aborted later.
     Finished,
 }
 
-/// The lock grant and the events it produces.
+/// The lock object and the events it produces.
 pub struct Lock {
     pub(super) session_lock_state: SessionLockState,
-    /// The active lock grant. Written when `start_session_lock` succeeds so a
-    /// synchronous double-lock check can reject a second call; cleared by
-    /// `finished` or `unlock_session`.
+    /// The active lock object, granted or not. Written when
+    /// `start_session_lock` succeeds so a synchronous double-lock check can
+    /// reject a second call; cleared by `finished` or `unlock_session`.
     pub(super) active_lock: Option<SessionLock>,
     /// Lock lifecycle events, drained by the main loop.
     pub(super) lock_events: Vec<LockEvent>,
