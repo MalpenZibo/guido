@@ -30,7 +30,9 @@ use smithay_client_toolkit::reexports::client::{
     Connection, Proxy, QueueHandle,
     protocol::{wl_keyboard, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
-use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape as WpCursorShape;
+use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+    Shape as WpCursorShape, WpCursorShapeDeviceV1,
+};
 
 use super::wayland::WaylandState;
 use crate::reactive::CursorIcon;
@@ -184,6 +186,9 @@ pub struct InputState {
 
     // Cursor shape
     pub(super) cursor_shape_manager: Option<CursorShapeManager>,
+    /// The pointer's one shape device, made and destroyed with it, as sctk's
+    /// `ThemedPointer` keeps its own.
+    pub(super) cursor_shape_device: Option<WpCursorShapeDeviceV1>,
 
     // Keyboard
     pub(super) keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -216,6 +221,7 @@ impl InputState {
             primary_finger: None,
             event_clock: None,
             cursor_shape_manager,
+            cursor_shape_device: None,
             keyboard: None,
             modifiers: Modifiers::default(),
             keyboard_serial: 0,
@@ -229,11 +235,7 @@ impl InputState {
 impl WaylandState {
     /// Set the cursor shape
     pub fn set_cursor(&mut self, cursor: CursorIcon) {
-        let qh = &self.qh;
-        let Some(ref manager) = self.input.cursor_shape_manager else {
-            return;
-        };
-        let Some(ref pointer) = self.input.pointer else {
+        let Some(device) = &self.input.cursor_shape_device else {
             return;
         };
 
@@ -261,8 +263,6 @@ impl WaylandState {
             CursorIcon::Progress => WpCursorShape::Progress,
         };
 
-        // Get cursor shape device and set shape
-        let device = manager.get_shape_device(pointer, qh);
         device.set_shape(self.input.pointer_enter_serial, shape);
     }
 }
@@ -285,7 +285,14 @@ impl SeatHandler for WaylandState {
         if capability == Capability::Pointer && self.input.pointer.is_none() {
             log::info!("Pointer capability available, creating pointer");
             match self.seat_state.get_pointer(qh, &seat) {
-                Ok(pointer) => self.input.pointer = Some(pointer),
+                Ok(pointer) => {
+                    self.input.cursor_shape_device = self
+                        .input
+                        .cursor_shape_manager
+                        .as_ref()
+                        .map(|manager| manager.get_shape_device(&pointer, qh));
+                    self.input.pointer = Some(pointer);
+                }
                 Err(e) => {
                     // A capability race at seat init is not fatal — the app
                     // just runs without pointer input until the seat updates
@@ -340,6 +347,9 @@ impl SeatHandler for WaylandState {
     ) {
         if capability == Capability::Pointer {
             log::info!("Pointer capability removed");
+            if let Some(device) = self.input.cursor_shape_device.take() {
+                device.destroy();
+            }
             if let Some(pointer) = self.input.pointer.take() {
                 pointer.release();
             }
