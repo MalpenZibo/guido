@@ -1247,7 +1247,7 @@ pub(crate) trait Platform {
         let _ = text;
     }
 
-    fn set_cursor(&self, cursor: reactive::CursorIcon) {
+    fn set_cursor(&mut self, cursor: reactive::CursorIcon) {
         let _ = cursor;
     }
 
@@ -1468,7 +1468,7 @@ impl Platform for platform::WaylandState {
         self.set_primary(text)
     }
 
-    fn set_cursor(&self, cursor: reactive::CursorIcon) {
+    fn set_cursor(&mut self, cursor: reactive::CursorIcon) {
         self.set_cursor(cursor)
     }
 
