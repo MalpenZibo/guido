@@ -14,10 +14,11 @@ use wgpu::{
 };
 
 use super::commands::DrawCommand;
-use super::constants::{IMAGE_HASH_SAMPLE_SIZE, SVG_QUALITY_MULTIPLIER};
+use super::constants::SVG_QUALITY_MULTIPLIER;
 use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{QuadClip, TexturedVertex};
+use crate::image_decode::{DecodedImage, hash_sampled};
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
@@ -132,21 +133,6 @@ impl ImageQuadRenderer {
         }
     }
 
-    /// Hash bytes with improved sampling for collision resistance.
-    fn hash_bytes(bytes: &[u8], hasher: &mut impl Hasher) {
-        bytes.len().hash(hasher);
-        if bytes.len() < 1024 {
-            bytes.hash(hasher);
-            return;
-        }
-        // Sample: first + middle + last bytes for collision resistance
-        let sample = IMAGE_HASH_SAMPLE_SIZE;
-        bytes[..sample].hash(hasher);
-        let mid = bytes.len() / 2 - sample / 2;
-        bytes[mid..mid + sample].hash(hasher);
-        bytes[bytes.len() - sample..].hash(hasher);
-    }
-
     /// Hash an image source for cache lookup.
     fn hash_source(source: &ImageSource) -> u64 {
         use std::collections::hash_map::DefaultHasher;
@@ -159,7 +145,7 @@ impl ImageQuadRenderer {
             }
             ImageSource::Bytes(bytes) => {
                 "bytes".hash(&mut hasher);
-                Self::hash_bytes(bytes, &mut hasher);
+                hash_sampled(bytes, &mut hasher);
             }
             ImageSource::Rgba {
                 width,
@@ -169,7 +155,7 @@ impl ImageQuadRenderer {
                 "rgba".hash(&mut hasher);
                 width.hash(&mut hasher);
                 height.hash(&mut hasher);
-                Self::hash_bytes(pixels, &mut hasher);
+                hash_sampled(pixels, &mut hasher);
             }
             ImageSource::SvgPath(path) => {
                 "svg_path".hash(&mut hasher);
@@ -177,7 +163,7 @@ impl ImageQuadRenderer {
             }
             ImageSource::SvgBytes(bytes) => {
                 "svg_bytes".hash(&mut hasher);
-                Self::hash_bytes(bytes, &mut hasher);
+                hash_sampled(bytes, &mut hasher);
             }
         }
 
@@ -196,16 +182,11 @@ impl ImageQuadRenderer {
         device: &Device,
         queue: &Queue,
         source: &ImageSource,
-        transform_scale: f32,
-        scale_factor: f32,
+        render_scale: f32,
         svg_target: Option<(f32, f32)>,
+        decoded: Option<&DecodedImage>,
     ) -> Option<Arc<CachedTexture>> {
         let is_svg = source.is_svg();
-        let render_scale = if is_svg {
-            transform_scale * scale_factor * SVG_QUALITY_MULTIPLIER
-        } else {
-            1.0
-        };
 
         // Quantize scale to reduce cache entries (round to 0.25 increments)
         let quantized_scale = (render_scale * 4.0).round() as u32;
@@ -237,7 +218,8 @@ impl ImageQuadRenderer {
         }
 
         // Load and create texture
-        let texture = self.load_texture(device, queue, source, render_scale, svg_target)?;
+        let texture =
+            self.load_texture(device, queue, source, render_scale, svg_target, decoded)?;
 
         let cached = Arc::new(texture);
         self.texture_cache.insert(key, cached.clone());
@@ -245,6 +227,11 @@ impl ImageQuadRenderer {
     }
 
     /// Load and upload a texture to the GPU.
+    ///
+    /// A raster `Path` or `Bytes` source arrives already decoded — the worker
+    /// in `image_decode` did that off the frame — so this only uploads. Without
+    /// the pixels there is nothing to draw, and decoding here instead is the
+    /// stall that module exists to remove.
     fn load_texture(
         &self,
         device: &Device,
@@ -252,37 +239,22 @@ impl ImageQuadRenderer {
         source: &ImageSource,
         render_scale: f32,
         svg_target: Option<(f32, f32)>,
+        decoded: Option<&DecodedImage>,
     ) -> Option<CachedTexture> {
         // Use Rgba8Unorm to pass colors through without sRGB conversion
         let format = TextureFormat::Rgba8Unorm;
 
         match source {
-            ImageSource::Path(path) => {
-                // Decode failures must be loud: a missing decoder feature
-                // (e.g. `webp` disabled) or a bad file otherwise degrades to
-                // a silently empty box.
-                let img = match image::open(path) {
-                    Ok(img) => img,
-                    Err(e) => {
-                        log::warn!("Failed to decode image {}: {e}", path.display());
-                        return None;
-                    }
-                };
-                let rgba = img.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
-            }
-            ImageSource::Bytes(bytes) => {
-                let img = match image::load_from_memory(bytes) {
-                    Ok(img) => img,
-                    Err(e) => {
-                        log::warn!("Failed to decode in-memory image: {e}");
-                        return None;
-                    }
-                };
-                let rgba = img.to_rgba8();
-                let (width, height) = rgba.dimensions();
-                self.upload_raster(device, queue, &format, width, height, rgba.as_raw())
+            ImageSource::Path(_) | ImageSource::Bytes(_) => {
+                let decoded = decoded?;
+                self.upload_raster(
+                    device,
+                    queue,
+                    &format,
+                    decoded.width,
+                    decoded.height,
+                    &decoded.pixels,
+                )
             }
             ImageSource::Rgba {
                 width,
@@ -521,12 +493,13 @@ impl ImageQuadRenderer {
         cmd: &FlattenedCommand,
         scale_factor: f32,
     ) -> Option<PreparedImageQuad> {
-        let (source, rect, content_fit) = match &*cmd.command {
+        let (source, decoded, rect, content_fit) = match &*cmd.command {
             DrawCommand::Image {
                 source,
+                decoded,
                 rect,
                 content_fit,
-            } => (source, rect, content_fit),
+            } => (source, decoded, rect, content_fit),
             _ => return None,
         };
 
@@ -538,13 +511,21 @@ impl ImageQuadRenderer {
         let svg_target = (*content_fit != ContentFit::None).then_some((rect.width, rect.height));
 
         // Get or create the texture
+        // An SVG is rasterised at the scale it is shown at; a raster image is
+        // uploaded at its own size.
+        let render_scale = if source.is_svg() {
+            transform_scale * scale_factor * SVG_QUALITY_MULTIPLIER
+        } else {
+            1.0
+        };
+
         let cached = self.get_or_create_texture(
             device,
             queue,
             source,
-            transform_scale,
-            scale_factor,
+            render_scale,
             svg_target,
+            decoded.as_ref(),
         )?;
 
         // Create bind group

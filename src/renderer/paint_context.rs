@@ -6,6 +6,7 @@ use super::commands::{Border, CornerRadii, DrawCommand};
 use super::text_measurer::LineFit;
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
+use crate::image_decode::{DecodeState, DecodedImage};
 use crate::pivot::Pivot;
 use crate::transform::Transform;
 use crate::tree::{Tree, WidgetId};
@@ -592,9 +593,33 @@ impl<'a> PaintContext<'a> {
     // -------------------------------------------------------------------------
 
     /// Draw an image in local coordinates.
+    ///
+    /// A raster `Path` or `Bytes` source is decoded off the frame: until its
+    /// decode lands this draws nothing, and the widget painting it is
+    /// repainted when it does.
     pub fn draw_image(&mut self, source: ImageSource, rect: Rect, content_fit: ContentFit) {
+        // Read while painting, so the widget drawing it is repainted when the
+        // decode lands — and until then draws nothing.
+        let decoded = match crate::image_decode::state(&source) {
+            None => None,
+            Some(DecodeState::Ready(decoded)) => Some(decoded),
+            Some(DecodeState::Pending | DecodeState::Failed) => return,
+        };
+        self.push_image(source, decoded, rect, content_fit);
+    }
+
+    /// Push an image whose decode the caller has already resolved — the
+    /// `Image` widget, which holds its entry and so needs no lookup.
+    pub(crate) fn push_image(
+        &mut self,
+        source: ImageSource,
+        decoded: Option<DecodedImage>,
+        rect: Rect,
+        content_fit: ContentFit,
+    ) {
         self.node.commands.push(Rc::new(DrawCommand::Image {
             source,
+            decoded,
             rect,
             content_fit,
         }));
