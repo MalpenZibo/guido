@@ -15,9 +15,10 @@
 //! The connection has a half of its own, and the recorder answers for that
 //! too: [`Headless::connect_output`] plugs a monitor in,
 //! [`disconnect_output`](Headless::disconnect_output) takes it away, and
-//! [`grant_lock`](Headless::grant_lock) answers the session lock the
-//! application asked for. Both were watched by a person with a spare screen
-//! until #424.
+//! [`grant_lock`](Headless::grant_lock) and
+//! [`finish_lock`](Headless::finish_lock) answer the session lock the
+//! application asked for. Outputs and the lock were watched by a person with
+//! a spare screen until #424.
 //!
 //! Surfaces declared before the loop runs come from [`Headless::surface`], the
 //! way `App::add_surface` declares them. After it is running they come from
@@ -94,7 +95,7 @@ struct RecordedLock {
     /// through [`Headless::grant_lock`].
     granted: bool,
     /// Every lock surface asked for, oldest first: the id, the output it was
-    /// to cover, and whether it was granted. Refused asks are kept, because a
+    /// to cover, and whether it was accepted. Refused asks are kept, because a
     /// refusal that repeats is #422 — a monitor that has gone being asked for
     /// a cover sixty times a second — and only the asks can show it.
     requests: Vec<(SurfaceId, OutputId, bool)>,
@@ -351,18 +352,18 @@ impl Platform for Recorder {
         true
     }
 
-    /// Cover one output. The two refusals are the compositor's own: no grant
+    /// Cover one output. The two refusals are the compositor's own: no lock
     /// to hang the surface on, and a monitor that is not there — the second is
     /// what a lock asking for a departed output's cover runs into, over and
     /// over, and it is kept rather than merely refused.
     fn create_lock_surface(&mut self, id: SurfaceId, output: OutputId) -> bool {
-        let granted = self.lock.asked
+        let accepted = self.lock.asked
             && self
                 .connectors
                 .iter()
                 .any(|name| self.outputs.id_for(name) == Some(output));
-        self.lock.requests.push((id, output, granted));
-        if !granted {
+        self.lock.requests.push((id, output, accepted));
+        if !accepted {
             return false;
         }
         self.created.push(id);
@@ -710,12 +711,22 @@ impl Headless {
 
     /// Say the compositor granted the lock the application asked for, which is
     /// what `ext_session_lock_v1.locked` says. Until it does, the application
-    /// sits in [`LockState::Locking`](crate::session_lock::LockState::Locking)
-    /// and there are no lock surfaces — a compositor answers a round trip
-    /// later, and may refuse.
+    /// sits in [`LockState::Locking`](crate::session_lock::LockState::Locking),
+    /// with its lock surfaces already asked for — a compositor answers a round
+    /// trip later, may wait for those surfaces to draw first, and may refuse
+    /// through [`finish_lock`](Self::finish_lock).
     pub fn grant_lock(&mut self) {
         self.host.lock.granted = true;
         self.host.lock.events.push(LockEvent::Locked);
+    }
+
+    /// Say the compositor ended the lock, which is what
+    /// `ext_session_lock_v1.finished` says: sent in place of `locked` when it
+    /// refuses, or later when the lock ends without the application's unlock.
+    /// Either way the lock object is gone, as `finished` clears `active_lock`.
+    pub fn finish_lock(&mut self) {
+        crate::Platform::unlock_session(&mut self.host);
+        self.host.lock.events.push(LockEvent::Finished);
     }
 
     /// Whether the compositor is holding a lock grant. The application's own
@@ -726,21 +737,21 @@ impl Headless {
     }
 
     /// Every lock surface the compositor was asked for, oldest first: the id,
-    /// the output it was to cover, and whether it was granted. Refused asks
+    /// the output it was to cover, and whether it was accepted. Refused asks
     /// are in it, because a refusal that repeats is the whole of what #422
     /// looked like from here.
     pub fn lock_surface_requests(&self) -> &[(SurfaceId, OutputId, bool)] {
         &self.host.lock.requests
     }
 
-    /// The lock surfaces it granted, oldest first — the asks above, less the
+    /// The lock surfaces it accepted, oldest first — the asks above, less the
     /// refusals.
     pub fn lock_surfaces_created(&self) -> Vec<(SurfaceId, OutputId)> {
         self.host
             .lock
             .requests
             .iter()
-            .filter(|(_, _, granted)| *granted)
+            .filter(|(_, _, accepted)| *accepted)
             .map(|(id, output, _)| (*id, *output))
             .collect()
     }
@@ -796,17 +807,17 @@ pub use crate::image_decode::DecodeHold;
 mod the_two_refusals_the_loop_cannot_reach {
     use super::*;
 
-    /// A cover is refused without a grant to hang it on, and refused for a
+    /// A cover is refused without a lock to hang it on, and refused for a
     /// monitor that is not there.
     ///
     /// Beside the recorder rather than in `tests/headless_app.rs` because the
-    /// loop reaches neither: it asks for a cover only while the lock is
-    /// granted, and only for an output the list holds. What makes them
+    /// loop reaches neither: it asks for a cover only while a lock is
+    /// held, and only for an output the list holds. What makes them
     /// load-bearing anyway is the case where the list and the registry
     /// disagree — the second refusal is what #422's phantom ran into, sixty
     /// times a second.
     #[test]
-    fn a_cover_is_refused_without_a_grant_and_for_a_monitor_that_is_not_there() {
+    fn a_cover_is_refused_without_a_lock_and_for_a_monitor_that_is_not_there() {
         let mut recorder = Recorder::default();
         let screen = recorder.connect_output("eDP-1");
         let phantom = OutputId::from_raw(9);
@@ -826,14 +837,14 @@ mod the_two_refusals_the_loop_cannot_reach {
             "and the monitor that is really there is covered"
         );
 
-        let granted: Vec<bool> = recorder
+        let accepted: Vec<bool> = recorder
             .lock
             .requests
             .iter()
-            .map(|(_, _, granted)| *granted)
+            .map(|(_, _, accepted)| *accepted)
             .collect();
         assert_eq!(
-            granted,
+            accepted,
             [false, false, true],
             "every ask is kept, refused or not"
         );

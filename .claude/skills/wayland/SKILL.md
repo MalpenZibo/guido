@@ -74,10 +74,10 @@ surfaces are popups and whose children they are.
 write the reactive list through `outputs::sync_outputs` and
 `outputs::output_removed`, which is how the Wayland handler writes it — outputs
 never reach `Platform` — and the recorder answers the four lock methods, with
-`Headless::grant_lock` where the compositor's `locked` would be. What is still
-only watched by running an example is what a `WaylandState` does with a
-`wl_output`: nothing can reach the handler methods around the registry without
-a connection.
+`Headless::grant_lock` and `Headless::finish_lock` where the compositor's
+`locked` and `finished` would be. What is still only watched by running an
+example is what a `WaylandState` does with a `wl_output`: nothing can reach the
+handler methods around the registry without a connection.
 
 When you change this layer:
 
