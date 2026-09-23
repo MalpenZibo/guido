@@ -2470,3 +2470,56 @@ fn a_cursor_closure_whose_widget_is_gone_is_not_read_again() {
         "nothing is asked for a declaration that is no longer there"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A surface without a cursor (#500)
+// ---------------------------------------------------------------------------
+
+/// Hidden is a shape like any other: the root declaring it is the whole
+/// surface without a pointer, and each enter asks for it again, because the
+/// compositor shows whatever it likes until a cursor is set against that
+/// enter's serial.
+#[test]
+fn a_root_that_hides_the_cursor_asks_for_hidden_on_every_enter() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .width(fill())
+            .height(fill())
+            .cursor(CursorIcon::Hidden)
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    for _ in 0..2 {
+        pointer_enters(&mut app, surface);
+        app.step();
+        app.event_at(surface, Event::MouseLeave, Instant::now());
+        app.step();
+    }
+
+    assert_eq!(app.cursors_asked(), [CursorIcon::Hidden; 2]);
+}
+
+/// A widget inside a surface without a cursor can still claim one, and the
+/// root's `Hidden` takes over again the moment the pointer leaves it.
+#[test]
+fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        left_of_a_bar(container().cursor(CursorIcon::Pointer)).cursor(CursorIcon::Hidden)
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_enters(&mut app, surface);
+    app.step();
+    assert_eq!(app.cursors_asked(), [CursorIcon::Pointer], "over the child");
+
+    pointer_moves(&mut app, surface, 160.0, 10.0);
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer, CursorIcon::Hidden],
+        "over the root alone"
+    );
+}

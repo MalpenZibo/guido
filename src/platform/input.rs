@@ -233,14 +233,24 @@ impl InputState {
 }
 
 impl WaylandState {
-    /// Set the cursor shape
+    /// Set the cursor shape, against the serial of the enter it is for.
+    ///
+    /// The cursor-shape protocol has no hidden shape: hiding is
+    /// `wl_pointer.set_cursor` with no surface. A visible shape after it goes
+    /// back through `set_shape`, which replaces whatever the pointer showed.
+    /// Hiding waits on the shape device like every other shape, because
+    /// without one nothing could ever show the pointer again.
     pub fn set_cursor(&mut self, cursor: CursorIcon) {
-        let Some(device) = &self.input.cursor_shape_device else {
+        let (Some(device), Some(pointer)) = (&self.input.cursor_shape_device, &self.input.pointer)
+        else {
             return;
         };
-
-        // Convert our CursorIcon to Wayland cursor shape
+        let serial = self.input.pointer_enter_serial;
         let shape = match cursor {
+            CursorIcon::Hidden => {
+                pointer.set_cursor(serial, None, 0, 0);
+                return;
+            }
             CursorIcon::Default => WpCursorShape::Default,
             CursorIcon::Text => WpCursorShape::Text,
             CursorIcon::Pointer => WpCursorShape::Pointer,
@@ -263,7 +273,7 @@ impl WaylandState {
             CursorIcon::Progress => WpCursorShape::Progress,
         };
 
-        device.set_shape(self.input.pointer_enter_serial, shape);
+        device.set_shape(serial, shape);
     }
 }
 
