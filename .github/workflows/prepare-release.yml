@@ -18,10 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: >-
-          Version to release, without the leading v (e.g. 0.7.0). Empty takes
-          the version Release Drafter resolved for the current draft, which is
-          the number the tag will use.
+        description: Version to release, e.g. 0.7.0. Defaults to the version of the draft release.
         required: false
         type: string
 
@@ -118,11 +115,6 @@ jobs:
           labels: skip-changelog
           delete-branch: true
           body: |
-            Version bump for **v${{ steps.version.outputs.version }}**, opened by
-            the Prepare release workflow.
+            Bumps the workspace version to **${{ steps.version.outputs.version }}**.
 
-            Merge this, then publish the drafted release. The tag is cut at
-            main's head, which this commit is, so the tag carries the version it
-            names — `publish.yml` refuses to publish if it does not.
-
-            Nothing here is hand-written: `cargo release version` produced it.
+            After merging, publish the v${{ steps.version.outputs.version }} draft release to create the tag and publish to crates.io.
