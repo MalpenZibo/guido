@@ -101,6 +101,7 @@ Text rendering with:
 - Reactive content (static string or `Signal<String>`)
 - Font size, color, weight styling
 - Text wrapping or `nowrap()` mode
+- A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape_text` in `renderer/text_measurer.rs`, so every path cuts on the same line
 
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets

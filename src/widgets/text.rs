@@ -2,7 +2,7 @@ use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
 use crate::reactive::{IntoSignal, Prop, Signal};
-use crate::renderer::{PaintContext, measure_text_full};
+use crate::renderer::{LineFit, PaintContext, measure_text_full};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::container::get_animated_value;
@@ -24,8 +24,20 @@ pub(crate) fn decoration_overflow(stroke: Option<TextStroke>, shadow: Option<Tex
     from_stroke.max(from_shadow)
 }
 
-/// What a text cut to fewer lines than it holds shows where the rest would
+/// What a text cut short by [`Text::max_lines`] shows where the rest would
 /// have been.
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("a window title far too long for the bar it sits in")
+///     .max_lines(1)
+///     .overflow(TextOverflow::Ellipsis);
+/// ```
+///
+/// The line limit and the mark are two properties, as they are in CSS
+/// (`line-clamp` and `text-overflow`), Flutter (`maxLines` and `overflow`) and
+/// GTK (`lines` and `ellipsize`): how many lines a text may take is a layout
+/// decision, and how the cut reads is a matter of taste.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum TextOverflow {
     /// The lines past the limit are not drawn, and the last one is cut where
@@ -75,6 +87,11 @@ pub struct Text {
     /// Whether the text wraps at the width it is given. `None` is the default,
     /// which wraps — an absent signal costs a null check rather than a read.
     wrap: Prop<bool>,
+    /// The most lines the text may take. `None`, the default, is as many as it
+    /// needs.
+    max_lines: Prop<Option<u32>>,
+    /// What marks the cut when the text is longer than its lines.
+    overflow: Prop<TextOverflow>,
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
     backdrop_blur: Prop<f32>,
@@ -87,6 +104,9 @@ pub struct Text {
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
     cached_wrap: bool,
+    /// The lines layout cut the text to, handed to paint so every path that
+    /// shapes it cuts in the same place.
+    cached_fit: Option<LineFit>,
 }
 
 impl Text {
@@ -102,6 +122,8 @@ impl Text {
             states: Vec::new(),
             own_hover: None,
             wrap: Prop::Unset,
+            max_lines: Prop::Unset,
+            overflow: Prop::Unset,
             backdrop_blur: Prop::Unset,
             anims: None,
             cached_text: String::new(), // Will be set during first layout
@@ -109,6 +131,7 @@ impl Text {
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
             cached_wrap: true,
+            cached_fit: None,
         }
     }
 
@@ -128,6 +151,35 @@ impl Text {
     /// re-measures rather than merely repainting.
     pub fn wrap<M>(mut self, wrap: impl IntoSignal<bool, M>) -> Self {
         self.wrap = wrap.into_prop();
+        self
+    }
+
+    /// The most lines the text may take; `None` is as many as it needs.
+    ///
+    /// A text longer than that is measured as the lines it draws, not as the
+    /// content it holds, and [`overflow`](Self::overflow) says how the cut is
+    /// marked. A limit of `0` is read as `1`: a text shows at least one line.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let track = create_signal(String::from("Something long"));
+    /// text(track).max_lines(2).overflow(TextOverflow::Ellipsis);
+    /// ```
+    ///
+    /// A layout decision like [`wrap`](Self::wrap), so a write re-measures.
+    pub fn max_lines<M>(mut self, lines: impl IntoSignal<Option<u32>, M>) -> Self {
+        self.max_lines = lines.into_prop();
+        self
+    }
+
+    /// How a text cut short is marked. [`TextOverflow::Clip`] by default.
+    ///
+    /// It marks the cut [`max_lines`](Self::max_lines) makes, and the one a
+    /// [`nowrap`](Self::nowrap) text meets at the edge of its box: there an
+    /// ellipsis needs no limit, and each line that runs past the box is
+    /// marked on its own.
+    pub fn overflow<M>(mut self, overflow: impl IntoSignal<TextOverflow, M>) -> Self {
+        self.overflow = overflow.into_prop();
         self
     }
 
@@ -255,7 +307,7 @@ impl Widget for Text {
 
         // Refresh cached values from content and declared style.
         // This reads signals and registers layout dependencies.
-        let (overflow, declared_color) = self.refresh(ctx.tree(), id);
+        let (reach, declared_color) = self.refresh(ctx.tree(), id);
         // Pointed at the freshly resolved target here, where both it and the
         // frame's instant are in hand.
         self.cached_font_size = self.retarget_text_anims(
@@ -264,18 +316,33 @@ impl Widget for Text {
             declared_color.unwrap_or(Color::WHITE),
             self.cached_font_size,
         );
-        ctx.tree().set_own_paint_reach(id, overflow);
+        ctx.tree().set_own_paint_reach(id, reach);
 
-        // Determine the effective max_width for measurement
+        let offered = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+
+        // A cut, when there is one. An unwrapped text's lines are cut by the
+        // box already, so a mark asked of it needs no limit: each line that
+        // runs past the box is marked, and none is dropped.
+        let overflow = self.overflow.get_or(TextOverflow::Clip);
+        let limit =
+            self.max_lines.get().flatten().or_else(|| {
+                (!self.cached_wrap && overflow != TextOverflow::Clip).then_some(u32::MAX)
+            });
+        self.cached_fit = limit.map(|lines| LineFit {
+            // An unwrapped line that nothing marks is the same line at any
+            // width, and a width in its fit would only miss the caches.
+            width: offered.filter(|_| self.cached_wrap || overflow != TextOverflow::Clip),
+            max_lines: lines.max(1),
+            overflow,
+            wrap: self.cached_wrap,
+        });
+
         // An unwrapped text is measured with no maximum, so it runs on one line
         // and whatever contains it does the clipping.
-        let max_width = if !self.cached_wrap {
-            None
-        } else if constraints.max_width.is_finite() {
-            Some(constraints.max_width)
-        } else {
-            None
-        };
+        let max_width = offered.filter(|_| self.cached_wrap);
 
         // Measure text (TextMeasurer caches results internally)
         let measured = measure_text_full(
@@ -284,7 +351,7 @@ impl Widget for Text {
             max_width,
             self.cached_font_family,
             self.cached_font_weight,
-            None,
+            self.cached_fit,
         );
 
         // A parent aligning on the baseline needs this; it comes out of the
@@ -368,7 +435,7 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
-                None,
+                self.cached_fit,
             );
         }
         ctx.draw_text_decorated(
@@ -380,7 +447,7 @@ impl Widget for Text {
             self.cached_font_weight,
             if frosted { None } else { stroke },
             shadow,
-            None,
+            self.cached_fit,
         );
     }
 }
@@ -454,6 +521,149 @@ mod tests {
             unwrapped.width > wrapped.width,
             "an unwrapped line has to run past the width a wrapped one fits in: \
              {wrapped:?} then {unwrapped:?}"
+        );
+    }
+
+    /// A text long enough that no installed font fits it on two lines at the
+    /// widths below, so the assertions stay off the font's metrics.
+    const OVERLONG: &str = "a considerable quantity of words, far more than any two \
+                            lines of a narrow box could hold, and then some more";
+
+    /// Lay out one text of a known line height in a box of `width`.
+    ///
+    /// Twenty pixels, so a line is twenty-four: guido asks every line for
+    /// 1.2 times the font size, so the line count is the height over that.
+    fn laid_out(text: Text, width: f32) -> crate::layout::Size {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(text.font_size(20.0)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, width)
+    }
+
+    const LINE: f32 = 24.0;
+
+    /// `max_lines(1)` with an ellipsis measures one line high.
+    ///
+    /// Measured, not drawn: the height is what the parent reserves, and a text
+    /// that drew one line in a box sized for six would leave the rest empty.
+    #[test]
+    fn one_line_with_an_ellipsis_measures_one_line() {
+        let whole = laid_out(Text::new(OVERLONG), 120.0);
+        assert!(
+            whole.height > LINE * 2.5,
+            "the text has to wrap without a limit, or this proves nothing: {whole:?}"
+        );
+
+        let cut = laid_out(
+            Text::new(OVERLONG)
+                .max_lines(1)
+                .overflow(TextOverflow::Ellipsis),
+            120.0,
+        );
+        assert_eq!(cut.height, LINE, "one line is one line high: {cut:?}");
+        assert!(cut.width <= 120.0, "and no wider than its box: {cut:?}");
+    }
+
+    /// `max_lines(2)` on a wrapped text measures two lines high, whatever marks
+    /// the cut.
+    #[test]
+    fn two_lines_measure_two_lines() {
+        for overflow in [TextOverflow::Clip, TextOverflow::Ellipsis] {
+            let cut = laid_out(Text::new(OVERLONG).max_lines(2).overflow(overflow), 120.0);
+            assert_eq!(
+                cut.height,
+                LINE * 2.0,
+                "two lines with {overflow:?} are two lines high: {cut:?}"
+            );
+        }
+    }
+
+    /// Hard line breaks count toward the limit like wrapped ones do.
+    ///
+    /// cosmic-text limits the lines of each paragraph on its own, so three
+    /// short paragraphs under `max_lines(2)` would come back three lines high
+    /// if the limit were only handed to it.
+    #[test]
+    fn a_line_break_counts_toward_the_limit() {
+        let cut = laid_out(Text::new("one\ntwo\nthree").max_lines(2), 400.0);
+        assert_eq!(cut.height, LINE * 2.0, "{cut:?}");
+    }
+
+    /// An ellipsis on an unwrapped text marks each line that runs past the box
+    /// and drops none: the lines a text has are its own until a limit says
+    /// otherwise.
+    #[test]
+    fn an_unwrapped_ellipsis_keeps_every_line() {
+        let cut = laid_out(
+            Text::new(format!("{OVERLONG}\n{OVERLONG}"))
+                .nowrap()
+                .overflow(TextOverflow::Ellipsis),
+            120.0,
+        );
+        assert_eq!(cut.height, LINE * 2.0, "{cut:?}");
+        assert!(cut.width <= 120.0, "{cut:?}");
+    }
+
+    /// The limit is a declared value, so it answers to a write — and lifting
+    /// it gives the text back the lines it needs.
+    #[test]
+    fn the_line_limit_answers_to_a_signal() {
+        let lines = create_signal(Some(1u32));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new(OVERLONG).font_size(20.0).max_lines(lines),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        assert_eq!(measured(&mut tree, root, 120.0).height, LINE);
+        lines.set(Some(3));
+        assert_eq!(measured(&mut tree, root, 120.0).height, LINE * 3.0);
+        lines.set(None);
+        assert!(measured(&mut tree, root, 120.0).height > LINE * 3.0);
+    }
+
+    /// Content that fits is measured as it always was: a limit it does not
+    /// reach changes nothing.
+    #[test]
+    fn content_that_fits_is_unchanged() {
+        let free = laid_out(Text::new("short"), 400.0);
+        let limited = laid_out(
+            Text::new("short")
+                .max_lines(1)
+                .overflow(TextOverflow::Ellipsis),
+            400.0,
+        );
+        assert_eq!(free, limited);
+    }
+
+    /// What paint hands the renderer is the fit layout measured with, so the
+    /// draw paths cut where the measurer did.
+    #[test]
+    fn paint_carries_the_fit_layout_measured_with() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new(OVERLONG)
+                .nowrap()
+                .max_lines(1)
+                .overflow(TextOverflow::Ellipsis),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, 90.0);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+
+        let fit = node.commands.iter().find_map(|cmd| match &**cmd {
+            DrawCommand::Text { fit, .. } => Some(*fit),
+            _ => None,
+        });
+        assert_eq!(
+            fit,
+            Some(Some(crate::renderer::LineFit {
+                width: Some(90.0),
+                max_lines: 1,
+                overflow: TextOverflow::Ellipsis,
+                wrap: false,
+            }))
         );
     }
 

@@ -325,6 +325,51 @@ text("This text will not wrap").nowrap()
 # }
 ```
 
+### Limiting Lines
+
+A text that has to fit a fixed box — a window title in a bar, a track name in
+a player — can be held to a number of lines, with the cut marked:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let title = "a window title far too long for the bar";
+text(title).max_lines(1).overflow(TextOverflow::Ellipsis)
+# ;
+# }
+```
+
+`max_lines` says how many lines the text may take, and the text is measured as
+those lines, not as everything it holds. `overflow` says what marks the cut:
+
+- `TextOverflow::Clip` (the default) — the lines past the limit are not drawn
+- `TextOverflow::Ellipsis` — the last line drawn ends in `…`
+- `TextOverflow::EllipsisStart` — the `…` opens the last line, which keeps the
+  end of the text: a path whose file name is what matters
+- `TextOverflow::EllipsisMiddle` — the `…` stands in the middle, keeping both
+  ends
+
+A line break counts toward the limit like a wrapped line does. A text that fits
+is drawn exactly as it would be with no limit.
+
+An unwrapped text is cut by its box already, so an ellipsis on a `nowrap()`
+text needs no limit — each line that runs past the box ends in `…`:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .width(120.0)
+    .child(text("a long track name").nowrap().overflow(TextOverflow::Ellipsis))
+# ;
+# }
+```
+
+Both are reactive like every other text property: `max_lines` takes an
+`Option<u32>`, so a signal can lift the limit with `None`.
+
 ## Reactive Text
 
 Text content can update based on signals:
@@ -507,5 +552,7 @@ impl Text {
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn wrap<M>(self, wrap: impl IntoSignal<bool, M>) -> Self;
     pub fn nowrap(self) -> Self;    // Shorthand for wrap(false)
+    pub fn max_lines<M>(self, lines: impl IntoSignal<Option<u32>, M>) -> Self;  // .max_lines(2)
+    pub fn overflow<M>(self, overflow: impl IntoSignal<TextOverflow, M>) -> Self;
 }
 ```

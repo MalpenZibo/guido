@@ -106,6 +106,19 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = text("closure").wrap(move || wraps.get());
     let _ = text("signal").wrap(wraps);
 
+    // An optional count: a bare number, one the closure returns, a signal of
+    // one, and a signal that can lift the limit with `None`.
+    let lines = create_signal(2u32);
+    let limit = create_signal(Some(2u32));
+    let cut = create_signal(TextOverflow::Ellipsis);
+    let _ = text("value").max_lines(1).overflow(TextOverflow::Ellipsis);
+    let _ = text("closure")
+        .max_lines(move || lines.get())
+        .overflow(move || cut.get());
+    let _ = text("signal").max_lines(lines).overflow(cut);
+    let _ = text("optional").max_lines(limit);
+    let _ = text("none").max_lines(None);
+
     let _ = image("x.png").content_fit(ContentFit::Cover);
     let _ = image("x.png").content_fit(move || fit.get());
     let _ = image("x.png").content_fit(fit);

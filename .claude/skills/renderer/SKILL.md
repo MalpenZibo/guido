@@ -59,6 +59,12 @@ is why the render-tree snapshots exclude text. The goldens do render it: they
 vendor a font under `tests/assets/` and name it in every scenario, so nothing
 there can reach a system font.
 
+Measurement and the three draw paths below each shape the text for
+themselves, and all four go through `shape_text` beside the measurer. A text
+cut by `max_lines` carries its `LineFit` — the width it was laid out in, the
+limit, the mark — on its draw command, so each path cuts on the line the
+measurer counted; `text_cut_to_its_lines` is the golden that watches all three.
+
 Transformed text is a path of its own. Rotated or scaled text is not handed to
 glyphon — it is rasterised to a texture and drawn as a quad
 (`text_quad.rs`, `textured_quad_shader.wgsl`). Anything true of axis-aligned
