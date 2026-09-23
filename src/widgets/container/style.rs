@@ -306,10 +306,12 @@ impl Container {
         let pivot = self.resolved_pivot_quietly();
         let anims = self.anims.as_ref();
 
+        // Each translate resolved against `bounds` as it is composed, since
+        // that is where `animated_transform` resolves the one it paints.
         let base_translate = self.translate_prop().get_finite_or_quietly(Translate::NONE);
         let base_rotate = self.rotate_prop().get_finite_or_quietly(0.0);
         let base_scale = self.scale_prop().get_finite_or_quietly(Scale::NONE);
-        let base = Transform::compose(base_translate, base_rotate, base_scale);
+        let base = Transform::compose(base_translate.resolve(bounds), base_rotate, base_scale);
         let mut reach = outset_of(base, painted, bounds, pivot);
 
         // A rotation's outset is not monotone in its angle: a box turned 0 or
@@ -350,7 +352,10 @@ impl Container {
                     continue;
                 }
                 let candidate = Transform::compose(
-                    state.translate.get_or_untracked(base_translate),
+                    state
+                        .translate
+                        .get_or_untracked(base_translate)
+                        .resolve(bounds),
                     state.rotate.get_or_untracked(base_rotate),
                     state.scale.get_or_untracked(base_scale),
                 );
@@ -374,7 +379,10 @@ impl Container {
             reach *= 1.0 + overshoot;
 
             let flying = Transform::compose(
-                anims.translate().map_or(base_translate, |a| *a.current()),
+                anims
+                    .translate()
+                    .map_or(base_translate, |a| *a.current())
+                    .resolve(bounds),
                 anims.rotate().map_or(base_rotate, |a| *a.current()),
                 anims.scale().map_or(base_scale, |a| *a.current()),
             );
@@ -494,7 +502,12 @@ impl Container {
     /// This is the only place the two forms meet. Everything above it says
     /// `translate`, `rotate`, `scale`; everything below it takes a matrix and
     /// never has to ask how the matrix was arrived at.
-    pub(super) fn animated_transform(&self, id: WidgetId) -> Transform {
+    ///
+    /// `bounds` is what a relative translate is a fraction of, resolved here
+    /// and not before, for the reason `Pivot` is resolved at flatten: what
+    /// animates is the fraction, so a width change moves the box at once
+    /// rather than starting a slide the declaration never asked for.
+    pub(super) fn animated_transform(&self, id: WidgetId, bounds: Rect) -> Transform {
         let anims = self.anims.as_ref();
 
         // What could move each component: its own declaration, its own
@@ -522,8 +535,9 @@ impl Container {
             get_animated_value(anims.and_then(|a| a.translate()), || {
                 self.effective_translate_target(id)
             })
+            .resolve(bounds)
         } else {
-            Translate::NONE
+            (0.0, 0.0)
         };
         let rotate = if has_rotate {
             get_animated_value(anims.and_then(|a| a.rotate()), || {
@@ -713,7 +727,7 @@ mod reach_tests {
     fn a_rotation_about_a_corner_sweeps_further_than_one_about_the_centre() {
         let mut worst: f32 = 0.0;
         for degrees in 0..360 {
-            let spin = Transform::compose(Translate::NONE, degrees as f32, Scale::NONE);
+            let spin = Transform::compose((0.0, 0.0), degrees as f32, Scale::NONE);
             worst = worst.max(outset_of(spin, BOX, BOX, Pivot::TOP_LEFT));
         }
         // What a bound written for the centre would have said.
@@ -756,7 +770,7 @@ mod reach_tests {
     #[test]
     fn a_shadow_carried_by_a_translate_reaches_past_both() {
         let painted = BOX.outset(10.0);
-        let lift = Transform::compose(Translate::new(0.0, -50.0), 0.0, Scale::NONE);
+        let lift = Transform::compose((0.0, -50.0), 0.0, Scale::NONE);
         assert_eq!(outset_of(lift, painted, BOX, Pivot::CENTER), 60.0);
     }
 
@@ -765,7 +779,7 @@ mod reach_tests {
     #[test]
     fn the_grown_box_contains_what_is_drawn() {
         let painted = BOX.outset(10.0);
-        let lift = Transform::compose(Translate::new(0.0, -50.0), 0.0, Scale::NONE);
+        let lift = Transform::compose((0.0, -50.0), 0.0, Scale::NONE);
         let reach = outset_of(lift, painted, BOX, Pivot::CENTER);
 
         let drawn = lift.about(Pivot::CENTER, painted).map_rect(painted);
@@ -783,7 +797,7 @@ mod reach_tests {
     #[test]
     fn a_scale_scales_the_shadow_it_surrounds() {
         let painted = BOX.outset(10.0);
-        let grow = Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0));
+        let grow = Transform::compose((0.0, 0.0), 0.0, Scale::uniform(2.0));
         // The 120-wide painted box doubles about the centre it shares with
         // bounds, reaching 120 either side of it; 70 of that stands outside the
         // 100-wide bounds. A shadow that did not scale would reach 60.
@@ -824,7 +838,7 @@ mod reach_tests {
 
             let worst = (0..360)
                 .map(|deg| {
-                    let spin = Transform::compose(Translate::NONE, deg as f32, Scale::NONE);
+                    let spin = Transform::compose((0.0, 0.0), deg as f32, Scale::NONE);
                     outset_of(spin, painted, BOX, pivot)
                 })
                 .fold(0.0f32, f32::max);
@@ -884,6 +898,25 @@ mod reach_tests {
         );
     }
 
+    /// A relative translate reaches as far as the box it is a fraction of: one
+    /// width left is `BOX.width` outside it, in the declaration and in a state
+    /// layer. Read as pixels it reaches nothing, and a slide that starts
+    /// off-screen is culled for as long as it is sliding.
+    #[test]
+    fn a_relative_translate_reaches_by_the_box_it_is_a_fraction_of() {
+        let declared = container()
+            .width(100.0)
+            .height(100.0)
+            .translate(Translate::relative(-1.0, 0.0));
+        assert_eq!(declared.max_transform_reach(BOX, 0.0), BOX.width);
+
+        let layered = container()
+            .width(100.0)
+            .height(100.0)
+            .when_hovered(|s| s.translate(Translate::relative(0.0, 0.5)));
+        assert_eq!(layered.max_transform_reach(BOX, 0.0), BOX.height / 2.0);
+    }
+
     /// A state layer that moves only one component is still a transform this
     /// container can be in.
     ///
@@ -937,7 +970,7 @@ mod reach_tests {
     fn a_square_reaches_furthest_halfway_through_its_rotation() {
         let at = |deg: f32| {
             outset_of(
-                Transform::compose(Translate::NONE, deg, Scale::NONE),
+                Transform::compose((0.0, 0.0), deg, Scale::NONE),
                 BOX,
                 BOX,
                 Pivot::CENTER,

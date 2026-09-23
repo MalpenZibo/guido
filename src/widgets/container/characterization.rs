@@ -2704,6 +2704,87 @@ fn a_played_sequence_actually_moves_the_transform() {
     );
 }
 
+/// `Translate::relative(-1.0, 0.0)` is one width left at whatever width the
+/// box is laid out, including one it changes to — and the frame the change
+/// lands on is the frame that paints it, through the paint cache.
+#[test]
+fn a_relative_translate_is_its_own_width_at_any_width() {
+    let w = create_signal(50.0f32);
+    let mut h = H::new(
+        container()
+            .width(w)
+            .height(20.0)
+            .translate(Translate::relative(-1.0, 0.0)),
+    );
+    let tx = |h: &mut H| h.frame(200.0, 200.0).node.local_transform.tx();
+    assert_eq!(tx(&mut h), -50.0);
+
+    w.set(120.0);
+    assert_eq!(tx(&mut h), -120.0, "a new width is a new distance");
+}
+
+/// A relative enter plays from the first frame, when nothing has been
+/// measured until the layout that seeds it — the case a width read back
+/// through a `WidgetRef` cannot do, because it is still zero there.
+#[test]
+fn a_relative_enter_slides_in_from_its_own_width_on_the_first_frame() {
+    let t0 = std::time::Instant::now();
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            box_of(80.0, 20.0).translate(
+                Translate::NONE
+                    .transition(Transition::new(100.0, TimingFunction::Linear))
+                    .entering_from(Translate::relative(-1.0, 0.0)),
+            ),
+        ),
+    );
+    let tx = |h: &mut H| h.paint().children[0].local_transform.tx();
+
+    frame_at(&mut h, t0, 200.0, 200.0);
+    assert_eq!(tx(&mut h), -80.0, "the first frame is one whole width out");
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        200.0,
+        200.0,
+    );
+    assert_eq!(tx(&mut h), -40.0, "half the fraction is half the width");
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(200),
+        200.0,
+        200.0,
+    );
+    assert_eq!(tx(&mut h), 0.0, "and it arrives");
+}
+
+/// What animates is the fraction, so a width change under a relative
+/// translate changes no target: the box is at its new distance on the frame
+/// that lays it out, and nothing is left playing.
+#[test]
+fn a_width_change_under_a_relative_translate_moves_at_once() {
+    let w = create_signal(50.0f32);
+    let mut h = H::new(container().width(w).height(20.0).translate(
+        Translate::relative(-1.0, 0.0).transition(Transition::new(100.0, TimingFunction::Linear)),
+    ));
+    let tx = |h: &mut H| h.paint().local_transform.tx();
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 200.0, 200.0);
+    assert_eq!(tx(&mut h), -50.0);
+
+    w.set(100.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(10),
+        200.0,
+        200.0,
+    );
+    assert_eq!(tx(&mut h), -100.0, "at the new width at once");
+    assert!(!pump(&mut h), "and no animation was started to get there");
+}
+
 /// A translate that animates has to arrive where its signal points.
 ///
 /// The one component with no such test until now, and four separate lists name

@@ -1581,10 +1581,11 @@ impl Widget for Container {
             return EventResponse::Ignored;
         }
 
+        let bounds = tree.get_bounds(id).unwrap_or_default();
         let hit = HitContext {
-            bounds: tree.get_bounds(id).unwrap_or_default(),
+            bounds,
             corners: self.animated_corners(id),
-            transform: self.animated_transform(id),
+            transform: self.animated_transform(id, bounds),
             pivot: self.resolved_pivot(id),
         };
 
@@ -1723,7 +1724,7 @@ impl Widget for Container {
             self.animated_background(id),
             self.animated_corners(id),
             self.animated_shadow(id),
-            self.animated_transform(id),
+            self.animated_transform(id, bounds),
             self.resolved_pivot(id),
             self.animated_border_width(id),
             self.animated_border_color(id),

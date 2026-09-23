@@ -224,7 +224,11 @@ impl Transform {
     /// `C·T·R·S·C⁻¹` is `T·(C·R·S·C⁻¹)`: a translation commutes past the
     /// conjugating one. Which is why a `Pivot` moves what `rotate` and `scale`
     /// do and does nothing at all to `translate`.
-    pub fn compose(translate: Translate, rotate_degrees: f32, scale: Scale) -> Self {
+    ///
+    /// `translate` is in pixels, which is why it is a pair and not a
+    /// [`Translate`]: a relative one is a fraction of a size this is not
+    /// given, and is resolved first with [`Translate::resolve`].
+    pub fn compose(translate: (f32, f32), rotate_degrees: f32, scale: Scale) -> Self {
         // Not about correctness: this runs for every container on every paint
         // and every pointer event, and almost none of them turn.
         let (sin, cos) = if rotate_degrees == 0.0 {
@@ -237,10 +241,10 @@ impl Transform {
             data: [
                 cos * scale.x,
                 -sin * scale.y,
-                translate.x,
+                translate.0,
                 sin * scale.x,
                 cos * scale.y,
-                translate.y,
+                translate.1,
             ],
         }
     }
@@ -1128,7 +1132,7 @@ mod tests {
         for deg in [0.0f32, 30.0, 45.0, 90.0, 180.0, 200.0, 270.0] {
             for scale in [Scale::NONE, Scale::new(2.0, 0.5), Scale::new(0.5, 2.0)] {
                 assert_reports_its_extents(
-                    Transform::compose(Translate::new(9.0, -4.0), deg, scale),
+                    Transform::compose((9.0, -4.0), deg, scale),
                     &format!("rotate {deg}° with scale ({}, {})", scale.x, scale.y),
                 );
             }
@@ -1159,7 +1163,7 @@ mod tests {
     #[test]
     fn a_rotation_alone_reports_no_scaling() {
         for deg in [0.0f32, 45.0, 180.0, 360.0] {
-            let t = Transform::compose(Translate::NONE, deg, Scale::NONE);
+            let t = Transform::compose((0.0, 0.0), deg, Scale::NONE);
             let (sx, sy) = t.extract_scale_components();
             assert!(
                 approx_eq(sx, 1.0) && approx_eq(sy, 1.0),
@@ -1173,10 +1177,10 @@ mod tests {
     /// worth doing if it agrees with composing it.
     #[test]
     fn compose_is_translate_then_rotate_then_scale() {
-        let (t, deg, s) = (Translate::new(7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
+        let (t, deg, s) = ((7.0, -3.0), 30.0_f32, Scale::new(2.0, 0.5));
 
         let folded = Transform::compose(t, deg, s);
-        let built = Transform::translate(t.x, t.y)
+        let built = Transform::translate(t.0, t.1)
             .then(&Transform::rotate_degrees(deg))
             .then(&Transform::scale_xy(s.x, s.y));
 
@@ -1190,15 +1194,15 @@ mod tests {
     #[test]
     fn each_component_is_neutral_when_it_is_not_declared() {
         assert_eq!(
-            Transform::compose(Translate::NONE, 0.0, Scale::NONE),
+            Transform::compose((0.0, 0.0), 0.0, Scale::NONE),
             Transform::IDENTITY
         );
         assert_eq!(
-            Transform::compose(Translate::new(5.0, 6.0), 0.0, Scale::NONE),
+            Transform::compose((5.0, 6.0), 0.0, Scale::NONE),
             Transform::translate(5.0, 6.0)
         );
         assert_eq!(
-            Transform::compose(Translate::NONE, 0.0, Scale::uniform(2.0)),
+            Transform::compose((0.0, 0.0), 0.0, Scale::uniform(2.0)),
             Transform::scale(2.0)
         );
     }
@@ -1208,7 +1212,7 @@ mod tests {
     /// turn itself is still there to interpolate.
     #[test]
     fn a_full_turn_composes_to_the_size_it_started_at() {
-        let full = Transform::compose(Translate::NONE, 360.0, Scale::NONE);
+        let full = Transform::compose((0.0, 0.0), 360.0, Scale::NONE);
         assert!(approx_eq(full.extract_scale(), 1.0));
     }
 
