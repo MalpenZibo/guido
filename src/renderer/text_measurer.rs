@@ -19,9 +19,7 @@ const SMALLEST_SHAPEABLE: f32 = 0.01;
 /// One door, because there are four places that build `Metrics` from a font
 /// size — this measurer and the three draw paths — and each would otherwise
 /// have to know that a non-finite or non-positive one is the single input that
-/// does not come back. Returns the size rather than the metrics because the
-/// draw paths build theirs from glyphon's own copy of cosmic-text, which is a
-/// different type from this one.
+/// does not come back.
 ///
 /// A clamped size draws a glyph far too small to see, which is what a caller
 /// who asked for nothing drawable should get.

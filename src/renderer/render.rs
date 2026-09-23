@@ -203,7 +203,7 @@ impl Renderer {
     ) -> RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Renderer Pipeline Layout"),
-            bind_group_layouts: &[bind_group_layout],
+            bind_group_layouts: &[Some(bind_group_layout)],
             immediate_size: 0,
         });
 
@@ -345,17 +345,14 @@ impl Renderer {
         #[cfg(not(any(test, feature = "testing")))]
         let RenderTarget::Swapchain(surface) = target;
         let output = match surface.surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(output)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
+            wgpu::CurrentSurfaceTexture::Lost => {
                 surface.resize(surface.width(), surface.height());
                 return false;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => {
-                log::error!("Out of GPU memory");
-                return false;
-            }
-            Err(e) => {
-                log::error!("Surface error: {:?}", e);
+            other => {
+                log::error!("Surface error: {:?}", other);
                 return false;
             }
         };

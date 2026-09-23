@@ -351,12 +351,12 @@ impl BackdropRenderer {
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Mask Pipeline Layout"),
-            bind_group_layouts: &[&mask_bind_group_layout],
+            bind_group_layouts: &[Some(&mask_bind_group_layout)],
             immediate_size: 0,
         });
 
