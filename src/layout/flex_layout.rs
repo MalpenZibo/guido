@@ -20,6 +20,8 @@
 //! - `Start`, `Center`, `End` - Align children along cross axis
 //! - `Stretch` - Stretch children to fill cross axis (default)
 //!
+//! [`Flex::center`] sets both to `Center`.
+//!
 //! ## Usage
 //!
 //! ```no_run
@@ -94,6 +96,21 @@ impl Flex {
     pub fn cross_alignment<M>(mut self, alignment: impl IntoSignal<CrossAlignment, M>) -> Self {
         self.cross_alignment = alignment.into_prop();
         self
+    }
+
+    /// Centre the children on both axes: shorthand for
+    /// [`main_alignment(MainAlignment::Center)`](Self::main_alignment) and
+    /// [`cross_alignment(CrossAlignment::Center)`](Self::cross_alignment).
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container()
+    ///     .layout(Flex::column().spacing(4.0).center())
+    ///     .children([text("Locked"), text("Type your password")]);
+    /// ```
+    pub fn center(self) -> Self {
+        self.main_alignment(MainAlignment::Center)
+            .cross_alignment(CrossAlignment::Center)
     }
 
     /// Calculate initial offset and spacing between children based on main axis alignment
