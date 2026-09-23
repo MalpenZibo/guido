@@ -45,7 +45,6 @@ impl QuadDraw for PreparedImageQuad {
 
 /// Cached texture data.
 struct CachedTexture {
-    #[allow(dead_code)] // Kept alive for GPU usage
     texture: Texture,
     view: wgpu::TextureView,
     /// Original intrinsic dimensions
@@ -57,6 +56,13 @@ struct CachedTexture {
     /// The raster source it was uploaded from, whose decoded pixels went with
     /// the upload: the decode cache is told when this texture goes.
     decoded_from: Option<DecodeKey>,
+}
+
+impl CachedTexture {
+    /// What it costs on the GPU, counted against the cache's budget.
+    fn bytes(&self) -> usize {
+        texture_bytes(&self.texture)
+    }
 }
 
 impl Drop for CachedTexture {
@@ -103,15 +109,29 @@ pub struct ImageQuadRenderer {
     /// When the frame being prepared started: what a texture drawn in it is
     /// stamped with.
     frame_started: Instant,
-    max_cache_size: usize,
+    /// The sum of every cached texture's `bytes`.
+    cached_bytes: usize,
 }
 
 /// How long a texture no frame has drawn is kept once the cache is past its
-/// size. One drawn more recently is never evicted — the cache grows past its
-/// size instead — because a raster texture's pixels went with its upload: an
+/// budget. One drawn more recently is never evicted — the cache grows past its
+/// budget instead — because a raster texture's pixels went with its upload: an
 /// image still in view whose texture was evicted is blank until it is decoded
 /// again, and evicting it every frame would decode it every frame.
 const KEEP_UNUSED: Duration = Duration::from_secs(1);
+
+/// The bytes `texture` holds on the GPU, every mip level of it.
+fn texture_bytes(texture: &Texture) -> usize {
+    let size = texture.size();
+    let texel = texture.format().block_copy_size(None).unwrap_or(4) as usize;
+    (0..texture.mip_level_count())
+        .map(|level| {
+            let width = (size.width >> level).max(1) as usize;
+            let height = (size.height >> level).max(1) as usize;
+            width * height * texel
+        })
+        .sum()
+}
 
 impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
@@ -119,7 +139,7 @@ impl ImageQuadRenderer {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
             texture_cache: FxHashMap::default(),
             frame_started: Instant::now(),
-            max_cache_size: 64,
+            cached_bytes: 0,
         }
     }
 
@@ -128,13 +148,40 @@ impl ImageQuadRenderer {
         self.quad.set_screen_size(width, height);
     }
 
-    /// Begin a new frame (for cache management).
+    /// Begin a new frame: what a texture drawn in it is stamped with.
     pub fn begin_frame(&mut self) {
         self.frame_started = Instant::now();
+    }
 
-        // Evict old entries if cache is too large
-        if self.texture_cache.len() > self.max_cache_size {
-            self.evict_oldest();
+    /// Bring the cache back under `budget` bytes, once the frame has drawn
+    /// what it draws.
+    ///
+    /// After the frame rather than before it, so every texture this frame drew
+    /// is stamped as drawn now: before it, a surface that sat idle for longer
+    /// than [`KEEP_UNUSED`] would have its own images evicted by the frame
+    /// about to draw them.
+    pub fn trim(&mut self, budget: usize) {
+        if self.cached_bytes <= budget {
+            return;
+        }
+        let mut idle: Vec<(Instant, CacheKey)> = self
+            .texture_cache
+            .iter()
+            .filter(|(_, texture)| {
+                self.frame_started
+                    .saturating_duration_since(texture.last_used.get())
+                    > KEEP_UNUSED
+            })
+            .map(|(key, texture)| (texture.last_used.get(), key.clone()))
+            .collect();
+        idle.sort_unstable_by_key(|(last_used, _)| *last_used);
+        for (_, key) in idle {
+            if self.cached_bytes <= budget {
+                break;
+            }
+            if let Some(texture) = self.texture_cache.remove(&key) {
+                self.cached_bytes -= texture.bytes();
+            }
         }
     }
 
@@ -142,31 +189,7 @@ impl ImageQuadRenderer {
     #[cfg(feature = "testing")]
     pub(crate) fn forget_textures(&mut self) {
         self.texture_cache.clear();
-    }
-
-    /// Evict the least recently used entries until under the limit — of those
-    /// no frame has drawn for [`KEEP_UNUSED`].
-    fn evict_oldest(&mut self) {
-        let target_size = self.max_cache_size / 2;
-        while self.texture_cache.len() > target_size {
-            let oldest = self
-                .texture_cache
-                .iter()
-                .min_by_key(|(_, v)| v.last_used.get())
-                .filter(|(_, v)| {
-                    self.frame_started
-                        .saturating_duration_since(v.last_used.get())
-                        > KEEP_UNUSED
-                })
-                .map(|(k, _)| k.clone());
-
-            match oldest {
-                Some(key) => {
-                    self.texture_cache.remove(&key);
-                }
-                None => break,
-            }
-        }
+        self.cached_bytes = 0;
     }
 
     /// Hash an image source for cache lookup.
@@ -258,6 +281,7 @@ impl ImageQuadRenderer {
         }
 
         let cached = Rc::new(texture);
+        self.cached_bytes += cached.bytes();
         self.texture_cache.insert(key, cached.clone());
         Some(cached)
     }

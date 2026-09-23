@@ -187,7 +187,7 @@ not drawn" colour.
   and shared by every surface, so one upload serves them all. No surface can
   draw from dropped pixels, because the only way to them is to take them.
 - **A texture that is gone.** When a frame draws a ready source whose texture
-  is not there (evicted from the 64-entry cache, or its renderer dropped) and
+  is not there (evicted from the texture cache, or its renderer dropped) and
   whose pixels were already taken, the renderer draws nothing and reports it.
   The source goes back to `Pending` and to the worker, and comes back through
   the same repaint as the first time. `ready()` is false in between.
@@ -203,11 +203,19 @@ not drawn" colour.
   from a widget written outside the crate is held by nobody, so nothing
   releases it: it goes with its texture's eviction, and if it is decoded but
   never drawn it keeps its pixels as long as the application.
-- **Eviction spares what is in view.** The texture cache holds 64 textures,
-  but never evicts one a frame drew within the last second: a raster texture
-  is the only copy of its pixels, so evicting an image still in view would
-  blank it and send it back to the worker every frame. Past 64 live textures
-  the cache grows instead.
+- **Eviction spares what is in view.** The texture cache is bounded by bytes,
+  not by count: each texture costs width × height × 4 (every mip level, if it
+  had any), and the budget is 100 MB (`DEFAULT_IMAGE_CACHE_BUDGET`, Flutter's
+  `ImageCache` default) unless the application sets its own with
+  `App::image_cache_budget` or `set_image_cache_budget`. Under the budget
+  nothing is evicted, whatever the count. Over it, `ImageQuadRenderer::trim`
+  evicts the least recently drawn first — once the frame has drawn, so what
+  it drew is stamped as drawn now — and never one a frame drew within the
+  last second: a raster texture is the only copy of its pixels, so evicting an
+  image still in view would blank it and send it back to the worker every
+  frame. When those alone exceed the budget the cache grows instead. The
+  cache is the renderer's, shared by every surface: a surface that has not
+  drawn for a second is not protected from another surface's trim.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
   is decoded, true from the start for `Rgba` and SVG, never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
@@ -234,8 +242,9 @@ background-write queue is process-wide.
 The image texture renderer includes LRU caching:
 - Raster images cached by source hash
 - SVGs cached by source hash + render scale
-- 64 cached textures, growing past that only while more than 64 are in view
-- Automatic eviction of least-recently-used entries
+- A byte budget, 100 MB by default, growing past it only while what was
+  drawn in the last second exceeds it
+- Past the budget, eviction of least-recently-used entries
 
 ## Reactive Sources
 

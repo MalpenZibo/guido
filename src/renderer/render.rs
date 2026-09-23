@@ -638,6 +638,7 @@ impl Renderer {
             });
         }
 
+        self.image_quad_renderer.trim(crate::image_cache_budget());
         self.text_state.end_frame();
     }
 }
