@@ -808,11 +808,16 @@ fn flatten_node(
 
 /// Stand-in for "this could be anywhere", used when a command's extent is not
 /// known: it intersects everything, so the group splits.
+///
+/// Finite on purpose: `Rect::intersects` reads the far edge as `x + width`,
+/// and from an infinite origin that is `-∞ + ∞`, a NaN that intersects
+/// nothing. Half of `f32::MAX` either way keeps both edges finite, through
+/// `union_of` too, and still past any surface.
 const EVERYTHING: Rect = Rect {
-    x: f32::NEG_INFINITY,
-    y: f32::NEG_INFINITY,
-    width: f32::INFINITY,
-    height: f32::INFINITY,
+    x: f32::MIN / 2.0,
+    y: f32::MIN / 2.0,
+    width: f32::MAX,
+    height: f32::MAX,
 };
 
 fn union_of(a: Rect, b: Rect) -> Rect {
@@ -1038,7 +1043,7 @@ mod tests {
             .collect()
     }
 
-    use RenderLayer::{Images, Overlay, Shapes, Text};
+    use RenderLayer::{Backdrop, Images, Overlay, Shapes, Text};
 
     /// A blur restricted to the compositor is published as a `wl_region` and
     /// drawn by nobody here, so it must not be filed as a backdrop effect: that
@@ -1269,6 +1274,34 @@ mod tests {
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert_eq!(layers.len(), 2);
+    }
+
+    #[test]
+    fn an_unbounded_command_already_drawn_covers_what_comes_after() {
+        // The other half of the one above: the turned command is drawn first,
+        // and what regresses under it later is bounded. An unbounded command
+        // covers everything, so the frost has to wait for the bars it frosts
+        // — held in the same group, it filtered the target before they were
+        // drawn and blurred nothing (#487). Twice: with nothing else under
+        // the frost, which only the turned command can split, and with a bar
+        // it overlaps, which the turned command's bounds must not hide.
+        for bars in [vec![], vec![Rect::new(0.0, 0.0, 100.0, 100.0)]] {
+            let mut layered = FlattenScratch::default();
+            let mut turned = command_at(Shapes, Rect::new(900.0, 900.0, 10.0, 10.0));
+            turned.world_transform = Transform::rotate(12.0);
+            layered.push(turned);
+            for bar in bars {
+                layered.push(command_at(Shapes, bar));
+            }
+            layered.push(command_at(Backdrop, Rect::new(10.0, 10.0, 50.0, 20.0)));
+
+            let mut commands = Vec::new();
+            let mut layers = Vec::new();
+            layered.drain_into(&mut commands, &mut layers);
+            assert_eq!(layers.len(), 2);
+            assert!(layers[0].backdrop.is_empty());
+            assert_eq!(layers[1].backdrop.len(), 1);
+        }
     }
 
     #[test]
