@@ -41,7 +41,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use super::invalidation::clear_signal_subscribers;
-use super::runtime::{EffectId, SignalId, with_runtime};
+use super::runtime::{EffectId, SignalId, flush_unless_batching, with_runtime};
 use super::state::with_reactive;
 use super::storage::dispose_signal;
 
@@ -104,6 +104,13 @@ impl Owner {
 struct OwnerSlot {
     owner: Option<Owner>,
     generation: NonZeroU32,
+    /// Whether the scope's effects are held back: set by [`pause_owner`] on a
+    /// scope and every scope below it, cleared by [`resume_owner`]. A scope
+    /// opened under a paused one starts paused.
+    ///
+    /// Here rather than on `Owner`, where it would cost the arena eight bytes a
+    /// slot; beside the generation it fits in the padding.
+    paused: bool,
 }
 
 /// Arena-based storage for owners with slot recycling.
@@ -116,6 +123,7 @@ pub(crate) struct OwnerArena {
 
 impl OwnerArena {
     fn allocate(&mut self, parent: Option<OwnerId>) -> OwnerId {
+        let paused = parent.is_some_and(|parent| self.is_paused(parent));
         let owner = Owner::new(parent);
         if let Some(index) = self.free_indices.pop() {
             let slot = &mut self.slots[index as usize];
@@ -123,6 +131,7 @@ impl OwnerArena {
             // `Option<OwnerId>` eight bytes.
             slot.generation = slot.generation.checked_add(1).unwrap_or(NonZeroU32::MIN);
             slot.owner = Some(owner);
+            slot.paused = paused;
             OwnerId {
                 index,
                 generation: slot.generation,
@@ -132,6 +141,7 @@ impl OwnerArena {
             self.slots.push(OwnerSlot {
                 owner: Some(owner),
                 generation: NonZeroU32::MIN,
+                paused,
             });
             OwnerId {
                 index,
@@ -140,11 +150,15 @@ impl OwnerArena {
         }
     }
 
-    fn get(&self, id: OwnerId) -> Option<&Owner> {
+    /// The slot `id` occupies, if the scope is still there.
+    fn live_slot(&self, id: OwnerId) -> Option<&OwnerSlot> {
         self.slots
             .get(id.index as usize)
-            .filter(|slot| slot.generation == id.generation)
-            .and_then(|slot| slot.owner.as_ref())
+            .filter(|slot| slot.generation == id.generation && slot.owner.is_some())
+    }
+
+    fn get(&self, id: OwnerId) -> Option<&Owner> {
+        self.live_slot(id).and_then(|slot| slot.owner.as_ref())
     }
 
     fn get_mut(&mut self, id: OwnerId) -> Option<&mut Owner> {
@@ -152,6 +166,35 @@ impl OwnerArena {
             .get_mut(id.index as usize)
             .filter(|slot| slot.generation == id.generation)
             .and_then(|slot| slot.owner.as_mut())
+    }
+
+    /// Whether `id` is paused. A scope that is gone is not: nothing of it is
+    /// left to hold back.
+    fn is_paused(&self, id: OwnerId) -> bool {
+        self.live_slot(id).is_some_and(|slot| slot.paused)
+    }
+
+    /// Set `paused` on `id` and every scope below it, and hand back the effects
+    /// they own.
+    fn set_paused(&mut self, id: OwnerId, paused: bool) -> Vec<EffectId> {
+        let mut effects = Vec::new();
+        let mut stack = vec![id];
+        while let Some(id) = stack.pop() {
+            let Some(slot) = self
+                .slots
+                .get_mut(id.index as usize)
+                .filter(|slot| slot.generation == id.generation)
+            else {
+                continue;
+            };
+            let Some(owner) = &slot.owner else {
+                continue;
+            };
+            slot.paused = paused;
+            effects.extend_from_slice(&owner.effects);
+            stack.extend_from_slice(&owner.children);
+        }
+        effects
     }
 
     fn take(&mut self, id: OwnerId) -> Option<Owner> {
@@ -409,6 +452,39 @@ pub fn dispose_owner_now(id: OwnerId) {
         with_runtime(|rt| rt.dispose_signal_subscriptions(signal_id));
         dispose_signal(signal_id);
     }
+}
+
+/// Hold back every effect owned by `id` and the scopes below it, until
+/// [`resume_owner`] or disposal.
+///
+/// For a subtree that is leaving but not yet disposed: its effects must not run
+/// on what they read — the item a row was built for may already be gone — but
+/// they must still be there if the row is asked for again. A write to what a
+/// paused effect read does not run it; it is remembered, and the effect runs
+/// once on resume. Svelte 5 does the same for an outroing block: `pause_effect`
+/// marks its effects `INERT`, and `resume_effect` runs the ones that went dirty.
+pub(crate) fn pause_owner(id: OwnerId) {
+    let effects = with_reactive(|reactive| reactive.owners.borrow_mut().set_paused(id, true));
+    with_runtime(|rt| rt.set_effects_paused(&effects, true));
+}
+
+/// Undo [`pause_owner`]: the effects of `id` and the scopes below it run on
+/// what they read again, and each one a write reached while it was paused runs
+/// now, once.
+pub(crate) fn resume_owner(id: OwnerId) {
+    let effects = with_reactive(|reactive| reactive.owners.borrow_mut().set_paused(id, false));
+    with_runtime(|rt| rt.set_effects_paused(&effects, false));
+    flush_unless_batching();
+}
+
+/// Whether the current scope is paused, so an effect made in it starts paused.
+pub(crate) fn current_owner_is_paused() -> bool {
+    with_reactive(|reactive| {
+        reactive
+            .current_owner
+            .get()
+            .is_some_and(|id| reactive.owners.borrow().is_paused(id))
+    })
 }
 
 /// Register a cleanup callback to run when the current owner is disposed.
@@ -857,6 +933,138 @@ mod tests {
         // Both should be disposed
         assert!(!effect_has_owner(inner_effect));
         assert!(!effect_has_owner(outer_effect));
+    }
+
+    /// A scope with one effect counting its runs of `signal`, and one nested
+    /// scope with another. Returns the scope and the two counts.
+    fn counting_scopes(
+        signal: crate::reactive::RwSignal<u32>,
+    ) -> (OwnerId, Rc<std::cell::Cell<u32>>, Rc<std::cell::Cell<u32>>) {
+        use super::super::effect::create_effect;
+        let outer = Rc::new(std::cell::Cell::new(0));
+        let inner = Rc::new(std::cell::Cell::new(0));
+        let (o, i) = (outer.clone(), inner.clone());
+        let (_, id) = with_owner(move || {
+            create_effect(move || {
+                signal.get();
+                o.set(o.get() + 1);
+            });
+            with_owner(move || {
+                create_effect(move || {
+                    signal.get();
+                    i.set(i.get() + 1);
+                })
+            });
+        });
+        (id, outer, inner)
+    }
+
+    /// A paused scope's effects, and those of the scopes below it, do not run
+    /// on a write; they run once on resume however many writes they missed.
+    #[test]
+    fn a_paused_scope_runs_what_it_missed_once_on_resume() {
+        use super::super::signal::create_signal;
+        let signal = create_signal(0u32);
+        let (id, outer, inner) = counting_scopes(signal);
+        assert_eq!((outer.get(), inner.get()), (1, 1));
+
+        pause_owner(id);
+        signal.set(1);
+        signal.set(2);
+        assert_eq!((outer.get(), inner.get()), (1, 1), "paused, nothing ran");
+
+        resume_owner(id);
+        assert_eq!((outer.get(), inner.get()), (2, 2), "each ran once");
+
+        signal.set(3);
+        assert_eq!(
+            (outer.get(), inner.get()),
+            (3, 3),
+            "and they are live again"
+        );
+        dispose_owner_now(id);
+    }
+
+    /// Resuming a scope nothing was written to while it was paused runs
+    /// nothing.
+    #[test]
+    fn a_paused_scope_that_missed_nothing_runs_nothing_on_resume() {
+        use super::super::signal::create_signal;
+        let signal = create_signal(0u32);
+        let (id, outer, inner) = counting_scopes(signal);
+        pause_owner(id);
+        resume_owner(id);
+        assert_eq!((outer.get(), inner.get()), (1, 1));
+        dispose_owner_now(id);
+    }
+
+    /// A paused scope disposed without resuming takes its effects with it:
+    /// what they missed is never run, and a later write runs nothing.
+    #[test]
+    fn a_paused_scope_disposed_runs_nothing() {
+        use super::super::signal::create_signal;
+        let signal = create_signal(0u32);
+        let (id, outer, inner) = counting_scopes(signal);
+        pause_owner(id);
+        signal.set(1);
+        dispose_owner_now(id);
+        resume_owner(id);
+        signal.set(2);
+        assert_eq!((outer.get(), inner.get()), (1, 1));
+    }
+
+    /// A scope opened, or an effect made, under a paused scope is paused with
+    /// it: it waits for the resume rather than running on its own.
+    #[test]
+    fn what_is_made_under_a_paused_scope_waits_for_the_resume() {
+        use super::super::effect::create_effect;
+        use super::super::signal::create_signal;
+        let signal = create_signal(0u32);
+        let (_, id) = with_owner(|| ());
+        pause_owner(id);
+        let runs = Rc::new(std::cell::Cell::new(0));
+        let counted = runs.clone();
+        under_owner(id, || {
+            with_owner(move || {
+                create_effect(move || {
+                    signal.get();
+                    counted.set(counted.get() + 1);
+                })
+            })
+        });
+        signal.set(1);
+        assert_eq!(runs.get(), 0, "not even its first run");
+
+        resume_owner(id);
+        assert_eq!(runs.get(), 1, "the first run, on resume");
+        signal.set(2);
+        assert_eq!(runs.get(), 2);
+        dispose_owner_now(id);
+    }
+
+    /// Pausing reaches down, not up or across: a sibling scope and the parent
+    /// go on running.
+    #[test]
+    fn pausing_a_scope_leaves_its_parent_and_siblings_running() {
+        use super::super::effect::create_effect;
+        use super::super::signal::create_signal;
+        let signal = create_signal(0u32);
+        let runs = Rc::new(std::cell::Cell::new(0));
+        let counted = runs.clone();
+        let ((paused, sibling_runs), parent) = with_owner(move || {
+            create_effect(move || {
+                signal.get();
+                counted.set(counted.get() + 1);
+            });
+            let (paused, ..) = counting_scopes(signal);
+            let (_, sibling_runs, _) = counting_scopes(signal);
+            (paused, sibling_runs)
+        });
+        pause_owner(paused);
+        signal.set(1);
+        assert_eq!(runs.get(), 2, "the parent still runs");
+        assert_eq!(sibling_runs.get(), 2, "and so does its sibling");
+        dispose_owner_now(parent);
     }
 
     /// The niche is the whole point of the `NonZeroU32`. `Option<OwnerId>` is

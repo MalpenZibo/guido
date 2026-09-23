@@ -691,6 +691,18 @@ container().children(move || {
 
 Owner scopes are automatically nested. When a parent owner is disposed, children are disposed first (depth-first). This happens automatically when removing nested dynamic children.
 
+### Paused Owners
+
+A removed child that plays an exit is not disposed until the exit settles, and
+a `keyed(..)` row can be asked for again before then. So its scopes are
+*paused* at removal rather than disposed: `pause_owner` marks a scope and every
+scope below it, and an effect whose scope is paused does not run — a write to
+what it read marks it as having missed a run instead. `resume_owner`, when the
+row is reclaimed, clears the mark and runs each effect that missed a run, once.
+A scope opened under a paused one starts paused. Disposal is unchanged: a
+paused scope disposed takes its effects with it, and what they missed never
+runs. This is Svelte 5's `pause_effect` and `resume_effect` (the `INERT` flag).
+
 ### Component Macro Integration
 
 Components created with `#[component]` automatically wrap their render body in an owner scope. When the component is dropped, all its reactive resources are cleaned up:
