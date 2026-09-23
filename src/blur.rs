@@ -74,6 +74,7 @@ mod tests {
             }),
             world_transform: Default::default(),
             layer: Default::default(),
+            opacity: 1.0,
             clip: None,
         };
         assert_eq!(

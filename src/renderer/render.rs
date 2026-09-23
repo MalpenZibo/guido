@@ -962,6 +962,7 @@ mod tests {
             }),
             world_transform: transform,
             layer: RenderLayer::Backdrop,
+            opacity: 1.0,
             clip: None,
         }
     }
@@ -1243,6 +1244,7 @@ mod tests {
             }),
             world_transform: Transform::IDENTITY,
             layer: RenderLayer::Shapes,
+            opacity: 1.0,
             clip: None,
         };
         let commands: [FlattenedCommand; 5] = std::array::from_fn(|i| box_at(i as f32 * 12.0));
