@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "guido"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "guido-macros"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "proc-macro2",
  "quote",
