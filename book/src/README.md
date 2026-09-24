@@ -1,6 +1,6 @@
 <p align="center">
-  <img class="logo-dark" src="images/logo_text_dark.svg" alt="Guido Logo" width="280">
-  <img class="logo-light" src="images/logo_text_light.svg" alt="Guido Logo" width="280">
+  <img class="logo-dark" src="images/wordmark-light.svg" alt="GUIdo" height="120">
+  <img class="logo-light" src="images/wordmark-dark.svg" alt="GUIdo" height="120">
 </p>
 
 # Guido
