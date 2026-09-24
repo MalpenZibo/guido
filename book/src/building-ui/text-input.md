@@ -209,6 +209,37 @@ and the field's own copy of what it drew is wiped when it changes. GTK 4's peek
 icon makes the same trade. If the threat you are guarding against is a core
 dump or a memory read, leave `reveal` off.
 
+### Hardening the process
+
+The field keeps the password out of places guido controls. Three copies are
+outside that, and a lock screen should know about them:
+
+- **Each key press.** smithay-client-toolkit, which guido reads the keyboard
+  through, hands every key over as a one-character `String` and frees it
+  unwiped. That leaves single characters, one per allocation — not the
+  password, but pieces of it.
+- **The clipboard.** A password pasted into the field was first copied into
+  guido's clipboard cache, which is not wiped yet (#519).
+- **A revealed password,** as above.
+
+A lock screen can close the core-dump route to all of it with one call at
+startup, before the password is ever typed: a process that is not dumpable
+leaves no core dump for `coredumpctl` to read back, and cannot be attached to
+with `ptrace` by other processes of the same user.
+
+```rust,ignore
+# // not compiled: uses the `libc` crate, which the book's samples do not link.
+// SAFETY: a plain prctl with no pointers.
+unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) };
+```
+
+Do not reach for `mlockall` to keep the process out of swap. It counts against
+the locked-memory limit, which is usually a few megabytes, and a GPU-rendered
+application maps far more than that — with `MCL_FUTURE`, later allocations
+start failing. The `Secret` already locks the pages that hold the password,
+which is what swaylock does too; for the rest, swap is the system's to
+encrypt.
+
 Everything else here — placeholder, caret, pointer shape, colours, focus,
 `readonly` — is the same on both fields.
 

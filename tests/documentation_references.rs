@@ -45,6 +45,10 @@ const NOT_CRATE_SYMBOLS: &[&str] = &[
     "WAYLAND_DISPLAY",
     "vulkan-swrast",
     "mesa-vulkan-drivers",
+    // Linux calls and flags the password chapter tells a lock screen about.
+    "mlockall",
+    "MCL_FUTURE",
+    "ptrace",
 ];
 
 fn repo() -> &'static Path {
