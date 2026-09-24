@@ -35,7 +35,7 @@ use zeroize::Zeroize;
 ///
 /// Build one from a `String` with [`From`] — the `String` is zeroed on the
 /// way in — or receive one from a
-/// password field. Read it with
+/// [`password_input`](crate::widgets::password_input). Read it with
 /// [`expose`](Self::expose), for as long as the borrow lasts.
 ///
 /// ```

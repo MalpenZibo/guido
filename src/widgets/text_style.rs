@@ -493,7 +493,11 @@ impl TextAnims {
 /// already have.
 macro_rules! declares_text_style {
     ($widget:ty, $style:ident, $anims:ident) => {
-        impl $widget {
+        $crate::widgets::text_style::declares_text_style!(impl[] $widget, $style, $anims);
+    };
+    // A generic widget names its parameters: `impl[C: Content] TextInput<C>`.
+    (impl[$($generics:tt)*] $widget:ty, $style:ident, $anims:ident) => {
+        impl<$($generics)*> $widget {
             fn text_style_mut(&mut self) -> &mut $crate::widgets::text_style::TextStyle {
                 self.$style.get_or_insert_with(Default::default)
             }

@@ -811,8 +811,10 @@ duplicate was found.
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
+| `src/reactive/password.rs` | `Password`: a signal holding a `Secret`, lent and never copied out |
 | `src/image_decode.rs` | Raster images decoded off the frame: one signal per source, a worker that writes them, and the handle that frees the pixels with the last image |
 | `src/heap.rs` | `CountingAllocator`: what a frame asks of the allocator, for the binary that installs it |
+| `src/secret.rs` | `Secret`: a password in pages of its own — locked, left out of core dumps, zeroed when given back |
 | `src/transform.rs` | Transform matrix operations |
 | `src/shape.rs` | A rounded rect and the transform that places it — one type for clips, compositor regions and the backdrop mask |
 | `src/region.rs` | A placed shape tessellated into the rectangles a `wl_region` is made of |

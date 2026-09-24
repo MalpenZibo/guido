@@ -147,6 +147,24 @@ impl Harness {
         out
     }
 
+    /// Every text the tree painted, in the order it drew them.
+    pub fn painted_texts(&mut self) -> Vec<String> {
+        fn collect(node: &RenderNode, out: &mut Vec<String>) {
+            for cmd in &node.commands {
+                if let DrawCommand::Text { text, .. } = &**cmd {
+                    out.push(text.clone());
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+
+        let mut out = Vec::new();
+        collect(&self.paint(), &mut out);
+        out
+    }
+
     /// Paint the whole tree and hand back what it drew.
     ///
     /// Inside a frame, because a paint is one of the three passes a frame is

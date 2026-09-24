@@ -34,7 +34,7 @@ pub use state_layer::{
     BackgroundOverride, BorderOverride, RippleConfig, StateStyle, StateWhen, Stateful,
 };
 pub use text::{Text, TextAlign, TextOverflow, text};
-pub use text_input::{Selection, TextInput, text_input};
+pub use text_input::{PasswordInput, Selection, TextInput, password_input, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle};
 pub use widget::{
     AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,

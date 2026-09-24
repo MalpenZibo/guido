@@ -22,15 +22,20 @@ use crate::secret::Secret;
 
 /// A password, held by the reactive system and lent, never copied.
 ///
-/// Created by [`create_password`]. `Copy`, like every signal, and owned by
-/// the scope that created it.
+/// Created by [`create_password`], bound to a field with
+/// [`password_input`](crate::widgets::password_input). `Copy`, like every
+/// signal, and owned by the scope that created it.
 ///
 /// ```no_run
 /// # use guido::prelude::*;
 /// let password = create_password();
-/// password.set(Secret::from(String::from("from the keyring")));
 ///
-/// // Reads subscribe: this re-runs as the password fills and empties.
+/// password_input(password).on_submit(|secret: Secret| {
+///     // `secret` is the field's buffer, moved out; the field is now empty.
+///     # let _ = secret;
+/// });
+///
+/// // Reads subscribe: this re-runs as the field fills and empties.
 /// let can_sign_in = move || !password.is_empty();
 /// # let _ = can_sign_in;
 ///
@@ -82,6 +87,19 @@ impl Password {
             self.inner.update_always(Secret::clear);
         }
     }
+
+    /// Edit the secret in place: the field's keystrokes.
+    pub(crate) fn edit(&self, f: impl FnOnce(&mut Secret)) {
+        self.inner.update_always(f);
+    }
+
+    /// Move the secret out and leave an empty one: the field's submit.
+    pub(crate) fn take(&self) -> Secret {
+        let mut taken = Secret::new();
+        self.inner
+            .update_always(|held| std::mem::swap(held, &mut taken));
+        taken
+    }
 }
 
 #[cfg(test)]
@@ -112,5 +130,14 @@ mod tests {
         let before = runs.get();
         password.clear();
         assert_eq!(runs.get(), before, "clearing an empty password notified");
+    }
+
+    #[test]
+    fn take_leaves_it_empty_and_hands_the_text_over() {
+        let password = create_password();
+        password.edit(|s| s.replace_range(0..0, "hunter2"));
+        let taken = password.take();
+        assert_eq!(taken.expose(), "hunter2");
+        assert!(password.with_untracked(Secret::is_empty));
     }
 }

@@ -834,8 +834,8 @@ See `examples/popup_example.rs`.
 (`ext-session-lock-v1`) and, without waiting for the answer, creates
 one lock surface per output using your widget factory, as the protocol
 asks. Once the compositor grants the lock it blanks every output, shows
-the lock surfaces, and routes all input to them, so a `text_input`
-password field works out of the box:
+the lock surfaces, and routes all input to them, so a `password_input`
+works out of the box:
 
 ```rust,no_run
 # extern crate guido;
@@ -843,15 +843,15 @@ password field works out of the box:
 # fn verify_password(_attempt: &str) -> bool { true }
 # fn main() {
 lock_session(|output: OutputInfo| {
-    let attempt = create_signal(String::new());
+    let attempt = create_password();
     container()
         .width(fill())
         .height(fill())
         .background(Color::rgb(0.07, 0.07, 0.1))
         .layout(Flex::column().main_alignment(MainAlignment::Center))
         .child(text(format!("Locked — {:?}", output.name)))
-        .child(text_input(attempt).password(true).on_submit(|s| {
-            if verify_password(s) {
+        .child(password_input(attempt).on_submit(|secret: Secret| {
+            if verify_password(secret.expose()) {
                 unlock_session();
             }
         }))

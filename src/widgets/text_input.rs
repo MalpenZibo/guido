@@ -1,15 +1,20 @@
-//! TextInput widget for single-line text editing.
+//! Single-line text editing: [`text_input`] and [`password_input`].
 //!
-//! The TextInput widget handles:
-//! - Text display and editing
-//! - Cursor blinking and positioning
-//! - Text selection with mouse and keyboard
-//! - Password masking mode
+//! The two are one widget, [`TextInput<C>`], over two answers to where the
+//! text lives. [`Plain`] mirrors an `RwSignal<String>`, which is what any field
+//! wants. [`Masked`] keeps it in the [`Secret`] behind a [`Password`] and edits
+//! it there, in place: nothing about a password is copied, kept for undo, or
+//! allowed out through the clipboard. Everything else — the caret, selection,
+//! scrolling, styling, focus — is the same code for both, so a password field
+//! cannot fall behind the text field it looks like.
 //!
 //! Styling (background, borders, etc.) should be handled by wrapping in a Container.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 use std::time::{Duration, Instant};
+
+use zeroize::Zeroize;
 
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
@@ -17,10 +22,11 @@ use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
-    CursorIcon, IntoSignal, Prop, RwSignal, clipboard_copy, clipboard_paste, has_focus,
+    CursorIcon, IntoSignal, Password, Prop, RwSignal, clipboard_copy, clipboard_paste, has_focus,
     primary_copy, primary_paste, release_focus, request_focus,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
+use crate::secret::Secret;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
@@ -227,11 +233,162 @@ impl Selection {
     }
 }
 
-pub struct TextInput {
-    // Content (actual value, never masked)
-    /// Signal for two-way binding
+/// Where a field's text lives, and what may be done with it.
+///
+/// Public so that [`TextInput<C>`] can name it, and in a private module so that
+/// nothing outside the crate can implement it: the two answers are [`Plain`]
+/// and [`Masked`], and a third would be a field the rules above were never
+/// asked about.
+mod content {
+    use std::ops::Range;
+
+    pub trait Content: 'static {
+        /// Whether the text is hidden: never copied out, and a Ctrl+arrow
+        /// does not reveal where its words end.
+        const HIDDEN: bool;
+
+        /// Lend the text, untracked: the editing below runs from events. For
+        /// finding positions in it, never for copying it out — that is
+        /// [`snapshot`](Self::snapshot)'s to allow.
+        fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R;
+
+        /// A copy for the undo history, or `None` where there may be no
+        /// copy — which is also what turns undo off.
+        fn snapshot(&self) -> Option<String>;
+
+        /// Replace a byte range, in place, and tell whoever is listening.
+        fn replace(&mut self, range: Range<usize>, with: &str);
+
+        /// Read the text back in layout, tracked. `Some` with the new character
+        /// count when what is displayed differs from `char_count` characters
+        /// of what was displayed before.
+        fn refresh(&mut self, char_count: usize) -> Option<usize>;
+
+        /// What is drawn for `char_count` characters.
+        fn display(&self, char_count: usize) -> String;
+
+        /// Enter. `Some` with the new character count when the submit took
+        /// the text with it.
+        fn submit(&mut self) -> Option<usize>;
+    }
+}
+
+use content::Content;
+
+/// A field's text as an ordinary `String`, mirrored from an `RwSignal`.
+///
+/// What [`text_input`] builds. The signal is the application's, and the
+/// field writes every edit back to it.
+pub struct Plain {
     value: RwSignal<String>,
-    cached_value: String,
+    text: String,
+    on_change: Option<TextCallback>,
+    on_submit: Option<TextCallback>,
+}
+
+impl Content for Plain {
+    const HIDDEN: bool = false;
+
+    fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        f(&self.text)
+    }
+
+    fn snapshot(&self) -> Option<String> {
+        Some(self.text.clone())
+    }
+
+    fn replace(&mut self, range: Range<usize>, with: &str) {
+        self.text.replace_range(range, with);
+        self.value.set(self.text.clone());
+        if let Some(ref callback) = self.on_change {
+            callback(&self.text);
+        }
+    }
+
+    fn refresh(&mut self, _char_count: usize) -> Option<usize> {
+        let text = &mut self.text;
+        let changed = self.value.with(|value| {
+            let changed = value != text;
+            if changed {
+                text.clone_from(value);
+            }
+            changed
+        });
+        changed.then(|| self.text.chars().count())
+    }
+
+    fn display(&self, _char_count: usize) -> String {
+        self.text.clone()
+    }
+
+    fn submit(&mut self) -> Option<usize> {
+        if let Some(ref callback) = self.on_submit {
+            callback(&self.text);
+        }
+        None
+    }
+}
+
+/// A field's text as a [`Secret`], behind a [`Password`].
+///
+/// What [`password_input`] builds. The field edits the secret where it lies,
+/// and draws [`mask_char`](TextInput::mask_char) once per character without
+/// ever reading what the characters are.
+pub struct Masked {
+    password: Password,
+    mask_char: Prop<char>,
+    cached_mask_char: char,
+    on_submit: Option<Box<dyn Fn(Secret)>>,
+}
+
+impl Content for Masked {
+    const HIDDEN: bool = true;
+
+    fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        self.password.with_untracked(|secret| f(secret.expose()))
+    }
+
+    fn snapshot(&self) -> Option<String> {
+        // A history of a password is copies of it. GTK turns undo off for
+        // invisible text for the same reason.
+        None
+    }
+
+    fn replace(&mut self, range: Range<usize>, with: &str) {
+        self.password
+            .edit(|secret| secret.replace_range(range, with));
+    }
+
+    fn refresh(&mut self, char_count: usize) -> Option<usize> {
+        // The count, not the text: counting borrows the secret and keeps
+        // nothing, and the count is all the display is made of.
+        let now = self.password.with(|secret| secret.expose().chars().count());
+        let mask_char = self.mask_char.get_or('•');
+        let changed = now != char_count || mask_char != self.cached_mask_char;
+        self.cached_mask_char = mask_char;
+        changed.then_some(now)
+    }
+
+    fn display(&self, char_count: usize) -> String {
+        std::iter::repeat_n(self.cached_mask_char, char_count).collect()
+    }
+
+    fn submit(&mut self) -> Option<usize> {
+        // Moved out, not lent: the application holds the one copy there is,
+        // and the field starts again empty — swaylock clears on submit too.
+        let callback = self.on_submit.as_ref()?;
+        callback(self.password.take());
+        Some(0)
+    }
+}
+
+/// A single-line text field, over where its text lives.
+///
+/// `TextInput` is the plain one, bound to an `RwSignal<String>` by
+/// [`text_input`]; [`PasswordInput`] keeps its text in a [`Password`] and is
+/// built by [`password_input`].
+pub struct TextInput<C = Plain> {
+    content: C,
     cached_char_count: usize,
     cached_display_text: String,
     display_text_dirty: bool,
@@ -250,14 +407,6 @@ pub struct TextInput {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
-
-    // Password mode
-    password: Prop<bool>,
-    /// What `password` said when layout last read it, which is what the masked
-    /// display and its measurements were built from.
-    cached_password: bool,
-    mask_char: Prop<char>,
-    cached_mask_char: char,
 
     /// Whether the text refuses to change. Not the same as disabled: a
     /// read-only field still takes the focus, still says so, and still lets a
@@ -307,9 +456,6 @@ pub struct TextInput {
     // Horizontal scroll offset for text overflow
     scroll_offset: f32,
 
-    // Callbacks
-    on_change: Option<TextCallback>,
-    on_submit: Option<TextCallback>,
     /// What this input declares about its own text, and about the furniture
     /// only it draws. Boxed and absent by default.
     text_style: Option<Box<TextStyle>>,
@@ -321,18 +467,78 @@ pub struct TextInput {
     states: Vec<(StateWhen, TextStyle)>,
 }
 
-impl TextInput {
+/// A field whose text is a [`Secret`] behind a [`Password`].
+pub type PasswordInput = TextInput<Masked>;
+
+impl TextInput<Plain> {
     /// Create a TextInput with a Signal for two-way binding.
     /// Changes made in the TextInput will be written back to the signal.
     pub fn new(signal: RwSignal<String>) -> Self {
         // Use get_untracked() to avoid registering layout dependencies during widget creation.
         // Layout dependencies should only be registered during the widget's own layout phase.
-        let cached_value = signal.get_untracked();
-        let cached_char_count = cached_value.chars().count();
+        let text = signal.get_untracked();
+        let char_count = text.chars().count();
+        Self::with_content(
+            Plain {
+                value: signal,
+                text,
+                on_change: None,
+                on_submit: None,
+            },
+            char_count,
+        )
+    }
+
+    /// Set callback for text changes
+    pub fn on_change<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+        self.content.on_change = Some(Box::new(callback));
+        self
+    }
+
+    /// Set callback for submit (Enter key)
+    pub fn on_submit<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
+        self.content.on_submit = Some(Box::new(callback));
+        self
+    }
+}
+
+impl TextInput<Masked> {
+    /// A field over `password`, which it reads and edits in place.
+    pub fn new_password(password: Password) -> Self {
+        let char_count = password.with_untracked(|secret| secret.expose().chars().count());
+        Self::with_content(
+            Masked {
+                password,
+                mask_char: Prop::Unset,
+                cached_mask_char: '•',
+                on_submit: None,
+            },
+            char_count,
+        )
+    }
+
+    /// The character drawn for each one typed (default: '•').
+    pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
+        self.content.mask_char = c.into_prop();
+        self
+    }
+
+    /// Called on Enter with the field's [`Secret`], moved out of it.
+    ///
+    /// The field is empty from that moment, and the application holds the one
+    /// copy there is: hand it to PAM, on another thread if need be — `Secret`
+    /// is `Send` — and let it drop, which wipes it.
+    pub fn on_submit<F: Fn(Secret) + 'static>(mut self, callback: F) -> Self {
+        self.content.on_submit = Some(Box::new(callback));
+        self
+    }
+}
+
+impl<C: Content> TextInput<C> {
+    fn with_content(content: C, cached_char_count: usize) -> Self {
         let default_family = default_font_family();
         Self {
-            value: signal,
-            cached_value,
+            content,
             cached_char_count,
             cached_display_text: String::new(),
             display_text_dirty: true,
@@ -342,10 +548,6 @@ impl TextInput {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
-            password: Prop::Unset,
-            cached_password: false,
-            mask_char: Prop::Unset,
-            cached_mask_char: '•',
             readonly: Prop::Unset,
             caret: Prop::Unset,
             cached_caret: true,
@@ -361,8 +563,6 @@ impl TextInput {
             hover: crate::reactive::signal::create_signal(false),
             history: History::new(),
             scroll_offset: 0.0,
-            on_change: None,
-            on_submit: None,
             text_style: None,
             text_anims: None,
             input_style: None,
@@ -402,18 +602,6 @@ impl TextInput {
 
     fn resolved_input_style(&self) -> InputStyle {
         self.input_style.as_deref().copied().unwrap_or_default()
-    }
-
-    /// Enable password mode (masks text with bullet characters)
-    pub fn password<M>(mut self, enabled: impl IntoSignal<bool, M>) -> Self {
-        self.password = enabled.into_prop();
-        self
-    }
-
-    /// Set custom mask character for password mode (default: '•')
-    pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
-        self.mask_char = c.into_prop();
-        self
     }
 
     /// Refuse edits, and nothing else.
@@ -520,9 +708,8 @@ impl TextInput {
     ///
     /// ```
     /// # use guido::prelude::*;
-    /// # let secret = create_signal(String::new());
-    /// text_input(secret)
-    ///     .password(true)
+    /// # let secret = create_password();
+    /// password_input(secret)
     ///     .no_caret()
     ///     .cursor(CursorIcon::Hidden);
     /// ```
@@ -559,42 +746,10 @@ impl TextInput {
         self
     }
 
-    /// Set callback for text changes
-    pub fn on_change<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
-        self.on_change = Some(Box::new(callback));
-        self
-    }
-
-    /// Set callback for submit (Enter key)
-    pub fn on_submit<F: Fn(&str) + 'static>(mut self, callback: F) -> Self {
-        self.on_submit = Some(Box::new(callback));
-        self
-    }
-
-    /// Whether this field masks its contents **right now**.
-    ///
-    /// Asked by the two guards that refuse to export a secret, and they run
-    /// from event handling rather than from layout — so they read the signal
-    /// itself rather than `cached_password`, which is only as fresh as the last
-    /// pass. A field switched to masked between two frames must refuse the very
-    /// next Ctrl+C, not the one after it.
-    ///
-    /// Untracked on purpose: an event handler is not a tracking scope, and
-    /// subscribing here would tie a copy to a keystroke.
-    fn masks_now(&self) -> bool {
-        self.password.get_or_untracked(false)
-    }
-
-    /// Get the display text (masked if password mode), using cache when clean
+    /// Get the display text (masked for a password), using cache when clean
     fn display_text(&mut self) -> &str {
         if self.display_text_dirty {
-            self.cached_display_text = if self.cached_password {
-                self.cached_mask_char
-                    .to_string()
-                    .repeat(self.cached_char_count)
-            } else {
-                self.cached_value.clone()
-            };
+            self.cached_display_text = self.content.display(self.cached_char_count);
             self.display_text_dirty = false;
         }
         &self.cached_display_text
@@ -647,13 +802,14 @@ impl TextInput {
             .unwrap_or(self.cached_text_width)
     }
 
-    /// Convert a character index to a byte index in the cached value
+    /// Convert a character index to a byte index in the text
     fn char_to_byte_index(&self, char_index: usize) -> usize {
-        self.cached_value
-            .char_indices()
-            .nth(char_index)
-            .map(|(i, _)| i)
-            .unwrap_or(self.cached_value.len())
+        self.content.with_text(|text| {
+            text.char_indices()
+                .nth(char_index)
+                .map(|(i, _)| i)
+                .unwrap_or(text.len())
+        })
     }
 
     /// Convert a character range to a byte range in the cached value
@@ -669,28 +825,16 @@ impl TextInput {
     /// inside does — see `LayoutCtx::layout_child` — so a change to a declared
     /// metric re-lays-out this input and nothing else.
     fn refresh(&mut self, ctx: &mut LayoutCtx, id: WidgetId) -> f32 {
-        let (new_value, new_font_size, new_font_family, new_font_weight, overflow, new_color) = {
+        let (new_font_size, new_font_family, new_font_weight, overflow, new_color) = {
             let style = self.resolved_text_style(ctx.tree_ref(), id);
 
             // Assigned here rather than returned, as the font metrics are:
             // the rule in this function is that a value comes back through
             // the tuple only when it is compared against its cache below to
-            // raise a dirty flag. These three raise their own or none.
+            // raise a dirty flag.
             self.cached_caret = self.caret.get_or(true);
-            let password = self.password.get_or(false);
-            let mask_char = self.mask_char.get_or('•');
-            if password != self.cached_password || mask_char != self.cached_mask_char {
-                // Both feed `display_text`, and the masked string is what
-                // the measurements are taken from, so either changing
-                // invalidates the same two caches a new value does.
-                self.cached_password = password;
-                self.cached_mask_char = mask_char;
-                self.display_text_dirty = true;
-                self.measurements_dirty = true;
-            }
 
             (
-                self.value.get(),
                 style.font_size(id),
                 style.font_family(),
                 style.font_weight(),
@@ -699,15 +843,10 @@ impl TextInput {
             )
         };
 
-        // Check if value changed (need to update char count and selection)
-        if new_value != self.cached_value {
-            self.cached_value = new_value;
-            self.cached_char_count = self.cached_value.chars().count();
-            self.display_text_dirty = true;
-            self.measurements_dirty = true;
-            // Clamp selection to valid range
-            self.selection.cursor = self.selection.cursor.min(self.cached_char_count);
-            self.selection.anchor = self.selection.anchor.min(self.cached_char_count);
+        // Compared against what the field holds, in place: a read that
+        // copied the value out would be a copy per layout.
+        if let Some(char_count) = self.content.refresh(self.cached_char_count) {
+            self.text_replaced(char_count);
         }
 
         // The declared motions, pointed at what the style now resolves to. The
@@ -873,19 +1012,13 @@ impl TextInput {
         let inserted_char_count = text.chars().count();
 
         // Replace selection with new text
-        let mut new_value = String::with_capacity(self.cached_value.len() + text.len());
-        new_value.push_str(&self.cached_value[..byte_start]);
-        new_value.push_str(text);
-        new_value.push_str(&self.cached_value[byte_end..]);
-
-        self.cached_value = new_value;
+        self.content.replace(byte_start..byte_end, text);
         // Update cached char count: old - deleted + inserted
         self.cached_char_count = self.cached_char_count - (end - start) + inserted_char_count;
         self.display_text_dirty = true;
         self.measurements_dirty = true;
         self.selection = Selection::new(start + inserted_char_count);
 
-        self.notify_change();
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
     }
@@ -934,15 +1067,21 @@ impl TextInput {
     fn delete_range(&mut self, start: usize, end: usize) {
         let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
 
-        let mut new_value = String::with_capacity(self.cached_value.len());
-        new_value.push_str(&self.cached_value[..byte_start]);
-        new_value.push_str(&self.cached_value[byte_end..]);
-
-        self.cached_value = new_value;
+        self.content.replace(byte_start..byte_end, "");
         self.cached_char_count -= end - start;
         self.display_text_dirty = true;
         self.measurements_dirty = true;
-        self.notify_change();
+    }
+
+    /// The text was replaced wholesale — read back in layout, restored by an
+    /// undo, or taken by a submit — and is now `char_count` characters long.
+    fn text_replaced(&mut self, char_count: usize) {
+        self.cached_char_count = char_count;
+        self.display_text_dirty = true;
+        self.measurements_dirty = true;
+        // Clamp selection to valid range
+        self.selection.cursor = self.selection.cursor.min(char_count);
+        self.selection.anchor = self.selection.anchor.min(char_count);
     }
 
     /// Move cursor left/right, optionally extending selection
@@ -967,6 +1106,12 @@ impl TextInput {
     fn find_word_boundary(&self, start: usize, direction: i32) -> usize {
         let len = self.cached_char_count;
 
+        // Where a hidden text's words end is part of what is hidden, so a
+        // word jump goes to the edge, as GTK's password entry does.
+        if C::HIDDEN {
+            return if direction < 0 { 0 } else { len };
+        }
+
         if direction < 0 {
             // Move left - collect only the prefix up to cursor (not entire string)
             if start == 0 {
@@ -974,7 +1119,7 @@ impl TextInput {
             }
 
             // Collect characters before cursor position
-            let prefix: Vec<char> = self.cached_value.chars().take(start).collect();
+            let prefix: Vec<char> = self.content.with_text(|t| t.chars().take(start).collect());
             let mut pos = prefix.len() - 1;
 
             // Skip whitespace going backwards
@@ -992,25 +1137,27 @@ impl TextInput {
                 return len;
             }
 
-            let mut pos = start;
-            let mut chars = self.cached_value.chars().skip(start).peekable();
+            self.content.with_text(|text| {
+                let mut pos = start;
+                let mut chars = text.chars().skip(start).peekable();
 
-            // Skip word characters
-            while let Some(&c) = chars.peek() {
-                if c.is_whitespace() {
-                    break;
+                // Skip word characters
+                while let Some(&c) = chars.peek() {
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    chars.next();
+                    pos += 1;
                 }
-                chars.next();
-                pos += 1;
-            }
-            // Skip whitespace
-            for c in chars {
-                if !c.is_whitespace() {
-                    break;
+                // Skip whitespace
+                for c in chars {
+                    if !c.is_whitespace() {
+                        break;
+                    }
+                    pos += 1;
                 }
-                pos += 1;
-            }
-            pos.min(len)
+                pos.min(len)
+            })
         }
     }
 
@@ -1037,7 +1184,10 @@ impl TextInput {
         if self.selection.has_selection() {
             let (start, end) = self.selection.range();
             let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
-            Some(self.cached_value[byte_start..byte_end].to_string())
+            Some(
+                self.content
+                    .with_text(|text| text[byte_start..byte_end].to_string()),
+            )
         } else {
             None
         }
@@ -1045,7 +1195,7 @@ impl TextInput {
 
     /// The selection, when it is allowed to leave the widget.
     ///
-    /// `None` in password mode. What a masked field holds must not reach the
+    /// `None` for a password. What a masked field holds must not reach the
     /// clipboard or the primary selection, and the leak that matters is not
     /// Ctrl+C — it is the primary selection, which an ordinary mouse drag fills
     /// with no keystroke at all, ready for a middle-click anywhere else. GTK4's
@@ -1056,7 +1206,7 @@ impl TextInput {
     /// theatre banking sites are mocked for: it stops password managers, not
     /// attackers, and pushes people towards passwords they can type.
     fn exportable_selection(&self) -> Option<String> {
-        if self.masks_now() {
+        if C::HIDDEN {
             return None;
         }
         self.get_selected_text()
@@ -1074,7 +1224,7 @@ impl TextInput {
         // A cut that cannot copy is not a cut. Refusing the gesture outright is
         // what GtkPasswordEntry does, and it keeps Ctrl+X from quietly becoming
         // a delete while the user believes the clipboard was filled.
-        if self.masks_now() {
+        if C::HIDDEN {
             return;
         }
         if self.selection.has_selection() {
@@ -1085,31 +1235,33 @@ impl TextInput {
 
     /// Paste text from clipboard
     fn paste(&mut self, edit: Edit) {
-        if let Some(text) = clipboard_paste() {
-            self.insert_text(&text, edit);
+        if let Some(mut text) = clipboard_paste() {
+            self.insert_pasted(&mut text, edit);
         }
+    }
+
+    /// Insert what a paste brought, and wipe the `String` it came in: pasting
+    /// a password from a manager is the ordinary case, and the copy the
+    /// clipboard handed over is ours to clear.
+    fn insert_pasted(&mut self, text: &mut String, edit: Edit) {
+        self.insert_text(text, edit);
+        text.zeroize();
     }
 
     /// Save current state to history (call before making changes)
     fn save_to_history(&mut self, edit_type: EditType, at: EventInstant) {
-        self.history.push(
-            HistoryEntry {
-                text: self.cached_value.clone(),
-                cursor: self.selection.cursor,
-                anchor: self.selection.anchor,
-            },
-            edit_type,
-            at,
-        );
+        if let Some(entry) = self.current_history_entry() {
+            self.history.push(entry, edit_type, at);
+        }
     }
 
-    /// Get current state as a history entry
-    fn current_history_entry(&self) -> HistoryEntry {
-        HistoryEntry {
-            text: self.cached_value.clone(),
+    /// Get current state as a history entry, where the text allows one.
+    fn current_history_entry(&self) -> Option<HistoryEntry> {
+        Some(HistoryEntry {
+            text: self.content.snapshot()?,
             cursor: self.selection.cursor,
             anchor: self.selection.anchor,
-        }
+        })
     }
 
     /// Undo the last change
@@ -1117,18 +1269,11 @@ impl TextInput {
         if self.refuses_edits() {
             return;
         }
-        let current = self.current_history_entry();
+        let Some(current) = self.current_history_entry() else {
+            return;
+        };
         if let Some(previous) = self.history.undo(current) {
-            self.cached_value = previous.text;
-            self.cached_char_count = self.cached_value.chars().count();
-            self.display_text_dirty = true;
-            self.measurements_dirty = true;
-            self.selection.cursor = previous.cursor;
-            self.selection.anchor = previous.anchor;
-            self.history.reset_coalescing();
-            self.notify_change();
-            self.reset_cursor_blink(edit.at);
-            self.ensure_cursor_visible(edit.width);
+            self.restore(previous, edit);
         }
     }
 
@@ -1137,29 +1282,24 @@ impl TextInput {
         if self.refuses_edits() {
             return;
         }
-        let current = self.current_history_entry();
+        let Some(current) = self.current_history_entry() else {
+            return;
+        };
         if let Some(next) = self.history.redo(current) {
-            self.cached_value = next.text;
-            self.cached_char_count = self.cached_value.chars().count();
-            self.display_text_dirty = true;
-            self.measurements_dirty = true;
-            self.selection.cursor = next.cursor;
-            self.selection.anchor = next.anchor;
-            self.history.reset_coalescing();
-            self.notify_change();
-            self.reset_cursor_blink(edit.at);
-            self.ensure_cursor_visible(edit.width);
+            self.restore(next, edit);
         }
     }
 
-    /// Notify change callback and sync to signal
-    fn notify_change(&self) {
-        // Update the signal for two-way binding
-        self.value.set(self.cached_value.clone());
-        // Call the on_change callback
-        if let Some(ref callback) = self.on_change {
-            callback(&self.cached_value);
-        }
+    /// Put back a state from the history.
+    fn restore(&mut self, entry: HistoryEntry, edit: Edit) {
+        let whole = self.content.with_text(str::len);
+        self.content.replace(0..whole, &entry.text);
+        self.text_replaced(entry.text.chars().count());
+        self.selection.cursor = entry.cursor;
+        self.selection.anchor = entry.anchor;
+        self.history.reset_coalescing();
+        self.reset_cursor_blink(edit.at);
+        self.ensure_cursor_visible(edit.width);
     }
 
     /// Handle key down event
@@ -1182,8 +1322,8 @@ impl TextInput {
                 EventResponse::Handled
             }
             Key::Enter => {
-                if let Some(ref callback) = self.on_submit {
-                    callback(&self.cached_value);
+                if let Some(char_count) = self.content.submit() {
+                    self.text_replaced(char_count);
                 }
                 EventResponse::Handled
             }
@@ -1253,7 +1393,9 @@ impl TextInput {
                         _ => EventResponse::Ignored,
                     }
                 } else if !c.is_control() {
-                    self.insert_text(&c.to_string(), edit);
+                    // Encoded on the stack: a `String` per keystroke is a
+                    // heap copy of every character of a password.
+                    self.insert_text(c.encode_utf8(&mut [0; 4]), edit);
                     EventResponse::Handled
                 } else {
                     EventResponse::Ignored
@@ -1278,7 +1420,7 @@ fn mutates(key: &Key, ctrl: bool) -> bool {
     }
 }
 
-impl Stateful for TextInput {
+impl<C: Content> Stateful for TextInput<C> {
     type Style = TextStyle;
 
     fn push_state_style(&mut self, when: StateWhen, style: TextStyle) {
@@ -1286,7 +1428,7 @@ impl Stateful for TextInput {
     }
 }
 
-crate::widgets::text_style::declares_text_style!(TextInput, text_style, text_anims);
+crate::widgets::text_style::declares_text_style!(impl[C: Content] TextInput<C>, text_style, text_anims);
 
 /// The field's own furniture: the caret, the selection band and the
 /// placeholder.
@@ -1294,7 +1436,7 @@ crate::widgets::text_style::declares_text_style!(TextInput, text_style, text_ani
 /// Inherent, and only here, because a field is the only widget that draws any
 /// of it. A caret colour on a `Text` would be a property nothing reads, and a
 /// container declares nothing about the text inside it.
-impl TextInput {
+impl<C: Content> TextInput<C> {
     fn input_style_mut(&mut self) -> &mut InputStyle {
         self.input_style.get_or_insert_with(Box::default)
     }
@@ -1318,7 +1460,7 @@ impl TextInput {
     }
 }
 
-impl Widget for TextInput {
+impl<C: Content> Widget for TextInput<C> {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let blinking = self.update_cursor_blink(id, tree.frame_instant());
         let animating = self.advance_text_anims(tree, id);
@@ -1403,9 +1545,7 @@ impl Widget for TextInput {
             // and subscribes to it, and a field with content shows no prompt —
             // so doing it the other way round allocates a `String` per paint
             // and repaints a field for a prompt it is not displaying.
-            let placeholder = self
-                .cached_value
-                .is_empty()
+            let placeholder = (self.cached_char_count == 0)
                 .then(|| self.placeholder.get())
                 .flatten()
                 .map(|placeholder| {
@@ -1593,8 +1733,8 @@ impl Widget for TextInput {
                 request_focus(tree, id);
                 let char_index = self.char_index_at_x(at.x, bounds);
                 self.selection = Selection::new(char_index);
-                if let Some(text) = primary_paste() {
-                    self.insert_text(&text, edit);
+                if let Some(mut text) = primary_paste() {
+                    self.insert_pasted(&mut text, edit);
                 }
                 self.reset_cursor_blink(edit.at);
                 request_job(id, JobRequest::Paint);
@@ -1656,6 +1796,35 @@ impl Widget for TextInput {
 /// ```
 pub fn text_input(signal: RwSignal<String>) -> TextInput {
     TextInput::new(signal)
+}
+
+/// Create a password field over `password`.
+///
+/// The field reads and edits the [`Secret`] the [`Password`] holds, in place,
+/// and draws one [`mask_char`](TextInput::mask_char) per character. Nothing
+/// about the text is copied: there is no undo history, nothing can be copied
+/// or cut out of it, and Enter moves the secret out to
+/// [`on_submit`](TextInput::<Masked>::on_submit), leaving the field empty.
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// let password = create_password();
+/// let busy = create_signal(false);
+///
+/// password_input(password)
+///     .placeholder("Password")
+///     .readonly(busy)
+///     .on_submit(move |secret: Secret| {
+///         busy.set(true);
+///         // hand `secret` to PAM; dropping it wipes it
+///         # let _ = secret;
+///     });
+///
+/// // Wiped in place, for instance after an idle timeout.
+/// password.clear();
+/// ```
+pub fn password_input(password: Password) -> PasswordInput {
+    TextInput::new_password(password)
 }
 
 #[cfg(test)]
@@ -1775,7 +1944,7 @@ mod tests {
     /// and the test passes while nothing subscribes. A container takes its
     /// unchanged-constraints early-out and never asks its children again, so
     /// the second pass reaches the field only if the write marked it.
-    fn field_in_container(input: TextInput) -> (Tree, WidgetId, WidgetId) {
+    fn field_in_container(input: impl Widget + 'static) -> (Tree, WidgetId, WidgetId) {
         clear_pending_jobs();
         clear_scheduled_jobs();
         crate::reactive::focus::clear_focus();
@@ -1856,46 +2025,135 @@ mod tests {
         out
     }
 
-    /// Masking is a value the field can be told, and the eye icon beside a
-    /// password box is what needs it.
+    /// A password is drawn as its mask, never as its text.
     ///
     /// Read off the caret's x, which sits at the end of the *displayed* text:
     /// bullets and `iiii` are different widths in any font, so the assertion
     /// does not depend on which one is installed — only that they differ.
     #[test]
-    fn masking_answers_to_a_signal() {
-        let masked = create_signal(true);
-        let (mut tree, root, id) =
-            field_in_container(text_input(create_signal("iiiiiiii".to_owned())).password(masked));
-
+    fn a_password_is_drawn_as_its_mask() {
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("iiiiiiii".to_owned()));
+        let (mut tree, _, id) = field_in_container(password_input(password));
         caret_to_end(&mut tree, id);
-        let with_bullets = drawn_rects(&mut tree, id);
-        assert_eq!(with_bullets.len(), 1, "the caret, and nothing else");
+        let masked = drawn_rects(&mut tree, id);
+        assert_eq!(masked.len(), 1, "the caret, and nothing else");
 
-        masked.set(false);
-        relayout(&mut tree, root);
-        let with_letters = drawn_rects(&mut tree, id);
+        let (mut tree, _, id) =
+            field_in_container(text_input(create_signal("iiiiiiii".to_owned())));
+        caret_to_end(&mut tree, id);
+        let plain = drawn_rects(&mut tree, id);
 
         assert_ne!(
-            with_bullets[0].x, with_letters[0].x,
-            "the field kept drawing bullets after the signal said not to"
-        );
-        assert!(
-            has_focus(id),
-            "the point of declaring this rather than rebuilding the widget is \
-             that the focus survives it"
+            masked[0].x, plain[0].x,
+            "the password field drew its text rather than its mask"
         );
     }
 
-    /// The same for what the mask is made of.
+    /// Every text a subtree drew.
+    fn drawn_strings(tree: &mut Tree, id: WidgetId) -> Vec<String> {
+        fn collect(node: &crate::renderer::RenderNode, out: &mut Vec<String>) {
+            for cmd in &node.commands {
+                if let crate::renderer::DrawCommand::Text { text, .. } = &**cmd {
+                    out.push(text.clone());
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&paint_once(tree, id), &mut out);
+        out
+    }
+
+    /// The application fills and wipes the field through the handle, outside
+    /// any event, and the field follows on its next layout — which the write
+    /// asks for, because the layout read the password.
+    #[test]
+    fn a_password_written_from_outside_reaches_the_field() {
+        let password = crate::reactive::create_password();
+        let (mut tree, root, id) = field_in_container(password_input(password).mask_char('*'));
+
+        password.set(Secret::from("abc".to_owned()));
+        relayout(&mut tree, root);
+        assert_eq!(drawn_strings(&mut tree, id), ["***"]);
+
+        password.clear();
+        relayout(&mut tree, root);
+        assert!(
+            drawn_strings(&mut tree, id).is_empty(),
+            "the mask outlived the text"
+        );
+    }
+
+    /// Enter takes the text with it, and the field says so.
+    #[test]
+    fn a_submit_empties_what_the_field_draws() {
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("abc".to_owned()));
+        let (mut tree, root, id) = field_in_container(
+            password_input(password)
+                .mask_char('*')
+                .on_submit(|_: Secret| {}),
+        );
+        assert_eq!(drawn_strings(&mut tree, id), ["***"]);
+
+        tree.with_widget_mut(id, |w, wid, t| {
+            w.event(
+                t,
+                wid,
+                &Event::KeyDown {
+                    key: Key::Enter,
+                    modifiers: Default::default(),
+                },
+            )
+        });
+        relayout(&mut tree, root);
+        assert!(
+            drawn_strings(&mut tree, id).is_empty(),
+            "the mask outlived the text"
+        );
+    }
+
+    /// A paste is copied into the field, and the `String` it arrived in is
+    /// zeroed — every byte of its buffer, not only its length.
+    #[test]
+    fn a_paste_wipes_the_string_it_arrived_in() {
+        let password = crate::reactive::create_password();
+        let mut field = password_input(password);
+        let mut pasted = String::from("hunter2");
+        let (ptr, capacity) = (pasted.as_ptr(), pasted.capacity());
+
+        field.insert_pasted(
+            &mut pasted,
+            Edit {
+                width: 200.0,
+                at: std::time::Instant::now().into(),
+            },
+        );
+
+        assert_eq!(
+            password.with_untracked(|s| s.expose().to_owned()),
+            "hunter2"
+        );
+        assert_eq!(pasted.as_ptr(), ptr, "the buffer checked is the one pasted");
+        // SAFETY: the same allocation, still owned by `pasted`, and every one
+        // of its `capacity` bytes was written by the wipe.
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, capacity) };
+        assert!(
+            bytes.iter().all(|&b| b == 0),
+            "the paste was left in memory"
+        );
+    }
+
+    /// What the mask is made of is a value the field can be told.
     #[test]
     fn the_mask_character_answers_to_a_signal() {
         let mask = create_signal('.');
-        let (mut tree, root, id) = field_in_container(
-            text_input(create_signal("aaaaaaaa".to_owned()))
-                .password(true)
-                .mask_char(mask),
-        );
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("aaaaaaaa".to_owned()));
+        let (mut tree, root, id) = field_in_container(password_input(password).mask_char(mask));
 
         caret_to_end(&mut tree, id);
         let narrow = drawn_rects(&mut tree, id);
@@ -2075,40 +2333,6 @@ mod tests {
              the default: got {size}"
         );
         assert_eq!(color, Color::RED, "and to the colour it declares");
-    }
-
-    /// A field switched to masked refuses the very next copy, not the one after.
-    ///
-    /// The two guards that refuse to export a secret run from event handling,
-    /// which is not a tracking scope and does not wait for a layout pass. So
-    /// they ask the signal rather than `cached_password`, which is only as
-    /// fresh as the last pass — reading the copy would hand out the secret for
-    /// one frame after the field was told to hide it.
-    #[test]
-    fn masking_refuses_an_export_before_the_next_layout() {
-        let masked = create_signal(false);
-        let mut input = text_input(create_signal("hunter2".to_owned())).password(masked);
-        input.cached_value = "hunter2".to_owned();
-        input.cached_char_count = 7;
-        input.selection = Selection {
-            cursor: 7,
-            anchor: 0,
-        };
-
-        assert_eq!(
-            input.exportable_selection().as_deref(),
-            Some("hunter2"),
-            "an unmasked field exports its selection"
-        );
-
-        masked.set(true);
-        // No layout in between: this is the frame the write landed in.
-
-        assert_eq!(
-            input.exportable_selection(),
-            None,
-            "the field exported a secret it had just been told to mask"
-        );
     }
 
     /// A field's font size appears after a measure too, under a box of exact

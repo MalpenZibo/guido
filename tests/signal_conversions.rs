@@ -95,7 +95,6 @@ fn a_signal_of_the_property_type_is_unaffected() {
 /// down, which is what this is.
 #[test]
 fn the_values_that_became_signals_take_every_form() {
-    let masked = create_signal(true);
     let mask = create_signal('*');
     let fit = create_signal(ContentFit::Cover);
     let wraps = create_signal(false);
@@ -127,16 +126,13 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = image("x.png").content_fit(move || fit.get());
     let _ = image("x.png").content_fit(fit);
 
-    let _ = text_input(create_signal(String::new()))
-        .password(true)
+    let _ = password_input(create_password())
         .mask_char('*')
         .caret(false);
-    let _ = text_input(create_signal(String::new()))
-        .password(move || masked.get())
+    let _ = password_input(create_password())
         .mask_char(move || mask.get())
         .caret(move || wraps.get());
-    let _ = text_input(create_signal(String::new()))
-        .password(masked)
+    let _ = password_input(create_password())
         .mask_char(mask)
         .caret(wraps);
 

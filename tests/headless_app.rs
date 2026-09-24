@@ -2633,15 +2633,10 @@ fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving()
 #[test]
 fn a_text_input_that_hides_the_cursor_claims_hidden_on_moves_and_on_presses() {
     let Some(mut app) = headless() else { return };
-    let value = create_signal(String::new());
+    let value = create_password();
     let surface = app.surface(fixed_bar(), move || {
         left_of_a_bar(
-            container().child(
-                text_input(value)
-                    .password(true)
-                    .no_caret()
-                    .cursor(CursorIcon::Hidden),
-            ),
+            container().child(password_input(value).no_caret().cursor(CursorIcon::Hidden)),
         )
         .cursor(CursorIcon::Pointer)
     });
