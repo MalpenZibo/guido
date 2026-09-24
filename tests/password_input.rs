@@ -28,10 +28,10 @@ struct Field {
 }
 
 impl Field {
-    fn new(build: impl FnOnce(PasswordInput) -> PasswordInput) -> Self {
+    fn new(build: impl FnOnce(PasswordInput, Password) -> PasswordInput) -> Self {
         let password = create_password();
         Self {
-            harness: Harness::focused(build(password_input(password)), WIDTH, HEIGHT),
+            harness: Harness::focused(build(password_input(password), password), WIDTH, HEIGHT),
             password,
             now: Instant::now(),
         }
@@ -72,7 +72,7 @@ impl Field {
 
 #[test]
 fn typing_is_held_by_the_password_and_drawn_as_its_mask() {
-    let mut field = Field::new(|f| f.mask_char('*'));
+    let mut field = Field::new(|f, _| f.mask_char('*'));
     field.type_str("hunter2");
 
     assert_eq!(field.held(), "hunter2");
@@ -81,7 +81,7 @@ fn typing_is_held_by_the_password_and_drawn_as_its_mask() {
 
 #[test]
 fn a_reader_of_the_password_follows_the_field() {
-    let mut field = Field::new(|f| f);
+    let mut field = Field::new(|f, _| f);
     let password = field.password;
     let empty = Rc::new(Cell::new(None));
     let seen = empty.clone();
@@ -100,10 +100,12 @@ fn a_reader_of_the_password_follows_the_field() {
 }
 
 #[test]
-fn enter_hands_the_secret_over_and_leaves_the_field_empty() {
+fn enter_can_take_the_secret_and_leave_the_field_empty() {
     let got = Rc::new(RefCell::new(None));
     let sink = got.clone();
-    let mut field = Field::new(move |f| f.on_submit(move |s: Secret| *sink.borrow_mut() = Some(s)));
+    let mut field = Field::new(move |f, password| {
+        f.on_submit(move || *sink.borrow_mut() = Some(password.take()))
+    });
     field.type_str("hunter2");
     field.key(Key::Enter);
 
@@ -116,9 +118,33 @@ fn enter_hands_the_secret_over_and_leaves_the_field_empty() {
     assert_eq!(field.held(), "ok");
 }
 
+/// A lock screen that shows its dots while the password is checked hands over
+/// a duplicate, and the field keeps what it had — caret and all.
+#[test]
+fn enter_can_hand_over_a_duplicate_and_keep_the_field() {
+    let got = Rc::new(RefCell::new(None));
+    let sink = got.clone();
+    let mut field = Field::new(move |f, password| {
+        f.mask_char('*').on_submit(move || {
+            *sink.borrow_mut() = Some(password.with_untracked(Secret::duplicate))
+        })
+    });
+    field.type_str("hunter2");
+    field.key(Key::Enter);
+
+    let copy = got.borrow_mut().take().expect("on_submit was not called");
+    assert_eq!(copy.expose(), "hunter2");
+    assert_eq!(field.held(), "hunter2", "a duplicate emptied the field");
+    assert_eq!(field.harness.painted_texts(), ["*******"]);
+
+    // Typing goes on from where the caret was.
+    field.type_str("!");
+    assert_eq!(field.held(), "hunter2!");
+}
+
 #[test]
 fn undo_does_nothing_because_there_is_no_history() {
-    let mut field = Field::new(|f| f);
+    let mut field = Field::new(|f, _| f);
     field.type_str("abc");
     field.key(Key::Backspace);
 
@@ -130,7 +156,7 @@ fn undo_does_nothing_because_there_is_no_history() {
 
 #[test]
 fn a_word_jump_goes_to_the_edge_rather_than_to_a_word() {
-    let mut field = Field::new(|f| f);
+    let mut field = Field::new(|f, _| f);
     field.type_str("one two");
     field.press(
         Key::Left,
@@ -150,7 +176,7 @@ fn a_word_jump_goes_to_the_edge_rather_than_to_a_word() {
 #[test]
 fn a_readonly_field_refuses_edits() {
     let busy = create_signal(false);
-    let mut field = Field::new(move |f| f.readonly(busy));
+    let mut field = Field::new(move |f, _| f.readonly(busy));
     field.type_str("ab");
 
     busy.set(true);

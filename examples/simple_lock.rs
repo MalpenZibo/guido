@@ -66,8 +66,8 @@ fn lock_screen(output: OutputInfo) -> Container {
                     password_input(attempt)
                         .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                         .color(Color::WHITE)
-                        .on_submit(move |secret: Secret| {
-                            if secret.expose() == PASSWORD {
+                        .on_submit(move || {
+                            if attempt.take().expose() == PASSWORD {
                                 unlock_session();
                             } else {
                                 error.set(true);

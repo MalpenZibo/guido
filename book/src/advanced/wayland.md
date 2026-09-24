@@ -850,8 +850,8 @@ lock_session(|output: OutputInfo| {
         .background(Color::rgb(0.07, 0.07, 0.1))
         .layout(Flex::column().main_alignment(MainAlignment::Center))
         .child(text(format!("Locked — {:?}", output.name)))
-        .child(password_input(attempt).on_submit(|secret: Secret| {
-            if verify_password(secret.expose()) {
+        .child(password_input(attempt).on_submit(move || {
+            if verify_password(attempt.take().expose()) {
                 unlock_session();
             }
         }))

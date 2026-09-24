@@ -30,8 +30,9 @@ use crate::secret::Secret;
 /// # use guido::prelude::*;
 /// let password = create_password();
 ///
-/// password_input(password).on_submit(|secret: Secret| {
-///     // `secret` is the field's buffer, moved out; the field is now empty.
+/// password_input(password).on_submit(move || {
+///     // Moved out of the field, which is now empty.
+///     let secret: Secret = password.take();
 ///     # let _ = secret;
 /// });
 ///
@@ -93,8 +94,13 @@ impl Password {
         self.inner.update_always(f);
     }
 
-    /// Move the secret out and leave an empty one: the field's submit.
-    pub(crate) fn take(&self) -> Secret {
+    /// Move the secret out, and leave the field empty.
+    ///
+    /// The one copy there is changes hands: nothing is duplicated, and the
+    /// field starts again from nothing, as swaylock's does on submit. To keep
+    /// the field as it is while the text is checked, lend a
+    /// [`duplicate`](Secret::duplicate) instead.
+    pub fn take(&self) -> Secret {
         let mut taken = Secret::new();
         self.inner
             .update_always(|held| std::mem::swap(held, &mut taken));

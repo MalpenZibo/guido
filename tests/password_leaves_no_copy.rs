@@ -116,8 +116,8 @@ fn no_freed_block_ever_held_the_password() {
     let submitted = Rc::new(Cell::new(false));
     let seen = submitted.clone();
     // The secret is compared through the borrow, and dropped here — wiped.
-    let field = password_input(password)
-        .on_submit(move |secret: Secret| seen.set(secret.expose() == PASSWORD));
+    let field =
+        password_input(password).on_submit(move || seen.set(password.take().expose() == PASSWORD));
 
     let mut harness = Harness::focused(field, WIDTH, HEIGHT);
 
@@ -136,6 +136,15 @@ fn no_freed_block_ever_held_the_password() {
         password.with_untracked(Secret::is_empty),
         "the field kept the password after handing it over"
     );
+
+    // Once more, submitted the way a lock screen keeping its dots does: a
+    // duplicate is handed over and dropped, and the field is cleared after.
+    type_str(&mut harness, PASSWORD);
+    let copy = password.with_untracked(Secret::duplicate);
+    assert_eq!(copy.expose(), PASSWORD);
+    drop(copy);
+    password.clear();
+    relayout(&mut harness);
 
     // Once more, and wiped by the application rather than submitted.
     type_str(&mut harness, PASSWORD);

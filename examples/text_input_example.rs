@@ -80,7 +80,7 @@ fn main() {
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                     .font_size(14.0)
                                     .color(Color::WHITE)
-                                    .on_submit(move |_| {
+                                    .on_submit(move || {
                                         let msg = format!("Login attempt: {}", username.get());
                                         submitted.set(msg);
                                     }),

@@ -119,9 +119,10 @@ let password = create_password();
 
 password_input(password)
     .placeholder("Password")
-    .on_submit(|secret: Secret| {
-        // Enter moves the field's secret out, and the field is empty again.
-        // Hand it to PAM; dropping it wipes it.
+    .on_submit(move || {
+        // Moved out, and the field is empty again. Hand it to PAM;
+        // dropping it wipes it.
+        let secret: Secret = password.take();
         # let _ = secret;
     })
 # ;
@@ -154,6 +155,27 @@ container()
 # ;
 password.set(Secret::from(String::from("from the keyring"))); // pre-fill; the String is wiped
 password.clear();                                             // wipe in place
+# }
+```
+
+Submitting is the application's to spell, and Enter only says it happened.
+`take` moves the secret out and empties the field. To keep the dots on screen
+while the password is checked, hand over a `duplicate` instead — a second
+`Secret` in pages of its own, as protected as the first — and `clear` the field
+when the answer arrives. Enter and a submit button can then share one function:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn check(_: Secret) {}
+# fn main() {
+# let password = create_password();
+let submit = move || check(password.with_untracked(Secret::duplicate));
+
+container()
+    .child(password_input(password).on_submit(submit))
+    .child(container().on_click(submit).child(text("→")))
+# ;
 # }
 ```
 
@@ -619,7 +641,7 @@ impl TextInput {
 impl PasswordInput {
     pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
     pub fn reveal<M>(self, reveal: impl IntoSignal<bool, M>) -> Self;  // copies while shown
-    pub fn on_submit<F: Fn(Secret) + 'static>(self, callback: F) -> Self;
+    pub fn on_submit<F: Fn() + 'static>(self, callback: F) -> Self;
 }
 
 create_password() -> Password
@@ -627,12 +649,14 @@ impl Password {
     pub fn with<R>(&self, f: impl FnOnce(&Secret) -> R) -> R;  // tracked
     pub fn is_empty(&self) -> bool;                              // tracked
     pub fn set(&self, secret: Secret);
+    pub fn take(&self) -> Secret;                                // empties the field
     pub fn clear(&self);
 }
 
 impl Secret {
     pub fn expose(&self) -> &str;
     pub fn is_empty(&self) -> bool;
+    pub fn duplicate(&self) -> Secret;  // its own locked pages
 }
 impl From<String> for Secret   // wipes the String
 ```

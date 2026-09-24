@@ -84,6 +84,19 @@ impl Secret {
         self.len == 0
     }
 
+    /// A second secret holding the same text, in pages of its own.
+    ///
+    /// Copied from mapping to mapping with nothing on the heap in between, so
+    /// the copy is as protected as the original and is wiped when it drops.
+    /// For handing the text to another thread while the field keeps it — a
+    /// lock screen that shows its dots while the password is being checked.
+    /// A method rather than `Clone`, so that every copy is written down.
+    pub fn duplicate(&self) -> Secret {
+        let mut copy = Secret::new();
+        copy.replace_range(0..0, self.expose());
+        copy
+    }
+
     fn bytes(&self) -> &[u8] {
         // SAFETY: see `expose`.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
@@ -334,6 +347,24 @@ mod tests {
         secret.replace_range(2..8, "");
         assert_eq!(secret.expose(), "ab");
         assert!(secret.slice_mut(2..8).iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn a_duplicate_has_pages_of_its_own_and_outlives_the_original() {
+        let original = Secret::from(String::from("hunter2"));
+        let copy = original.duplicate();
+        assert_eq!(copy.expose(), "hunter2");
+        assert_ne!(
+            copy.ptr, original.ptr,
+            "the copy shares the original's pages"
+        );
+        let (flags, _) = smaps_entry(copy.ptr.as_ptr() as usize);
+        assert!(
+            flags.split_whitespace().any(|f| f == "dd"),
+            "the copy is not left out of core dumps"
+        );
+        drop(original);
+        assert_eq!(copy.expose(), "hunter2");
     }
 
     #[test]

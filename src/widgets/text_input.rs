@@ -2,7 +2,7 @@
 //!
 //! The two are one widget, [`TextInput<C>`], over two answers to where the
 //! text lives. [`Plain`] mirrors an `RwSignal<String>`, which is what any field
-//! wants. [`Masked`] keeps it in the [`Secret`] behind a [`Password`] and edits
+//! wants. [`Masked`] keeps it in the [`Secret`](crate::Secret) behind a [`Password`] and edits
 //! it there, in place: nothing about a password is copied, kept for undo, or
 //! allowed out through the clipboard. Everything else — the caret, selection,
 //! scrolling, styling, focus — is the same code for both, so a password field
@@ -26,7 +26,6 @@ use crate::reactive::{
     primary_copy, primary_paste, release_focus, request_focus,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
-use crate::secret::Secret;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
@@ -329,7 +328,7 @@ impl Content for Plain {
     }
 }
 
-/// A field's text as a [`Secret`], behind a [`Password`].
+/// A field's text as a [`Secret`](crate::Secret), behind a [`Password`].
 ///
 /// What [`password_input`] builds. The field edits the secret where it lies,
 /// and draws [`mask_char`](TextInput::mask_char) once per character without
@@ -341,7 +340,7 @@ pub struct Masked {
     cached_mask_char: char,
     reveal: Prop<bool>,
     cached_reveal: bool,
-    on_submit: Option<Box<dyn Fn(Secret)>>,
+    on_submit: Option<Box<dyn Fn()>>,
 }
 
 impl Content for Masked {
@@ -387,11 +386,12 @@ impl Content for Masked {
     }
 
     fn submit(&mut self) -> Option<usize> {
-        // Moved out, not lent: the application holds the one copy there is,
-        // and the field starts again empty — swaylock clears on submit too.
+        // Enter only says so. Whether the text leaves the field — `take`, and
+        // it is empty — or stays while a duplicate is checked is the
+        // application's to decide, and the answer is read back here.
         let callback = self.on_submit.as_ref()?;
-        callback(self.password.take());
-        Some(0)
+        callback();
+        Some(self.with_text(|text| text.chars().count()))
     }
 }
 
@@ -482,7 +482,7 @@ pub struct TextInput<C = Plain> {
     states: Vec<(StateWhen, TextStyle)>,
 }
 
-/// A field whose text is a [`Secret`] behind a [`Password`].
+/// A field whose text is a [`Secret`](crate::Secret) behind a [`Password`].
 pub type PasswordInput = TextInput<Masked>;
 
 impl TextInput<Plain> {
@@ -559,12 +559,15 @@ impl TextInput<Masked> {
         self
     }
 
-    /// Called on Enter with the field's [`Secret`], moved out of it.
+    /// Called on Enter.
     ///
-    /// The field is empty from that moment, and the application holds the one
-    /// copy there is: hand it to PAM, on another thread if need be — `Secret`
-    /// is `Send` — and let it drop, which wipes it.
-    pub fn on_submit<F: Fn(Secret) + 'static>(mut self, callback: F) -> Self {
+    /// The text is not handed over: the callback reaches it through the
+    /// [`Password`], as a button beside the field would, and chooses —
+    /// [`take`](Password::take) moves it out and empties the field,
+    /// [`duplicate`](crate::Secret::duplicate) keeps the field as it is while a copy
+    /// is checked. Either way it stays a [`Secret`](crate::Secret), which is `Send`, so PAM
+    /// can have it on another thread.
+    pub fn on_submit<F: Fn() + 'static>(mut self, callback: F) -> Self {
         self.content.on_submit = Some(Box::new(callback));
         self
     }
@@ -1836,11 +1839,11 @@ pub fn text_input(signal: RwSignal<String>) -> TextInput {
 
 /// Create a password field over `password`.
 ///
-/// The field reads and edits the [`Secret`] the [`Password`] holds, in place,
+/// The field reads and edits the [`Secret`](crate::Secret) the [`Password`] holds, in place,
 /// and draws one [`mask_char`](TextInput::mask_char) per character. Nothing
 /// about the text is copied: there is no undo history, nothing can be copied
-/// or cut out of it, and Enter moves the secret out to
-/// [`on_submit`](TextInput::<Masked>::on_submit), leaving the field empty.
+/// or cut out of it, and [`on_submit`](TextInput::<Masked>::on_submit) is told
+/// of Enter and reaches the secret through the `Password`.
 /// [`reveal`](TextInput::reveal) shows the text, at the cost it documents.
 ///
 /// ```no_run
@@ -1851,9 +1854,10 @@ pub fn text_input(signal: RwSignal<String>) -> TextInput {
 /// password_input(password)
 ///     .placeholder("Password")
 ///     .readonly(busy)
-///     .on_submit(move |secret: Secret| {
+///     .on_submit(move || {
 ///         busy.set(true);
-///         // hand `secret` to PAM; dropping it wipes it
+///         // Moved out, and the field is empty; dropping it wipes it.
+///         let secret: Secret = password.take();
 ///         # let _ = secret;
 ///     });
 ///
@@ -1867,6 +1871,7 @@ pub fn password_input(password: Password) -> PasswordInput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Secret;
     use crate::jobs::JobType;
     use crate::jobs::{clear_pending_jobs, clear_scheduled_jobs, next_deadline, queued_job_types};
     use crate::layout::Constraints;
@@ -2132,7 +2137,7 @@ mod tests {
         let (mut tree, root, id) = field_in_container(
             password_input(password)
                 .mask_char('*')
-                .on_submit(|_: Secret| {}),
+                .on_submit(move || drop(password.take())),
         );
         assert_eq!(drawn_strings(&mut tree, id), ["***"]);
 
