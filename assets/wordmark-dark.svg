@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 295 469" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 899.2 346.0" role="img">
   <title>GUIdo</title>
-  <g transform="translate(-77 -49)">
+  <g transform="translate(8.0 8.0) scale(0.7285) translate(-85 -57)">
   <defs>
     <clipPath id="gb"><path d="M176 292 C148 318 138 372 148 414 C154 440 174 452 206 454 L300 454 C330 452 346 436 348 406 C352 358 340 306 300 282 C262 268 202 270 176 292Z"/></clipPath>
     <clipPath id="gh"><path d="M236 82 C300 82 338 130 338 188 C338 250 294 292 234 292 C176 292 134 252 134 192 C134 128 176 82 236 82Z"/></clipPath>
@@ -58,4 +58,16 @@
   <!-- mustache -->
   <path d="M104 270 C92 282 96 300 112 302 C118 312 136 314 148 304 C158 314 180 314 190 302 C204 306 218 296 214 282 C204 268 180 264 158 266 C138 262 116 262 104 270Z" fill="#ffffff" stroke="#2b2320" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
 </g>
+  <g transform="translate(283.2 148.0)">
+  <g fill="none" stroke="#f4efe6" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M130.7 -25.2 A75 75 0 1 0 150 25 L93 25"/>
+    <path d="M198 -50 L198 50 A50 50 0 0 0 298 50 L298 -50"/>
+    <path d="M348 -50 L348 100 M326 -50 L370 -50 M326 100 L370 100"/>
+    <path d="M436 50 m-38 0 a38 38 0 1 0 76 0 a38 38 0 1 0 -76 0 M474 -50 L474 100"/>
+  </g>
+  <circle cx="556" cy="50" r="40" fill="#e6f4f7" stroke="#f4efe6" stroke-width="24"/>
+<circle cx="556" cy="50" r="27" fill="none" stroke="#2b2320" stroke-width="6"/>
+  <ellipse cx="548" cy="54" rx="13" ry="17" fill="#2b2320"/>
+  <circle cx="553" cy="46" r="5" fill="#ffffff"/>
+  </g>
 </svg>

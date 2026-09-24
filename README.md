@@ -1,8 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/MalpenZibo/guido/blob/main/assets/logo_text_light.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/MalpenZibo/guido/blob/main/assets/logo_text_dark.svg">
-    <img alt="Guido Logo" src="https://github.com/MalpenZibo/guido/blob/main/assets/logo_text_dark.svg" width="300">
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/MalpenZibo/guido/blob/main/assets/wordmark-dark.svg">
+    <img alt="GUIdo" src="https://github.com/MalpenZibo/guido/blob/main/assets/wordmark-light.svg" height="140">
   </picture>
 </p>
 
