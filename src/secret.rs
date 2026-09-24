@@ -409,6 +409,21 @@ mod tests {
         }
     }
 
+    /// Growing out of a nearly full mapping, at its end: the copy that moves
+    /// the tail must read nothing past the old text, which here is the edge of
+    /// the old mapping.
+    #[test]
+    fn growing_at_the_end_of_a_full_mapping_copies_only_the_text() {
+        let mut secret = Secret::from(String::from("a"));
+        let capacity = secret.capacity;
+        secret.replace_range(1..1, &"a".repeat(capacity - 2));
+        let end = secret.expose().len();
+        secret.replace_range(end..end, "bcd");
+        let mut expected = "a".repeat(capacity - 1);
+        expected.push_str("bcd");
+        assert_eq!(secret.expose(), expected);
+    }
+
     /// Text that exactly fills the mapping stays in it.
     #[test]
     fn text_that_fills_the_pages_exactly_does_not_move_them() {
