@@ -1,6 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 295 469" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img">
   <title>GUIdo</title>
-  <g transform="translate(-77 -49)">
+  <rect width="400" height="400" rx="96" fill="#cfe7ec"/>
+  <ellipse cx="200" cy="346" rx="100" ry="12" fill="#b3d7de"/>
+  <g transform="translate(107.6 50) scale(0.6623) translate(-85 -57)">
   <defs>
     <clipPath id="gb"><path d="M176 292 C148 318 138 372 148 414 C154 440 174 452 206 454 L300 454 C330 452 346 436 348 406 C352 358 340 306 300 282 C262 268 202 270 176 292Z"/></clipPath>
     <clipPath id="gh"><path d="M236 82 C300 82 338 130 338 188 C338 250 294 292 234 292 C176 292 134 252 134 192 C134 128 176 82 236 82Z"/></clipPath>
