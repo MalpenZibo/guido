@@ -218,10 +218,11 @@ pub mod prelude {
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
-        WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
-        create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
-        provide_context, provide_signal_context, use_context, with_context,
+        Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
+        Trigger, WriteSignal, create_derived, create_effect, create_memo, create_password,
+        create_service, create_signal, create_stored, create_task, create_trigger, expect_context,
+        has_context, on_cleanup, provide_context, provide_signal_context, use_context,
+        with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{

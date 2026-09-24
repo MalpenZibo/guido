@@ -146,6 +146,12 @@ impl Secret {
         self.len = new_len;
     }
 
+    /// Wipe the text, and keep the pages for what is typed next.
+    pub(crate) fn clear(&mut self) {
+        self.slice_mut(0..self.len).zeroize();
+        self.len = 0;
+    }
+
     fn slice_mut(&mut self, range: Range<usize>) -> &mut [u8] {
         debug_assert!(range.end <= self.capacity || range.is_empty());
         // SAFETY: inside the mapping, which this value owns exclusively.
@@ -314,6 +320,12 @@ mod tests {
         assert!(secret.expose().starts_with("held"));
         assert_eq!(secret.expose().len(), 4 + first);
 
+        secret.clear();
+        assert!(secret.is_empty());
+        assert!(
+            secret.slice_mut(0..8).iter().all(|&b| b == 0),
+            "clear left bytes behind"
+        );
     }
 
     #[test]
