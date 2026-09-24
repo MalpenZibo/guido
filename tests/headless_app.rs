@@ -18,7 +18,10 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-use guido::reactive::clipboard::{SelectionKind, primary_paste};
+use guido::reactive::clipboard::{
+    SelectionKind, clipboard_copy, clipboard_has_content, clipboard_paste, primary_copy,
+    primary_paste,
+};
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
@@ -555,8 +558,10 @@ fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
     app.click(surface, 100.0, 8.0);
     app.step();
 
+    assert!(!clipboard_has_content(), "nothing is offered yet");
     app.offer_selection(SelectionKind::Clipboard, "from a password manager");
     app.step();
+    assert!(clipboard_has_content(), "the offer is known about");
     assert!(
         app.selection_reads().is_empty(),
         "an offer arriving is not a paste"
@@ -578,6 +583,30 @@ fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
     app.step();
     assert_eq!(app.selection_reads(), [SelectionKind::Clipboard]);
     assert_eq!(value.get(), "from a password manager");
+}
+
+/// What the application copies is offered back to it, as a compositor offers a
+/// new selection to every client, so a paste after a copy brings the copy.
+#[test]
+fn a_copy_is_what_the_next_paste_brings() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), container);
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    clipboard_copy("copied here");
+    primary_copy("selected here");
+    app.step();
+
+    let got = Rc::new(RefCell::new(Vec::new()));
+    let sink = got.clone();
+    clipboard_paste(move |text| sink.borrow_mut().push(text));
+    let sink = got.clone();
+    primary_paste(move |text| sink.borrow_mut().push(text));
+    app.step();
+    app.step();
+
+    assert_eq!(*got.borrow(), ["copied here", "selected here"]);
 }
 
 /// A paste from application code is answered through its callback, and two

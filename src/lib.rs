@@ -1297,10 +1297,9 @@ pub(crate) trait Platform {
 
     /// Read a selection for the pastes waiting on `token`, and answer them
     /// with `reactive::clipboard::answer_paste` — now or when the read lands.
-    fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64) {
-        let _ = kind;
-        reactive::clipboard::answer_paste(token, None);
-    }
+    /// Required, because a platform that forgot it would leave every paste
+    /// unanswered.
+    fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64);
 
     /// Send everything this iteration queued. `false` means the connection is
     /// gone and the application is over.
@@ -3976,6 +3975,10 @@ mod a_frame_lands_where_the_surface_points {
 
         fn surface(&mut self, _id: SurfaceId) -> Option<OneHandle<'_>> {
             Some(OneHandle(&mut self.0))
+        }
+
+        fn read_selection(&mut self, _kind: reactive::SelectionKind, token: u64) {
+            reactive::clipboard::answer_paste(token, None);
         }
     }
 
