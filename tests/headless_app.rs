@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
+use guido::reactive::clipboard::{SelectionKind, primary_paste};
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
@@ -539,6 +540,66 @@ fn a_click_outside_the_field_takes_the_keyboard_off_it() {
         !field.is_focused(),
         "and a click on the bar behind it gives it back"
     );
+}
+
+/// Another application's copy is not read when it is offered, only when the
+/// field pastes it: one read, and the text lands in the field that asked.
+#[test]
+fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
+    let Some(mut app) = headless() else { return };
+    let field = create_widget_ref();
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    app.click(surface, 100.0, 8.0);
+    app.step();
+
+    app.offer_selection(SelectionKind::Clipboard, "from a password manager");
+    app.step();
+    assert!(
+        app.selection_reads().is_empty(),
+        "an offer arriving is not a paste"
+    );
+
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    app.event_at(
+        surface,
+        Event::KeyDown {
+            key: Key::Char('v'),
+            modifiers: ctrl,
+        },
+        Instant::now(),
+    );
+    app.step();
+    app.step();
+    assert_eq!(app.selection_reads(), [SelectionKind::Clipboard]);
+    assert_eq!(value.get(), "from a password manager");
+}
+
+/// A paste from application code is answered through its callback, and two
+/// asked for in one iteration share one read.
+#[test]
+fn pastes_asked_together_share_one_read() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), container);
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    app.offer_selection(SelectionKind::Primary, "selected elsewhere");
+
+    let got = Rc::new(RefCell::new(Vec::new()));
+    for _ in 0..2 {
+        let got = got.clone();
+        primary_paste(move |text| got.borrow_mut().push(text));
+    }
+    app.step();
+    app.step();
+
+    assert_eq!(app.selection_reads(), [SelectionKind::Primary]);
+    assert_eq!(*got.borrow(), ["selected elsewhere", "selected elsewhere"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2633,15 +2694,10 @@ fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving()
 #[test]
 fn a_text_input_that_hides_the_cursor_claims_hidden_on_moves_and_on_presses() {
     let Some(mut app) = headless() else { return };
-    let value = create_signal(String::new());
+    let value = create_password();
     let surface = app.surface(fixed_bar(), move || {
         left_of_a_bar(
-            container().child(
-                text_input(value)
-                    .password(true)
-                    .no_caret()
-                    .cursor(CursorIcon::Hidden),
-            ),
+            container().child(password_input(value).no_caret().cursor(CursorIcon::Hidden)),
         )
         .cursor(CursorIcon::Pointer)
     });

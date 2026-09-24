@@ -224,14 +224,14 @@ signal and it is read where the style is resolved.
 # struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
 # impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
 # fn main() {
-# let password = create_signal(String::new());
+# let password = create_password();
 # let theme = Theme::default();
 let wrong_password = create_signal(false);
 
 container()
     .border(1.0, theme.line)
     .state(wrong_password, |s| s.border(2.0, theme.error))
-    .child(text_input(password))
+    .child(password_input(password))
 # ;
 # }
 ```
@@ -294,11 +294,11 @@ nothing else announces it:
 # struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
 # impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
 # fn main() {
-# let password = create_signal(String::new());
+# let password = create_password();
 # let theme = Theme::default();
 container().control()
     .child(text("Password").when_focused(|s| s.color(theme.accent)))
-    .child(text_input(password))
+    .child(password_input(password))
 # ;
 # }
 ```
@@ -346,14 +346,14 @@ matters on a password field, where the focus is held essentially all the time:
 # struct Theme { text: Color, text_weak: Color, weak: Color, strong: Color, line: Color, accent: Color, error: Color, danger: Color, surface: Color }
 # impl Default for Theme { fn default() -> Self { let c = Color::WHITE; Self { text: c, text_weak: c, weak: c, strong: c, line: c, accent: c, error: c, danger: c, surface: c } } }
 # fn main() {
-# let password = create_signal(String::new());
+# let password = create_password();
 # let theme = Theme::default();
 # let wrong_password = create_signal(false);
 container()
     .border(1.0, theme.line)
     .when_focused(|s| s.border(2.0, theme.accent))
     .state(wrong_password, |s| s.border(2.0, theme.error))   // written after,
-    .child(text_input(password))                             // so it wins
+    .child(password_input(password))                             // so it wins
 # ;
 # }
 ```

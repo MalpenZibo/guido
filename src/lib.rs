@@ -18,6 +18,7 @@ pub mod pivot;
 pub mod reactive;
 mod region;
 pub mod render_stats;
+mod secret;
 pub mod session_lock;
 pub mod shape;
 pub mod surface;
@@ -35,6 +36,7 @@ pub mod renderer;
 
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
+pub use secret::Secret;
 
 use std::sync::Arc;
 
@@ -216,10 +218,11 @@ pub mod prelude {
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
-        WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
-        create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
-        provide_context, provide_signal_context, use_context, with_context,
+        Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
+        Trigger, WriteSignal, create_derived, create_effect, create_memo, create_password,
+        create_service, create_signal, create_stored, create_task, create_trigger, expect_context,
+        has_context, on_cleanup, provide_context, provide_signal_context, use_context,
+        with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
@@ -235,13 +238,14 @@ pub mod prelude {
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
-        IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding, Point,
-        PointerKind, Rect, RippleConfig, Scroll, ScrollSource, ScrollbarVisibility, Selection,
-        StateStyle, Stateful, Text, TextAlign, TextInput, TextOverflow, TextShadow, TextStroke,
-        TextStyle, Widget, container, image, keyed, text, text_input,
+        IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
+        PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
+        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextAlign, TextInput,
+        TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed,
+        password_input, text, text_input,
     };
     pub use crate::{
-        App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
+        App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
         restart_app, set_default_font_family, set_image_cache_budget,
     };
 }
@@ -744,6 +748,9 @@ fn sync_platform_state<P: Platform>(wayland_state: &mut P) {
     }
     if let Some(cursor) = take_cursor_change() {
         wayland_state.set_cursor(cursor);
+    }
+    for (kind, token) in reactive::clipboard::take_paste_requests() {
+        wayland_state.read_selection(kind, token);
     }
 }
 
@@ -1288,6 +1295,13 @@ pub(crate) trait Platform {
         let _ = cursor;
     }
 
+    /// Read a selection for the pastes waiting on `token`, and answer them
+    /// with `reactive::clipboard::answer_paste` — now or when the read lands.
+    fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64) {
+        let _ = kind;
+        reactive::clipboard::answer_paste(token, None);
+    }
+
     /// Send everything this iteration queued. `false` means the connection is
     /// gone and the application is over.
     fn flush(&self) -> bool {
@@ -1507,6 +1521,10 @@ impl Platform for platform::WaylandState {
 
     fn set_cursor(&mut self, cursor: reactive::CursorIcon) {
         self.set_cursor(cursor)
+    }
+
+    fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64) {
+        self.read_selection(kind, token)
     }
 
     fn flush(&self) -> bool {
@@ -2312,19 +2330,16 @@ impl App {
         let (ingress_tx, ingress_channel) = calloop_channel::channel();
         ingress::install_ingress(ingress_tx);
         loop_handle
-            .insert_source(ingress_channel, |event, _, wayland_state| {
+            .insert_source(ingress_channel, |event, _, _| {
                 if let calloop_channel::Event::Msg(message) = event {
                     match message {
                         // Doorbell only: the write payloads live in the
                         // reactive write queue, drained at the flush point
                         // later this same iteration.
                         ingress::IngressMessage::BgWritesQueued => {}
-                        // Prefetched selection content from a reader thread
-                        ingress::IngressMessage::ClipboardUpdate {
-                            kind,
-                            generation,
-                            content,
-                        } => wayland_state.apply_clipboard_update(kind, generation, content),
+                        ingress::IngressMessage::SelectionRead { token, content } => {
+                            reactive::clipboard::answer_paste(token, content)
+                        }
                     }
                 }
             })
@@ -2540,6 +2555,10 @@ fn iterate<P: Platform>(
         ));
     }
 
+    // Pastes whose text has arrived, handed to whoever asked before the
+    // surfaces draw, so a field shows what it was given in this frame.
+    reactive::clipboard::deliver_pastes(tree);
+
     // Flush background-thread signal writes once per frame (queued via WriteSignal).
     // Must run before take_wake_request() so that signal changes from bg writes
     // are processed into jobs before we check the wake request.
@@ -2657,8 +2676,9 @@ impl Default for App {
 mod restart_tests {
     use super::*;
     use crate::jobs::{JobRequest, has_pending_jobs, request_job};
+    use crate::reactive::clipboard::take_paste_requests;
     use crate::reactive::owner::create_root_owner;
-    use crate::reactive::{clipboard_copy, clipboard_paste};
+    use crate::reactive::{clipboard_copy, clipboard_paste, take_clipboard_change};
     use crate::surface::drain_surface_commands;
     use crate::widget_ref::create_widget_ref;
 
@@ -2765,6 +2785,7 @@ mod restart_tests {
             crate::widgets::container()
         });
         clipboard_copy("a secret");
+        clipboard_paste(|_| {});
         create_widget_ref().focus();
         crate::session_lock::unlock_session();
 
@@ -2778,9 +2799,13 @@ mod restart_tests {
             "the loop would open a surface the old App asked for"
         );
         assert_eq!(
-            clipboard_paste(),
+            take_clipboard_change(),
             None,
-            "the next App would paste the last one's copy"
+            "the next App would offer the last one's copy"
+        );
+        assert!(
+            take_paste_requests().is_empty(),
+            "the next App would read for a paste the last one asked for"
         );
         with_app_state(|app| {
             assert!(

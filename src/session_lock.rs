@@ -4,7 +4,7 @@
 //! creates one lock surface per output using the provided widget factory
 //! (new outputs plugged in while locking or locked get one too). The
 //! compositor blanks all outputs and routes input to the lock surfaces, so
-//! a `text_input` password field works out of the box.
+//! a [`password_input`](crate::widgets::password_input) works out of the box.
 //!
 //! ```no_run
 //! # use guido::prelude::*;

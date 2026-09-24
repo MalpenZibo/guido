@@ -688,6 +688,9 @@ pub enum Event {
     FocusIn,
     /// Widget lost keyboard focus
     FocusOut,
+    /// The text a paste this widget asked for brought. Sent to that widget
+    /// alone, on a later iteration than the one that asked.
+    Pasted(crate::reactive::PastedText),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -794,7 +797,8 @@ impl Event {
             | Event::KeyDown { .. }
             | Event::KeyUp { .. }
             | Event::FocusIn
-            | Event::FocusOut => None,
+            | Event::FocusOut
+            | Event::Pasted(_) => None,
         }
     }
 
@@ -835,7 +839,7 @@ impl Event {
             },
             Event::ScrollEnd { .. } => Event::ScrollEnd { at },
             Event::MouseLeave => Event::MouseLeave,
-            // Keyboard and focus events never had one to replace.
+            // Keyboard, focus and paste events never had one to replace.
             Event::KeyDown { key, modifiers } => Event::KeyDown {
                 key: *key,
                 modifiers: *modifiers,
@@ -846,6 +850,7 @@ impl Event {
             },
             Event::FocusIn => Event::FocusIn,
             Event::FocusOut => Event::FocusOut,
+            Event::Pasted(text) => Event::Pasted(text.clone()),
         }
     }
 }

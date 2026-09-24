@@ -203,15 +203,16 @@ Layer shell protocol implementation for desktop widgets.
 
 **Module layout.** `wayland.rs` holds the connection, the surface registry and
 the layer shell; everything else is one file per concern, each owning its own
-state and the protocol handlers that drive it. The `delegate_*` macros need
-those handlers implemented on `WaylandState`, which is why the `impl` blocks
-live beside their state rather than all in one file.
+state and the protocol handlers that drive it. sctk dispatches every object it
+binds through one `delegate_dispatch2!` in `wayland.rs`, and that dispatch calls
+the handler traits implemented on `WaylandState` — which is why the `impl`
+blocks live beside their state rather than all in one file.
 
 | File | Concern |
 |------|---------|
 | `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
-| `platform/selections.rs` | Clipboard and primary selection, async prefetch |
+| `platform/selections.rs` | Clipboard and primary selection, read on paste |
 | `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
 | `platform/lock.rs` | `ext-session-lock-v1` grant and lifecycle events |
@@ -369,10 +370,10 @@ A focused input is the resting state of a lock screen, so that ran all night.
 **The contract is structural, not policed.** A deferred queue and its wakeup
 are one object (`src/deferred.rs`): `DeferredQueue::push` and
 `DeferredSlot::set` *are* the wakeup, the cell inside is private, and there is
-no way to reach it that does not ask for the pass that empties it. Disposals
-and surface commands are queues; the cursor, the clipboard and the primary
-selection are slots, where two values in one frame means the second is the
-answer.
+no way to reach it that does not ask for the pass that empties it. Disposals,
+surface commands and paste requests are queues; the cursor, the clipboard and
+the primary selection are slots, where two values in one frame means the second
+is the answer.
 
 That replaced a `debug_assert!` before the blocking dispatch which named every
 queue and panicked if one was non-empty. It was the wrong shape twice over. It
@@ -810,8 +811,10 @@ duplicate was found.
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
+| `src/reactive/password.rs` | `Password`: a signal holding a `Secret`, lent and never copied out |
 | `src/image_decode.rs` | Raster images decoded off the frame: one signal per source, a worker that writes them, and the handle that frees the pixels with the last image |
 | `src/heap.rs` | `CountingAllocator`: what a frame asks of the allocator, for the binary that installs it |
+| `src/secret.rs` | `Secret`: a password in pages of its own — locked, left out of core dumps, zeroed when given back |
 | `src/transform.rs` | Transform matrix operations |
 | `src/shape.rs` | A rounded rect and the transform that places it — one type for clips, compositor regions and the backdrop mask |
 | `src/region.rs` | A placed shape tessellated into the rectangles a `wl_region` is made of |

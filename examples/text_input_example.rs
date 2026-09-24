@@ -14,7 +14,7 @@ use guido::prelude::*;
 fn main() {
     App::new().run(|app| {
         let username = create_signal(String::new());
-        let password = create_signal(String::new());
+        let password = create_password();
         let submitted = create_signal(String::new());
 
         let view = container()
@@ -75,13 +75,12 @@ fn main() {
                             // Highlight border when text input is focused
                             .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                             .child(
-                                text_input(password)
+                                password_input(password)
                                     .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
                                     .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                                     .font_size(14.0)
                                     .color(Color::WHITE)
-                                    .password(true)
-                                    .on_submit(move |_| {
+                                    .on_submit(move || {
                                         let msg = format!("Login attempt: {}", username.get());
                                         submitted.set(msg);
                                     }),
@@ -111,9 +110,14 @@ fn main() {
                     )
                     .child(
                         container().child(
-                            text(move || format!("Password: {} chars", password.get().len()))
-                                .font_size(13.0)
-                                .color(Color::rgb(0.8, 0.8, 0.9)),
+                            text(move || {
+                                format!(
+                                    "Password: {} chars",
+                                    password.with(|s| s.expose().chars().count())
+                                )
+                            })
+                            .font_size(13.0)
+                            .color(Color::rgb(0.8, 0.8, 0.9)),
                         ),
                     ),
             )

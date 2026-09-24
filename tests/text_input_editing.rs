@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use common::Harness;
 use guido::prelude::*;
 use guido::reactive::clipboard::{
-    clear_system_clipboard, clipboard_paste, primary_copy, take_clipboard_change,
+    SelectionKind, answer_pastes, deliver_pastes, take_clipboard_change,
 };
 use guido::reactive::focus::{clear_focus, focus_path, request_focus};
 use guido::renderer::{DrawCommand, RenderNode};
@@ -104,7 +104,7 @@ impl Field {
         // The focus and the selection a previous field in this thread published
         // would otherwise answer for this one.
         clear_focus();
-        clear_system_clipboard();
+        answer_pastes(SelectionKind::Clipboard, None);
         let _ = take_clipboard_change();
 
         Self {
@@ -156,11 +156,20 @@ impl Field {
         );
     }
 
-    /// A middle press at a point, which is the primary-selection paste.
-    fn middle_click(&mut self, x: f32, y: f32) {
+    /// A middle press at a point, which is the primary-selection paste, with
+    /// `offered` as what another application selected.
+    fn middle_click(&mut self, x: f32, y: f32, offered: &str) {
         self.now += Duration::from_millis(1);
         self.harness
             .send_at(Event::mouse_down(x, y, MouseButton::Middle), self.now);
+        self.paste_arrives(SelectionKind::Primary, offered);
+    }
+
+    /// The answer to the pastes asked for so far arrives, as the loop hands it
+    /// over.
+    fn paste_arrives(&mut self, kind: SelectionKind, text: &str) {
+        answer_pastes(kind, Some(text));
+        deliver_pastes(&mut self.harness.tree);
     }
 
     fn type_text(&mut self, text: &str) {
@@ -291,6 +300,53 @@ fn backspace_takes_the_character_before_the_cursor_and_leaves_it_there() {
         field.text(),
         "hZi",
         "backspace leaves the cursor where the character it removed was"
+    );
+}
+
+/// Ctrl+Left and Ctrl+Right stop at the edges of words, skipping the spaces
+/// between them — asked, like the test above, by moving and then writing.
+#[test]
+fn ctrl_arrows_move_by_word() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    let mut field = Field::focused("");
+    field.type_text("one  two three");
+
+    field.press(Key::Left, ctrl);
+    field.type_text("A");
+    assert_eq!(
+        field.text(),
+        "one  two Athree",
+        "back to the start of the last word"
+    );
+
+    field.press(Key::Left, ctrl);
+    field.press(Key::Left, ctrl);
+    field.type_text("B");
+    assert_eq!(
+        field.text(),
+        "one  Btwo Athree",
+        "back over a word and the spaces before it"
+    );
+
+    field.key(Key::Home);
+    field.press(Key::Right, ctrl);
+    field.type_text("C");
+    assert_eq!(
+        field.text(),
+        "one  CBtwo Athree",
+        "forward over a word and both spaces after it"
+    );
+
+    field.key(Key::End);
+    field.press(Key::Right, ctrl);
+    field.type_text("D");
+    assert_eq!(
+        field.text(),
+        "one  CBtwo AthreeD",
+        "and no further than the end"
     );
 }
 
@@ -454,7 +510,22 @@ fn ctrl_x_cuts_the_selection_to_the_clipboard() {
     field.ctrl('x');
 
     assert_eq!(field.text(), "");
-    assert_eq!(clipboard_paste().as_deref(), Some("abcd"));
+    assert_eq!(take_clipboard_change().as_deref(), Some("abcd"));
+}
+
+/// A paste is a request: the text goes in when the application that owns the
+/// clipboard answers, at the caret.
+#[test]
+fn ctrl_v_inserts_the_paste_when_it_arrives() {
+    let mut field = Field::focused("abcd");
+    field.key(Key::End);
+    field.key(Key::Left);
+
+    field.ctrl('v');
+    assert_eq!(field.text(), "abcd", "nothing is there until the answer is");
+
+    field.paste_arrives(SelectionKind::Clipboard, "XY");
+    assert_eq!(field.text(), "abcXYd");
 }
 
 #[test]
@@ -789,13 +860,11 @@ fn a_read_only_field_refuses_a_middle_click_paste() {
             .height(HEIGHT)
             .child(text_input(value).readonly(readonly)),
     );
-    primary_copy("pasted");
-
-    field.middle_click(4.0, 5.0);
+    field.middle_click(4.0, 5.0, "pasted");
     assert_eq!(field.text(), "hi", "the primary selection got in");
 
     readonly.set(false);
-    field.middle_click(4.0, 5.0);
+    field.middle_click(4.0, 5.0, "pasted");
     assert!(
         field.text().contains("pasted"),
         "and the same click works when the field is not read-only: {}",

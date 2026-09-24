@@ -1310,10 +1310,10 @@ impl Container {
     /// # use guido::prelude::*;
     /// # struct Theme { accent: Color }
     /// # let theme = Theme { accent: Color::rgb(0.4, 0.6, 1.0) };
-    /// # let password = create_signal(String::new());
+    /// # let password = create_password();
     /// container().control()
     ///     .child(text("Password").when_focused(|s| s.color(theme.accent)))
-    ///     .child(text_input(password));
+    ///     .child(password_input(password));
     /// ```
     pub fn control(mut self) -> Self {
         self.declared_control = true;
