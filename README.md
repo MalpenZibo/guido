@@ -131,12 +131,6 @@ cargo run --example component_example
 - Wayland compositor with layer shell support (e.g., Sway, Hyprland)
 - GPU with Vulkan or OpenGL support
 
-## Logo
-
-Guido is an *umarell*: the retired man of Bologna who stands at a building
-site, hands behind his back, watching the work go up. The files are in
-[assets](assets).
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
