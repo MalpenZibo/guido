@@ -298,14 +298,7 @@ fn read_with_deadline(
         match file.read(chunk) {
             Ok(0) => return Some(()), // EOF
             Ok(n) => {
-                // Grown by hand, so the old buffer is wiped before it goes:
-                // `extend_from_slice` would reallocate and free it as it was.
-                if buf.capacity() - buf.len() < n {
-                    let mut grown = Vec::with_capacity((buf.len() + n).max(2 * buf.capacity()));
-                    grown.extend_from_slice(buf);
-                    buf.zeroize();
-                    *buf = grown;
-                }
+                drop(grow_wiping(buf, n));
                 buf.extend_from_slice(&chunk[..n]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -315,6 +308,20 @@ fn read_with_deadline(
             }
         }
     }
+}
+
+/// Make room in `buf` for `n` more bytes, by hand: `extend_from_slice` would
+/// reallocate and free the old buffer as it was. Answers the old buffer, wiped,
+/// when it had to move.
+fn grow_wiping(buf: &mut Vec<u8>, n: usize) -> Option<Vec<u8>> {
+    if buf.capacity() - buf.len() >= n {
+        return None;
+    }
+    let mut grown = Vec::with_capacity((buf.len() + n).max(2 * buf.capacity()));
+    grown.extend_from_slice(buf);
+    let mut old = std::mem::replace(buf, grown);
+    old.zeroize();
+    Some(old)
 }
 
 impl DataDeviceHandler for WaylandState {
@@ -539,6 +546,69 @@ mod tests {
 
         assert_eq!(read, Some(()));
         assert_eq!(buf, text.as_bytes());
+    }
+
+    /// A pipe holding `bytes`, closed behind them.
+    fn pipe_holding(bytes: &[u8]) -> ReadPipe {
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(bytes).unwrap();
+        ReadPipe::from(OwnedFd::from(reader))
+    }
+
+    #[test]
+    fn a_pipe_is_read_as_text() {
+        let deadline = Duration::from_secs(5);
+        assert_eq!(
+            read_pipe_with_deadline(pipe_holding(b"copied"), deadline).as_deref(),
+            Some("copied")
+        );
+        assert_eq!(
+            read_pipe_with_deadline(pipe_holding(b""), deadline),
+            None,
+            "an empty selection is nothing to paste"
+        );
+        assert_eq!(
+            read_pipe_with_deadline(pipe_holding(b"ok\xff"), deadline).as_deref(),
+            Some("ok\u{fffd}"),
+            "bytes that are not UTF-8 are replaced, not refused"
+        );
+    }
+
+    #[test]
+    fn a_buffer_that_moves_is_wiped_where_it_was() {
+        let mut buf = Vec::with_capacity(4);
+        buf.extend_from_slice(b"abc");
+
+        assert!(grow_wiping(&mut buf, 1).is_none(), "one more byte fits");
+
+        let old = grow_wiping(&mut buf, 2).expect("two more do not");
+        assert_eq!(buf, b"abc", "the text moved with it");
+        assert!(buf.capacity() - buf.len() >= 2);
+        // SAFETY: `old` still owns its allocation, and the wipe wrote every one
+        // of its `capacity` bytes.
+        let left = unsafe { std::slice::from_raw_parts(old.as_ptr(), old.capacity()) };
+        assert!(
+            left.iter().all(|&b| b == 0),
+            "the old buffer was freed as it was"
+        );
+    }
+
+    #[test]
+    fn an_offer_is_received_as_the_text_type_chosen_for_it() {
+        let mut asked = None;
+        let pipe = receive_text(SelectionKind::Clipboard, Some("UTF8_STRING"), |mime| {
+            asked = Some(mime);
+            Ok::<_, ()>(pipe_holding(b""))
+        });
+        assert!(pipe.is_some());
+        assert_eq!(asked.as_deref(), Some("UTF8_STRING"));
+
+        let refused = receive_text(SelectionKind::Primary, Some("TEXT"), |_| Err(()));
+        assert!(refused.is_none());
+        let no_text = receive_text(SelectionKind::Clipboard, None, |_| -> Result<_, ()> {
+            panic!("an offer with no text type is not received")
+        });
+        assert!(no_text.is_none());
     }
 
     #[test]
