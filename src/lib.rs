@@ -18,6 +18,7 @@ pub mod pivot;
 pub mod reactive;
 mod region;
 pub mod render_stats;
+mod secret;
 pub mod session_lock;
 pub mod shape;
 pub mod surface;
@@ -35,6 +36,7 @@ pub mod renderer;
 
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
+pub use secret::Secret;
 
 use std::sync::Arc;
 
@@ -241,7 +243,7 @@ pub mod prelude {
         TextStyle, Widget, container, image, keyed, text, text_input,
     };
     pub use crate::{
-        App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
+        App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
         restart_app, set_default_font_family, set_image_cache_budget,
     };
 }
