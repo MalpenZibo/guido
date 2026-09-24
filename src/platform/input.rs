@@ -12,17 +12,14 @@
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
-use smithay_client_toolkit::{
-    delegate_keyboard, delegate_pointer, delegate_seat, delegate_touch,
-    seat::{
-        Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
-        pointer::{
-            AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
-            cursor_shape::CursorShapeManager,
-        },
-        touch::TouchHandler,
+use smithay_client_toolkit::seat::{
+    Capability, SeatHandler, SeatState,
+    keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers as WlModifiers, RawModifiers},
+    pointer::{
+        AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+        cursor_shape::CursorShapeManager,
     },
+    touch::TouchHandler,
 };
 
 use smithay_client_toolkit::reexports::calloop::LoopHandle;
@@ -1042,11 +1039,6 @@ fn keysym_char(keysym: Keysym) -> Option<Key> {
 
     None
 }
-
-delegate_seat!(WaylandState);
-delegate_pointer!(WaylandState);
-delegate_touch!(WaylandState);
-delegate_keyboard!(WaylandState);
 
 #[cfg(test)]
 mod tests {

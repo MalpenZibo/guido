@@ -20,7 +20,6 @@ use smithay_client_toolkit::{
         data_offer::DataOfferHandler,
         data_source::{CopyPasteSource, DataSourceHandler},
     },
-    delegate_data_device, delegate_primary_selection,
     primary_selection::{
         PrimarySelectionManagerState,
         device::{PrimarySelectionDevice, PrimarySelectionDeviceHandler},
@@ -557,9 +556,6 @@ impl DataSourceHandler for WaylandState {
         // Action notification - not used for clipboard
     }
 }
-
-delegate_data_device!(WaylandState);
-delegate_primary_selection!(WaylandState);
 
 #[cfg(test)]
 mod tests {

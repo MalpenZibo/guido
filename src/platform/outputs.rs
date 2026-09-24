@@ -12,10 +12,7 @@
 use std::hash::Hash;
 
 use rustc_hash::FxHashMap;
-use smithay_client_toolkit::{
-    delegate_output,
-    output::{OutputHandler, OutputState},
-};
+use smithay_client_toolkit::output::{OutputHandler, OutputState};
 
 use super::wayland::WaylandState;
 use crate::outputs::{self, OutputId, OutputInfo};
@@ -168,8 +165,6 @@ impl OutputHandler for WaylandState {
         self.sync_outputs();
     }
 }
-
-delegate_output!(WaylandState);
 
 #[cfg(test)]
 mod tests {

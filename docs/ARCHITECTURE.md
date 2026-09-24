@@ -203,9 +203,10 @@ Layer shell protocol implementation for desktop widgets.
 
 **Module layout.** `wayland.rs` holds the connection, the surface registry and
 the layer shell; everything else is one file per concern, each owning its own
-state and the protocol handlers that drive it. The `delegate_*` macros need
-those handlers implemented on `WaylandState`, which is why the `impl` blocks
-live beside their state rather than all in one file.
+state and the protocol handlers that drive it. sctk dispatches every object it
+binds through one `delegate_dispatch2!` in `wayland.rs`, and that dispatch calls
+the handler traits implemented on `WaylandState` — which is why the `impl`
+blocks live beside their state rather than all in one file.
 
 | File | Concern |
 |------|---------|

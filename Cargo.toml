@@ -49,7 +49,7 @@ wgpu = { version = "29.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.11"
 cosmic-text = "0.18"
-smithay-client-toolkit = { version = "0.20", default-features = false, features = ["calloop", "xkbcommon"] }
+smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 # Staging protocols not wrapped by sctk (ext-background-effect-v1 for blur)
 wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }

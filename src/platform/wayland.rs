@@ -10,9 +10,9 @@ use smithay_client_toolkit::reexports::client::{
     protocol::{wl_output, wl_surface},
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, Region},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     data_device_manager::DataDeviceManagerState,
-    delegate_compositor, delegate_layer, delegate_registry,
+    delegate_registry,
     output::OutputState,
     primary_selection::PrimarySelectionManagerState,
     registry::{ProvidesRegistryState, RegistryState},
@@ -25,7 +25,7 @@ use smithay_client_toolkit::{
             Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
             LayerSurfaceConfigure,
         },
-        xdg::{XdgShell, popup::Popup},
+        xdg::popup::Popup,
     },
 };
 use wayland_backend::sys::client::ObjectId;
@@ -318,8 +318,8 @@ pub fn create_wayland_app(
     let session_lock_state = SessionLockState::new(&globals, &qh);
 
     // xdg shell for popups anchored to layer surfaces — optional
-    let xdg_shell = XdgShell::bind(&globals, &qh).ok();
-    if xdg_shell.is_none() {
+    let wm_base = super::popups::WmBase::bind(&globals, &qh).ok();
+    if wm_base.is_none() {
         log::warn!("xdg_wm_base not available - popups will not work");
     }
 
@@ -362,7 +362,7 @@ pub fn create_wayland_app(
         current_keyboard_surface: None,
         outputs: OutputRegistry::new(),
         backdrop: Backdrop::new(bg_effect_manager),
-        popups: Popups::new(xdg_shell),
+        popups: Popups::new(wm_base),
         lock: Lock::new(session_lock_state),
         scaling: Scaling::bind(&globals, &qh),
         input: InputState::new(cursor_shape_manager, loop_handle),
@@ -420,7 +420,7 @@ impl WaylandState {
         if let Some(surface) = self.surfaces.get(&id) {
             surface
                 .wl_surface
-                .frame(&self.qh, surface.wl_surface.clone());
+                .frame(&self.qh, FrameCallbackData(surface.wl_surface.clone()));
         }
     }
 
@@ -1003,9 +1003,11 @@ impl ProvidesRegistryState for WaylandState {
     registry_handlers![OutputState, SeatState];
 }
 
-delegate_compositor!(WaylandState);
-delegate_layer!(WaylandState);
 delegate_registry!(WaylandState);
+
+// Every sctk object guido binds, dispatched through the data type sctk
+// attaches to it.
+smithay_client_toolkit::delegate_dispatch2!(WaylandState);
 
 #[cfg(test)]
 mod batching_tests {
