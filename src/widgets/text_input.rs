@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
@@ -22,8 +22,8 @@ use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::focused_widget;
 use crate::reactive::{
-    CursorIcon, IntoSignal, Password, Prop, RwSignal, clipboard_copy, clipboard_paste, has_focus,
-    primary_copy, primary_paste, release_focus, request_focus,
+    CursorIcon, IntoSignal, Password, Prop, RwSignal, SelectionKind, clipboard_copy, has_focus,
+    paste_into, primary_copy, release_focus, request_focus,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
@@ -1272,19 +1272,12 @@ impl<C: Content> TextInput<C> {
         }
     }
 
-    /// Paste text from clipboard
-    fn paste(&mut self, edit: Edit) {
-        if let Some(mut text) = clipboard_paste() {
-            self.insert_pasted(&mut text, edit);
+    /// Ask for a paste. The text comes back as `Event::Pasted`, once the
+    /// application that owns the selection has answered.
+    fn paste(&self, kind: SelectionKind, id: WidgetId) {
+        if !self.refuses_edits() {
+            paste_into(kind, id);
         }
-    }
-
-    /// Insert what a paste brought, and wipe the `String` it came in: pasting
-    /// a password from a manager is the ordinary case, and the copy the
-    /// clipboard handed over is ours to clear.
-    fn insert_pasted(&mut self, text: &mut String, edit: Edit) {
-        self.insert_text(text, edit);
-        text.zeroize();
     }
 
     /// Save current state to history (call before making changes)
@@ -1342,7 +1335,14 @@ impl<C: Content> TextInput<C> {
     }
 
     /// Handle key down event
-    fn handle_key(&mut self, key: &Key, ctrl: bool, shift: bool, edit: Edit) -> EventResponse {
+    fn handle_key(
+        &mut self,
+        id: WidgetId,
+        key: &Key,
+        ctrl: bool,
+        shift: bool,
+        edit: Edit,
+    ) -> EventResponse {
         // What the *answer* is for a key a read-only field will not use — the
         // refusal itself is at the four writers, which is what makes it hold
         // for the middle-click paste as well. `Ignored` rather than `Handled`,
@@ -1412,7 +1412,7 @@ impl<C: Content> TextInput<C> {
                             EventResponse::Handled
                         }
                         'v' => {
-                            self.paste(edit);
+                            self.paste(SelectionKind::Clipboard, id);
                             EventResponse::Handled
                         }
                         'z' => {
@@ -1772,9 +1772,7 @@ impl<C: Content> Widget for TextInput<C> {
                 request_focus(tree, id);
                 let char_index = self.char_index_at_x(at.x, bounds);
                 self.selection = Selection::new(char_index);
-                if let Some(mut text) = primary_paste() {
-                    self.insert_pasted(&mut text, edit);
-                }
+                self.paste(SelectionKind::Primary, id);
                 self.reset_cursor_blink(edit.at);
                 request_job(id, JobRequest::Paint);
                 return EventResponse::Handled;
@@ -1795,11 +1793,18 @@ impl<C: Content> Widget for TextInput<C> {
                 tree.keep_the_focus_this_press_landed_on();
             }
             Event::KeyDown { key, modifiers } if has_focus(id) => {
-                let response = self.handle_key(key, modifiers.ctrl, modifiers.shift, edit);
+                let response = self.handle_key(id, key, modifiers.ctrl, modifiers.shift, edit);
                 if response == EventResponse::Handled {
                     request_job(id, JobRequest::Paint);
                 }
                 return response;
+            }
+            // Inserted at the caret as it is now, which is where it was asked
+            // for unless the user moved it while the answer was on its way.
+            Event::Pasted(text) => {
+                self.insert_text(text.as_str(), edit);
+                request_job(id, JobRequest::Paint);
+                return EventResponse::Handled;
             }
             Event::FocusOut if has_focus(id) => {
                 release_focus(id);
@@ -2168,37 +2173,6 @@ mod tests {
         assert!(
             drawn_strings(&mut tree, id).is_empty(),
             "the mask outlived the text"
-        );
-    }
-
-    /// A paste is copied into the field, and the `String` it arrived in is
-    /// zeroed — every byte of its buffer, not only its length.
-    #[test]
-    fn a_paste_wipes_the_string_it_arrived_in() {
-        let password = crate::reactive::create_password();
-        let mut field = password_input(password);
-        let mut pasted = String::from("hunter2");
-        let (ptr, capacity) = (pasted.as_ptr(), pasted.capacity());
-
-        field.insert_pasted(
-            &mut pasted,
-            Edit {
-                width: 200.0,
-                at: std::time::Instant::now().into(),
-            },
-        );
-
-        assert_eq!(
-            password.with_untracked(|s| s.expose().to_owned()),
-            "hunter2"
-        );
-        assert_eq!(pasted.as_ptr(), ptr, "the buffer checked is the one pasted");
-        // SAFETY: the same allocation, still owned by `pasted`, and every one
-        // of its `capacity` bytes was written by the wipe.
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, capacity) };
-        assert!(
-            bytes.iter().all(|&b| b == 0),
-            "the paste was left in memory"
         );
     }
 

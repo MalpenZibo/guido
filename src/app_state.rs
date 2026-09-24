@@ -22,7 +22,7 @@
 //! written in: everything the running application has queued, mirrored or
 //! declared lives here, and the machinery that makes a reactive closure
 //! reactive at all is its twin, `ReactiveState` in `src/reactive/state.rs`.
-//! So the clipboard buffers and the cursor come here from `src/reactive/`,
+//! So the clipboard queues and the cursor come here from `src/reactive/`,
 //! and `invalidation.rs` keeps its subscriber registry over there while its
 //! dirtied segments, which are a queue the reconciler drains, come here. The
 //! diagnostics stay out of both: they outlive an `App` on purpose.
@@ -36,6 +36,7 @@ use smallvec::SmallVec;
 use crate::deferred::{DeferredQueue, DeferredSlot};
 use crate::image_decode::{DecodeEntry, DecodeKey, Decoder, ImageEvent};
 use crate::jobs::{JobQueues, ScheduledJob};
+use crate::reactive::clipboard::{PasteTarget, PastedText, SelectionKind};
 use crate::reactive::cursor::CursorIcon;
 use crate::reactive::{OwnerId, Prop};
 use crate::renderer::TextMeasurer;
@@ -84,6 +85,10 @@ pub(crate) struct AppState {
     /// one is laid out. One slot, not a queue: two requests in a frame are two
     /// answers to "where should the keyboard be", and the last one is meant.
     pub(crate) pending_focus: RefCell<Option<WidgetRef>>,
+    /// Pastes asked for, waiting for the loop to start their reads.
+    pub(crate) paste_requests: DeferredQueue<(SelectionKind, PasteTarget)>,
+    /// Pastes whose text has arrived, waiting for the loop to hand them over.
+    pub(crate) pastes: DeferredQueue<(PasteTarget, PastedText)>,
     /// A lock or unlock asked for by application code, waiting for the loop.
     pub(crate) lock_request: DeferredSlot<LockRequest>,
 
@@ -98,15 +103,14 @@ pub(crate) struct AppState {
     /// The scope of the effect watching `pointed_cursor` when it is a signal,
     /// disposed when the pointer finds another declaration.
     pub(crate) cursor_watch: Cell<Option<OwnerId>>,
-    /// What a copy in a handler put there, readable by a paste in another.
-    pub(crate) clipboard: RefCell<Option<String>>,
-    /// The compositor's selection, prefetched so a paste in a handler can
-    /// answer synchronously.
-    pub(crate) system_clipboard: RefCell<Option<String>>,
-    /// The primary-selection counterpart of `clipboard`.
-    pub(crate) primary: RefCell<Option<String>>,
-    /// The primary-selection counterpart of `system_clipboard`.
-    pub(crate) system_primary: RefCell<Option<String>>,
+    /// Whether the compositor offers a clipboard to paste: only that an offer
+    /// exists, because nothing is read until a paste asks for it.
+    pub(crate) clipboard_offered: Cell<bool>,
+    /// The reads started for pastes, each with the token its answer comes back
+    /// under and everyone waiting on it.
+    pub(crate) paste_reads: RefCell<Vec<(u64, Vec<PasteTarget>)>>,
+    /// The token the next read is given.
+    pub(crate) next_paste_read: Cell<u64>,
     /// The lock-screen factory and each output's lock surface while locked.
     pub(crate) lock: RefCell<LockData>,
     /// The popups that are still open. A `PopupHandle` is `Copy` and outlives
@@ -168,14 +172,15 @@ pub(crate) fn reset() {
             outgoing_clipboard,
             outgoing_primary,
             pending_focus,
+            paste_requests,
+            pastes,
             lock_request,
             current_cursor,
             pointed_cursor,
             cursor_watch,
-            clipboard,
-            system_clipboard,
-            primary,
-            system_primary,
+            clipboard_offered,
+            paste_reads,
+            next_paste_read,
             lock,
             live_popups,
             widget_refs,
@@ -195,13 +200,16 @@ pub(crate) fn reset() {
         // are the same expression, and neither can drift from the other.
         //
         // What holds an application closure goes first. A queued surface
-        // command carries a widget factory and a lock request carries a
-        // lock-screen one, and dropping either drops what it captured — a
+        // command carries a widget factory, a lock request carries a
+        // lock-screen one and a paste its callback, and dropping any drops what it captured — a
         // `ChildrenSource` among them, whose own `Drop` queues a job. So the
         // queues those land in are emptied below, after everything that can
         // still push into them.
         surface_commands.clear();
         lock_request.clear();
+        paste_requests.clear();
+        paste_reads.take();
+        pastes.clear();
         lock.take();
         widget_refs.take();
         text_measurer.take();
@@ -217,10 +225,8 @@ pub(crate) fn reset() {
         current_cursor.take();
         pointed_cursor.take();
         cursor_watch.take();
-        clipboard.take();
-        system_clipboard.take();
-        primary.take();
-        system_primary.take();
+        clipboard_offered.take();
+        next_paste_read.take();
         live_popups.take();
 
         default_font_family.take();

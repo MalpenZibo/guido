@@ -449,7 +449,7 @@ impl Container {
                 }
             }
 
-            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => {}
+            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut | Event::Pasted(_) => {}
         }
 
         // A press inside the box that lights up for this focus is a press on

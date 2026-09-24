@@ -212,7 +212,7 @@ blocks live beside their state rather than all in one file.
 |------|---------|
 | `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
-| `platform/selections.rs` | Clipboard and primary selection, async prefetch |
+| `platform/selections.rs` | Clipboard and primary selection, read on paste |
 | `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
 | `platform/lock.rs` | `ext-session-lock-v1` grant and lifecycle events |
@@ -370,10 +370,10 @@ A focused input is the resting state of a lock screen, so that ran all night.
 **The contract is structural, not policed.** A deferred queue and its wakeup
 are one object (`src/deferred.rs`): `DeferredQueue::push` and
 `DeferredSlot::set` *are* the wakeup, the cell inside is private, and there is
-no way to reach it that does not ask for the pass that empties it. Disposals
-and surface commands are queues; the cursor, the clipboard and the primary
-selection are slots, where two values in one frame means the second is the
-answer.
+no way to reach it that does not ask for the pass that empties it. Disposals,
+surface commands and paste requests are queues; the cursor, the clipboard and
+the primary selection are slots, where two values in one frame means the second
+is the answer.
 
 That replaced a `debug_assert!` before the blocking dispatch which named every
 queue and panicked if one was non-empty. It was the wrong shape twice over. It

@@ -20,12 +20,10 @@ pub(crate) mod state;
 pub mod storage;
 mod trigger;
 
-pub(crate) use clipboard::{
-    clear_system_clipboard, set_system_clipboard, set_system_primary, take_clipboard_change,
-    take_primary_change,
-};
+pub(crate) use clipboard::paste_into;
 pub use clipboard::{
-    clipboard_copy, clipboard_has_content, clipboard_paste, primary_copy, primary_paste,
+    PastedText, SelectionKind, clipboard_copy, clipboard_has_content, clipboard_paste,
+    primary_copy, primary_paste, take_clipboard_change, take_primary_change,
 };
 pub use context::{
     expect_context, has_context, provide_context, provide_signal_context, use_context, with_context,

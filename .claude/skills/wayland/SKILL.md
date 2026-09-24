@@ -35,8 +35,8 @@ Multiple surfaces share one reactive state and one renderer.
   is click and state layers work. The rules of that folding are
   `translate_touch`, a free function with unit tests beside it; what still
   needs a device is the wire above it
-- **Clipboard** — async prefetch so paste never blocks the UI thread, plus
-  primary selection
+- **Clipboard** — an offer is read only when something pastes, on a reader
+  thread, and the answer goes to whoever asked; plus primary selection
 - **Compositor effects** — `ext-background-effect-v1` for backdrop blur, with
   `compositor_effects()` to ask what is available
 - **Fractional scaling** (`wp_fractional_scale_v1` + `wp_viewporter`) — bound

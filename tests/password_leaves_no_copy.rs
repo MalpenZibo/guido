@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use common::Harness;
 use guido::prelude::*;
+use guido::reactive::clipboard::{SelectionKind, answer_pastes, deliver_pastes};
 
 /// Twenty characters, so a regrowth or two happens while it is typed, and
 /// none of it a word the rest of the test binary might hold for its own
@@ -158,6 +159,18 @@ fn no_freed_block_ever_held_the_password() {
     relayout(&mut harness);
     // And replaced, so the one set above is dropped.
     password.set(Secret::new());
+
+    // Pasted from a password manager: the answer to the paste is read into a
+    // `String`, as the reader thread reads it, and handed to the field.
+    ctrl(&mut harness, 'v');
+    answer_pastes(SelectionKind::Clipboard, Some(PASSWORD));
+    deliver_pastes(&mut harness.tree);
+    assert!(
+        password.with_untracked(|s| s.expose() == PASSWORD),
+        "the paste did not arrive"
+    );
+    password.clear();
+    relayout(&mut harness);
 
     drop(harness);
 

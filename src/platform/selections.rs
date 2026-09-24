@@ -1,12 +1,11 @@
 //! The two system selections: the clipboard and the primary selection.
 //!
-//! Both work the same way — an offer arrives, a reader thread pulls the
-//! content through a pipe, and the result comes back on the calloop ingress
-//! channel — so they are kept together and share one prefetch path.
-//!
-//! Reading a selection means blocking on a pipe until the owning application
-//! answers, which is why it never happens on the UI thread. Generation
-//! counters drop any result that a newer offer has already made stale.
+//! Both work the same way, so they are kept together. An offer arriving is
+//! only recorded — sctk keeps it, and the application is told that one exists.
+//! Its content is read when something pastes: a reader thread pulls it through
+//! a pipe, and the result comes back on the calloop ingress channel to whoever
+//! asked. Reading means blocking on a pipe until the owning application
+//! answers, which is why it never happens on the UI thread.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -26,9 +25,10 @@ use smithay_client_toolkit::{
         selection::{PrimarySelectionSource, PrimarySelectionSourceHandler},
     },
 };
+use zeroize::{Zeroize, Zeroizing};
 
 use smithay_client_toolkit::reexports::client::{
-    Connection, Proxy, QueueHandle,
+    Connection, QueueHandle,
     protocol::{
         wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
         wl_data_source::WlDataSource, wl_seat, wl_surface,
@@ -36,14 +36,24 @@ use smithay_client_toolkit::reexports::client::{
 };
 
 use super::wayland::WaylandState;
+pub use crate::reactive::SelectionKind;
+use crate::reactive::clipboard::{answer_paste, set_clipboard_offered};
 
-/// Which system selection a prefetched content update belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectionKind {
-    /// The regular clipboard (Ctrl+C / Ctrl+V).
-    Clipboard,
-    /// The primary selection (select-to-copy / middle-click paste).
-    Primary,
+/// The text types a selection is read as, most preferred first.
+const TEXT_MIMES: [&str; 5] = [
+    "text/plain;charset=utf-8",
+    "UTF8_STRING",
+    "text/plain",
+    "TEXT",
+    "STRING",
+];
+
+/// The first of an offer's mime types a selection can be read as.
+fn text_mime(mimes: &[String]) -> Option<&'static str> {
+    TEXT_MIMES
+        .iter()
+        .find(|m| mimes.iter().any(|t| t == *m))
+        .copied()
 }
 
 /// Everything the two selections own.
@@ -61,12 +71,6 @@ pub struct Selections {
     pub(super) primary_selection_device: Option<PrimarySelectionDevice>,
     pub(super) primary_content: Option<String>,
     pub(super) primary_source: Option<PrimarySelectionSource>,
-
-    /// Bumped on every new offer. A reader thread stamps its result with the
-    /// generation it started from, and a result that no longer matches is
-    /// dropped: the selection moved on while the pipe was still open.
-    selection_generation: u64,
-    primary_generation: u64,
 }
 
 impl Selections {
@@ -83,58 +87,20 @@ impl Selections {
             primary_selection_device: None,
             primary_content: None,
             primary_source: None,
-            selection_generation: 0,
-            primary_generation: 0,
         }
     }
 
-    /// Apply a prefetched clipboard/primary content update. Reads made stale by
-    /// a newer offer are dropped via the generation check.
-    pub(super) fn apply(&self, kind: SelectionKind, generation: u64, content: Option<String>) {
-        let current = match kind {
-            SelectionKind::Clipboard => self.selection_generation,
-            SelectionKind::Primary => self.primary_generation,
-        };
-        if generation != current {
-            log::debug!("Dropping stale {kind:?} content (gen {generation} != {current})");
-            return;
-        }
+    /// What guido itself is offering as `kind`, while it still owns it.
+    fn own_content(&self, kind: SelectionKind) -> Option<&String> {
         match kind {
-            SelectionKind::Clipboard => match content {
-                Some(text) => crate::reactive::set_system_clipboard(text),
-                None => crate::reactive::clear_system_clipboard(),
-            },
-            SelectionKind::Primary => crate::reactive::set_system_primary(content),
-        }
-    }
-
-    fn next_generation(&mut self, kind: SelectionKind) -> u64 {
-        let generation = match kind {
-            SelectionKind::Clipboard => &mut self.selection_generation,
-            SelectionKind::Primary => &mut self.primary_generation,
-        };
-        *generation += 1;
-        *generation
-    }
-
-    /// A selection with no content: cleared, or offered in nothing readable.
-    pub(super) fn clear(&mut self, kind: SelectionKind) {
-        let generation = self.next_generation(kind);
-        self.apply(kind, generation, None);
-    }
-
-    /// A new offer for `kind`, read by `start_reader`, which is handed the
-    /// offer's generation to stamp its result with and answers whether the read
-    /// could start. One that could not is an offer with no content.
-    pub(super) fn offer(
-        &mut self,
-        kind: SelectionKind,
-        start_reader: impl FnOnce(u64) -> Result<(), String>,
-    ) {
-        let generation = self.next_generation(kind);
-        if let Err(e) = start_reader(generation) {
-            log::warn!("Selection prefetch skipped: {e}");
-            self.apply(kind, generation, None);
+            SelectionKind::Clipboard => self
+                .clipboard_source
+                .as_ref()
+                .and(self.clipboard_content.as_ref()),
+            SelectionKind::Primary => self
+                .primary_source
+                .as_ref()
+                .and(self.primary_content.as_ref()),
         }
     }
 
@@ -169,10 +135,7 @@ impl WaylandState {
         let qh = &self.qh;
         if let Some(ref manager) = self.selections.data_device_manager {
             // Create a data source for the clipboard
-            let source = manager.create_copy_paste_source(
-                qh,
-                vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
-            );
+            let source = manager.create_copy_paste_source(qh, TEXT_MIMES);
 
             // Store the text to write when compositor requests it
             self.selections.clipboard_content = Some(text);
@@ -185,12 +148,6 @@ impl WaylandState {
         }
     }
 
-    /// Get clipboard content (paste)
-    /// Returns the content if available, or None if clipboard is empty
-    pub fn get_clipboard(&self) -> Option<String> {
-        self.selections.clipboard_content.clone()
-    }
-
     /// Set the primary selection content (select-to-copy).
     pub fn set_primary(&mut self, text: String) {
         let qh = &self.qh;
@@ -201,84 +158,113 @@ impl WaylandState {
             return;
         };
 
-        let source = manager.create_selection_source(
-            qh,
-            vec!["text/plain;charset=utf-8", "UTF8_STRING", "TEXT", "STRING"],
-        );
+        let source = manager.create_selection_source(qh, TEXT_MIMES);
         self.selections.primary_content = Some(text);
         source.set_selection(device, self.input.latest_input_serial);
         self.selections.primary_source = Some(source);
     }
 
-    /// Apply a prefetched clipboard/primary content update (from the loop's
-    /// ingress channel callback).
-    pub(crate) fn apply_clipboard_update(
-        &mut self,
-        kind: SelectionKind,
-        generation: u64,
-        content: Option<String>,
-    ) {
-        self.selections.apply(kind, generation, content);
-    }
-
-    /// Start an async prefetch of an offer's content on a reader thread.
-    /// `receive` turns a chosen mime type into a read pipe. The result comes
-    /// back through the calloop ingress channel — the message itself wakes
-    /// the loop, no hand-rolled wakeup involved.
-    fn prefetch_selection<R>(&mut self, kind: SelectionKind, mimes: Vec<String>, receive: R)
-    where
-        R: FnOnce(&str) -> Option<ReadPipe>,
-    {
-        // Preferred mime order; take the first one offered.
-        const PREFERRED: [&str; 5] = [
-            "text/plain;charset=utf-8",
-            "UTF8_STRING",
-            "text/plain",
-            "TEXT",
-            "STRING",
-        ];
-        let mime = PREFERRED
-            .iter()
-            .find(|m| mimes.iter().any(|t| t == *m))
-            .copied();
-
-        let Some(pipe) = mime.and_then(receive) else {
-            self.selections.clear(kind);
+    /// Read `kind` for the pastes waiting on `token`.
+    ///
+    /// While guido owns the selection it answers from its own copy: going
+    /// through the compositor would only hand the same text back through a
+    /// pipe. Otherwise the current offer is read on a reader thread, and the
+    /// result comes back through the calloop ingress channel — the message
+    /// itself wakes the loop.
+    pub(crate) fn read_selection(&mut self, kind: SelectionKind, token: u64) {
+        if let Some(own) = self.selections.own_content(kind) {
+            answer_paste(token, Some(own.clone()));
             return;
-        };
-        self.selections.offer(kind, |generation| {
-            // Bound to the loop that is running now, because the read below has
-            // three seconds to finish and a loop that restarts in the meantime
-            // starts its generation counters over: a result delivered into the
-            // next session would pass the check in `Selections::apply` against a
-            // matching generation that means something else.
-            let sender = crate::ingress::sender_handle()
-                .ok_or_else(|| "no event loop running".to_string())?;
-            std::thread::Builder::new()
-                .name("guido-clipboard-read".into())
-                .spawn(move || {
-                    let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
-                    sender.send(crate::ingress::IngressMessage::ClipboardUpdate {
-                        kind,
-                        generation,
-                        content,
-                    });
-                })
-                .map(|_| ())
-                .map_err(|e| format!("failed to spawn clipboard reader thread: {e}"))
-        });
+        }
+        if self.start_read(kind, token).is_none() {
+            answer_paste(token, None);
+        }
     }
+
+    /// Open the current offer of `kind` and read it on a reader thread.
+    /// `None` when there is nothing to read or the read could not start.
+    fn start_read(&self, kind: SelectionKind, token: u64) -> Option<()> {
+        let pipe = match kind {
+            SelectionKind::Clipboard => {
+                let offer = self
+                    .selections
+                    .data_device
+                    .as_ref()?
+                    .data()
+                    .selection_offer()?;
+                receive_text(kind, offer.with_mime_types(text_mime), |mime| {
+                    offer.receive(mime)
+                })?
+            }
+            SelectionKind::Primary => {
+                let device = self.selections.primary_selection_device.as_ref()?;
+                let offer = device.data().selection_offer()?;
+                receive_text(kind, offer.with_mime_types(text_mime), |mime| {
+                    offer.receive(mime)
+                })?
+            }
+        };
+        // Bound to the loop that is running now: the read below has three
+        // seconds to finish, and a result delivered into the next session's
+        // loop could meet a token that means something else there.
+        let sender = crate::ingress::sender_handle()?;
+        std::thread::Builder::new()
+            .name("guido-clipboard-read".into())
+            .spawn(move || {
+                let content = read_pipe_with_deadline(pipe, Duration::from_secs(3));
+                sender.send(crate::ingress::IngressMessage::SelectionRead { token, content });
+            })
+            .map_err(|e| log::warn!("Failed to spawn clipboard reader thread: {e}"))
+            .ok()?;
+        Some(())
+    }
+}
+
+/// Ask for an offer's content as `mime`, the text type chosen for it.
+fn receive_text<E: std::fmt::Debug>(
+    kind: SelectionKind,
+    mime: Option<&'static str>,
+    receive: impl FnOnce(String) -> Result<ReadPipe, E>,
+) -> Option<ReadPipe> {
+    let mime = mime?;
+    receive(mime.to_string())
+        .map_err(|e| log::debug!("Failed to receive {kind:?} as {mime}: {e:?}"))
+        .ok()
 }
 
 /// Read a selection pipe to EOF with a total deadline. Runs on a reader
 /// thread — never on the UI thread.
+///
+/// Every buffer the text passes through is wiped before it is freed: a paste
+/// is often a password, copied from a manager.
 fn read_pipe_with_deadline(pipe: ReadPipe, deadline: Duration) -> Option<String> {
+    let mut file = File::from(OwnedFd::from(pipe));
+    let mut buf = Zeroizing::new(Vec::new());
+    let mut chunk = Zeroizing::new([0u8; 8192]);
+    read_with_deadline(&mut file, &mut buf, &mut chunk[..], deadline)?;
+
+    let text = match String::from_utf8(std::mem::take(&mut *buf)) {
+        Ok(text) => text,
+        Err(e) => {
+            let mut bytes = e.into_bytes();
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            bytes.zeroize();
+            text
+        }
+    };
+    (!text.is_empty()).then_some(text)
+}
+
+/// Read `file` into `buf` until EOF, or give up at the deadline.
+fn read_with_deadline(
+    file: &mut File,
+    buf: &mut Vec<u8>,
+    chunk: &mut [u8],
+    deadline: Duration,
+) -> Option<()> {
     use std::os::unix::io::AsRawFd;
 
-    let fd = OwnedFd::from(pipe);
-    let mut file = File::from(fd);
     let raw_fd = file.as_raw_fd();
-    let mut buf = Vec::new();
     let end = Instant::now() + deadline;
 
     loop {
@@ -309,10 +295,19 @@ fn read_pipe_with_deadline(pipe: ReadPipe, deadline: Duration) -> Option<String>
         }
 
         // POLLIN or POLLHUP: data available or writer closed — read either way
-        let mut chunk = [0u8; 8192];
-        match file.read(&mut chunk) {
-            Ok(0) => break, // EOF
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        match file.read(chunk) {
+            Ok(0) => return Some(()), // EOF
+            Ok(n) => {
+                // Grown by hand, so the old buffer is wiped before it goes:
+                // `extend_from_slice` would reallocate and free it as it was.
+                if buf.capacity() - buf.len() < n {
+                    let mut grown = Vec::with_capacity((buf.len() + n).max(2 * buf.capacity()));
+                    grown.extend_from_slice(buf);
+                    buf.zeroize();
+                    *buf = grown;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => {
                 log::warn!("Clipboard read failed: {e}");
@@ -320,9 +315,6 @@ fn read_pipe_with_deadline(pipe: ReadPipe, deadline: Duration) -> Option<String>
             }
         }
     }
-
-    let text = String::from_utf8_lossy(&buf).into_owned();
-    (!text.is_empty()).then_some(text)
 }
 
 impl DataDeviceHandler for WaylandState {
@@ -364,66 +356,33 @@ impl DataDeviceHandler for WaylandState {
 
     fn selection(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &WlDataDevice,
     ) {
         log::debug!("Clipboard selection changed");
-        // Prefetch the new selection's content on a reader thread so paste
-        // is instant and never blocks the UI thread.
-        let offer = self
+        // Nothing is read until something pastes: only whether there is
+        // anything to paste is recorded.
+        let offered = self
             .selections
             .data_device
             .as_ref()
-            .and_then(|device| device.data().selection_offer());
-        match offer {
-            None => {
-                // Selection cleared — main thread, apply directly.
-                self.selections.clear(SelectionKind::Clipboard);
-            }
-            Some(offer) => {
-                let mimes = offer.with_mime_types(|t| t.to_vec());
-                self.prefetch_selection(SelectionKind::Clipboard, mimes, |mime| {
-                    offer
-                        .receive(mime.to_string())
-                        .map_err(|e| log::debug!("Failed to receive clipboard as {mime}: {e:?}"))
-                        .ok()
-                });
-                // Send the receive request out now so the source app starts
-                // writing before the next loop-iteration flush.
-                let _ = conn.flush();
-            }
-        }
+            .and_then(|device| device.data().selection_offer())
+            .and_then(|offer| offer.with_mime_types(text_mime))
+            .is_some();
+        set_clipboard_offered(offered);
     }
 }
 
 impl PrimarySelectionDeviceHandler for WaylandState {
     fn selection(
         &mut self,
-        conn: &Connection,
+        _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        device: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
+        _device: &smithay_client_toolkit::reexports::protocols::wp::primary_selection::zv1::client::zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1,
     ) {
+        // Nothing is read until a middle click pastes.
         log::debug!("Primary selection changed");
-        let offer = device
-            .data::<smithay_client_toolkit::primary_selection::device::PrimarySelectionDeviceData>()
-            .and_then(|data| data.selection_offer());
-        match offer {
-            None => {
-                // Primary selection cleared — main thread, apply directly.
-                self.selections.clear(SelectionKind::Primary);
-            }
-            Some(offer) => {
-                let mimes = offer.with_mime_types(|t| t.to_vec());
-                self.prefetch_selection(SelectionKind::Primary, mimes, |mime| {
-                    offer
-                        .receive(mime.to_string())
-                        .map_err(|e| log::debug!("Failed to receive primary as {mime}: {e:?}"))
-                        .ok()
-                });
-                let _ = conn.flush();
-            }
-        }
     }
 }
 
@@ -560,82 +519,32 @@ impl DataSourceHandler for WaylandState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reactive::{
-        clipboard_paste, primary_paste, set_system_clipboard, set_system_primary,
-    };
 
-    /// An offer whose read cannot start — no event loop to deliver to, no thread
-    /// to read on — has no content, as one with nothing readable does.
+    /// Longer than a chunk and than the first allocation, so the buffer grows
+    /// by hand more than once and each grow has to carry the text over.
     #[test]
-    fn an_offer_whose_read_cannot_start_leaves_nothing_to_paste() {
-        let mut selections = Selections::new(None, None);
+    fn a_read_keeps_every_byte_across_its_grows() {
+        let text: String = (0..20_000)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let sent = text.clone();
+        let writing = std::thread::spawn(move || writer.write_all(sent.as_bytes()));
 
-        set_system_clipboard("copied two selections ago".into());
-        selections.offer(SelectionKind::Clipboard, |_| {
-            Err("failed to spawn clipboard reader thread".into())
-        });
-        assert_eq!(clipboard_paste(), None);
+        let mut file = File::from(OwnedFd::from(reader));
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        let read = read_with_deadline(&mut file, &mut buf, &mut chunk, Duration::from_secs(5));
+        writing.join().unwrap().unwrap();
 
-        set_system_primary(Some("selected two selections ago".into()));
-        selections.offer(SelectionKind::Primary, |_| {
-            Err("no event loop running".into())
-        });
-        assert_eq!(
-            primary_paste(),
-            None,
-            "and the middle click has the same hole"
-        );
+        assert_eq!(read, Some(()));
+        assert_eq!(buf, text.as_bytes());
     }
 
-    /// A reader that did start is left to deliver: the text is replaced when its
-    /// result arrives, not before.
     #[test]
-    fn an_offer_being_read_keeps_the_text_until_the_read_lands() {
-        let mut selections = Selections::new(None, None);
-        set_system_clipboard("the last owner's".into());
-
-        let mut started = None;
-        selections.offer(SelectionKind::Clipboard, |generation| {
-            started = Some(generation);
-            Ok(())
-        });
-        assert_eq!(clipboard_paste().as_deref(), Some("the last owner's"));
-
-        selections.apply(
-            SelectionKind::Clipboard,
-            started.unwrap(),
-            Some("this one's".into()),
-        );
-        assert_eq!(clipboard_paste().as_deref(), Some("this one's"));
-    }
-
-    /// A read that lands after a newer offer is dropped: the slow pipe of the
-    /// last owner does not get to overwrite the one that replaced it.
-    #[test]
-    fn a_read_overtaken_by_a_newer_offer_is_dropped() {
-        let mut selections = Selections::new(None, None);
-
-        let mut first = None;
-        selections.offer(SelectionKind::Clipboard, |generation| {
-            first = Some(generation);
-            Ok(())
-        });
-        let mut second = None;
-        selections.offer(SelectionKind::Clipboard, |generation| {
-            second = Some(generation);
-            Ok(())
-        });
-
-        selections.apply(
-            SelectionKind::Clipboard,
-            second.unwrap(),
-            Some("newer".into()),
-        );
-        selections.apply(
-            SelectionKind::Clipboard,
-            first.unwrap(),
-            Some("older".into()),
-        );
-        assert_eq!(clipboard_paste().as_deref(), Some("newer"));
+    fn the_preferred_text_type_is_the_one_read() {
+        let offered = ["STRING".to_owned(), "text/plain;charset=utf-8".to_owned()];
+        assert_eq!(text_mime(&offered), Some("text/plain;charset=utf-8"));
+        assert_eq!(text_mime(&["image/png".to_owned()]), None);
     }
 }

@@ -125,9 +125,31 @@ struct Recorder {
     /// shape asked for again on each enter is the thing asserted, and a last
     /// value cannot count.
     cursors: Vec<crate::reactive::CursorIcon>,
+    /// What the seat offers as the clipboard and as the primary selection:
+    /// another application's copy, or the application's own, handed back the
+    /// way a compositor hands a new selection to every client.
+    clipboard: Option<String>,
+    primary: Option<String>,
+    /// Every read the seat was asked for, oldest first.
+    selection_reads: Vec<crate::reactive::SelectionKind>,
 }
 
 impl Recorder {
+    /// A new selection, and what the application is told of it.
+    fn offer(&mut self, kind: crate::reactive::SelectionKind, text: String) {
+        *self.selection(kind) = Some(text);
+        if kind == crate::reactive::SelectionKind::Clipboard {
+            crate::reactive::clipboard::set_clipboard_offered(true);
+        }
+    }
+
+    fn selection(&mut self, kind: crate::reactive::SelectionKind) -> &mut Option<String> {
+        match kind {
+            crate::reactive::SelectionKind::Clipboard => &mut self.clipboard,
+            crate::reactive::SelectionKind::Primary => &mut self.primary,
+        }
+    }
+
     fn get(&self, id: SurfaceId) -> &RecordedSurface {
         self.surfaces.get(&id).unwrap_or_else(|| missing(id))
     }
@@ -376,6 +398,22 @@ impl Platform for Recorder {
 
     fn set_cursor(&mut self, cursor: crate::reactive::CursorIcon) {
         self.cursors.push(cursor);
+    }
+
+    fn set_clipboard(&mut self, text: String) {
+        self.offer(crate::reactive::SelectionKind::Clipboard, text);
+    }
+
+    fn set_primary(&mut self, text: String) {
+        self.offer(crate::reactive::SelectionKind::Primary, text);
+    }
+
+    /// Answered at once: the reader thread and its pipe are the half a
+    /// recorder cannot stand in for.
+    fn read_selection(&mut self, kind: crate::reactive::SelectionKind, token: u64) {
+        self.selection_reads.push(kind);
+        let offered = self.selection(kind).clone();
+        crate::reactive::clipboard::answer_paste(token, offered);
     }
 
     fn take_lock_events(&mut self) -> Vec<LockEvent> {
@@ -707,6 +745,17 @@ impl Headless {
     /// whichever surface that was.
     pub fn cursors_asked(&self) -> &[crate::reactive::CursorIcon] {
         &self.host.cursors
+    }
+
+    /// Another application copies `text`: the seat now offers it as `kind`.
+    /// Nothing is read until the application pastes.
+    pub fn offer_selection(&mut self, kind: crate::reactive::SelectionKind, text: &str) {
+        self.host.offer(kind, text.to_owned());
+    }
+
+    /// Every selection read the application asked the seat for, oldest first.
+    pub fn selection_reads(&self) -> &[crate::reactive::SelectionKind] {
+        &self.host.selection_reads
     }
 
     /// Say the compositor granted the lock the application asked for, which is
