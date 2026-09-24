@@ -6,32 +6,63 @@
 //! off. That answer arrives as a configure, which is also why growing a popup
 //! means asking to be repositioned rather than simply resizing.
 
-use smithay_client_toolkit::{
-    delegate_xdg_popup,
-    shell::xdg::{
-        XdgPositioner, XdgShell,
-        popup::{Popup, PopupConfigure, PopupHandler},
-    },
+use smithay_client_toolkit::globals::{GlobalData, ProvidesBoundGlobal};
+use smithay_client_toolkit::reexports::client::globals::{BindError, GlobalList};
+use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
+use smithay_client_toolkit::reexports::protocols::xdg::shell::client::{
+    xdg_positioner, xdg_wm_base::XdgWmBase,
 };
-
-use smithay_client_toolkit::reexports::client::{Connection, Dispatch, Proxy, QueueHandle};
-use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positioner;
+use smithay_client_toolkit::shell::xdg::{
+    XdgPositioner, XdgShell,
+    popup::{Popup, PopupConfigure, PopupHandler},
+};
 
 use super::wayland::{SurfaceRole, WaylandState, WaylandSurfaceState};
 use crate::surface::SurfaceId;
 
-/// The xdg shell and the state popups need across configures.
+/// `xdg_wm_base`, and nothing else of the xdg shell.
+///
+/// Not sctk's `XdgShell`: binding that also binds the decoration manager, whose
+/// dispatch asks for a `WindowHandler`, and guido has no toplevel windows.
+/// Popups and positioners take anything that provides the base, and sctk's own
+/// `GlobalData` dispatch answers its pings.
+pub(crate) struct WmBase(XdgWmBase);
+
+impl WmBase {
+    pub(super) fn bind(
+        globals: &GlobalList,
+        qh: &QueueHandle<WaylandState>,
+    ) -> Result<Self, BindError> {
+        globals
+            .bind(qh, 1..=XdgShell::API_VERSION_MAX, GlobalData)
+            .map(Self)
+    }
+}
+
+impl ProvidesBoundGlobal<XdgWmBase, 5> for WmBase {
+    fn bound_global(&self) -> Result<XdgWmBase, smithay_client_toolkit::error::GlobalError> {
+        Ok(self.0.clone())
+    }
+}
+
+impl ProvidesBoundGlobal<XdgWmBase, { XdgShell::API_VERSION_MAX }> for WmBase {
+    fn bound_global(&self) -> Result<XdgWmBase, smithay_client_toolkit::error::GlobalError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// The xdg base and the state popups need across configures.
 pub struct Popups {
     /// `None` where xdg_wm_base is unavailable — popups then fail with a log.
-    pub(super) xdg_shell: Option<XdgShell>,
+    pub(super) wm_base: Option<WmBase>,
     /// Monotonic token for xdg_popup.reposition requests.
     pub(super) reposition_token: u32,
 }
 
 impl Popups {
-    pub(super) fn new(xdg_shell: Option<XdgShell>) -> Self {
+    pub(super) fn new(wm_base: Option<WmBase>) -> Self {
         Self {
-            xdg_shell,
+            wm_base,
             reposition_token: 0,
         }
     }
@@ -40,11 +71,11 @@ impl Popups {
 impl WaylandState {
     /// Build an xdg_positioner for a popup config at the given size.
     fn build_popup_positioner(
-        xdg_shell: &XdgShell,
+        wm_base: &WmBase,
         config: &crate::surface::PopupConfig,
         size: (u32, u32),
     ) -> Option<XdgPositioner> {
-        let positioner = match XdgPositioner::new(xdg_shell) {
+        let positioner = match XdgPositioner::new(wm_base) {
             Ok(p) => p,
             Err(e) => {
                 log::error!("Failed to create xdg_positioner: {e}");
@@ -88,7 +119,7 @@ impl WaylandState {
         size: (u32, u32),
     ) -> bool {
         let qh = &self.qh;
-        let Some(ref xdg_shell) = self.popups.xdg_shell else {
+        let Some(ref wm_base) = self.popups.wm_base else {
             log::error!("Cannot create popup: compositor lacks xdg_wm_base");
             return false;
         };
@@ -97,7 +128,7 @@ impl WaylandState {
             return false;
         };
 
-        let Some(positioner) = Self::build_popup_positioner(xdg_shell, config, size) else {
+        let Some(positioner) = Self::build_popup_positioner(wm_base, config, size) else {
             return false;
         };
 
@@ -105,8 +136,7 @@ impl WaylandState {
         let popup = match &parent_state.role {
             SurfaceRole::Layer(layer_surface) => {
                 let popup =
-                    match Popup::from_surface(None, &positioner, qh, wl_surface.clone(), xdg_shell)
-                    {
+                    match Popup::from_surface(None, &positioner, qh, wl_surface.clone(), wm_base) {
                         Ok(popup) => popup,
                         Err(e) => {
                             log::error!("Failed to create xdg popup: {e}");
@@ -129,7 +159,7 @@ impl WaylandState {
                     &positioner,
                     qh,
                     wl_surface.clone(),
-                    xdg_shell,
+                    wm_base,
                 ) {
                     Ok(popup) => popup,
                     Err(e) => {
@@ -228,7 +258,7 @@ impl WaylandState {
     /// Reposition an auto-height popup when its content height changed.
     /// The compositor answers with a new configure carrying the final size.
     pub(crate) fn reposition_popup_if_changed(&mut self, id: SurfaceId, new_height: u32) {
-        let Some(ref xdg_shell) = self.popups.xdg_shell else {
+        let Some(ref wm_base) = self.popups.wm_base else {
             return;
         };
         let Some(surface_state) = self.surfaces.get_mut(&id) else {
@@ -247,7 +277,7 @@ impl WaylandState {
             return;
         }
         let Some(positioner) =
-            Self::build_popup_positioner(xdg_shell, config, (config.width, new_height))
+            Self::build_popup_positioner(wm_base, config, (config.width, new_height))
         else {
             return;
         };
@@ -335,32 +365,3 @@ impl PopupHandler for WaylandState {
         }
     }
 }
-
-// Not delegate_xdg_shell!: that macro (and sctk's decoration dispatches)
-// drag in WindowHandler bounds — guido has no toplevel windows. Popups need
-// only xdg_wm_base (ping/pong), plus an inert stub for the decoration
-// manager that XdgShell::bind insists on binding (the protocol object has
-// no events).
-smithay_client_toolkit::reexports::client::delegate_dispatch!(WaylandState: [
-    smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_wm_base::XdgWmBase: smithay_client_toolkit::globals::GlobalData
-] => XdgShell);
-
-impl
-    Dispatch<
-        smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-        smithay_client_toolkit::globals::GlobalData,
-    > for WaylandState
-{
-    fn event(
-        _: &mut Self,
-        _: &smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
-        _: smithay_client_toolkit::reexports::protocols::xdg::decoration::zv1::client::zxdg_decoration_manager_v1::Event,
-        _: &smithay_client_toolkit::globals::GlobalData,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        unreachable!("zxdg_decoration_manager_v1 has no events");
-    }
-}
-
-delegate_xdg_popup!(WaylandState);

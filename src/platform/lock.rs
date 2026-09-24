@@ -7,12 +7,9 @@
 //! which exists from the request on, and a compositor may hold the grant until
 //! they have drawn.
 
-use smithay_client_toolkit::{
-    delegate_session_lock,
-    session_lock::{
-        SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
-        SessionLockSurfaceConfigure,
-    },
+use smithay_client_toolkit::session_lock::{
+    SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
+    SessionLockSurfaceConfigure,
 };
 
 use smithay_client_toolkit::reexports::client::{Connection, Proxy, QueueHandle};
@@ -185,5 +182,3 @@ impl SessionLockHandler for WaylandState {
         }
     }
 }
-
-delegate_session_lock!(WaylandState);
