@@ -220,14 +220,20 @@ impl Default for Secret {
     }
 }
 
+impl Secret {
+    /// Zero the whole mapping, not just the text: a shrink already zeroed its
+    /// tail, but wiping what was never written costs a page at most.
+    fn wipe(&mut self) {
+        self.slice_mut(0..self.capacity).zeroize();
+    }
+}
+
 impl Drop for Secret {
     fn drop(&mut self) {
         if self.capacity == 0 {
             return;
         }
-        // The whole mapping, not just the text: a shrink already zeroed its
-        // tail, but wiping what was never written costs a page at most.
-        self.slice_mut(0..self.capacity).zeroize();
+        self.wipe();
         // SAFETY: the mapping this value made, released once.
         unsafe {
             libc::munlock(self.ptr.as_ptr().cast(), self.capacity);
@@ -259,6 +265,31 @@ impl fmt::Debug for Secret {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bytes at `range` of a secret's mapping, read through the raw
+    /// pointer rather than through `slice_mut`, which is under test too.
+    fn raw(secret: &Secret, range: Range<usize>) -> Vec<u8> {
+        assert!(range.end <= secret.capacity);
+        // SAFETY: inside the mapping the secret owns.
+        unsafe { std::slice::from_raw_parts(secret.ptr.as_ptr().add(range.start), range.len()) }
+            .to_vec()
+    }
+
+    /// Whether any mapping of this process holds `addr`.
+    fn mapped(addr: usize) -> bool {
+        let maps = std::fs::read_to_string("/proc/self/maps").expect("Linux has maps");
+        maps.lines().any(|line| {
+            let range = line.split(' ').next().unwrap_or_default();
+            let (start, end) = range.split_once('-').unwrap_or_default();
+            match (
+                usize::from_str_radix(start, 16),
+                usize::from_str_radix(end, 16),
+            ) {
+                (Ok(start), Ok(end)) => (start..end).contains(&addr),
+                _ => false,
+            }
+        })
+    }
 
     /// The `/proc/self/smaps` entry of the mapping that holds `addr`: its
     /// `VmFlags` line, and its `Locked:` size in kB.
@@ -346,7 +377,74 @@ mod tests {
         let mut secret = Secret::from(String::from("abcdefgh"));
         secret.replace_range(2..8, "");
         assert_eq!(secret.expose(), "ab");
-        assert!(secret.slice_mut(2..8).iter().all(|&b| b == 0));
+        assert_eq!(raw(&secret, 2..8), [0; 6]);
+    }
+
+    /// Every edit the field makes, in place and across a regrowth, against a
+    /// `String` making the same ones — and nothing left past the end.
+    #[test]
+    fn its_edits_match_a_string_making_the_same_ones() {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let long = "é".repeat(page); // two bytes each: past a page, on boundaries
+        let edits: [(Range<usize>, &str); 7] = [
+            (0..0, "hunter2"),
+            (3..3, "--"),                // into the middle
+            (1..5, "X"),                 // shorter, tail moves left
+            (2..3, "abcdef"),            // longer, tail moves right
+            (4..4, &long),               // grows the mapping, with a tail after it
+            (6..6 + long.len() - 2, ""), // shrinks back, tail moves far left
+            (0..2, ""),                  // from the front
+        ];
+        let mut secret = Secret::new();
+        let mut reference = String::new();
+        for (range, with) in edits {
+            secret.replace_range(range.clone(), with);
+            reference.replace_range(range, with);
+            assert_eq!(secret.expose(), reference);
+            let len = secret.expose().len();
+            assert!(
+                raw(&secret, len..secret.capacity).iter().all(|&b| b == 0),
+                "bytes left past the end of the text"
+            );
+        }
+    }
+
+    /// Text that exactly fills the mapping stays in it.
+    #[test]
+    fn text_that_fills_the_pages_exactly_does_not_move_them() {
+        let mut secret = Secret::from(String::from("a"));
+        let (ptr, capacity) = (secret.ptr, secret.capacity);
+        secret.replace_range(1..1, &"a".repeat(capacity - 1));
+        assert_eq!(secret.ptr, ptr, "a secret that fit was moved");
+        assert_eq!(secret.expose().len(), capacity);
+    }
+
+    #[test]
+    fn clearing_zeroes_the_text_and_keeps_the_pages() {
+        let mut secret = Secret::from(String::from("hunter2"));
+        let ptr = secret.ptr;
+        secret.clear();
+        assert!(secret.is_empty());
+        assert_eq!(secret.ptr, ptr);
+        assert_eq!(raw(&secret, 0..7), [0; 7]);
+    }
+
+    #[test]
+    fn wiping_zeroes_every_byte_of_the_mapping() {
+        let mut secret = Secret::from("x".repeat(100));
+        secret.wipe();
+        assert!(raw(&secret, 0..secret.capacity).iter().all(|&b| b == 0));
+    }
+
+    /// Dropping gives the pages back — after `wipe`, which the test above is
+    /// what watches.
+    #[test]
+    fn dropping_gives_the_pages_back() {
+        let secret = Secret::from(String::from("hunter2"));
+        let addr = secret.ptr.as_ptr() as usize;
+        assert!(mapped(addr));
+        drop(secret);
+        assert!(!mapped(addr), "the mapping outlived its secret");
     }
 
     #[test]

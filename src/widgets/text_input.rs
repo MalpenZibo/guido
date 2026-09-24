@@ -2129,6 +2129,19 @@ mod tests {
         );
     }
 
+    /// A write to the bound signal from outside reaches the field on its next
+    /// layout.
+    #[test]
+    fn a_plain_field_follows_its_signal() {
+        let value = create_signal("abc".to_owned());
+        let (mut tree, root, id) = field_in_container(text_input(value));
+        assert_eq!(drawn_strings(&mut tree, id), ["abc"]);
+
+        value.set("xyz".to_owned());
+        relayout(&mut tree, root);
+        assert_eq!(drawn_strings(&mut tree, id), ["xyz"]);
+    }
+
     /// Enter takes the text with it, and the field says so.
     #[test]
     fn a_submit_empties_what_the_field_draws() {
