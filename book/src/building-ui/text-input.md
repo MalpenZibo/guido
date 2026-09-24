@@ -172,6 +172,43 @@ password_input(password).mask_char('*')
 # }
 ```
 
+### Showing the password
+
+An eye button beside the field is a signal the field is told:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_password();
+let shown = create_signal(false);
+
+container()
+    .layout(Flex::row().spacing(8.0))
+    .child(password_input(password).reveal(shown))
+    .child(
+        container()
+            .on_click(move || shown.update(|s| *s = !*s))
+            .child(text(move || if shown.get() { "Hide" } else { "Show" }.to_string())),
+    )
+# ;
+# }
+```
+
+Declared rather than rebuilt, so the caret, the selection and the focus stay
+where they were. Everything else stays as it was: nothing can be copied or cut
+out, and there is no undo.
+
+**The catch: a shown password is drawn like any other text, and drawing text
+copies it.** Shaping makes temporary copies of the text and frees them without
+wiping them, and the measurement and render caches keep what they shaped. That
+is ordinary memory, outside what the field controls, so while the password is
+shown — and afterwards, until those caches let go of it — it can be found in
+the process's memory the way any `String` can. The `Secret` itself is untouched,
+and the field's own copy of what it drew is wiped when it changes. GTK 4's peek
+icon makes the same trade. If the threat you are guarding against is a core
+dump or a memory read, leave `reveal` off.
+
 Everything else here — placeholder, caret, pointer shape, colours, focus,
 `readonly` — is the same on both fields.
 
@@ -550,6 +587,7 @@ impl TextInput {
 
 impl PasswordInput {
     pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
+    pub fn reveal<M>(self, reveal: impl IntoSignal<bool, M>) -> Self;  // copies while shown
     pub fn on_submit<F: Fn(Secret) + 'static>(self, callback: F) -> Self;
 }
 

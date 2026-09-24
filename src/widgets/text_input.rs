@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
@@ -333,11 +333,14 @@ impl Content for Plain {
 ///
 /// What [`password_input`] builds. The field edits the secret where it lies,
 /// and draws [`mask_char`](TextInput::mask_char) once per character without
-/// ever reading what the characters are.
+/// ever reading what the characters are — unless it is told to
+/// [`reveal`](TextInput::reveal) them.
 pub struct Masked {
     password: Password,
     mask_char: Prop<char>,
     cached_mask_char: char,
+    reveal: Prop<bool>,
+    cached_reveal: bool,
     on_submit: Option<Box<dyn Fn(Secret)>>,
 }
 
@@ -364,12 +367,22 @@ impl Content for Masked {
         // nothing, and the count is all the display is made of.
         let now = self.password.with(|secret| secret.expose().chars().count());
         let mask_char = self.mask_char.get_or('•');
-        let changed = now != char_count || mask_char != self.cached_mask_char;
+        let reveal = self.reveal.get_or(false);
+        let changed = now != char_count
+            || mask_char != self.cached_mask_char
+            || reveal != self.cached_reveal
+            // What is drawn while revealed is the text itself, which can change
+            // without its length changing.
+            || reveal;
         self.cached_mask_char = mask_char;
+        self.cached_reveal = reveal;
         changed.then_some(now)
     }
 
     fn display(&self, char_count: usize) -> String {
+        if self.cached_reveal {
+            return self.with_text(str::to_owned);
+        }
         std::iter::repeat_n(self.cached_mask_char, char_count).collect()
     }
 
@@ -390,7 +403,9 @@ impl Content for Masked {
 pub struct TextInput<C = Plain> {
     content: C,
     cached_char_count: usize,
-    cached_display_text: String,
+    /// Wiped whenever it is replaced or dropped: for a revealed password it is
+    /// the text itself.
+    cached_display_text: Zeroizing<String>,
     display_text_dirty: bool,
 
     // Measurement cache (avoid repeated text shaping in paint)
@@ -511,6 +526,8 @@ impl TextInput<Masked> {
                 password,
                 mask_char: Prop::Unset,
                 cached_mask_char: '•',
+                reveal: Prop::Unset,
+                cached_reveal: false,
                 on_submit: None,
             },
             char_count,
@@ -520,6 +537,25 @@ impl TextInput<Masked> {
     /// The character drawn for each one typed (default: '•').
     pub fn mask_char<M>(mut self, c: impl IntoSignal<char, M>) -> Self {
         self.content.mask_char = c.into_prop();
+        self
+    }
+
+    /// Draw the text itself rather than its mask, while this says so — the
+    /// eye button beside a password box.
+    ///
+    /// Declared rather than rebuilt, so the caret, the selection and the focus
+    /// stay where they were. What stays hidden is everything else: nothing is
+    /// copied or cut out, and there is no undo.
+    ///
+    /// **Drawing the text puts copies of it where drawing any text does.**
+    /// Shaping makes temporary copies of what it shapes and frees them
+    /// unwiped, and the measurement and render caches keep what they shaped —
+    /// all ordinary memory, none of it guido's to wipe. The secret itself
+    /// stays where it was, and the field's own copy of what it drew is wiped
+    /// when it is replaced. GTK 4's peek icon makes the same trade: while the
+    /// text is shown, it is laid out like any other.
+    pub fn reveal<M>(mut self, reveal: impl IntoSignal<bool, M>) -> Self {
+        self.content.reveal = reveal.into_prop();
         self
     }
 
@@ -540,7 +576,7 @@ impl<C: Content> TextInput<C> {
         Self {
             content,
             cached_char_count,
-            cached_display_text: String::new(),
+            cached_display_text: Zeroizing::new(String::new()),
             display_text_dirty: true,
             cached_text_width: 0.0,
             cached_glyph_positions: Vec::new(),
@@ -749,7 +785,7 @@ impl<C: Content> TextInput<C> {
     /// Get the display text (masked for a password), using cache when clean
     fn display_text(&mut self) -> &str {
         if self.display_text_dirty {
-            self.cached_display_text = self.content.display(self.cached_char_count);
+            self.cached_display_text = Zeroizing::new(self.content.display(self.cached_char_count));
             self.display_text_dirty = false;
         }
         &self.cached_display_text
@@ -1805,6 +1841,7 @@ pub fn text_input(signal: RwSignal<String>) -> TextInput {
 /// about the text is copied: there is no undo history, nothing can be copied
 /// or cut out of it, and Enter moves the secret out to
 /// [`on_submit`](TextInput::<Masked>::on_submit), leaving the field empty.
+/// [`reveal`](TextInput::reveal) shows the text, at the cost it documents.
 ///
 /// ```no_run
 /// # use guido::prelude::*;
@@ -2145,6 +2182,51 @@ mod tests {
             bytes.iter().all(|&b| b == 0),
             "the paste was left in memory"
         );
+    }
+
+    /// Revealing is a value the field can be told, and the eye icon beside a
+    /// password box is what needs it. Declaring it rather than rebuilding the
+    /// field is what keeps the focus.
+    ///
+    /// Read off the caret's x, which sits at the end of the *displayed* text:
+    /// bullets and `iiii` are different widths in any font.
+    #[test]
+    fn revealing_answers_to_a_signal() {
+        let shown = create_signal(false);
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("iiiiiiii".to_owned()));
+        let (mut tree, root, id) = field_in_container(password_input(password).reveal(shown));
+
+        caret_to_end(&mut tree, id);
+        let masked = drawn_rects(&mut tree, id);
+        assert_eq!(drawn_strings(&mut tree, id), ["••••••••"]);
+
+        shown.set(true);
+        relayout(&mut tree, root);
+        assert_eq!(drawn_strings(&mut tree, id), ["iiiiiiii"]);
+        assert_ne!(
+            drawn_rects(&mut tree, id)[0].x,
+            masked[0].x,
+            "the caret did not follow the revealed text"
+        );
+
+        shown.set(false);
+        relayout(&mut tree, root);
+        assert_eq!(drawn_strings(&mut tree, id), ["••••••••"]);
+        assert!(has_focus(id), "revealing cost the field its focus");
+    }
+
+    /// A revealed field follows a change to its text that keeps its length.
+    #[test]
+    fn a_revealed_field_follows_a_same_length_change() {
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("abc".to_owned()));
+        let (mut tree, root, id) = field_in_container(password_input(password).reveal(true));
+        assert_eq!(drawn_strings(&mut tree, id), ["abc"]);
+
+        password.set(Secret::from("xyz".to_owned()));
+        relayout(&mut tree, root);
+        assert_eq!(drawn_strings(&mut tree, id), ["xyz"]);
     }
 
     /// What the mask is made of is a value the field can be told.

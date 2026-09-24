@@ -14,6 +14,11 @@
 //!
 //! The password never exists on the heap on the test's side: it is typed one
 //! `Key::Char` at a time from a `&'static str`, and compared through a borrow.
+//!
+//! `reveal` is left out on purpose, and not because it passes. Drawing the
+//! text shapes it, and text shaping makes temporary copies of what it shapes
+//! and frees them unwiped — the catch `reveal` documents. With it in, this
+//! test fails on the shaper, which is the answer it should give.
 
 mod common;
 
@@ -76,6 +81,14 @@ fn press(harness: &mut Harness, key: Key, modifiers: Modifiers) {
     harness.lay_out(WIDTH, HEIGHT);
 }
 
+/// Lay the field out again after a write from outside any event — the job
+/// the real loop runs because the field's layout read what was written.
+fn relayout(harness: &mut Harness) {
+    let root = harness.root;
+    harness.tree.mark_needs_layout(root);
+    harness.lay_out(WIDTH, HEIGHT);
+}
+
 fn key(harness: &mut Harness, key: Key) {
     press(harness, key, Modifiers::default());
 }
@@ -127,13 +140,13 @@ fn no_freed_block_ever_held_the_password() {
     // Once more, and wiped by the application rather than submitted.
     type_str(&mut harness, PASSWORD);
     password.clear();
-    harness.lay_out(WIDTH, HEIGHT);
+    relayout(&mut harness);
 
     // Pre-filled from a `String` the application held — a keyring's answer —
     // which `From` wipes on the way in. `String::from` puts the password on
     // the heap on purpose, here and only here.
     password.set(Secret::from(String::from(PASSWORD)));
-    harness.lay_out(WIDTH, HEIGHT);
+    relayout(&mut harness);
     // And replaced, so the one set above is dropped.
     password.set(Secret::new());
 
