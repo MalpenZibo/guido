@@ -11,6 +11,7 @@ pub mod into_signal;
 pub mod invalidation;
 pub mod memo;
 pub mod owner;
+mod password;
 pub mod prop;
 pub mod runtime;
 pub mod service;
@@ -54,6 +55,7 @@ pub use memo::{Memo, create_memo};
 // call from anywhere), the synchronous engine stays crate-internal.
 pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, under_owner, with_owner};
 pub use owner::{dispose_owner, on_cleanup};
+pub use password::{Password, create_password};
 pub use trigger::{Trigger, create_trigger};
 
 /// Internal module for macro support. NOT PART OF PUBLIC API.

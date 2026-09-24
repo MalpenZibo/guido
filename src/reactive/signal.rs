@@ -122,7 +122,7 @@ fn write_and_notify_always<T: Clone + 'static>(id: SignalId, value: T) {
 }
 
 /// Update without comparison: every update notifies (main thread only).
-fn update_and_notify_always<T: Clone + 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
+fn update_and_notify_always<T: 'static>(id: SignalId, f: impl FnOnce(&mut T)) {
     if crate::reactive::storage::update_signal_value_always(id, f) {
         notify_signal_change(id);
         notify_write(id);
@@ -281,6 +281,31 @@ impl<T> RwSignal<T> {
     }
 }
 
+/// What needs no copy of the value: borrowing it, and changing it in place.
+/// A value that cannot be cloned — a `Secret` — is still a signal's to hold.
+impl<T: 'static> RwSignal<T> {
+    /// Borrow the value for reading
+    #[inline]
+    #[cfg_attr(debug_assertions, track_caller)]
+    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        check_reactive_scope();
+        record_effect_read(self.id);
+        record_signal_read(self.id);
+        with_signal_value(self.id, f)
+    }
+
+    /// Borrow the value without tracking
+    #[inline]
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        with_signal_value(self.id, f)
+    }
+
+    /// Update the value using a closure, notifying unconditionally.
+    pub fn update_always<F: FnOnce(&mut T)>(&self, f: F) {
+        update_and_notify_always(self.id, f);
+    }
+}
+
 impl<T: Clone + 'static> RwSignal<T> {
     /// Get the current value (tracks as dependency for effects)
     #[inline]
@@ -307,22 +332,6 @@ impl<T: Clone + 'static> RwSignal<T> {
     #[inline]
     pub(crate) fn try_get_untracked(&self) -> Option<T> {
         try_get_signal_value(self.id)
-    }
-
-    /// Borrow the value for reading
-    #[inline]
-    #[cfg_attr(debug_assertions, track_caller)]
-    pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        check_reactive_scope();
-        record_effect_read(self.id);
-        record_signal_read(self.id);
-        with_signal_value(self.id, f)
-    }
-
-    /// Borrow the value without tracking
-    #[inline]
-    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        with_signal_value(self.id, f)
     }
 
     /// Convert to a read-only [`Signal<T>`].
@@ -368,11 +377,6 @@ impl<T: Clone + 'static> RwSignal<T> {
     /// must not lose emissions belong in an async channel, not a signal.
     pub fn set_always(&self, value: T) {
         write_and_notify_always(self.id, value);
-    }
-
-    /// Update the value using a closure, notifying unconditionally.
-    pub fn update_always<F: FnOnce(&mut T)>(&self, f: F) {
-        update_and_notify_always(self.id, f);
     }
 }
 
@@ -586,6 +590,12 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
 /// container().padding(count); // auto-converts to Signal<T> via IntoSignal
 /// ```
 pub fn create_signal<T: Clone + Send + 'static>(value: T) -> RwSignal<T> {
+    new_rw_signal(value)
+}
+
+/// [`create_signal`] without the bounds a public signal promises its readers:
+/// for a value the crate holds in a signal and never hands out by copy.
+pub(crate) fn new_rw_signal<T: 'static>(value: T) -> RwSignal<T> {
     let id = create_signal_value(value);
     // Safe even inside effect callbacks: the runtime borrow is never held
     // across user code anymore.

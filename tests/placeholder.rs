@@ -66,22 +66,16 @@ fn a_field_with_a_value_says_the_value() {
 fn a_password_placeholder_is_not_masked() {
     // It is a label, not a value. Masking it would draw eight bullets where the
     // field is supposed to say what it wants.
-    let texts = drawn(
-        text_input(create_signal(String::new()))
-            .password(true)
-            .placeholder("Password"),
-    );
+    let texts = drawn(password_input(create_password()).placeholder("Password"));
 
     assert_eq!(texts[0].0, "Password");
 }
 
 #[test]
 fn the_value_of_a_password_field_still_is() {
-    let texts = drawn(
-        text_input(create_signal("hunter2".to_owned()))
-            .password(true)
-            .placeholder("Password"),
-    );
+    let password = create_password();
+    password.set(Secret::from("hunter2".to_owned()));
+    let texts = drawn(password_input(password).placeholder("Password"));
 
     assert_eq!(texts[0].0, "•••••••");
 }

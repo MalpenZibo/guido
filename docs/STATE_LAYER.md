@@ -67,7 +67,7 @@ let wrong_password = create_signal(false);
 container()
     .border(1.0, theme.line)
     .state(wrong_password, |s| s.border(2.0, theme.error))
-    .child(text_input(password))
+    .child(password_input(password))
 ```
 
 The same signal can be read anywhere else that needs it, independently. That is why there is one generic `state` rather than a named method per case.
@@ -130,7 +130,7 @@ The unit that holds the state is the nearest enclosing **control**:
 ```rust
 container().control()
     .child(text("Password").when_focused(|s| s.color(theme.accent)))
-    .child(text_input(password))
+    .child(password_input(password))
 ```
 
 Everything inside asks the same question — *is my control in this state?* —

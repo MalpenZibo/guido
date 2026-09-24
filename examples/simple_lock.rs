@@ -15,7 +15,7 @@ use guido::prelude::*;
 const PASSWORD: &str = "guido";
 
 fn lock_screen(output: OutputInfo) -> Container {
-    let attempt = create_signal(String::new());
+    let attempt = create_password();
     let error = create_signal(false);
 
     // Safety net for an example: never leave the user locked out.
@@ -63,12 +63,11 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .corners(8.0)
                 .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
                 .child(
-                    text_input(attempt)
+                    password_input(attempt)
                         .cursor_color(Color::rgb(0.4, 0.8, 1.0))
                         .color(Color::WHITE)
-                        .password(true)
-                        .on_submit(move |s| {
-                            if s == PASSWORD {
+                        .on_submit(move || {
+                            if attempt.take().expose() == PASSWORD {
                                 unlock_session();
                             } else {
                                 error.set(true);

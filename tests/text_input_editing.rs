@@ -294,6 +294,53 @@ fn backspace_takes_the_character_before_the_cursor_and_leaves_it_there() {
     );
 }
 
+/// Ctrl+Left and Ctrl+Right stop at the edges of words, skipping the spaces
+/// between them — asked, like the test above, by moving and then writing.
+#[test]
+fn ctrl_arrows_move_by_word() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    let mut field = Field::focused("");
+    field.type_text("one  two three");
+
+    field.press(Key::Left, ctrl);
+    field.type_text("A");
+    assert_eq!(
+        field.text(),
+        "one  two Athree",
+        "back to the start of the last word"
+    );
+
+    field.press(Key::Left, ctrl);
+    field.press(Key::Left, ctrl);
+    field.type_text("B");
+    assert_eq!(
+        field.text(),
+        "one  Btwo Athree",
+        "back over a word and the spaces before it"
+    );
+
+    field.key(Key::Home);
+    field.press(Key::Right, ctrl);
+    field.type_text("C");
+    assert_eq!(
+        field.text(),
+        "one  CBtwo Athree",
+        "forward over a word and both spaces after it"
+    );
+
+    field.key(Key::End);
+    field.press(Key::Right, ctrl);
+    field.type_text("D");
+    assert_eq!(
+        field.text(),
+        "one  CBtwo AthreeD",
+        "and no further than the end"
+    );
+}
+
 #[test]
 fn delete_takes_the_character_after_it() {
     // A field opens with its cursor at the start, so Delete has something in

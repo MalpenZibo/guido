@@ -1,6 +1,6 @@
 # Text Input
 
-The TextInput widget provides single-line text editing with support for selection, clipboard operations, undo/redo, and password masking.
+The TextInput widget provides single-line text editing with support for selection, clipboard operations and undo/redo. Its sibling, `password_input`, is the same field for a password: masked, and holding the text where it cannot be copied, swapped or dumped.
 
 ## Basic Usage
 
@@ -106,35 +106,81 @@ container().child(text_input(value))
 # }
 ```
 
-## Password Mode
+## Password Input
 
-Hide text input for sensitive data like passwords:
-
-```rust
-# extern crate guido;
-# use guido::prelude::*;
-# fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
-# ;
-# }
-```
-
-Masking is a declared value, so it takes a signal — which is what an eye icon
-beside the field needs. Declaring it rather than rebuilding the input is what
-keeps the caret, the selection and the focus where they were:
+A password gets its own field, bound to a `Password` rather than a
+`RwSignal<String>`:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-# let hidden = create_signal(true);
-text_input(password).password(hidden)
+let password = create_password();
+
+password_input(password)
+    .placeholder("Password")
+    .on_submit(move || {
+        // Moved out, and the field is empty again. Hand it to PAM;
+        // dropping it wipes it.
+        let secret: Secret = password.take();
+        # let _ = secret;
+    })
 # ;
 # }
 ```
+
+A `String` is the wrong home for a password: every edit and every `get` of one
+leaves a copy on the heap that nothing wipes, its pages can be swapped to disk,
+and a crash writes it into a core dump. So the field keeps its text in a
+`Secret` — pages of its own, locked in memory, left out of core dumps, and
+zeroed whenever they are given back — and edits it there, in place. It keeps
+no undo history, since every entry would be a copy; nothing can be copied or
+cut out of it; and `Ctrl+Left/Right` goes to the edge rather than revealing
+where the words end. Pasting in still works, for password managers.
+
+`Password` is a signal in everything but the copy. Reads subscribe, so state
+that follows the field is an ordinary closure, and the application reaches the
+text whenever it needs to — a Sign In button, a form's Save, a clear after an
+idle timeout — by borrowing it:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_password();
+# let sign_in = |_: &str| {};
+container()
+    .enabled(move || !password.is_empty())
+    .on_click(move || password.with(|secret| sign_in(secret.expose())))
+# ;
+password.set(Secret::from(String::from("from the keyring"))); // pre-fill; the String is wiped
+password.clear();                                             // wipe in place
+# }
+```
+
+Submitting is the application's to spell, and Enter only says it happened.
+`take` moves the secret out and empties the field. To keep the dots on screen
+while the password is checked, hand over a `duplicate` instead — a second
+`Secret` in pages of its own, as protected as the first — and `clear` the field
+when the answer arrives. Enter and a submit button can then share one function:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn check(_: Secret) {}
+# fn main() {
+# let password = create_password();
+let submit = move || check(password.with_untracked(Secret::duplicate));
+
+container()
+    .child(password_input(password).on_submit(submit))
+    .child(container().on_click(submit).child(text("→")))
+# ;
+# }
+```
+
+There is no `get`: whatever the application copies out of `expose()` is the
+application's to wipe.
 
 By default, characters are masked with `•`. Customize the mask character:
 
@@ -142,13 +188,82 @@ By default, characters are masked with `•`. Customize the mask character:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
-    .mask_char('*')
+# let password = create_password();
+password_input(password).mask_char('*')
 # ;
 # }
 ```
+
+### Showing the password
+
+An eye button beside the field is a signal the field is told:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let password = create_password();
+let shown = create_signal(false);
+
+container()
+    .layout(Flex::row().spacing(8.0))
+    .child(password_input(password).reveal(shown))
+    .child(
+        container()
+            .on_click(move || shown.update(|s| *s = !*s))
+            .child(text(move || if shown.get() { "Hide" } else { "Show" }.to_string())),
+    )
+# ;
+# }
+```
+
+Declared rather than rebuilt, so the caret, the selection and the focus stay
+where they were. Everything else stays as it was: nothing can be copied or cut
+out, and there is no undo.
+
+**The catch: a shown password is drawn like any other text, and drawing text
+copies it.** Shaping makes temporary copies of the text and frees them without
+wiping them, and the measurement and render caches keep what they shaped. That
+is ordinary memory, outside what the field controls, so while the password is
+shown — and afterwards, until those caches let go of it — it can be found in
+the process's memory the way any `String` can. The `Secret` itself is untouched,
+and the field's own copy of what it drew is wiped when it changes. GTK 4's peek
+icon makes the same trade. If the threat you are guarding against is a core
+dump or a memory read, leave `reveal` off.
+
+### Hardening the process
+
+The field keeps the password out of places guido controls. Three copies are
+outside that, and a lock screen should know about them:
+
+- **Each key press.** smithay-client-toolkit, which guido reads the keyboard
+  through, hands every key over as a one-character `String` and frees it
+  unwiped. That leaves single characters, one per allocation — not the
+  password, but pieces of it.
+- **The clipboard.** A password pasted into the field was first copied into
+  guido's clipboard cache, which is not wiped yet (#519).
+- **A revealed password,** as above.
+
+A lock screen can close the core-dump route to all of it with one call at
+startup, before the password is ever typed: a process that is not dumpable
+leaves no core dump for `coredumpctl` to read back, and cannot be attached to
+with `ptrace` by other processes of the same user.
+
+```rust,ignore
+# // not compiled: uses the `libc` crate, which the book's samples do not link.
+// SAFETY: a plain prctl with no pointers.
+unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) };
+```
+
+Do not reach for `mlockall` to keep the process out of swap. It counts against
+the locked-memory limit, which is usually a few megabytes, and a GPU-rendered
+application maps far more than that — with `MCL_FUTURE`, later allocations
+start failing. The `Secret` already locks the pages that hold the password,
+which is what swaylock does too; for the rest, swap is the system's to
+encrypt.
+
+Everything else here — placeholder, caret, pointer shape, colours, focus,
+`readonly` — is the same on both fields.
 
 ## Initial Focus
 
@@ -159,9 +274,8 @@ on a surface with no pointer there may be nothing to click *with*:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
+# let password = create_password();
+password_input(password)
     .autofocus()
 # ;
 # }
@@ -231,9 +345,8 @@ What the field says while it is empty:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
+# let password = create_password();
+password_input(password)
     .placeholder("Password")
 # ;
 # }
@@ -281,9 +394,8 @@ container()
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
+# let password = create_password();
+password_input(password)
     .no_caret()
 # ;
 # }
@@ -307,9 +419,8 @@ the same `cursor` a container does — a value, a closure or a signal:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-# let password = create_signal(String::new());
-text_input(password)
-    .password(true)
+# let password = create_password();
+password_input(password)
     .no_caret()
     .cursor(CursorIcon::Hidden)
 # ;
@@ -364,13 +475,13 @@ The TextInput widget supports standard text editing shortcuts:
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+A` | Select all |
-| `Ctrl+C` | Copy selection |
-| `Ctrl+X` | Cut selection |
+| `Ctrl+C` | Copy selection (not in a password field) |
+| `Ctrl+X` | Cut selection (not in a password field) |
 | `Ctrl+V` | Paste |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Shift+Z` or `Ctrl+Y` | Redo |
+| `Ctrl+Z` | Undo (not in a password field) |
+| `Ctrl+Shift+Z` or `Ctrl+Y` | Redo (not in a password field) |
 | `Left/Right` | Move cursor |
-| `Ctrl+Left/Right` | Move by word |
+| `Ctrl+Left/Right` | Move by word (to the edge in a password field) |
 | `Shift+Left/Right` | Extend selection |
 | `Home/End` | Move to start/end |
 | `Backspace` | Delete before cursor |
@@ -428,7 +539,7 @@ A login form with username and password fields:
 # use guido::prelude::*;
 fn login_form() -> Container {
     let username = create_signal(String::new());
-    let password = create_signal(String::new());
+    let password = create_password();
 
     container()
         .padding(24.0)
@@ -463,7 +574,7 @@ fn login_form() -> Container {
                         .corners(4.0)
                         .when_focused(|s| s.border(1.0, Color::rgb(0.4, 0.6, 1.0)))
                         .child(
-                            container().child(text_input(password).font_size(14.0).color(Color::WHITE).password(true))
+                            container().child(password_input(password).font_size(14.0).color(Color::WHITE))
                         ),
                 ]),
             // Submit button
@@ -474,7 +585,9 @@ fn login_form() -> Container {
                 .when_hovered(|s| s.lighter(0.1))
                 .when_pressed(|s| s.darker(0.1))
                 .on_click(move || {
-                    println!("Login: {} / {}", username.get(), password.get());
+                    password.with(|secret| {
+                        println!("Login: {} / {} characters", username.get(), secret.expose().chars().count());
+                    });
                 })
                 .child(
                     container().child(text("Sign In").font_size(14.0).color(Color::WHITE))
@@ -507,19 +620,45 @@ fn login_form() -> Container {
 
 ```rust,ignore
 # // not compiled: a signature listing — these declarations have no bodies.
-text_input(signal: Signal<String>) -> TextInput
+text_input(signal: RwSignal<String>) -> TextInput
+password_input(password: Password) -> PasswordInput   // TextInput<Masked>
 
-impl TextInput {
-    pub fn password<M>(self, enabled: impl IntoSignal<bool, M>) -> Self;
-    pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
+// Both fields
+impl<C> TextInput<C> {
     pub fn autofocus(self) -> Self;
     pub fn caret<M>(self, caret: impl IntoSignal<bool, M>) -> Self;
     pub fn no_caret(self) -> Self;  // Shorthand for caret(false)
     pub fn cursor<M>(self, cursor: impl IntoSignal<CursorIcon, M>) -> Self;  // Text by default
     pub fn placeholder<M>(self, text: impl IntoSignal<String, M>) -> Self;
+    pub fn readonly<M>(self, readonly: impl IntoSignal<bool, M>) -> Self;
+}
+
+impl TextInput {
     pub fn on_change<F: Fn(&str) + 'static>(self, callback: F) -> Self;
     pub fn on_submit<F: Fn(&str) + 'static>(self, callback: F) -> Self;
 }
+
+impl PasswordInput {
+    pub fn mask_char<M>(self, c: impl IntoSignal<char, M>) -> Self;
+    pub fn reveal<M>(self, reveal: impl IntoSignal<bool, M>) -> Self;  // copies while shown
+    pub fn on_submit<F: Fn() + 'static>(self, callback: F) -> Self;
+}
+
+create_password() -> Password
+impl Password {
+    pub fn with<R>(&self, f: impl FnOnce(&Secret) -> R) -> R;  // tracked
+    pub fn is_empty(&self) -> bool;                              // tracked
+    pub fn set(&self, secret: Secret);
+    pub fn take(&self) -> Secret;                                // empties the field
+    pub fn clear(&self);
+}
+
+impl Secret {
+    pub fn expose(&self) -> &str;
+    pub fn is_empty(&self) -> bool;
+    pub fn duplicate(&self) -> Secret;  // its own locked pages
+}
+impl From<String> for Secret   // wipes the String
 ```
 
 **Note:** The `on_change` callback is optional and is called *in addition* to the automatic signal update. Use it for side effects like validation or logging, not for updating the signal (that happens automatically).

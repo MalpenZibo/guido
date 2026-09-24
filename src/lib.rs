@@ -18,6 +18,7 @@ pub mod pivot;
 pub mod reactive;
 mod region;
 pub mod render_stats;
+mod secret;
 pub mod session_lock;
 pub mod shape;
 pub mod surface;
@@ -35,6 +36,7 @@ pub mod renderer;
 
 // Re-export macros
 pub use guido_macros::{SignalFields, component};
+pub use secret::Secret;
 
 use std::sync::Arc;
 
@@ -216,10 +218,11 @@ pub mod prelude {
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, IntoSignal, IntoVal, Memo, RwSignal, Service, Signal, Trigger,
-        WriteSignal, create_derived, create_effect, create_memo, create_service, create_signal,
-        create_stored, create_task, create_trigger, expect_context, has_context, on_cleanup,
-        provide_context, provide_signal_context, use_context, with_context,
+        Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
+        Trigger, WriteSignal, create_derived, create_effect, create_memo, create_password,
+        create_service, create_signal, create_stored, create_task, create_trigger, expect_context,
+        has_context, on_cleanup, provide_context, provide_signal_context, use_context,
+        with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
@@ -235,13 +238,14 @@ pub mod prelude {
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
-        IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding, Point,
-        PointerKind, Rect, RippleConfig, Scroll, ScrollSource, ScrollbarVisibility, Selection,
-        StateStyle, Stateful, Text, TextAlign, TextInput, TextOverflow, TextShadow, TextStroke,
-        TextStyle, Widget, container, image, keyed, text, text_input,
+        IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
+        PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
+        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextAlign, TextInput,
+        TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed,
+        password_input, text, text_input,
     };
     pub use crate::{
-        App, ExitReason, SignalFields, component, default_font_family, load_font, quit_app,
+        App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
         restart_app, set_default_font_family, set_image_cache_budget,
     };
 }
