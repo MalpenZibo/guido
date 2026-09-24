@@ -233,15 +233,15 @@ dump or a memory read, leave `reveal` off.
 
 ### Hardening the process
 
-The field keeps the password out of places guido controls. Three copies are
+The field keeps the password out of places guido controls. Some copies are
 outside that, and a lock screen should know about them:
 
 - **Each key press.** smithay-client-toolkit, which guido reads the keyboard
   through, hands every key over as a one-character `String` and frees it
   unwiped. That leaves single characters, one per allocation — not the
   password, but pieces of it.
-- **The clipboard.** A password pasted into the field was first copied into
-  guido's clipboard cache, which is not wiped yet (#519).
+- **The clipboard.** guido reads the clipboard only when something pastes,
+  and wipes what it read. The password manager's own copy is its business.
 - **A revealed password,** as above.
 
 A lock screen can close the core-dump route to all of it with one call at
@@ -600,9 +600,9 @@ fn login_form() -> Container {
 ## Features
 
 - **Selection**: Click and drag to select text, or use Shift+Arrow keys
-- **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. System
-  clipboard contents are prefetched asynchronously whenever another app
-  copies, so paste is instant and never blocks the UI
+- **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. Another
+  application's copy is read only when you paste, off the UI thread, so a
+  paste never blocks it: the text appears once that application answers
 - **Primary selection**: selecting text with the mouse sets the primary
   selection (paste it elsewhere with middle click); middle-clicking the
   input pastes the primary selection at the click position
