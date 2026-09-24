@@ -11,8 +11,7 @@
 use guido::layout::Constraints;
 use guido::prelude::*;
 use guido::reactive::clipboard::{
-    clear_system_clipboard, clipboard_paste, primary_paste, set_system_clipboard,
-    take_clipboard_change,
+    SelectionKind, answer_pastes, deliver_pastes, take_clipboard_change, take_primary_change,
 };
 use guido::reactive::focus::request_focus;
 use guido::tree::{Tree, WidgetId};
@@ -31,8 +30,9 @@ impl Field {
     /// ordinary one.
     fn new(password: bool) -> Self {
         // Anything a previous test left behind would make this one lie.
-        clear_system_clipboard();
+        answer_pastes(SelectionKind::Clipboard, None);
         let _ = take_clipboard_change();
+        let _ = take_primary_change();
 
         let (input, value): (Box<dyn Widget>, Box<dyn Fn() -> String>) = if password {
             let held = create_password();
@@ -88,7 +88,7 @@ impl Field {
 
 /// Everything that could carry the value out of the widget.
 fn exported() -> Vec<String> {
-    [take_clipboard_change(), clipboard_paste(), primary_paste()]
+    [take_clipboard_change(), take_primary_change()]
         .into_iter()
         .flatten()
         .collect()
@@ -154,7 +154,7 @@ fn an_ordinary_field_still_fills_the_primary_selection() {
     let mut field = Field::new(false);
     field.drag_select_all();
 
-    assert_eq!(primary_paste().as_deref(), Some(SECRET));
+    assert_eq!(take_primary_change().as_deref(), Some(SECRET));
 }
 
 #[test]
@@ -162,9 +162,10 @@ fn a_password_field_still_takes_a_paste() {
     let mut field = Field::new(true);
     field.key(Key::Char('a'), true);
     field.key(Key::Backspace, false);
-    set_system_clipboard("hunter2".to_owned());
 
     field.key(Key::Char('v'), true);
+    answer_pastes(SelectionKind::Clipboard, Some("hunter2"));
+    deliver_pastes(&mut field.tree);
 
     assert_eq!((field.value)(), "hunter2");
 }
