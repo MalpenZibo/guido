@@ -385,6 +385,70 @@ fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_t
     );
 }
 
+/// A resident program — a polkit agent, an OSD — shows a surface when asked
+/// and closes it when done, and is still there to be asked again.
+///
+/// Closed through its handle, which is the path the compositor's own close of
+/// a layer surface takes too.
+#[test]
+fn an_app_that_outlives_its_last_surface_can_show_another() {
+    let Some(mut app) = headless() else { return };
+    app.quit_on_last_surface(false);
+
+    let asked = create_signal(true);
+    let shown: Rc<RefCell<Option<SurfaceHandle>>> = Rc::new(RefCell::new(None));
+    let kept = shown.clone();
+    create_effect(move || {
+        if asked.get() {
+            *kept.borrow_mut() = Some(spawn_surface(content_bar(), measuring_24));
+        } else if let Some(dialog) = kept.borrow_mut().take() {
+            dialog.close();
+        }
+    });
+    let shown = move || shown.borrow().as_ref().map(SurfaceHandle::id);
+    app.step();
+    assert!(shown().is_some(), "the effect spawned one");
+
+    asked.set(false);
+    assert_eq!(
+        app.step(),
+        None,
+        "the last surface closed and the loop runs on"
+    );
+    assert_eq!(app.surfaces_live(), []);
+    assert_eq!(app.step(), None, "and idles, with nothing to draw");
+
+    asked.set(true);
+    app.step();
+    let second = shown().expect("asked again, and it answered");
+    app.configure(second, 200, 24, 1.0);
+    app.step();
+    assert_eq!(app.frames_presented(second), 1, "the second one drew");
+}
+
+/// A bar per monitor, set not to quit, survives every monitor going and
+/// puts a bar on the one that comes back.
+#[test]
+fn a_bar_per_output_outlives_its_last_monitor() {
+    let Some(mut app) = headless() else { return };
+    app.quit_on_last_surface(false);
+    let bars = a_bar_per_output();
+
+    let laptop = app.connect_output("eDP-1");
+    app.step();
+    app.disconnect_output(laptop);
+    assert_eq!(app.step(), None, "no monitor, no bar, and the loop runs on");
+    assert_eq!(app.surfaces_live(), []);
+
+    let back = app.connect_output("eDP-1");
+    app.step();
+    assert_eq!(
+        app.surfaces_live(),
+        [bars.borrow()[&back].id()],
+        "the monitor came back and so did its bar"
+    );
+}
+
 /// A popup is torn down before the surface it hangs from, deepest first.
 ///
 /// Getting this wrong is not a cosmetic bug: destroying a popup that still has

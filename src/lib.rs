@@ -155,7 +155,7 @@ pub(crate) fn get_registered_fonts() -> Vec<Arc<Vec<u8>>> {
 /// The reason the application's main loop exited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExitReason {
-    /// Normal exit (compositor closed, all surfaces destroyed, etc.)
+    /// Normal exit: `quit_app()`, or the last surface closing.
     Quit,
     /// Restart requested (e.g. config change). The caller should re-create `App` and run again.
     Restart,
@@ -380,11 +380,12 @@ fn publish_exclusive_zone<S: Surface>(
 }
 
 /// Process dynamic surface commands (create, close, property changes).
-/// Returns false if all surfaces have been closed and the app should exit.
+/// Returns false when the last surface closed and the app quits with it.
 fn process_surface_commands<P: Platform>(
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut P,
     tree: &mut Tree,
+    quit_on_last_surface: bool,
 ) -> bool {
     for cmd in drain_surface_commands() {
         match cmd {
@@ -414,8 +415,7 @@ fn process_surface_commands<P: Platform>(
                 }
                 close_surface_now(id, surface_manager, wayland_state, tree);
 
-                // If no surfaces left, exit
-                if surface_manager.is_empty() {
+                if quit_on_last_surface && surface_manager.is_empty() {
                     wayland_state.request_exit();
                     return false;
                 }
@@ -2182,6 +2182,8 @@ pub struct App {
     /// Root owner for the reactive graph. When disposed, cascades cleanup
     /// through all signals, effects, and cleanup callbacks.
     root_owner_id: Option<OwnerId>,
+    /// Whether closing the last surface ends [`run`](Self::run).
+    quit_on_last_surface: bool,
 }
 
 impl App {
@@ -2191,6 +2193,7 @@ impl App {
             tree: Tree::new(),
             layout_roots: rustc_hash::FxHashMap::default(),
             root_owner_id: None,
+            quit_on_last_surface: true,
         }
     }
 
@@ -2233,6 +2236,29 @@ impl App {
     /// ```
     pub fn image_cache_budget(self, bytes: usize) -> Self {
         set_image_cache_budget(bytes);
+        self
+    }
+
+    /// Whether closing the last surface ends the application. On by default.
+    ///
+    /// Off, the application idles when its last surface closes — by its
+    /// handle, by the compositor, or with its monitor — as one that has not
+    /// spawned any yet does, until
+    /// [`spawn_surface`](crate::surface::spawn_surface) brings one back. It
+    /// then ends through [`quit_app`] or a lost connection. For a resident
+    /// program that only sometimes has something to show, such as a polkit
+    /// agent.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// App::new().quit_on_last_surface(false).run(|_app| {
+    ///     // No `add_surface`: surfaces are spawned when something asks.
+    /// });
+    /// ```
+    pub fn quit_on_last_surface(mut self, quit: bool) -> Self {
+        self.quit_on_last_surface = quit;
         self
     }
 
@@ -2283,9 +2309,10 @@ impl App {
     /// up when the `App` is dropped. Use `app.add_surface()` inside the closure
     /// to define surfaces.
     ///
-    /// # Panics
-    ///
-    /// Panics if no surfaces were added via `add_surface()` inside the closure.
+    /// An application with no surfaces is not an error: it idles until
+    /// [`spawn_surface`](crate::surface::spawn_surface) gives it one. Unless
+    /// [`quit_on_last_surface`](Self::quit_on_last_surface) says otherwise,
+    /// closing the last surface returns [`ExitReason::Quit`].
     ///
     /// # Example
     ///
@@ -2447,6 +2474,7 @@ impl App {
                 surface_manager: &mut surface_manager,
                 gpu_context: &gpu_context,
                 renderer: &mut renderer,
+                quit_on_last_surface: self.quit_on_last_surface,
             };
             if let Some(reason) = iterate(ctx, &mut self.tree, &mut self.layout_roots, None) {
                 return reason;
@@ -2467,6 +2495,7 @@ struct LoopContext<'a, P: Platform> {
     surface_manager: &'a mut SurfaceManager,
     gpu_context: &'a GpuContext,
     renderer: &'a mut Option<Renderer>,
+    quit_on_last_surface: bool,
 }
 
 /// Everything one iteration does once it has finished waiting.
@@ -2497,6 +2526,7 @@ fn iterate<P: Platform>(
         wayland_state,
         surface_manager,
         renderer,
+        quit_on_last_surface,
     } = ctx;
     // Reset ping coalescing first: the first wake_loop from here on sends a
     // fresh ping, so the next dispatch cannot block on work queued during
@@ -2527,7 +2557,7 @@ fn iterate<P: Platform>(
     image_decode::settle_image_events();
 
     // Process dynamic surface commands
-    if !process_surface_commands(surface_manager, wayland_state, tree) {
+    if !process_surface_commands(surface_manager, wayland_state, tree, quit_on_last_surface) {
         return Some(ExitReason::Quit);
     }
 
