@@ -218,8 +218,6 @@ pub struct WaylandState {
     pub seat_state: SeatState,
     pub layer_shell: LayerShell,
 
-    /// Whether the application should exit
-    pub exit: bool,
     // Multi-surface tracking
     /// All surfaces indexed by SurfaceId
     pub surfaces: FxHashMap<SurfaceId, WaylandSurfaceState>,
@@ -355,7 +353,6 @@ pub fn create_wayland_app(
         output_state,
         seat_state,
         layer_shell,
-        exit: false,
         surfaces: FxHashMap::default(),
         surface_lookup: FxHashMap::default(),
         current_pointer_surface: None,

@@ -416,7 +416,6 @@ fn process_surface_commands<P: Platform>(
                 close_surface_now(id, surface_manager, wayland_state, tree);
 
                 if quit_on_last_surface && surface_manager.is_empty() {
-                    wayland_state.request_exit();
                     return false;
                 }
             }
@@ -1273,15 +1272,6 @@ pub(crate) trait Platform {
     /// Release the session.
     fn unlock_session(&mut self) {}
 
-    /// Whether the platform has asked the application to stop — the compositor
-    /// went away, or the connection died.
-    fn should_exit(&self) -> bool {
-        false
-    }
-
-    /// Ask it to stop: the last surface closed, so there is nothing to show.
-    fn request_exit(&mut self) {}
-
     /// Hand the seat what the widgets changed this iteration.
     fn set_clipboard(&mut self, text: String) {
         let _ = text;
@@ -1500,14 +1490,6 @@ impl Platform for platform::WaylandState {
 
     fn unlock_session(&mut self) {
         self.unlock_session()
-    }
-
-    fn should_exit(&self) -> bool {
-        self.exit
-    }
-
-    fn request_exit(&mut self) {
-        self.exit = true;
     }
 
     fn set_clipboard(&mut self, text: String) {
@@ -2401,15 +2383,11 @@ impl App {
         }
 
         // Wait for all surfaces to configure
-        while !wayland_state.all_surfaces_configured() && !wayland_state.should_exit() {
+        while !wayland_state.all_surfaces_configured() {
             if let Err(e) = event_queue.blocking_dispatch(&mut wayland_state) {
                 log::error!("Wayland dispatch failed during configure: {e}");
                 return ExitReason::Error(platform::PlatformError::ConnectionLost);
             }
-        }
-
-        if wayland_state.should_exit() {
-            return ExitReason::Quit;
         }
 
         // Create shared GPU context
@@ -2538,10 +2516,6 @@ fn iterate<P: Platform>(
         jobs::ExitRequest::Quit => return Some(ExitReason::Quit),
         jobs::ExitRequest::Restart => return Some(ExitReason::Restart),
         jobs::ExitRequest::Running => {}
-    }
-
-    if wayland_state.should_exit() {
-        return Some(ExitReason::Quit);
     }
 
     // Drive the session-lock state machine (lock/unlock requests,
