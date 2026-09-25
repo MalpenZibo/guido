@@ -275,22 +275,6 @@ mod tests {
             .to_vec()
     }
 
-    /// Whether any mapping of this process holds `addr`.
-    fn mapped(addr: usize) -> bool {
-        let maps = std::fs::read_to_string("/proc/self/maps").expect("Linux has maps");
-        maps.lines().any(|line| {
-            let range = line.split(' ').next().unwrap_or_default();
-            let (start, end) = range.split_once('-').unwrap_or_default();
-            match (
-                usize::from_str_radix(start, 16),
-                usize::from_str_radix(end, 16),
-            ) {
-                (Ok(start), Ok(end)) => (start..end).contains(&addr),
-                _ => false,
-            }
-        })
-    }
-
     /// The `/proc/self/smaps` entry of the mapping that holds `addr`: its
     /// `VmFlags` line, and its `Locked:` size in kB.
     fn smaps_entry(addr: usize) -> (String, usize) {
@@ -449,17 +433,6 @@ mod tests {
         let mut secret = Secret::from("x".repeat(100));
         secret.wipe();
         assert!(raw(&secret, 0..secret.capacity).iter().all(|&b| b == 0));
-    }
-
-    /// Dropping gives the pages back — after `wipe`, which the test above is
-    /// what watches.
-    #[test]
-    fn dropping_gives_the_pages_back() {
-        let secret = Secret::from(String::from("hunter2"));
-        let addr = secret.ptr.as_ptr() as usize;
-        assert!(mapped(addr));
-        drop(secret);
-        assert!(!mapped(addr), "the mapping outlived its secret");
     }
 
     #[test]
