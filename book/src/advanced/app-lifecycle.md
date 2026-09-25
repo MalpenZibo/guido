@@ -1,6 +1,6 @@
 # App Lifecycle
 
-Guido applications can programmatically quit or restart. `App::run()` returns an `ExitReason` so the caller knows why the loop exited: `Quit`, `Restart`, or `Error(PlatformError)` when the platform layer fails (no Wayland session, a compositor without layer-shell support such as GNOME, or a lost connection) — these conditions are reported instead of panicking.
+Guido applications can programmatically quit or restart. `App::run()` returns an `ExitReason` so the caller knows why the loop exited: `Quit`, `Restart`, or `Error(PlatformError)` when the platform layer fails (no Wayland session, a compositor without layer-shell support such as GNOME, a lost connection, or no GPU to draw a surface with) — these conditions are reported instead of panicking.
 
 ## Quitting
 
@@ -48,6 +48,8 @@ fn main() {
 ```
 
 With it off, the app idles when its last surface closes, exactly as one that has not spawned a surface yet does, and ends through `quit_app()` or a lost connection.
+
+An app holds a GPU device only while it has something to draw. The device is made when the first surface needs one, and let go 30 seconds after the last one closes — soon enough that a resident program between windows costs no GPU memory, late enough that a dialog closed and reopened straight away does not wait for a new one.
 
 ## Restarting
 
@@ -142,7 +144,7 @@ pub enum ExitReason {
     /// Restart requested. The caller should re-create `App` and run again.
     Restart,
     /// The platform layer failed: no Wayland session, a compositor without
-    /// layer shell, or a lost connection.
+    /// layer shell, a lost connection, or no GPU to draw a surface with.
     Error(PlatformError),
 }
 ```

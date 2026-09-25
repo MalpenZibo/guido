@@ -254,8 +254,9 @@ pub struct WaylandState {
 /// Why the platform layer could not start or continue.
 ///
 /// These are ordinary environmental conditions (no Wayland session, a
-/// compositor without layer-shell such as GNOME, a dropped connection) —
-/// they are reported instead of panicking the process.
+/// compositor without layer-shell such as GNOME, a dropped connection, no GPU
+/// to draw a surface with) — they are reported instead of panicking the
+/// process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlatformError {
     /// Could not connect to a Wayland display (no session / wrong env).
@@ -268,6 +269,8 @@ pub enum PlatformError {
     MissingLayerShell,
     /// The Wayland connection failed while the app was running.
     ConnectionLost,
+    /// No Vulkan adapter could draw the surface that asked for one.
+    NoGpu,
 }
 
 impl std::fmt::Display for PlatformError {
@@ -283,6 +286,7 @@ impl std::fmt::Display for PlatformError {
                 )
             }
             Self::ConnectionLost => write!(f, "Wayland connection lost"),
+            Self::NoGpu => write!(f, "no usable Vulkan adapter"),
         }
     }
 }

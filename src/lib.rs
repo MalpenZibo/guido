@@ -44,7 +44,7 @@ use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::owner::with_owner;
 use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
-use renderer::{GpuContext, Renderer, flatten_root_into};
+use renderer::{GpuSlot, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -160,8 +160,9 @@ pub enum ExitReason {
     /// Restart requested (e.g. config change). The caller should re-create `App` and run again.
     Restart,
     /// The platform layer failed (no Wayland session, compositor without
-    /// layer-shell support, connection lost). Previously these ordinary
-    /// environmental conditions aborted the process with a panic.
+    /// layer-shell support, connection lost, no GPU to draw a surface with).
+    /// Previously these ordinary environmental conditions aborted the process
+    /// with a panic.
     Error(platform::PlatformError),
 }
 
@@ -2055,6 +2056,15 @@ struct Pending {
     deadline: Option<std::time::Instant>,
 }
 
+/// The earliest moment the loop has to wake with nothing else to do: a
+/// scheduled job, or the device outliving the last surface.
+fn wake_deadline(gpu: &GpuSlot) -> Option<std::time::Instant> {
+    [jobs::next_deadline(), gpu.release_at()]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
 /// How long this iteration may sleep before it has to look again.
 ///
 /// `None` blocks until the compositor or a ping. Nothing queued can be stranded
@@ -2390,8 +2400,7 @@ impl App {
             }
         }
 
-        // Create shared GPU context
-        let gpu_context = GpuContext::new();
+        let mut gpu = GpuSlot::lazy();
 
         // Create surface manager and runtime entries for each surface
         let mut surface_manager = SurfaceManager::new();
@@ -2436,7 +2445,7 @@ impl App {
                 force_render: wayland_state.any_surface_needs_render(),
                 jobs: has_pending_jobs(),
                 wake_requested: jobs::wake_request_pending(),
-                deadline: jobs::next_deadline(),
+                deadline: wake_deadline(&gpu),
             };
             let timeout = wait_for(&pending, std::time::Instant::now());
 
@@ -2450,7 +2459,7 @@ impl App {
             let ctx = LoopContext {
                 wayland_state: &mut wayland_state,
                 surface_manager: &mut surface_manager,
-                gpu_context: &gpu_context,
+                gpu: &mut gpu,
                 renderer: &mut renderer,
                 quit_on_last_surface: self.quit_on_last_surface,
             };
@@ -2471,7 +2480,7 @@ impl App {
 struct LoopContext<'a, P: Platform> {
     wayland_state: &'a mut P,
     surface_manager: &'a mut SurfaceManager,
-    gpu_context: &'a GpuContext,
+    gpu: &'a mut GpuSlot,
     renderer: &'a mut Option<Renderer>,
     quit_on_last_surface: bool,
 }
@@ -2500,7 +2509,7 @@ fn iterate<P: Platform>(
     frame_at: Option<std::time::Instant>,
 ) -> Option<ExitReason> {
     let LoopContext {
-        gpu_context,
+        gpu,
         wayland_state,
         surface_manager,
         renderer,
@@ -2520,7 +2529,7 @@ fn iterate<P: Platform>(
 
     // Drive the session-lock state machine (lock/unlock requests,
     // grant/denial events, per-output lock surfaces)
-    session_lock::process_session_lock(surface_manager, wayland_state, tree);
+    session_lock::process_session_lock(surface_manager, wayland_state, tree, gpu);
 
     // Run deferred owner disposals (public dispose_owner). Safe
     // here: no user closure is on the stack.
@@ -2542,8 +2551,19 @@ fn iterate<P: Platform>(
     // when its first frame arrives. A driver that named an instant is obeyed.
     let frame_at = frame_at.unwrap_or_else(std::time::Instant::now);
 
+    // Nothing has been left to draw on for long enough: the device goes, and
+    // the renderer with it, since it holds the device too.
+    if surface_manager.is_empty() && gpu.release_if_idle(frame_at) {
+        *renderer = None;
+    }
+
     // Initialize GPU for any pending surfaces (newly created dynamic surfaces)
-    surface_manager.init_pending_gpu(gpu_context, wayland_state, tree, frame_at);
+    if !surface_manager.is_empty() {
+        let Some(gpu_context) = gpu.get() else {
+            return Some(ExitReason::Error(platform::PlatformError::NoGpu));
+        };
+        surface_manager.init_pending_gpu(gpu_context, wayland_state, tree, frame_at);
+    }
 
     // Lazily create the shared renderer once the first surface has a
     // GPU state (apps may start with zero surfaces and spawn them
@@ -3848,6 +3868,26 @@ mod what_the_loop_waits_for {
     use std::time::{Duration, Instant};
 
     const FRAME: Duration = Duration::from_millis(16);
+
+    /// An idle loop still holding a device it no longer needs wakes to let
+    /// it go, rather than sleeping on it until something else comes along.
+    #[test]
+    fn a_device_waiting_to_go_is_a_deadline() {
+        let Some(gpu) = crate::or_skip(renderer::GpuContext::try_new()) else {
+            return;
+        };
+        let closed = Instant::now();
+        let slot = GpuSlot::Lazy {
+            gpu: Some(gpu),
+            idle_since: Some(closed),
+        };
+        assert_eq!(wake_deadline(&slot), Some(closed + renderer::GPU_GRACE));
+        assert_eq!(
+            wake_deadline(&GpuSlot::lazy()),
+            None,
+            "nothing held, nothing to wake for"
+        );
+    }
 
     fn idle() -> Pending {
         Pending {

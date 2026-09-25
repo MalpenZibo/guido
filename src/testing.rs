@@ -441,7 +441,7 @@ impl Platform for Recorder {
 
 /// One application and its surfaces, stepped by hand.
 pub struct Headless {
-    gpu: &'static GpuContext,
+    gpu: crate::renderer::GpuSlot,
     tree: Tree,
     renderer: Option<Renderer>,
     surfaces: SurfaceManager,
@@ -473,7 +473,7 @@ impl Headless {
     /// `None` where there is no GPU adapter at all — a frame has to land
     /// somewhere, and the somewhere is a texture this allocates.
     pub fn new() -> Option<Self> {
-        let gpu = shared_device()?;
+        let gpu = crate::renderer::GpuSlot::Shared(shared_device()?);
         // The application's own scope, as `App::run` makes one: what outlives
         // every widget — a decoded image's entry, a global signal — is filed
         // under it rather than under whichever widget asked first.
@@ -487,6 +487,28 @@ impl Headless {
             layout_roots: rustc_hash::FxHashMap::default(),
             quit_on_last_surface: true,
         })
+    }
+
+    /// Hold a device of this application's own, made and let go as
+    /// `App::run` does, rather than the one every application in a test
+    /// binary shares and nothing lets go of.
+    pub fn own_gpu(&mut self) {
+        self.gpu = crate::renderer::GpuSlot::lazy();
+    }
+
+    /// Stand where a machine without a usable Vulkan adapter stands.
+    pub fn without_gpu(&mut self) {
+        self.gpu = crate::renderer::GpuSlot::Absent;
+    }
+
+    /// Whether the compositor was ever asked to lock the session.
+    pub fn lock_asked(&self) -> bool {
+        self.host.lock.asked
+    }
+
+    /// Whether a device and a renderer are held right now.
+    pub fn holds_gpu(&self) -> bool {
+        self.gpu.held().is_some() && self.renderer.is_some()
     }
 
     /// What [`App::quit_on_last_surface`](crate::App::quit_on_last_surface)
@@ -599,7 +621,7 @@ impl Headless {
         let ctx = LoopContext {
             wayland_state: &mut self.host,
             surface_manager: &mut self.surfaces,
-            gpu_context: self.gpu,
+            gpu: &mut self.gpu,
             renderer: &mut self.renderer,
             quit_on_last_surface: self.quit_on_last_surface,
         };
@@ -626,7 +648,7 @@ impl Headless {
     /// the same frame costs one thing on a GPU and another on lavapipe, and a
     /// timing that does not name its adapter is a claim about neither.
     pub fn adapter_name(&self) -> &str {
-        &self.gpu.adapter_info.name
+        self.gpu.held().map_or("", |gpu| &gpu.adapter_info.name)
     }
 
     /// The size a surface's root widget was measured at, in logical pixels.
@@ -959,7 +981,7 @@ mod one_device_for_the_binary {
         let second = Headless::new().expect("the first one had an adapter");
 
         assert!(
-            std::ptr::eq(first.gpu, second.gpu),
+            std::ptr::eq(first.gpu.held().unwrap(), second.gpu.held().unwrap()),
             "a second application built a context of its own"
         );
     }

@@ -41,6 +41,9 @@ pub use flatten::{
     CommandLayer, FlattenScratch, FlattenedCommand, RegionsCarried, RenderLayer, ScratchCapacity,
     flatten_root_into,
 };
+#[cfg(test)]
+pub(crate) use gpu_context::GPU_GRACE;
+pub(crate) use gpu_context::GpuSlot;
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
