@@ -449,6 +449,69 @@ fn a_bar_per_output_outlives_its_last_monitor() {
     );
 }
 
+/// An application between windows holds no device: the renderer and the
+/// context outlive the last surface by a grace period, so a dialog opened
+/// again straight away finds them, and go once it has passed.
+#[test]
+fn the_device_outlives_the_last_surface_by_a_grace_period_and_no_more() {
+    let Some(mut app) = headless() else { return };
+    app.quit_on_last_surface(false);
+    app.own_gpu();
+    assert!(!app.holds_gpu(), "nothing asked for one yet");
+
+    let t0 = Instant::now();
+    let show = |app: &mut Headless, at: Instant| {
+        let dialog = spawn_surface(content_bar(), measuring_24);
+        app.step_at(at);
+        app.configure(dialog.id(), 200, 24, 1.0);
+        app.step_at(at);
+        assert_eq!(app.frames_presented(dialog.id()), 1);
+        dialog
+    };
+
+    show(&mut app, t0).close();
+    app.step_at(t0);
+    assert!(
+        app.holds_gpu(),
+        "closed a moment ago: kept for the next one"
+    );
+
+    let again = t0 + Duration::from_secs(10);
+    show(&mut app, again).close();
+    app.step_at(again);
+    app.step_at(again + Duration::from_secs(29));
+    assert!(
+        app.holds_gpu(),
+        "the grace period counts from the last close, not the first"
+    );
+
+    app.step_at(again + Duration::from_secs(30));
+    assert!(!app.holds_gpu(), "idle for the whole grace period: let go");
+
+    let later = again + Duration::from_secs(60);
+    show(&mut app, later);
+    assert!(app.holds_gpu(), "and made again for the next surface");
+}
+
+/// A lock the application has nothing to draw with is never asked for.
+///
+/// ext-session-lock-v1 keeps a session locked when the client holding the
+/// lock dies. A lock screen that asked first and found no GPU afterwards would
+/// leave the user locked out behind a process that is gone.
+#[test]
+fn a_lock_without_a_gpu_is_refused_before_it_is_asked_for() {
+    let Some(mut app) = headless() else { return };
+    app.without_gpu();
+    app.connect_output("eDP-1");
+
+    lock_session(lock_screen);
+    assert_eq!(app.step(), None, "a refused lock is not the end of the app");
+
+    assert!(!app.lock_asked(), "the compositor never heard of it");
+    assert_eq!(lock_state().get_untracked(), LockState::Unlocked);
+    assert!(app.lock_surfaces_created().is_empty());
+}
+
 /// A popup is torn down before the surface it hangs from, deepest first.
 ///
 /// Getting this wrong is not a cosmetic bug: destroying a popup that still has

@@ -3,6 +3,94 @@ use std::sync::Arc;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::{Device, Instance, Queue, Surface, SurfaceConfiguration};
 
+/// How long a device outlives the last surface. Long enough that a dialog
+/// closed and opened again straight away finds it still there, rather than
+/// paying to build a device and a renderer twice.
+pub(crate) const GPU_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Where the loop's device comes from.
+pub(crate) enum GpuSlot {
+    /// Made when a surface needs it, dropped [`GPU_GRACE`] after the last.
+    Lazy {
+        gpu: Option<GpuContext>,
+        /// When the last surface closed, while the device is still held.
+        idle_since: Option<std::time::Instant>,
+    },
+    /// One device, held by somebody else for longer than the loop — the test
+    /// binary's, which `testing::shared_device` makes once.
+    #[cfg(feature = "testing")]
+    Shared(&'static GpuContext),
+    /// No adapter to be had: what a machine without Vulkan hands the loop.
+    #[cfg(feature = "testing")]
+    Absent,
+}
+
+impl GpuSlot {
+    pub(crate) fn lazy() -> Self {
+        GpuSlot::Lazy {
+            gpu: None,
+            idle_since: None,
+        }
+    }
+
+    /// The device, made now if it has to be. `None` when there is no usable
+    /// adapter, which is logged by `GpuContext::try_new`.
+    pub(crate) fn get(&mut self) -> Option<&GpuContext> {
+        match self {
+            GpuSlot::Lazy { gpu, idle_since } => {
+                *idle_since = None;
+                if gpu.is_none() {
+                    *gpu = GpuContext::try_new();
+                }
+                gpu.as_ref()
+            }
+            #[cfg(feature = "testing")]
+            GpuSlot::Shared(gpu) => Some(gpu),
+            #[cfg(feature = "testing")]
+            GpuSlot::Absent => None,
+        }
+    }
+
+    /// No surface is left at `now`: let the device go if it has outlived the
+    /// last one by [`GPU_GRACE`]. Whether it went.
+    pub(crate) fn release_if_idle(&mut self, now: std::time::Instant) -> bool {
+        let GpuSlot::Lazy {
+            gpu: gpu @ Some(_),
+            idle_since,
+        } = self
+        else {
+            return false;
+        };
+        if now < *idle_since.get_or_insert(now) + GPU_GRACE {
+            return false;
+        }
+        *gpu = None;
+        *idle_since = None;
+        true
+    }
+
+    /// When the loop has to wake to let the device go, if it is waiting to.
+    pub(crate) fn release_at(&self) -> Option<std::time::Instant> {
+        match self {
+            GpuSlot::Lazy {
+                gpu: Some(_),
+                idle_since: Some(since),
+            } => Some(*since + GPU_GRACE),
+            _ => None,
+        }
+    }
+
+    /// The device, if one is held right now.
+    #[cfg(feature = "testing")]
+    pub(crate) fn held(&self) -> Option<&GpuContext> {
+        match self {
+            GpuSlot::Lazy { gpu, .. } => gpu.as_ref(),
+            GpuSlot::Shared(gpu) => Some(gpu),
+            GpuSlot::Absent => None,
+        }
+    }
+}
+
 pub struct GpuContext {
     pub instance: Instance,
     pub device: Arc<Device>,
@@ -15,20 +103,9 @@ pub struct GpuContext {
     pub adapter_info: wgpu::AdapterInfo,
 }
 
-impl Default for GpuContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GpuContext {
-    pub fn new() -> Self {
-        Self::try_new().expect("no usable Vulkan adapter (see log for the reason)")
-    }
-
-    /// The same context, for a caller that has something better to do than die
-    /// when there is no GPU to be had: a test that skips itself, a tool that
-    /// reports. The reason is logged at error level either way.
+    /// A device on the first Vulkan adapter that answers, or `None` when there
+    /// is none. The reason is logged at error level.
     pub fn try_new() -> Option<Self> {
         let instance = Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,

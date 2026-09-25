@@ -157,6 +157,7 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut P,
     tree: &mut Tree,
+    gpu: &mut crate::renderer::GpuSlot,
 ) {
     // 1. Pending request. A lock goes out now; an unlock waits for step 3,
     // after the compositor's events — a `Locked` arriving in the same
@@ -166,7 +167,10 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
     match with_app_state(|app| app.lock_request.take()) {
         Some(LockRequest::Lock(factory)) => {
             with_lock(|lock| lock.factory = Some(factory));
-            if wayland_state.start_session_lock() {
+            // Refused before it goes out, as a compositor refuses one: a lock
+            // granted to a client with nothing to draw its covers with stays
+            // held after that client dies, and the session stays locked.
+            if gpu.get().is_some() && wayland_state.start_session_lock() {
                 set_state(LockState::Locking);
             } else {
                 forget_factory();
