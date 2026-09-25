@@ -538,9 +538,10 @@ App::new().run(|_app| {
 ```
 
 When the compositor closes the surfaces of an unplugged monitor, the
-bars keep working on the remaining outputs. Note that the app exits when
-its last surface closes, so an all-monitors-disconnected event ends the
-app.
+bars keep working on the remaining outputs. When the last monitor goes,
+its bar is the last surface, and closing the last surface ends the app —
+unless it was built with `App::quit_on_last_surface(false)`, in which case
+it idles until a monitor comes back and the effect spawns a bar for it.
 
 ### Tracking Which Output a Surface Is On
 

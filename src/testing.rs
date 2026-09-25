@@ -447,6 +447,7 @@ pub struct Headless {
     surfaces: SurfaceManager,
     host: Recorder,
     layout_roots: rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
+    quit_on_last_surface: bool,
 }
 
 /// One device for the whole test binary.
@@ -484,7 +485,14 @@ impl Headless {
             surfaces: SurfaceManager::new(),
             host: Recorder::default(),
             layout_roots: rustc_hash::FxHashMap::default(),
+            quit_on_last_surface: true,
         })
+    }
+
+    /// What [`App::quit_on_last_surface`](crate::App::quit_on_last_surface)
+    /// says: whether closing the last surface ends the loop.
+    pub fn quit_on_last_surface(&mut self, quit: bool) {
+        self.quit_on_last_surface = quit;
     }
 
     /// Declare a surface before the loop runs, as `App::add_surface` does.
@@ -593,6 +601,7 @@ impl Headless {
             surface_manager: &mut self.surfaces,
             gpu_context: self.gpu,
             renderer: &mut self.renderer,
+            quit_on_last_surface: self.quit_on_last_surface,
         };
         iterate(ctx, &mut self.tree, &mut self.layout_roots, Some(at))
     }
