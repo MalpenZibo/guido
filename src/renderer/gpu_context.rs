@@ -53,7 +53,9 @@ impl GpuContext {
                 label: Some("Guido Device"),
                 required_features: wgpu::Features::TEXTURE_FORMAT_16BIT_NORM,
                 required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::default(),
+                // The default, `Performance`, reserves memory in blocks of
+                // 128-256 MB; a renderer allocates about one.
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 experimental_features: wgpu::ExperimentalFeatures::default(),
                 trace: wgpu::Trace::Off,
             })) {
@@ -339,4 +341,34 @@ fn offscreen_texture(device: &Device, width: u32, height: u32) -> wgpu::Texture 
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::Renderer;
+
+    /// Every guido process holds a device, and on an integrated GPU what it
+    /// reserves is system RAM that RSS does not show (#530).
+    #[test]
+    fn a_renderer_reserves_megabytes_not_hundreds_of_them() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let _renderer = Renderer::new(
+            gpu.device.clone(),
+            gpu.queue.clone(),
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+        );
+        let report = gpu
+            .device
+            .generate_allocator_report()
+            .expect("Vulkan sub-allocates, so there is a report");
+        assert!(
+            report.total_reserved_bytes <= 16 << 20,
+            "{} MB reserved for {:.2} MB allocated",
+            report.total_reserved_bytes >> 20,
+            report.total_allocated_bytes as f64 / f64::from(1 << 20),
+        );
+    }
 }
