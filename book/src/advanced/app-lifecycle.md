@@ -23,6 +23,32 @@ container()
 
 The current `App::run()` loop exits and returns `ExitReason::Quit`.
 
+## Outliving the Last Surface
+
+Closing the last surface also ends the loop with `ExitReason::Quit` — whether the app closed it, the compositor did, or its monitor was unplugged. A resident program that only sometimes has something to show — a polkit agent, a notification daemon, an on-screen display — turns that off with `quit_on_last_surface(false)`:
+
+```rust,no_run
+# extern crate guido;
+use guido::prelude::*;
+
+fn main() {
+    App::new().quit_on_last_surface(false).run(|_app| {
+        let asked = create_signal(false);
+        let mut dialog: Option<SurfaceHandle> = None;
+        create_effect(move || {
+            if asked.get() {
+                dialog = Some(spawn_surface(SurfaceConfig::new(), || text("Authenticate")));
+            } else if let Some(open) = dialog.take() {
+                open.close();
+            }
+        });
+        // Something outside the UI — a D-Bus request, say — writes `asked`.
+    });
+}
+```
+
+With it off, the app idles when its last surface closes, exactly as one that has not spawned a surface yet does, and ends through `quit_app()` or a lost connection.
+
 ## Restarting
 
 Call `restart_app()` to request a restart. The loop exits and returns `ExitReason::Restart`, letting the caller re-create the app:
@@ -111,7 +137,7 @@ create_task(move |ctx| async move {
 # // not compiled: a listing of a type the crate owns — a copy of it declared
 # // here would compile without checking the original.
 pub enum ExitReason {
-    /// Normal exit (compositor closed, all surfaces destroyed, etc.)
+    /// Normal exit: `quit_app()`, or the last surface closing.
     Quit,
     /// Restart requested. The caller should re-create `App` and run again.
     Restart,
