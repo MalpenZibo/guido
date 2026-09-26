@@ -385,6 +385,21 @@ fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_t
     );
 }
 
+#[test]
+fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
+    let Some(mut app) = headless() else { return };
+    let first = app.surface(content_bar(), measuring_24);
+    app.configure(first, 200, 24, 1.0);
+    app.step();
+
+    surface_handle(first).close();
+    let replacement = spawn_surface(content_bar(), measuring_24);
+
+    assert_eq!(app.step(), None);
+    assert_eq!(app.surfaces_destroyed(), [first]);
+    assert_eq!(app.surfaces_live(), [replacement.id()]);
+}
+
 /// A resident program — a polkit agent, an OSD — shows a surface when asked
 /// and closes it when done, and is still there to be asked again.
 ///

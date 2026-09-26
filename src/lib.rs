@@ -388,6 +388,7 @@ fn process_surface_commands<P: Platform>(
     tree: &mut Tree,
     quit_on_last_surface: bool,
 ) -> bool {
+    let mut closed_surface = false;
     for cmd in drain_surface_commands() {
         match cmd {
             SurfaceCommand::Create {
@@ -415,10 +416,7 @@ fn process_surface_commands<P: Platform>(
                     close_surface_now(child, surface_manager, wayland_state, tree);
                 }
                 close_surface_now(id, surface_manager, wayland_state, tree);
-
-                if quit_on_last_surface && surface_manager.is_empty() {
-                    return false;
-                }
+                closed_surface = true;
             }
             SurfaceCommand::SetLayer { id, layer } => {
                 with_surface(wayland_state, id, |s| s.set_layer(layer));
@@ -557,7 +555,7 @@ fn process_surface_commands<P: Platform>(
             }
         }
     }
-    true
+    !(closed_surface && quit_on_last_surface && surface_manager.is_empty())
 }
 
 /// Measure a popup's natural content height at the given width.
