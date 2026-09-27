@@ -2765,6 +2765,7 @@ mod restart_tests {
         let update_target = create_signal(20u32);
         let set_always_target = create_signal(30u32);
         let update_always_target = create_signal(40u32);
+        let current_update_always = update_always_target.writer();
 
         stale_set.set(11);
         stale_update.update(|value| *value = 21);
@@ -2775,6 +2776,9 @@ mod restart_tests {
         assert_eq!(update_target.get_untracked(), 20);
         assert_eq!(set_always_target.get_untracked(), 30);
         assert_eq!(update_always_target.get_untracked(), 40);
+
+        current_update_always.update_always(|value| *value = 41);
+        assert_eq!(update_always_target.get_untracked(), 41);
     }
 
     /// The order inside the reset, which is the one thing about it the
