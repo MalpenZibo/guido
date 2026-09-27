@@ -485,6 +485,9 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Otherwise (background threads): queued for next frame with the epoch
     /// captured when this writer was created.
     pub fn set(&self, value: T) {
+        if self.epoch != current_write_epoch() {
+            return;
+        }
         if has_signal(self.id) {
             write_and_notify(self.id, value);
         } else {
@@ -513,6 +516,9 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
+        if self.epoch != current_write_epoch() {
+            return;
+        }
         if has_signal(self.id) {
             update_and_notify(self.id, f);
         } else {
@@ -538,6 +544,9 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     /// (immediate on the main thread, queued for the next frame from
     /// background threads).
     pub fn set_always(&self, value: T) {
+        if self.epoch != current_write_epoch() {
+            return;
+        }
         if has_signal(self.id) {
             write_and_notify_always(self.id, value);
         } else {
@@ -559,6 +568,9 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
+        if self.epoch != current_write_epoch() {
+            return;
+        }
         if has_signal(self.id) {
             update_and_notify_always(self.id, f);
         } else {
