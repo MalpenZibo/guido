@@ -1024,6 +1024,29 @@ fn tinted_svg() {
     golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
 }
 
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_keeps_its_vector_aspect() {
+    let source = ImageSource::SvgBytes(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="0.5" height="1.5" viewBox="0 0 0.5 1.5"><rect width="0.5" height="1.5" fill="#f27340"/></svg>"##
+            .to_vec()
+            .into(),
+    );
+    let view = container().background(BACKDROP).padding(20.0).child(
+        box_of(120.0, 120.0)
+            .background(Color::rgb(0.12, 0.16, 0.22))
+            .child(image(source).content_fit(ContentFit::Contain)),
+    );
+
+    golden(
+        "fractional_svg_keeps_its_vector_aspect",
+        (160.0, 160.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// Two clips a quarter turn apart still cut exactly.
 ///
 /// `intersect_clips` rewrites the inner clip in the outer's coordinates when

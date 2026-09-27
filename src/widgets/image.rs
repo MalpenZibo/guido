@@ -114,7 +114,7 @@ pub struct Image {
     /// Read under layout tracking, and used again by paint on the same frame.
     cached_content_fit: ContentFit,
     /// Cached intrinsic size from the image source
-    intrinsic_size: Option<(u32, u32)>,
+    intrinsic_size: Option<(f64, f64)>,
     /// Cached source for change detection
     cached_source: Option<ImageSource>,
     /// The decode cache's entry for the source, held while it is shown so the
@@ -193,6 +193,7 @@ impl Image {
     /// Get the current intrinsic size if known.
     pub fn intrinsic_size(&self) -> Option<(u32, u32)> {
         self.intrinsic_size
+            .map(|(width, height)| (width.ceil() as u32, height.ceil() as u32))
     }
 
     /// The box this image occupies, from the constraints and the fit mode.
@@ -213,9 +214,8 @@ impl Image {
     /// An axis whose constraint is unbounded has no room to take, so every
     /// mode falls back to the intrinsic size there.
     fn calculate_size(&self, constraints: &Constraints) -> Size {
-        let (intrinsic_w, intrinsic_h) = self.intrinsic_size.unwrap_or((100, 100));
-        let intrinsic_w = intrinsic_w as f32;
-        let intrinsic_h = intrinsic_h as f32;
+        let (intrinsic_w, intrinsic_h) = self.intrinsic_size.unwrap_or((100.0, 100.0));
+        let (intrinsic_w, intrinsic_h) = (intrinsic_w as f32, intrinsic_h as f32);
         let aspect = intrinsic_w / intrinsic_h;
 
         let offered_w = if constraints.max_width.is_finite() {
@@ -286,8 +286,10 @@ impl Widget for Image {
         }
         if source_changed || self.intrinsic_size.is_none() {
             self.intrinsic_size = match &self.decode {
-                Some(decode) => decode.size(),
-                None => crate::image_metadata::get_intrinsic_size(&current_source),
+                Some(decode) => decode
+                    .size()
+                    .map(|(width, height)| (width as f64, height as f64)),
+                None => crate::image_metadata::get_layout_size(&current_source),
             };
         }
 
@@ -403,6 +405,31 @@ mod tests {
             drawn.0
         );
         assert_eq!(drawn.1, ContentFit::Fill, "and with the fit it declares");
+    }
+
+    #[test]
+    fn fractional_intrinsic_size_has_a_nonzero_pixel_extent() {
+        let mut image = Image::new(ImageSource::Rgba {
+            pixels: vec![0; 4].into(),
+            width: 1,
+            height: 1,
+        });
+        image.intrinsic_size = Some((0.5, 1.5));
+
+        assert_eq!(image.intrinsic_size(), Some((1, 2)));
+    }
+
+    #[test]
+    fn raster_intrinsic_size_keeps_integers_beyond_f32_precision() {
+        let source = ImageSource::Rgba {
+            pixels: vec![0; 4].into(),
+            width: 16_777_217,
+            height: 1,
+        };
+        let mut image = Image::new(source.clone());
+        image.intrinsic_size = crate::image_metadata::get_layout_size(&source);
+
+        assert_eq!(image.intrinsic_size(), Some((16_777_217, 1)));
     }
 
     /// How an image fills its box is a value it can be told.

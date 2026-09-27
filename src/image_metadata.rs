@@ -30,6 +30,19 @@ pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
     }
 }
 
+pub(crate) fn get_layout_size(source: &ImageSource) -> Option<(f64, f64)> {
+    match source {
+        #[cfg(feature = "svg")]
+        ImageSource::SvgPath(path) => {
+            get_svg_layout_size_from_file(path).map(|(width, height)| (width as f64, height as f64))
+        }
+        #[cfg(feature = "svg")]
+        ImageSource::SvgBytes(bytes) => get_svg_layout_size_from_bytes(bytes)
+            .map(|(width, height)| (width as f64, height as f64)),
+        _ => get_intrinsic_size(source).map(|(width, height)| (width as f64, height as f64)),
+    }
+}
+
 /// Get SVG dimensions from a file path.
 #[cfg(feature = "svg")]
 fn get_svg_size_from_file(path: &Path) -> Option<(u32, u32)> {
@@ -40,9 +53,25 @@ fn get_svg_size_from_file(path: &Path) -> Option<(u32, u32)> {
 /// Get SVG dimensions from raw bytes.
 #[cfg(feature = "svg")]
 fn get_svg_size_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
+    get_svg_layout_size_from_bytes(bytes).map(svg_pixel_extent)
+}
+
+#[cfg(feature = "svg")]
+fn get_svg_layout_size_from_file(path: &Path) -> Option<(f32, f32)> {
+    let data = std::fs::read(path).ok()?;
+    get_svg_layout_size_from_bytes(&data)
+}
+
+#[cfg(feature = "svg")]
+fn get_svg_layout_size_from_bytes(bytes: &[u8]) -> Option<(f32, f32)> {
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
-    Some((size.width() as u32, size.height() as u32))
+    Some((size.width(), size.height()))
+}
+
+#[cfg(feature = "svg")]
+fn svg_pixel_extent((width, height): (f32, f32)) -> (u32, u32) {
+    (width.ceil() as u32, height.ceil() as u32)
 }
 
 #[cfg(not(feature = "svg"))]

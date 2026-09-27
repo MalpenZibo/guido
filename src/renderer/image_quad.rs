@@ -62,8 +62,8 @@ struct CachedTexture {
     /// coordinates — all of it, for a texture of its own.
     uv_rect: [f32; 4],
     /// Original intrinsic dimensions
-    intrinsic_width: u32,
-    intrinsic_height: u32,
+    intrinsic_width: f32,
+    intrinsic_height: f32,
     /// When a frame last drew it. A `Cell` because the frame that draws it
     /// holds it through an `Rc` already.
     last_used: Cell<Instant>,
@@ -451,7 +451,14 @@ impl ImageQuadRenderer {
             return None;
         }
 
-        self.store(device, queue, width, height, rgba, (width, height))
+        self.store(
+            device,
+            queue,
+            width,
+            height,
+            rgba,
+            (width as f32, height as f32),
+        )
     }
 
     /// Fallback when the `svg` feature is disabled: SVG sources fail to
@@ -488,8 +495,8 @@ impl ImageQuadRenderer {
         let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
         let size = tree.size();
 
-        let intrinsic_width = size.width() as u32;
-        let intrinsic_height = size.height() as u32;
+        let intrinsic_width = size.width();
+        let intrinsic_height = size.height();
 
         // Fit the raster to the display target, preserving aspect ratio
         // (contain). `scale` already carries transform scale, HiDPI factor
@@ -539,7 +546,7 @@ impl ImageQuadRenderer {
         width: u32,
         height: u32,
         rgba: &[u8],
-        (intrinsic_width, intrinsic_height): (u32, u32),
+        (intrinsic_width, intrinsic_height): (f32, f32),
     ) -> Option<CachedTexture> {
         let (backing, bind_group, uv_rect) = match self
             .atlas
@@ -675,12 +682,12 @@ impl ImageQuadRenderer {
     fn calculate_display_rect_and_uv(
         &self,
         rect: &Rect,
-        intrinsic_width: u32,
-        intrinsic_height: u32,
+        intrinsic_width: f32,
+        intrinsic_height: f32,
         content_fit: ContentFit,
     ) -> (Rect, (f32, f32, f32, f32)) {
-        let img_width = intrinsic_width as f32;
-        let img_height = intrinsic_height as f32;
+        let img_width = intrinsic_width;
+        let img_height = intrinsic_height;
         let img_aspect = img_width / img_height;
         let widget_aspect = rect.width / rect.height;
 
