@@ -1,8 +1,13 @@
 name: Labeler
 
+# `pull_request_target`, as actions/labeler's own README sets it up: a fork's
+# `pull_request` run gets a read-only token and cannot label anything. It is
+# safe only while no step checks out or runs the pull request's code — the
+# labeler reads its config from the base branch and the changed files from the
+# API. Never add a checkout here.
 on:
-  pull_request:
-    types: [opened, synchronize]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
