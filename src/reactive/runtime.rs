@@ -23,6 +23,7 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread::ThreadId;
 
 use smallvec::SmallVec;
 
@@ -34,17 +35,29 @@ use super::state::with_reactive;
 /// so SmallVec avoids heap allocation in the common case.
 pub(crate) type EffectReads = SmallVec<[SignalId; 4]>;
 
-/// Epoch counter for write filtering. Incremented on each runtime reset (App restart).
-/// Writes tagged with a stale epoch are silently discarded in `flush_bg_writes()`.
+/// Source of identities for thread-local application lifetimes.
+/// Incremented on each runtime reset (App restart).
 static WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// A queued background write: (epoch at queue time, closure to execute).
-type EpochWrite = (u64, Box<dyn FnOnce() + Send>);
+/// A queued background write: (owner thread, owner epoch, closure to execute).
+type EpochWrite = (ThreadId, u64, Box<dyn FnOnce() + Send>);
 
-/// Background write queue: closures that perform signal writes, queued from bg threads.
-/// Each entry is tagged with the epoch at queue time. Writes from a previous epoch
-/// are discarded during flush.
-static WRITE_QUEUE: Mutex<Vec<EpochWrite>> = Mutex::new(Vec::new());
+struct WriteQueue {
+    active: Vec<(ThreadId, u64)>,
+    writes: Vec<EpochWrite>,
+}
+
+impl WriteQueue {
+    const fn new() -> Self {
+        Self {
+            active: Vec::new(),
+            writes: Vec::new(),
+        }
+    }
+}
+
+/// Background writes and the application lifetimes allowed to receive them.
+static WRITE_QUEUE: Mutex<WriteQueue> = Mutex::new(WriteQueue::new());
 
 /// Unique identifier for a signal.
 ///
@@ -165,22 +178,46 @@ where
     f()
 }
 
-/// Return the current write epoch. Captured by `WriteSignal` at creation
-/// time so that writes queued after a restart carry the old epoch.
+/// Return the next available application-lifetime identity.
 pub(crate) fn current_write_epoch() -> u64 {
     WRITE_EPOCH.load(Ordering::Acquire)
+}
+
+/// Return the write epoch of the application living on this thread.
+///
+/// The value is sampled once per reactive lifetime. Another thread can end
+/// its application and advance the process-wide background-write epoch
+/// without retiring writers whose signals are still live here.
+pub(crate) fn current_local_write_epoch() -> u64 {
+    with_reactive(|reactive| {
+        if let Some(epoch) = reactive.write_epoch.get() {
+            epoch
+        } else {
+            let epoch = current_write_epoch();
+            reactive.write_epoch.set(Some(epoch));
+            if let Ok(mut queue) = WRITE_QUEUE.lock() {
+                queue.active.push((std::thread::current().id(), epoch));
+            }
+            epoch
+        }
+    })
 }
 
 /// Queue a closure for execution on the main thread (next frame).
 /// Used by `WriteSignal::set()`/`update()` from background threads.
 ///
-/// The write is tagged with the caller-supplied epoch (captured when the
-/// `WriteSignal` was created). If the runtime resets before this write is
-/// flushed (e.g. App restart), the epoch will be stale and the write is
-/// silently discarded.
-pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
-    if let Ok(mut q) = WRITE_QUEUE.lock() {
-        q.push((epoch, Box::new(f)));
+/// The write is tagged with the thread and application lifetime captured by
+/// the `WriteSignal`. Only that thread can drain it, and a reset before the
+/// flush makes the lifetime stale.
+pub fn queue_bg_write(owner_thread: ThreadId, epoch: u64, f: impl FnOnce() + Send + 'static) {
+    {
+        let Ok(mut queue) = WRITE_QUEUE.lock() else {
+            return;
+        };
+        if !queue.active.contains(&(owner_thread, epoch)) {
+            return;
+        }
+        queue.writes.push((owner_thread, epoch, Box::new(f)));
     }
     // Queueing and waking are one gesture here too — this is the cross-thread
     // one, so the wakeup goes through the calloop ingress channel rather than
@@ -192,16 +229,32 @@ pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
 /// Drain queued background writes and execute them on the main thread.
 /// Called from the main event loop before processing widget jobs.
 ///
-/// Writes tagged with a stale epoch (from a previous App run) are silently
-/// discarded. This prevents old service tasks from corrupting the new app's
-/// reactive state after a restart.
+/// Writes for another thread stay queued. Writes tagged with a stale lifetime
+/// are discarded, preventing old service tasks from corrupting a restarted
+/// application's reactive state.
 pub fn flush_bg_writes() {
-    let current_epoch = WRITE_EPOCH.load(Ordering::Acquire);
+    let current_thread = std::thread::current().id();
+    let current_epoch = current_local_write_epoch();
     loop {
         let writes: Vec<(u64, Box<dyn FnOnce() + Send>)> = match WRITE_QUEUE.lock() {
-            Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
-            _ => return,
+            Ok(mut queue) => {
+                let mut own = Vec::new();
+                let mut other = Vec::new();
+                for (owner, epoch, write) in queue.writes.drain(..) {
+                    if owner == current_thread {
+                        own.push((epoch, write));
+                    } else {
+                        other.push((owner, epoch, write));
+                    }
+                }
+                queue.writes = other;
+                own
+            }
+            Err(_) => return,
         };
+        if writes.is_empty() {
+            return;
+        }
         let mut executed = 0usize;
         let mut stale = 0usize;
         for (epoch, write_fn) in writes {
@@ -614,14 +667,24 @@ where
 /// `static`s rather than a thread's, because the thread that queues a write is
 /// not the one that owns the reactive state.
 ///
-/// Increments the write epoch so that any in-flight background writes from
-/// old service tasks are automatically discarded by `flush_bg_writes()`.
+/// Advances the identity source and removes writes already queued for the
+/// application ending on this thread. Writes queued later by its old service
+/// tasks carry the retired identity and are discarded by `flush_bg_writes()`.
 pub(crate) fn reset_bg_writes() {
-    // Increment epoch BEFORE clearing — writes queued between now and the next
-    // flush_bg_writes() will carry the old epoch and be discarded.
+    // Advance BEFORE removing queued work so a new lifetime cannot reuse this
+    // one's identity.
     WRITE_EPOCH.fetch_add(1, Ordering::Release);
-    if let Ok(mut q) = WRITE_QUEUE.lock() {
-        q.clear();
+    let retired = with_reactive(|reactive| reactive.write_epoch.get());
+    if let Ok(mut queue) = WRITE_QUEUE.lock() {
+        let current_thread = std::thread::current().id();
+        if let Some(epoch) = retired {
+            queue
+                .active
+                .retain(|identity| *identity != (current_thread, epoch));
+        }
+        queue
+            .writes
+            .retain(|(owner, _, _)| *owner != current_thread);
     }
 }
 

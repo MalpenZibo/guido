@@ -1,10 +1,11 @@
 use std::marker::PhantomData;
+use std::thread::ThreadId;
 
 use super::diagnostics::{check_reactive_scope, snapshot_zone};
 use super::invalidation::{notify_signal_change, record_signal_read, suspend_widget_tracking};
 use super::owner::register_signal;
 use super::runtime::{
-    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read,
+    SignalId, current_local_write_epoch, notify_write, queue_bg_write, record_effect_read,
     suspend_effect_tracking, with_runtime,
 };
 use super::storage::{
@@ -429,7 +430,8 @@ impl<T: Clone + Send + 'static> RwSignal<T> {
     pub fn writer(&self) -> WriteSignal<T> {
         WriteSignal {
             id: self.id,
-            epoch: current_write_epoch(),
+            local_epoch: current_local_write_epoch(),
+            owner_thread: std::thread::current().id(),
             _marker: PhantomData,
         }
     }
@@ -465,9 +467,10 @@ impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
 /// ```
 pub struct WriteSignal<T> {
     id: SignalId,
-    /// Write epoch captured when the writer was created. Writes queued from
-    /// a stale epoch (after App restart) are silently discarded.
-    epoch: u64,
+    /// Epoch of the reactive lifetime that owns the signal.
+    local_epoch: u64,
+    /// The thread whose signal arena owns `id`.
+    owner_thread: ThreadId,
     _marker: PhantomData<T>,
 }
 
@@ -478,6 +481,12 @@ impl<T> Clone for WriteSignal<T> {
 }
 impl<T> Copy for WriteSignal<T> {}
 
+impl<T> WriteSignal<T> {
+    fn is_owner_thread(&self) -> bool {
+        self.owner_thread == std::thread::current().id()
+    }
+}
+
 impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Sets the signal's value, only triggering updates if the value actually changed.
     ///
@@ -485,15 +494,13 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Otherwise (background threads): queued for next frame with the epoch
     /// captured when this writer was created.
     pub fn set(&self, value: T) {
-        if self.epoch != current_write_epoch() {
-            return;
-        }
-        if has_signal(self.id) {
-            write_and_notify(self.id, value);
+        if self.is_owner_thread() {
+            if self.local_epoch == current_local_write_epoch() && has_signal(self.id) {
+                write_and_notify(self.id, value);
+            }
         } else {
             let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
+            queue_bg_write(self.owner_thread, self.local_epoch, move || {
                 // The signal may have been disposed between queueing and this
                 // flush (e.g. a service outliving a removed dynamic child).
                 // That race is inherent to background writers, so drop the
@@ -516,15 +523,13 @@ impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
-        if self.epoch != current_write_epoch() {
-            return;
-        }
-        if has_signal(self.id) {
-            update_and_notify(self.id, f);
+        if self.is_owner_thread() {
+            if self.local_epoch == current_local_write_epoch() && has_signal(self.id) {
+                update_and_notify(self.id, f);
+            }
         } else {
             let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
+            queue_bg_write(self.owner_thread, self.local_epoch, move || {
                 // See `set()`: disposal can race a queued write; drop it.
                 if has_signal(id) {
                     update_and_notify(id, f);
@@ -544,15 +549,13 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     /// (immediate on the main thread, queued for the next frame from
     /// background threads).
     pub fn set_always(&self, value: T) {
-        if self.epoch != current_write_epoch() {
-            return;
-        }
-        if has_signal(self.id) {
-            write_and_notify_always(self.id, value);
+        if self.is_owner_thread() {
+            if self.local_epoch == current_local_write_epoch() && has_signal(self.id) {
+                write_and_notify_always(self.id, value);
+            }
         } else {
             let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
+            queue_bg_write(self.owner_thread, self.local_epoch, move || {
                 // See `set()`: disposal can race a queued write; drop it.
                 if has_signal(id) {
                     write_and_notify_always(id, value);
@@ -568,15 +571,13 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
-        if self.epoch != current_write_epoch() {
-            return;
-        }
-        if has_signal(self.id) {
-            update_and_notify_always(self.id, f);
+        if self.is_owner_thread() {
+            if self.local_epoch == current_local_write_epoch() && has_signal(self.id) {
+                update_and_notify_always(self.id, f);
+            }
         } else {
             let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
+            queue_bg_write(self.owner_thread, self.local_epoch, move || {
                 if has_signal(id) {
                     update_and_notify_always(id, f);
                 } else {
@@ -891,6 +892,122 @@ mod tests {
         let writer = signal.writer();
         writer.update(|v| *v += 5);
         assert_eq!(signal.get(), 15);
+    }
+
+    #[test]
+    fn resetting_another_thread_preserves_a_live_runtimes_queued_writes() {
+        use std::sync::mpsc;
+
+        let (writers_tx, writers_rx) = mpsc::channel();
+        let (flush_tx, flush_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            crate::reactive::reset_reactive();
+            let set = create_signal(1u32);
+            let update = create_signal(10u32);
+            let set_always = create_signal(20u32);
+            let update_always = create_signal(30u32);
+            let direct = create_signal(40u32);
+            let direct_writer = direct.writer();
+            writers_tx
+                .send((
+                    set.writer(),
+                    update.writer(),
+                    set_always.writer(),
+                    update_always.writer(),
+                ))
+                .unwrap();
+            flush_rx.recv().unwrap();
+            direct_writer.set(41);
+            crate::reactive::flush_bg_writes();
+            (
+                set.get_untracked(),
+                update.get_untracked(),
+                set_always.get_untracked(),
+                update_always.get_untracked(),
+                direct.get_untracked(),
+            )
+        });
+
+        let (set, update, set_always, update_always) = writers_rx.recv().unwrap();
+        std::thread::spawn(move || {
+            set.set(2);
+            update.update(|value| *value += 5);
+            set_always.set_always(21);
+            update_always.update_always(|value| *value += 2);
+        })
+        .join()
+        .unwrap();
+        crate::reactive::reset_reactive();
+        flush_tx.send(()).unwrap();
+
+        assert_eq!(owner.join().unwrap(), (2, 15, 21, 32, 41));
+    }
+
+    #[test]
+    fn a_writer_cannot_retain_a_value_after_its_owner_exits() {
+        use std::sync::Arc;
+
+        let writer = std::thread::spawn(|| {
+            crate::reactive::reset_reactive();
+            let signal = create_signal(Arc::new(()));
+            let writer = signal.writer();
+            crate::reactive::reset_reactive();
+            writer
+        })
+        .join()
+        .unwrap();
+
+        let value = Arc::new(());
+        writer.set(Arc::clone(&value));
+
+        assert_eq!(Arc::strong_count(&value), 1);
+    }
+
+    #[test]
+    fn reset_releases_values_held_by_queued_writes() {
+        use std::sync::Arc;
+
+        crate::reactive::reset_reactive();
+        let signal = create_signal(Arc::new(()));
+        let writer = signal.writer();
+        let value = Arc::new(());
+        let queued = Arc::clone(&value);
+        std::thread::spawn(move || writer.set(queued))
+            .join()
+            .unwrap();
+        assert_eq!(Arc::strong_count(&value), 2);
+
+        crate::reactive::reset_reactive();
+
+        assert_eq!(Arc::strong_count(&value), 1);
+    }
+
+    #[test]
+    fn a_foreign_writer_cannot_write_a_matching_signal_on_the_wrong_thread() {
+        use std::sync::mpsc;
+
+        let (writer_tx, writer_rx) = mpsc::channel();
+        let (flush_tx, flush_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            crate::reactive::reset_reactive();
+            let signal = create_signal(1u32);
+            writer_tx.send(signal.writer()).unwrap();
+            flush_rx.recv().unwrap();
+            crate::reactive::flush_bg_writes();
+            signal.get_untracked()
+        });
+
+        let writer = writer_rx.recv().unwrap();
+        let foreign = std::thread::spawn(move || {
+            crate::reactive::reset_reactive();
+            let signal = create_signal(10u32);
+            writer.set(2);
+            signal.get_untracked()
+        });
+
+        assert_eq!(foreign.join().unwrap(), 10);
+        flush_tx.send(()).unwrap();
+        assert_eq!(owner.join().unwrap(), 2);
     }
 
     /// Equality is a property of the write site: `set` deduplicates equal

@@ -75,8 +75,8 @@ pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, c
 /// Called during `App::drop()` to wipe all thread-local reactive state,
 /// enabling clean restart of the application.
 pub(crate) fn reset_reactive() {
-    state::reset();
     runtime::reset_bg_writes();
+    state::reset();
     diagnostics::reset();
 }
 

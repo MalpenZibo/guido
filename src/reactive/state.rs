@@ -87,6 +87,10 @@ pub(crate) struct ReactiveState {
     /// its `static` and tagged with the type it was declared as: a `static`
     /// cannot hold a thread's signal.
     pub(crate) globals: RefCell<FxHashMap<usize, (SignalId, TypeId)>>,
+    /// The process write epoch this thread's current application began in.
+    /// Kept stable while that application lives, even when another thread's
+    /// application ends and advances the background-write epoch.
+    pub(crate) write_epoch: Cell<Option<u64>>,
 
     // --- Guards that nest across calls sharing no argument -----------------
     /// `batch()` nesting: above zero, a write collects pending effects and
@@ -132,6 +136,7 @@ pub(crate) fn reset() {
             effect_tracking,
             subscribers,
             globals,
+            write_epoch,
             batch_depth,
             flushing,
         } = reactive;
@@ -147,6 +152,7 @@ pub(crate) fn reset() {
         pending_disposals.clear();
         subscribers.take();
         globals.take();
+        write_epoch.take();
         effect_tracking.take();
         tracking_context.take();
 
