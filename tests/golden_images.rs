@@ -1072,13 +1072,7 @@ fn fractional_svg_fills_its_raster_when_stretched() {
     };
 
     let expected = render("1", "1");
-    assert!(
-        expected
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .any(|pixel| pixel[0] > 200 && pixel[1] > 70 && pixel[2] < 120)
-    );
+    assert_eq!(expected, [242, 115, 64, 255].repeat(4));
     assert_eq!(render("0.6", "1.5"), expected);
     assert_eq!(render("1.5", "0.6"), expected);
 }
