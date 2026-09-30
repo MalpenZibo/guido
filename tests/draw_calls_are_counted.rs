@@ -5,8 +5,8 @@
 //! answer is a number `benches/icon_grid` prints. That number is only worth
 //! reading if each pipeline's column counts what that pipeline issued, so each
 //! is asserted here against a frame whose draw calls can be worked out by hand:
-//! seven images are seven calls, and the shapes and the text around them are
-//! one call per draw group.
+//! small images share an atlas page and are one call however many there are,
+//! and the shapes and the text around them are one call per draw group.
 
 mod common;
 
@@ -72,7 +72,7 @@ fn first_frame(build: impl FnOnce() -> Container + 'static) -> Option<StatsSnaps
 }
 
 #[test]
-fn each_image_is_a_draw_call_and_the_rest_are_one_per_group() {
+fn seven_small_images_are_one_draw_call_and_the_rest_are_one_per_group() {
     let Some(calls) = draw_calls_of_one_frame(scene) else {
         return;
     };
@@ -81,13 +81,13 @@ fn each_image_is_a_draw_call_and_the_rest_are_one_per_group() {
         calls,
         DrawCalls {
             shapes: 2,
-            images: IMAGES as u64,
+            images: 1,
             text: 1,
             text_quads: 0,
             backdrop: 0,
         }
     );
-    assert_eq!(calls.total(), 2 + IMAGES as u64 + 1);
+    assert_eq!(calls.total(), 2 + 1 + 1);
 }
 
 /// The two pipelines the first frame does not reach, on a frame that reaches
@@ -121,9 +121,9 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
     );
 }
 
-/// What preparing those seven images made on the GPU: a bind group for each
-/// texture, made when it was uploaded, and the vertex and index buffers every
-/// quad of the frame shares.
+/// What preparing those seven images made on the GPU: one bind group, for the
+/// atlas page all seven were packed onto, and the vertex and index buffers
+/// every quad of the frame shares.
 #[test]
 fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
     let Some(stats) = first_frame(scene) else {
@@ -134,7 +134,7 @@ fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
         stats.quad_allocations,
         QuadAllocations {
             buffers: 2,
-            bind_groups: IMAGES as u64,
+            bind_groups: 1,
         }
     );
 }
@@ -168,4 +168,119 @@ fn a_frame_that_draws_cached_textures_again_makes_no_buffer_and_no_bind_group() 
         "the second frame drew no image"
     );
     assert_eq!(stats.quad_allocations, QuadAllocations::default());
+}
+
+/// A distinct `side`×`side` source per index.
+fn sized_icon(index: usize, side: u32) -> ImageSource {
+    let shade = (index % 256) as u8;
+    ImageSource::Rgba {
+        width: side,
+        height: side,
+        pixels: [shade, 255 - shade, (index / 256) as u8, 255]
+            .repeat((side * side) as usize)
+            .into(),
+    }
+}
+
+fn images_row(sources: Vec<ImageSource>) -> Container {
+    container()
+        .layout(Flex::row())
+        .children(sources.into_iter().map(|source| {
+            container()
+                .width(4.0)
+                .height(4.0)
+                .child(image(source).content_fit(ContentFit::Fill))
+        }))
+}
+
+/// The case the atlas is for: two hundred distinct small images, every one a
+/// texture of its own before it and two hundred draw calls, are one.
+///
+/// The surface is as wide as the row, so none of them is off screen. That
+/// all two hundred are in that one call is what the texture count says: an
+/// image's texture is made only when its quad is prepared, and every prepared
+/// quad is drawn.
+#[test]
+fn two_hundred_small_images_are_one_draw_call() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(4)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        || images_row((0..200).map(|i| sized_icon(i, 4)).collect()),
+    );
+    app.configure(surface, 800, 4, 1.0);
+
+    render_stats::reset_stats();
+    app.step();
+    let stats = render_stats::get_stats();
+
+    assert_eq!(stats.frames_painted, 1);
+    assert_eq!(app.image_textures(), 200, "every image was prepared");
+    assert_eq!(stats.draw_calls.images, 1);
+}
+
+/// Paint order outranks batching. An image too large for a page keeps a
+/// texture of its own, and drawing the small image after it early — with the
+/// one before it — would draw it underneath: small, large, small is three.
+#[test]
+fn an_image_too_large_for_a_page_ends_the_run_it_interrupts() {
+    let Some(stats) =
+        first_frame(|| images_row(vec![sized_icon(0, 4), sized_icon(1, 300), sized_icon(2, 4)]))
+    else {
+        return;
+    };
+
+    assert_eq!(stats.draw_calls.images, 3);
+}
+
+/// A page is given back once eviction has taken everything off it — by the
+/// frame's own `trim`, with nothing asked of it by hand. Four megabytes is
+/// what a page costs, whether it holds one icon or four hundred.
+///
+/// The budget is set below one entry so the three images, once off screen and
+/// idle past `KEEP_UNUSED`, are all evicted. That frame's `trim` frees their
+/// entries after it has looked for empty pages, so the page goes on the next.
+#[test]
+fn a_page_eviction_empties_is_given_back() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    guido::set_image_cache_budget(0);
+    let shown = create_signal(true);
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(fill())
+                .height(fill())
+                .background(backdrop)
+                .child(move || {
+                    shown
+                        .get()
+                        .then(|| images_row((0..3).map(|i| sized_icon(i, 4)).collect()))
+                })
+        },
+    );
+    app.configure(surface, 240, 20, 1.0);
+    app.step();
+    assert_eq!(app.image_atlas_pages(), 1);
+
+    shown.set(false);
+    app.step();
+    assert_eq!(app.image_atlas_pages(), 1, "drawn within the last second");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    for shade in [0.2, 0.3] {
+        backdrop.set(Color::rgb(shade, shade, shade));
+        app.step();
+    }
+
+    assert_eq!(app.image_textures(), 0, "all three were evicted");
+    assert_eq!(app.image_atlas_pages(), 0);
 }

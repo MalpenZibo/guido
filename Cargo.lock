@@ -625,6 +625,7 @@ dependencies = [
  "bytemuck",
  "cosmic-text",
  "env_logger",
+ "etagere",
  "glyphon",
  "guido-macros",
  "image",

@@ -319,6 +319,12 @@ impl Renderer {
         self.image_quad_renderer.texture_count()
     }
 
+    /// How many atlas pages small images are packed on.
+    #[cfg(feature = "testing")]
+    pub(crate) fn image_atlas_pages(&self) -> usize {
+        self.image_quad_renderer.atlas_pages()
+    }
+
     /// Drop every image texture, as eviction does.
     #[cfg(feature = "testing")]
     pub(crate) fn forget_image_textures(&mut self) {

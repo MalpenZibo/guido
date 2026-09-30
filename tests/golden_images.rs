@@ -935,6 +935,56 @@ fn clipped_images() {
     golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
 }
 
+/// Neighbours on an atlas page do not bleed into each other (#546).
+///
+/// Four tiny solid images — red, green, blue, white — are uploaded one after
+/// another, so they land side by side on the same page, and each is magnified
+/// far past its texels at a fractional position, so bilinear filtering reads
+/// right up to its edge. Had the texel beyond that edge been the neighbour
+/// rather than a gutter repeating the image, each square would show a fringe
+/// of the next colour. The bottom row turns and scales them, which samples the
+/// edge at every angle. Every edge should look as a texture of its own drew it.
+#[test]
+fn atlas_neighbours_do_not_bleed() {
+    let solid = |rgb: [u8; 3]| ImageSource::Rgba {
+        width: 3,
+        height: 3,
+        pixels: [rgb[0], rgb[1], rgb[2], 0xff].repeat(9).into(),
+    };
+    let colours = [
+        [0xe0, 0x20, 0x20],
+        [0x20, 0xc0, 0x40],
+        [0x20, 0x40, 0xe0],
+        [0xff; 3],
+    ];
+    let tile = move |rgb: [u8; 3]| {
+        box_of(33.5, 33.5).child(image(solid(rgb)).content_fit(ContentFit::Fill))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.25)
+        .layout(Flex::column().spacing(12.5))
+        .child(
+            container()
+                .layout(Flex::row().spacing(6.5))
+                .children(colours.map(tile)),
+        )
+        .child(
+            container()
+                .layout(Flex::row().spacing(14.0))
+                .children(colours.map(move |rgb| tile(rgb).rotate(17.0).scale(1.2))),
+        );
+
+    golden(
+        "atlas_neighbours_do_not_bleed",
+        (190.0, 110.0),
+        1.5,
+        BACKDROP,
+        view,
+    );
+}
+
 /// A tint draws a monochrome SVG in its colour and keeps its coverage (#545).
 ///
 /// A black ring with a bar through it, so the antialiased curve and the
