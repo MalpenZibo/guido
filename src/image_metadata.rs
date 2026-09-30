@@ -9,9 +9,6 @@ use crate::widgets::image::ImageSource;
 
 /// Get the intrinsic dimensions of an image source without loading the full image.
 ///
-/// This is used during layout to determine the natural size of an image
-/// before the renderer loads it to a GPU texture.
-///
 /// Returns `Some((width, height))` if the dimensions can be determined,
 /// or `None` if the image cannot be read or parsed.
 pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
