@@ -13,17 +13,16 @@ use glyphon::{
     Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
     TextAtlas, TextBounds, TextRenderer, Viewport,
 };
-use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, Buffer as WgpuBuffer, Device, Extent3d, MultisampleState, Queue, RenderPass,
-    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+    BindGroup, Device, Extent3d, MultisampleState, Queue, RenderPass, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages,
 };
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEXTURE_PADDING};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
-use crate::render_stats::{self, Pipeline, QuadObject};
+use crate::render_stats::{self, Pipeline};
 use crate::widgets::font::FontWeight;
 use crate::widgets::{Rect, TextAlign};
 
@@ -60,20 +59,20 @@ fn texture_room(rect: Rect, effective_scale: f32) -> (f32, f32) {
     )
 }
 
-/// A prepared text quad ready for rendering.
+/// A prepared text quad ready for rendering: the texture it samples, and
+/// where its corners are among the frame's quads.
 pub struct PreparedTextQuad {
     cached: std::rc::Rc<CachedTextTexture>,
-    /// Vertex buffer with pre-computed vertices in NDC
-    vertex_buffer: WgpuBuffer,
+    quad: u32,
 }
 
 impl QuadDraw for PreparedTextQuad {
-    fn bind_group(&self) -> &BindGroup {
+    fn bind_group(&self) -> &std::rc::Rc<BindGroup> {
         &self.cached.bind_group
     }
 
-    fn vertex_buffer(&self) -> &WgpuBuffer {
-        &self.vertex_buffer
+    fn quad(&self) -> u32 {
+        self.quad
     }
 }
 
@@ -87,7 +86,7 @@ impl QuadDraw for PreparedTextQuad {
 struct CachedTextTexture {
     #[allow(dead_code)] // Kept alive for GPU usage
     texture: Texture,
-    bind_group: BindGroup,
+    bind_group: std::rc::Rc<BindGroup>,
     last_used: std::cell::Cell<u64>,
 }
 
@@ -156,6 +155,16 @@ impl TextQuadRenderer {
             viewport,
             format,
         }
+    }
+
+    /// Forget the last frame's quads.
+    pub fn begin_frame(&mut self) {
+        self.quad.begin_frame();
+    }
+
+    /// Write this frame's text quads to the GPU, once they are all prepared.
+    pub fn upload(&mut self, device: &Device, queue: &Queue) {
+        self.quad.upload(device, queue);
     }
 
     /// Update screen dimensions for NDC conversion.
@@ -240,15 +249,7 @@ impl TextQuadRenderer {
         if let Some(cached) = self.text_cache.get(&cache_key) {
             cached.last_used.set(self.frame_gen);
             let cached = cached.clone();
-            return self.build_quad(
-                device,
-                entry,
-                cached,
-                tex_width,
-                tex_height,
-                padding,
-                scale_factor,
-            );
+            return self.build_quad(entry, cached, tex_width, tex_height, padding, scale_factor);
         }
 
         // Cache miss: shape and rasterize
@@ -368,23 +369,14 @@ impl TextQuadRenderer {
             last_used: std::cell::Cell::new(self.frame_gen),
         });
         self.text_cache.insert(cache_key, cached.clone());
-        self.build_quad(
-            device,
-            entry,
-            cached,
-            tex_width,
-            tex_height,
-            padding,
-            scale_factor,
-        )
+        self.build_quad(entry, cached, tex_width, tex_height, padding, scale_factor)
     }
 
     /// Build the per-frame quad (vertices depend on position/transform, the
     /// texture itself is cached).
     #[allow(clippy::too_many_arguments)]
     fn build_quad(
-        &self,
-        device: &Arc<Device>,
+        &mut self,
         entry: &TextEntry,
         cached: std::rc::Rc<CachedTextTexture>,
         tex_width: u32,
@@ -458,17 +450,9 @@ impl TextQuadRenderer {
             )
         });
 
-        // Create vertex buffer with the vertices already initialized
-        render_stats::record_quad_allocation(QuadObject::Buffer);
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("TextQuad Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
         PreparedTextQuad {
+            quad: self.quad.push(vertices),
             cached,
-            vertex_buffer,
         }
     }
 

@@ -121,8 +121,9 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
     );
 }
 
-/// What preparing those seven images made on the GPU: a vertex buffer and a
-/// bind group each, on the frame that uploaded their textures.
+/// What preparing those seven images made on the GPU: a bind group for each
+/// texture, made when it was uploaded, and the vertex and index buffers every
+/// quad of the frame shares.
 #[test]
 fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
     let Some(stats) = first_frame(scene) else {
@@ -132,8 +133,39 @@ fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
     assert_eq!(
         stats.quad_allocations,
         QuadAllocations {
-            buffers: IMAGES as u64,
+            buffers: 2,
             bind_groups: IMAGES as u64,
         }
     );
+}
+
+/// Drawing the same images again makes nothing on the GPU. The frame is forced
+/// by the backdrop's colour, which no image depends on, so every image is
+/// prepared again from textures that are already cached.
+#[test]
+fn a_frame_that_draws_cached_textures_again_makes_no_buffer_and_no_bind_group() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || scene().background(backdrop),
+    );
+    app.configure(surface, 240, 20, 1.0);
+    app.step();
+
+    backdrop.set(Color::rgb(0.2, 0.2, 0.2));
+    render_stats::reset_stats();
+    app.step();
+    let stats = render_stats::get_stats();
+
+    assert_eq!(stats.frames_painted, 1, "the second frame was not painted");
+    assert!(
+        stats.draw_calls.images > 0,
+        "the second frame drew no image"
+    );
+    assert_eq!(stats.quad_allocations, QuadAllocations::default());
 }

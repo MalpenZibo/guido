@@ -9,10 +9,9 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
-use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, Buffer as WgpuBuffer, Device, Extent3d, Queue, RenderPass, Texture,
-    TextureDimension, TextureFormat, TextureUsages,
+    BindGroup, Device, Extent3d, Queue, RenderPass, Texture, TextureDimension, TextureFormat,
+    TextureUsages,
 };
 
 use super::commands::DrawCommand;
@@ -21,34 +20,34 @@ use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
-use crate::render_stats::{self, Pipeline, QuadObject};
+use crate::render_stats::Pipeline;
 use crate::widgets::Color;
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
-/// A prepared image quad ready for rendering.
+/// A prepared image quad ready for rendering: the texture it samples, and
+/// where its corners are among the frame's quads.
 pub struct PreparedImageQuad {
-    #[allow(dead_code)] // Kept alive for GPU usage
     texture: Rc<CachedTexture>,
-    bind_group: BindGroup,
-    /// Vertex buffer with pre-computed vertices in NDC
-    vertex_buffer: WgpuBuffer,
+    quad: u32,
 }
 
 impl QuadDraw for PreparedImageQuad {
-    fn bind_group(&self) -> &BindGroup {
-        &self.bind_group
+    fn bind_group(&self) -> &Rc<BindGroup> {
+        &self.texture.bind_group
     }
 
-    fn vertex_buffer(&self) -> &WgpuBuffer {
-        &self.vertex_buffer
+    fn quad(&self) -> u32 {
+        self.quad
     }
 }
 
 /// Cached texture data.
 struct CachedTexture {
     texture: Texture,
-    view: wgpu::TextureView,
+    /// Made with the texture and kept with it, so drawing it again makes
+    /// nothing.
+    bind_group: Rc<BindGroup>,
     /// Original intrinsic dimensions
     intrinsic_width: u32,
     intrinsic_height: u32,
@@ -162,6 +161,12 @@ impl ImageQuadRenderer {
     /// Begin a new frame: what a texture drawn in it is stamped with.
     pub fn begin_frame(&mut self) {
         self.frame_started = Instant::now();
+        self.quad.begin_frame();
+    }
+
+    /// Write this frame's image quads to the GPU, once they are all prepared.
+    pub fn upload(&mut self, device: &Device, queue: &Queue) {
+        self.quad.upload(device, queue);
     }
 
     /// Bring the cache back under `budget` bytes, once the frame has drawn
@@ -426,8 +431,10 @@ impl ImageQuadRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         Some(CachedTexture {
+            bind_group: self
+                .quad
+                .bind_texture(device, &view, "ImageQuad Bind Group"),
             texture,
-            view,
             intrinsic_width: width,
             intrinsic_height: height,
             last_used: Cell::new(self.frame_started),
@@ -540,8 +547,10 @@ impl ImageQuadRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         Some(CachedTexture {
+            bind_group: self
+                .quad
+                .bind_texture(device, &view, "ImageQuad Bind Group"),
             texture,
-            view,
             intrinsic_width,
             intrinsic_height,
             last_used: Cell::new(self.frame_started),
@@ -613,11 +622,6 @@ impl ImageQuadRenderer {
             decoded.as_ref(),
         )?;
 
-        // Create bind group
-        let bind_group = self
-            .quad
-            .bind_texture(device, &cached.view, "ImageQuad Bind Group");
-
         // Calculate display rect and UV coordinates based on content fit
         let (display_rect, uv) = self.calculate_display_rect_and_uv(
             rect,
@@ -632,7 +636,7 @@ impl ImageQuadRenderer {
             .clip()
             .map_or(QuadClip::NONE, |clip| QuadClip::shape(&clip, scale_factor));
 
-        let vertices = self.compute_vertices(
+        let corners = self.compute_vertices(
             &display_rect,
             &cmd.world_transform,
             uv,
@@ -641,18 +645,9 @@ impl ImageQuadRenderer {
             opacity_and_tint(cmd.opacity, *tint),
         );
 
-        // Create vertex buffer
-        render_stats::record_quad_allocation(QuadObject::Buffer);
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ImageQuad Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
         Some(PreparedImageQuad {
+            quad: self.quad.push(corners),
             texture: cached,
-            bind_group,
-            vertex_buffer,
         })
     }
 

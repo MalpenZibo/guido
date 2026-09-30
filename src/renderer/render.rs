@@ -558,6 +558,7 @@ impl Renderer {
         self.text_quads.clear();
         self.prepared_layers.clear();
         self.image_quad_renderer.begin_frame();
+        self.text_quad_renderer.begin_frame();
         self.text_mask.begin_frame();
         self.text_state.begin_frame(
             &self.queue,
@@ -647,6 +648,8 @@ impl Renderer {
             });
         }
 
+        self.image_quad_renderer.upload(&self.device, &self.queue);
+        self.text_quad_renderer.upload(&self.device, &self.queue);
         self.image_quad_renderer.trim(crate::image_cache_budget());
         self.text_state.end_frame();
     }

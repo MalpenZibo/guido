@@ -10,22 +10,37 @@
 //! down to the byte apart from their debug labels. Keeping them apart meant
 //! the blend state could drift on one side and nothing would say so.
 
-use wgpu::util::DeviceExt;
+use std::rc::Rc;
+
 use wgpu::{
-    BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, RenderPass, RenderPipeline, Sampler,
-    TextureFormat, TextureView,
+    BindGroup, BindGroupLayout, Buffer as WgpuBuffer, Device, Queue, RenderPass, RenderPipeline,
+    Sampler, TextureFormat, TextureView,
 };
 
 use super::textured_vertex::{TexturedVertex, to_ndc};
 use crate::render_stats::{self, Pipeline, QuadObject};
 
-/// Pipeline, bind group layout, sampler and index buffer for textured quads.
+/// Pipeline, bind group layout, sampler, and the frame's vertices for
+/// textured quads.
 pub(super) struct TexturedQuadPipeline {
     pub(super) pipeline: RenderPipeline,
     pub(super) bind_group_layout: BindGroupLayout,
     pub(super) sampler: Sampler,
-    /// Two triangles, shared by every quad — only the vertices are per-quad.
-    pub(super) index_buffer: WgpuBuffer,
+
+    /// Every quad this frame draws, four corners each, in the order they were
+    /// pushed. Uploaded once by [`upload`](Self::upload) into `vertex_buffer`,
+    /// which a quad addresses by its index in here rather than owning a buffer
+    /// of its own: a buffer per quad per frame was an allocation per image per
+    /// frame, for sixty-four bytes that change only when the image moves.
+    vertices: Vec<TexturedVertex>,
+    /// Holds `capacity` quads. Grown, never shrunk, and only when a frame draws
+    /// more quads than any frame before it.
+    vertex_buffer: Option<WgpuBuffer>,
+    /// Two triangles for each of `capacity` quads, quad `k` using vertices
+    /// `4k..4k + 4`. A run of `n` quads is its first `6n` indices, offset to
+    /// the run's first vertex by `base_vertex`.
+    index_buffer: Option<WgpuBuffer>,
+    capacity: usize,
 
     /// The surface size the vertices are projected against. Every quad's
     /// geometry is computed in screen pixels and converted here, so this is
@@ -34,15 +49,17 @@ pub(super) struct TexturedQuadPipeline {
     screen_height: f32,
 }
 
-/// A quad ready to draw: the texture to sample, and the four corners its
-/// geometry resolved to.
+/// A quad ready to draw: the texture to sample, and where in the frame's
+/// vertices its four corners are.
 ///
-/// The two renderers reach the bind group differently — one owns it per quad,
-/// the other shares it through a cached texture — which was the only reason
-/// they each wrote out the same render loop.
+/// The bind group is shared: it belongs to the cached texture the quad
+/// samples, so two quads sampling the same texture hold the same one, and a
+/// run of them is one draw call.
 pub(super) trait QuadDraw {
-    fn bind_group(&self) -> &BindGroup;
-    fn vertex_buffer(&self) -> &WgpuBuffer;
+    fn bind_group(&self) -> &Rc<BindGroup>;
+    /// The quad's index among the frame's quads, as [`TexturedQuadPipeline::push`]
+    /// returned it.
+    fn quad(&self) -> u32;
 }
 
 impl TexturedQuadPipeline {
@@ -141,18 +158,14 @@ impl TexturedQuadPipeline {
             ..Default::default()
         });
 
-        let indices: [u16; 6] = [0, 1, 2, 1, 3, 2];
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("{label} Index Buffer")),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
         Self {
             pipeline,
             bind_group_layout,
             sampler,
-            index_buffer,
+            vertices: Vec::new(),
+            vertex_buffer: None,
+            index_buffer: None,
+            capacity: 0,
             screen_width: 800.0,
             screen_height: 600.0,
         }
@@ -169,15 +182,69 @@ impl TexturedQuadPipeline {
         to_ndc(x, y, self.screen_width, self.screen_height)
     }
 
+    /// Forget the last frame's quads.
+    pub(super) fn begin_frame(&mut self) {
+        self.vertices.clear();
+    }
+
+    /// Add a quad to this frame, returning the index [`QuadDraw::quad`]
+    /// reports for it.
+    pub(super) fn push(&mut self, corners: [TexturedVertex; 4]) -> u32 {
+        let quad = (self.vertices.len() / 4) as u32;
+        self.vertices.extend(corners);
+        quad
+    }
+
+    /// Write this frame's quads to the GPU, before the pass that draws them
+    /// opens. Allocates only when the frame holds more quads than the buffers
+    /// have ever held.
+    pub(super) fn upload(&mut self, device: &Device, queue: &Queue) {
+        let quads = self.vertices.len() / 4;
+        if quads == 0 {
+            return;
+        }
+        if quads > self.capacity {
+            let capacity = quads.max(self.capacity * 2).max(16);
+            render_stats::record_quad_allocation(QuadObject::Buffer);
+            self.vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("TexturedQuad Vertex Buffer"),
+                size: (capacity * 4 * std::mem::size_of::<TexturedVertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            let indices: Vec<u32> = (0..capacity as u32)
+                .flat_map(|k| {
+                    let v = 4 * k;
+                    [v, v + 1, v + 2, v + 1, v + 3, v + 2]
+                })
+                .collect();
+            render_stats::record_quad_allocation(QuadObject::Buffer);
+            let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("TexturedQuad Index Buffer"),
+                size: (indices.len() * std::mem::size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(&indices));
+            self.index_buffer = Some(index_buffer);
+            self.capacity = capacity;
+        }
+        if let Some(buffer) = &self.vertex_buffer {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&self.vertices));
+        }
+    }
+
     /// Bind a texture for sampling, with this pipeline's layout and sampler.
+    ///
+    /// Made once per cached texture and kept with it, not once per frame.
     pub(super) fn bind_texture(
         &self,
         device: &Device,
         view: &TextureView,
         label: &str,
-    ) -> BindGroup {
+    ) -> Rc<BindGroup> {
         render_stats::record_quad_allocation(QuadObject::BindGroup);
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
+        Rc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: &self.bind_group_layout,
             entries: &[
@@ -190,30 +257,49 @@ impl TexturedQuadPipeline {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        })
+        }))
     }
 
-    /// Draw prepared quads: one pipeline and index buffer for all of them,
-    /// then a bind group and vertex buffer per quad — so one draw call per
-    /// quad, counted under `pipeline`.
+    /// Draw prepared quads, in order, one draw call per run: consecutive quads
+    /// that sample through the same bind group and sit next to each other in
+    /// the frame's vertices. Counted under `pipeline`.
+    ///
+    /// A run is exactly as long as paint order allows. A quad that samples
+    /// something else ends it even if a later quad would have joined, because
+    /// drawing that later quad early would draw it under the one between.
     pub(super) fn draw<'a, Q: QuadDraw>(
         &'a self,
         render_pass: &mut RenderPass<'a>,
         quads: &'a [Q],
         pipeline: Pipeline,
     ) {
+        let (Some(vertices), Some(indices)) = (&self.vertex_buffer, &self.index_buffer) else {
+            return;
+        };
         if quads.is_empty() {
             return;
         }
 
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.set_vertex_buffer(0, vertices.slice(..));
+        render_pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
 
-        for quad in quads {
-            render_pass.set_bind_group(0, quad.bind_group(), &[]);
-            render_pass.set_vertex_buffer(0, quad.vertex_buffer().slice(..));
-            render_pass.draw_indexed(0..6, 0, 0..1);
+        let mut calls = 0;
+        let mut rest = quads;
+        while let Some(first) = rest.first() {
+            let run = 1 + rest[1..]
+                .iter()
+                .zip(rest)
+                .take_while(|(next, prev)| {
+                    Rc::ptr_eq(next.bind_group(), prev.bind_group())
+                        && next.quad() == prev.quad() + 1
+                })
+                .count();
+            render_pass.set_bind_group(0, &**first.bind_group(), &[]);
+            render_pass.draw_indexed(0..6 * run as u32, 4 * first.quad() as i32, 0..1);
+            calls += 1;
+            rest = &rest[run..];
         }
-        render_stats::record_draw_calls(pipeline, quads.len() as u64);
+        render_stats::record_draw_calls(pipeline, calls);
     }
 }
