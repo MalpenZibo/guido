@@ -102,7 +102,9 @@ pub(crate) struct ReactiveState {
 /// this thread starts clean.
 ///
 /// Read `src/app_state.rs`'s `reset` for why this is a destructure and a `take`
-/// each: the same two guarantees, from the same two compiler errors.
+/// each: the same two guarantees, from the same two compiler errors. Storage
+/// is the one exception: it is replaced by its `successor`, which keeps the
+/// generations a `take` would start over.
 ///
 /// The order matters in one place, and it is insurance rather than a chain
 /// this crate has: three of these hold values the application wrote — a
@@ -137,8 +139,10 @@ pub(crate) fn reset() {
         } = reactive;
 
         // What the application wrote, first: dropping these is what may queue
-        // one last disposal.
-        storage.take();
+        // one last disposal. Storage keeps its generations, so its handles
+        // stay stale in the next one.
+        let successor = storage.borrow().successor();
+        drop(storage.replace(successor));
         runtime.take();
         owners.take();
 

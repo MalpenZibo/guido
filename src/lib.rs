@@ -2701,7 +2701,9 @@ mod restart_tests {
     use crate::jobs::{JobRequest, has_pending_jobs, request_job};
     use crate::reactive::clipboard::take_paste_requests;
     use crate::reactive::owner::create_root_owner;
-    use crate::reactive::{clipboard_copy, clipboard_paste, take_clipboard_change};
+    use crate::reactive::{
+        clipboard_copy, clipboard_paste, create_signal, flush_bg_writes, take_clipboard_change,
+    };
     use crate::surface::drain_surface_commands;
     use crate::widget_ref::create_widget_ref;
 
@@ -2749,6 +2751,114 @@ mod restart_tests {
             get_registered_fonts().is_empty(),
             "the next App would draw in a font it was never given"
         );
+    }
+
+    #[test]
+    fn writers_from_the_first_app_cannot_change_the_second_apps_signals() {
+        let first = App::new();
+        let stale_set = create_signal(1u32).writer();
+        let stale_update = create_signal(2u32).writer();
+        let stale_set_always = create_signal(3u32).writer();
+        let stale_update_always = create_signal(4u32).writer();
+        drop(first);
+
+        let _next = App::new();
+        let set_target = create_signal(10u32);
+        let update_target = create_signal(20u32);
+        let set_always_target = create_signal(30u32);
+        let update_always_target = create_signal(40u32);
+
+        stale_set.set(11);
+        stale_update.update(|value| *value = 21);
+        stale_set_always.set_always(31);
+        stale_update_always.update_always(|value| *value = 41);
+
+        assert_eq!(set_target.get_untracked(), 10);
+        assert_eq!(update_target.get_untracked(), 20);
+        assert_eq!(set_always_target.get_untracked(), 30);
+        assert_eq!(update_always_target.get_untracked(), 40);
+
+        update_always_target
+            .writer()
+            .update_always(|value| *value = 41);
+        assert_eq!(update_always_target.get_untracked(), 41);
+    }
+
+    #[test]
+    fn background_writers_from_the_first_app_cannot_change_the_second_apps_signals() {
+        let first = App::new();
+        let stale_set = create_signal(1u32).writer();
+        let stale_update = create_signal(2u32).writer();
+        let stale_set_always = create_signal(3u32).writer();
+        let stale_update_always = create_signal(4u32).writer();
+        std::thread::spawn(move || {
+            stale_set.set(11);
+            stale_update.update(|value| *value = 21);
+            stale_set_always.set_always(31);
+            stale_update_always.update_always(|value| *value = 41);
+        })
+        .join()
+        .unwrap();
+
+        drop(first);
+        let _next = App::new();
+        let set_target = create_signal(10u32);
+        let update_target = create_signal(20u32);
+        let set_always_target = create_signal(30u32);
+        let update_always_target = create_signal(40u32);
+        flush_bg_writes();
+
+        assert_eq!(set_target.get_untracked(), 10);
+        assert_eq!(update_target.get_untracked(), 20);
+        assert_eq!(set_always_target.get_untracked(), 30);
+        assert_eq!(update_always_target.get_untracked(), 40);
+    }
+
+    #[test]
+    fn late_background_writers_cannot_change_the_second_apps_signals() {
+        let first = App::new();
+        let stale_set = create_signal(1u32).writer();
+        let stale_update = create_signal(2u32).writer();
+        let stale_set_always = create_signal(3u32).writer();
+        let stale_update_always = create_signal(4u32).writer();
+        drop(first);
+
+        let _next = App::new();
+        let set_target = create_signal(10u32);
+        let update_target = create_signal(20u32);
+        let set_always_target = create_signal(30u32);
+        let update_always_target = create_signal(40u32);
+        std::thread::spawn(move || {
+            stale_set.set(11);
+            stale_update.update(|value| *value = 21);
+            stale_set_always.set_always(31);
+            stale_update_always.update_always(|value| *value = 41);
+        })
+        .join()
+        .unwrap();
+        flush_bg_writes();
+
+        assert_eq!(set_target.get_untracked(), 10);
+        assert_eq!(update_target.get_untracked(), 20);
+        assert_eq!(set_always_target.get_untracked(), 30);
+        assert_eq!(update_always_target.get_untracked(), 40);
+    }
+
+    /// A `WriteSignal` is one handle an `App` can leave behind; the
+    /// `RwSignal` it came from is another, and reads its id the same way.
+    #[test]
+    fn signals_from_the_first_app_cannot_reach_the_second_apps_signals() {
+        let first = App::new();
+        let stale = create_signal(1u32);
+        drop(first);
+
+        let _next = App::new();
+        let target = create_signal(10u32);
+
+        stale.set(11);
+
+        assert_eq!(target.get_untracked(), 10);
+        assert!(stale.try_get_untracked().is_none());
     }
 
     /// The order inside the reset, which is the one thing about it the
