@@ -167,7 +167,7 @@ impl Counts {
 ///
 /// Zero throughout unless the binary installed
 /// [`guido::heap::CountingAllocator`], which is a thing only a binary may do:
-/// both benchmarks and both repeatability tests install it.
+/// every benchmark and every repeatability test installs it.
 #[derive(Debug, Default, Clone)]
 pub struct Heap {
     /// Times the scripted frames went to the allocator.

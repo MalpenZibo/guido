@@ -84,12 +84,14 @@ cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo run --example status_bar     # a real surface, on a real compositor
 
-# Two workloads that run the same way twice — by hand, on a quiet machine. The
-# `renderer` skill says what repeats and what does not. The first scrolls, so
-# everything under its clip moves; the second holds a clipped panel still while
-# something beside it repaints, which is the case the first cannot show.
+# Three workloads that run the same way twice — by hand, on a quiet machine.
+# The `renderer` skill says what repeats and what does not. The first scrolls,
+# so everything under its clip moves; the second holds a clipped panel still
+# while something beside it repaints, which is the case the first cannot show;
+# the third scrolls a grid of small images, which neither of the others paints.
 cargo bench --bench scroll_list  --features testing,render-stats -- 5000
 cargo bench --bench static_clip  --features testing,render-stats -- 400
+cargo bench --bench icon_grid    --features testing,render-stats -- 1100
 
 mdbook build book                  # the user documentation
 mdbook serve book                  # ... with live reload
@@ -141,8 +143,9 @@ every run for months.
 | new ambient state — a `thread_local!`, a `static` `GlobalSignal`, or a process-wide `static` behind a lock or an atomic | `tests/ambient_state_inventory.rs`, against the **Ambient state** table in `docs/ARCHITECTURE.md` |
 | a new map or set — that it is keyed by `rustc_hash` and not by std's SipHash | `tests/hashers_are_fx.rs` — the source, read for a bare `HashMap`, against the opt-out list beside it |
 | the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
-| a performance claim about a frame | `benches/scroll_list` and `benches/static_clip` — one scripted gesture over two workloads, run by hand; the two `*_benchmark_is_repeatable.rs` tests are what say their counts repeat. A change that helps one and hurts the other is why there are two. The `renderer` skill has the rest |
-| a claim that a frame allocates less | the heap section of those same two tables. `CountingAllocator` is a `GlobalAlloc` the *binary* installs — a library may not — and `render_stats` samples it at each end of a frame; `tests/frame_allocations_are_counted.rs` says the window really is a frame's, and the two repeatability tests say the figures repeat. Two windows are printed, the scripted frames' own and the whole play's: a change to how a widget is *built* lands only in the second |
+| a performance claim about a frame | `benches/scroll_list`, `benches/static_clip` and `benches/icon_grid` — one scripted gesture over three workloads, run by hand; the three `*_benchmark_is_repeatable.rs` tests are what say their counts repeat. A change that helps one and hurts another is why there is more than one. The `renderer` skill has the rest |
+| how many draw calls a frame issues, and the buffers and bind groups the image and transformed-text quads make to issue them — the image atlas and its runs | `tests/draw_calls_are_counted.rs` — frames whose calls can be worked out by hand — and the `draw.*` and `quad.*` rows of the benchmark tables; `atlas_neighbours_do_not_bleed` in `tests/golden_images.rs` for what packing images side by side must not do to their edges |
+| a claim that a frame allocates less | the heap section of those same tables. `CountingAllocator` is a `GlobalAlloc` the *binary* installs — a library may not — and `render_stats` samples it at each end of a frame; `tests/frame_allocations_are_counted.rs` says the window really is a frame's, and the repeatability tests say the figures repeat. Two windows are printed, the scripted frames' own and the whole play's: a change to how a widget is *built* lands only in the second |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |
 
 That last row is what is left of the hole. Until #264 it was the whole of it:

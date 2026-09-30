@@ -11,7 +11,7 @@
 //! **The library never installs it.** A `#[global_allocator]` may only be set
 //! by the binary that links the program, and a library that set one would be
 //! choosing an allocator for every application that ever depends on it — the
-//! same line `dhat` and `stats_alloc` draw. So the two benchmarks, and the
+//! same line `dhat` and `stats_alloc` draw. So the benchmarks, and the
 //! tests that read the numbers, install it themselves:
 //!
 //! ```

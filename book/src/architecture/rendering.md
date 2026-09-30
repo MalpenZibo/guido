@@ -276,7 +276,7 @@ self.indices.clear();   // Reuse allocation
 
 ### Batching
 
-Similar shapes batch together to reduce draw calls. Text renders in a single pass using the glyph atlas.
+Similar shapes batch together to reduce draw calls. Text renders in a single pass using the glyph atlas, and small images are packed onto shared atlas pages, so consecutive images on one page are a single draw call too.
 
 ### Layout Optimization
 

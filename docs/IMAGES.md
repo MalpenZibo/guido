@@ -1,6 +1,6 @@
 # Image Widget
 
-The Image widget displays raster images (PNG, JPEG, GIF, WebP) and SVG vector graphics. Images are rendered as GPU textures and compose with container transforms (rotate, scale, translate).
+The Image widget displays raster images (PNG, JPEG, GIF, WebP) and SVG vector graphics. Images are rendered as GPU textures and compose with container transforms (rotate, scale, translate). An image up to 256 texels a side shares an atlas page with other small ones, so a screen of icons is a few draw calls rather than one per icon — see `docs/RENDERER.md`, "Textured Quads".
 
 ## Quick Start
 
@@ -204,8 +204,10 @@ not drawn" colour.
   releases it: it goes with its texture's eviction, and if it is decoded but
   never drawn it keeps its pixels as long as the application.
 - **Eviction spares what is in view.** The texture cache is bounded by bytes,
-  not by count: each texture costs width × height × 4 (every mip level, if it
-  had any), and the budget is 100 MB (`DEFAULT_IMAGE_CACHE_BUDGET`, Flutter's
+  not by count: an image with a texture of its own costs width × height × 4
+  (image textures have no mip levels), one packed onto an atlas page costs
+  its place there — (width + 2) × (height + 2) × 4, gutter included — and the
+  budget is 100 MB (`DEFAULT_IMAGE_CACHE_BUDGET`, Flutter's
   `ImageCache` default) unless the application sets its own with
   `App::image_cache_budget` or `set_image_cache_budget`. Under the budget
   nothing is evicted, whatever the count. Over it, `ImageQuadRenderer::trim`
@@ -215,7 +217,11 @@ not drawn" colour.
   image still in view would blank it and send it back to the worker every
   frame. When those alone exceed the budget the cache grows instead. The
   cache is the renderer's, shared by every surface: a surface that has not
-  drawn for a second is not protected from another surface's trim.
+  drawn for a second is not protected from another surface's trim. The pages
+  themselves are not counted: a page is 1024 × 1024 × 4 bytes, 4 MB, whether
+  it holds one entry or four hundred, and goes only once eviction has emptied
+  it — so the budget bounds what the entries occupy, not the GPU memory the
+  pages reserve.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
   is decoded, true from the start for `Rgba` and SVG, never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
