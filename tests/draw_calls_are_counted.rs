@@ -119,6 +119,7 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
             backdrop: 9,
         }
     );
+    assert_eq!(calls.total(), 1 + 1 + 9);
 }
 
 /// What preparing those seven images made on the GPU: one bind group, for the
@@ -283,4 +284,82 @@ fn a_page_eviction_empties_is_given_back() {
 
     assert_eq!(app.image_textures(), 0, "all three were evicted");
     assert_eq!(app.image_atlas_pages(), 0);
+}
+
+/// The frame's vertex and index buffers grow only when a frame holds more
+/// quads than they ever have, and then to at least twice that: a frame that
+/// fits allocates nothing, the full-to-the-brim one included.
+///
+/// Two, five, sixteen, seventeen, thirty images: the first frame allocates
+/// the minimum of sixteen, which the next two fit in; seventeen is the first
+/// that does not, and doubles to thirty-two, which thirty fits in. Buffers
+/// sized by anything but the quad count, or grown by less than double, or
+/// grown when merely full, or a frame that kept the last one's quads, would
+/// each allocate on a frame that is zero here.
+#[test]
+fn the_frame_buffers_grow_only_past_what_they_have_held() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let count = create_signal(2usize);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(4)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .child(move || images_row((0..count.get()).map(|i| sized_icon(i, 4)).collect()))
+        },
+    );
+    app.configure(surface, 120, 4, 1.0);
+
+    let mut buffers = Vec::new();
+    for images in [2, 5, 16, 17, 30] {
+        count.set(images);
+        render_stats::reset_stats();
+        app.step();
+        let stats = render_stats::get_stats();
+        assert_eq!(stats.frames_painted, 1, "{images} images were painted");
+        assert_eq!(stats.draw_calls.images, 1, "{images} images are one run");
+        buffers.push(stats.quad_allocations.buffers);
+    }
+
+    assert_eq!(buffers, [2, 0, 0, 2, 0]);
+    assert_eq!(
+        app.read_pixel(surface, 29 * 4 + 2, 2),
+        [29, 255 - 29, 0, 255],
+        "the last image of the grown buffer is drawn from its own vertices"
+    );
+}
+
+/// Transformed text draws through a pipeline of its own, with a frame buffer
+/// of its own: drawing the same labels again allocates nothing there either.
+#[test]
+fn transformed_text_drawn_again_allocates_no_buffer() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .background(backdrop)
+                .layout(Flex::row())
+                .children((0..10).map(|i| container().rotate(10.0).child(text(format!("{i}")))))
+        },
+    );
+    app.configure(surface, 240, 40, 1.0);
+    app.step();
+
+    for shade in [0.2, 0.3] {
+        backdrop.set(Color::rgb(shade, shade, shade));
+        render_stats::reset_stats();
+        app.step();
+        let stats = render_stats::get_stats();
+        assert_eq!(stats.draw_calls.text_quads, 10, "the labels were drawn");
+        assert_eq!(stats.quad_allocations.buffers, 0);
+    }
 }

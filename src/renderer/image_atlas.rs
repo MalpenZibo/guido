@@ -227,4 +227,28 @@ mod tests {
         ];
         assert_eq!(padded, expected);
     }
+
+    /// The same on an image that is neither square nor two wide, where adding
+    /// two and doubling differ: one column of three rows becomes three columns
+    /// of five.
+    #[test]
+    fn the_gutter_is_one_texel_whatever_the_shape() {
+        let (a, b, c) = ([1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]);
+        let rgba = [a, b, c].concat();
+
+        let padded: Vec<[u8; 4]> = extruded(1, 3, &rgba)
+            .chunks(4)
+            .map(|texel| texel.try_into().unwrap())
+            .collect();
+
+        #[rustfmt::skip]
+        let expected = vec![
+            a, a, a,
+            a, a, a,
+            b, b, b,
+            c, c, c,
+            c, c, c,
+        ];
+        assert_eq!(padded, expected);
+    }
 }
