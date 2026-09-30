@@ -1,0 +1,7 @@
+node 0,0 56x32
+  node 0,0 16x16 at 8,8
+    node 0,0 16x16
+      draw image 0,0 16x16
+  node 0,0 16x16 at 32,8
+    node 0,0 16x16
+      draw image 0,0 16x16 tint=#ff0000ff

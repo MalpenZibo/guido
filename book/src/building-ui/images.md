@@ -245,6 +245,32 @@ An `Image` carries no box of its own: the container it sits in is what gives it
 one, exactly as with a `text`. `content_fit` then decides how the picture uses
 that box.
 
+## Tinting
+
+`tint` draws every pixel of an image in one colour, keeping its alpha. It is
+how a monochrome icon takes the colour of the text beside it, a hover, or a
+theme:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let hovered = create_signal(false);
+container()
+    .width(16.0)
+    .height(16.0)
+    .on_hover(move |h| hovered.set(h))
+    .child(image("./battery.svg").tint(move || {
+        if hovered.get() { Color::WHITE } else { Color::rgb(0.6, 0.6, 0.6) }
+    }))
+# ;
+# }
+```
+
+The colour is applied while the image is drawn, from the texture it already
+has, so changing it costs a repaint rather than rasterizing the SVG again. The
+tint's alpha fades the image as `opacity` would.
+
 ## Reactive Images
 
 Image sources can be reactive, allowing dynamic image changes:
