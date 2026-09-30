@@ -288,10 +288,11 @@ impl Widget for Image {
                             Some(decoded),
                             local_bounds,
                             self.cached_content_fit,
+                            None,
                         );
                     }
                 }
-                None => ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit),
+                None => ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit, None),
             }
         }
     }

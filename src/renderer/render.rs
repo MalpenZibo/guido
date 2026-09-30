@@ -312,6 +312,12 @@ impl Renderer {
         }
     }
 
+    /// How many image textures are cached.
+    #[cfg(feature = "testing")]
+    pub(crate) fn image_textures(&self) -> usize {
+        self.image_quad_renderer.texture_count()
+    }
+
     /// Drop every image texture, as eviction does.
     #[cfg(feature = "testing")]
     pub(crate) fn forget_image_textures(&mut self) {

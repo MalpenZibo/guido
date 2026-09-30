@@ -21,7 +21,7 @@ use wgpu::{
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEXTURE_PADDING};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
-use super::textured_vertex::{QuadClip, TexturedVertex};
+use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::widgets::font::FontWeight;
 use crate::widgets::{Rect, TextAlign};
@@ -446,7 +446,14 @@ impl TextQuadRenderer {
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
         let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {
             let (x, y) = screen_corners[i];
-            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip, entry.opacity)
+            TexturedVertex::corner(
+                self.quad.to_ndc(x, y),
+                uvs[i],
+                (x, y),
+                &clip,
+                entry.opacity,
+                NO_TINT,
+            )
         });
 
         // Create vertex buffer with the vertices already initialized

@@ -43,6 +43,11 @@ pub struct TexturedVertex {
     /// than into the texture, so a text or an image that fades is not
     /// rasterised again on every frame of it.
     pub curvature_opacity: [f32; 4],
+    /// `[r, g, b, amount]`: the colour every texel takes, keeping its alpha,
+    /// and how much of it — `1.0` for a tinted image, `0.0` for everything
+    /// else, which leaves the texel as it was. Carried on the vertex for the
+    /// same reason as the opacity: a new tint is not a new texture.
+    pub tint: [f32; 4],
 }
 
 /// The clip a textured quad is cut by, in the clip's own coordinates.
@@ -126,6 +131,7 @@ impl TexturedVertex {
         screen: (f32, f32),
         clip: &QuadClip,
         opacity: f32,
+        tint: [f32; 4],
     ) -> Self {
         Self {
             position: ndc,
@@ -134,6 +140,7 @@ impl TexturedVertex {
             clip_rect: clip.rect,
             clip_params: clip.radii,
             curvature_opacity: [clip.curvature, opacity, 0.0, 0.0],
+            tint,
         }
     }
 
@@ -178,10 +185,19 @@ impl TexturedVertex {
                     shader_location: 5,
                     format: VertexFormat::Float32x4,
                 },
+                // tint
+                VertexAttribute {
+                    offset: 72,
+                    shader_location: 6,
+                    format: VertexFormat::Float32x4,
+                },
             ],
         }
     }
 }
+
+/// The tint of a quad that has none: its texels are drawn as they are.
+pub const NO_TINT: [f32; 4] = [0.0; 4];
 
 /// Convert screen coordinates to NDC (Normalized Device Coordinates).
 #[inline]
