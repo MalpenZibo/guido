@@ -46,6 +46,27 @@ pub(crate) struct SignalStorage {
     derived: FxHashMap<SignalId, Rc<dyn Any>>,
 }
 
+impl SignalStorage {
+    /// The storage the next `App` on this thread starts from: every slot
+    /// vacant, every generation kept. Ids restarting from zero would let a
+    /// handle the last `App` left behind pass the generation check against
+    /// the first signal the next one creates.
+    pub(crate) fn successor(&self) -> Self {
+        Self {
+            slots: self
+                .slots
+                .iter()
+                .map(|slot| Slot {
+                    value: None,
+                    generation: slot.generation,
+                })
+                .collect(),
+            free_indices: (0..self.slots.len() as u32).rev().collect(),
+            derived: FxHashMap::default(),
+        }
+    }
+}
+
 /// Briefly borrow storage to Rc::clone a signal's value handle.
 ///
 /// Leptos-style: clone the Rc (O(1)), release the storage borrow, then let

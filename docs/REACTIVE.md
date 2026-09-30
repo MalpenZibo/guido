@@ -422,7 +422,10 @@ pub struct Signal<T> {
 `SignalId` is generational — `{ index: u32, generation: u32 }`. Storage slots
 are recycled with a bumped generation, so a stale `Copy` handle held after its
 owner was disposed can never silently alias the slot's next occupant: reads of
-disposed signals fail loudly. Effect and owner ids use the same scheme.
+disposed signals fail loudly. The generations outlive an `App`, too: its reset
+leaves every slot vacant rather than starting the storage over, so a handle
+kept across a restart fails the same check. Effect and owner ids use the same
+scheme within an `App`, but their arenas still start over at a restart.
 
 The actual value is stored in `thread_local! { RefCell<SignalStorage> }`, accessed by `id`. This design allows:
 - Both types to be `Copy`
