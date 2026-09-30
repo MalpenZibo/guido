@@ -334,8 +334,10 @@ fn an_image_whose_texture_is_gone_is_decoded_again() {
     assert_eq!(app.image_bytes_held(), 0, "and let go of again");
 }
 
-/// What one of the 20×20 PNGs above costs as a texture: width × height × 4.
-const IMAGE_BYTES: usize = 20 * 20 * 4;
+/// What one of the 20×20 PNGs above costs the cache: small enough for an atlas
+/// page, so its place there — the image and the one-texel gutter around it,
+/// 22 × 22, at 4 bytes a texel (#546).
+const IMAGE_BYTES: usize = 22 * 22 * 4;
 
 /// Long enough that no texture drawn before it counts as drawn recently: the
 /// renderer spares one drawn within the last second.

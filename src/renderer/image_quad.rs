@@ -9,45 +9,58 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
-use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, Buffer as WgpuBuffer, Device, Extent3d, Queue, RenderPass, Texture,
-    TextureDimension, TextureFormat, TextureUsages,
+    BindGroup, Device, Extent3d, Queue, RenderPass, Texture, TextureDimension, TextureFormat,
+    TextureUsages,
 };
 
 use super::commands::DrawCommand;
 use super::constants::SVG_QUALITY_MULTIPLIER;
 use super::flatten::FlattenedCommand;
+use super::image_atlas::{AtlasEntry, ImageAtlas};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
+use crate::render_stats::Pipeline;
 use crate::widgets::Color;
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
-/// A prepared image quad ready for rendering.
+/// A prepared image quad ready for rendering: the texture it samples, and
+/// where its corners are among the frame's quads.
 pub struct PreparedImageQuad {
-    #[allow(dead_code)] // Kept alive for GPU usage
     texture: Rc<CachedTexture>,
-    bind_group: BindGroup,
-    /// Vertex buffer with pre-computed vertices in NDC
-    vertex_buffer: WgpuBuffer,
+    quad: u32,
 }
 
 impl QuadDraw for PreparedImageQuad {
-    fn bind_group(&self) -> &BindGroup {
-        &self.bind_group
+    fn bind_group(&self) -> &Rc<BindGroup> {
+        &self.texture.bind_group
     }
 
-    fn vertex_buffer(&self) -> &WgpuBuffer {
-        &self.vertex_buffer
+    fn quad(&self) -> u32 {
+        self.quad
     }
+}
+
+/// Where a cached image's texels live.
+enum Backing {
+    /// A texture of its own: an image larger than an atlas page takes.
+    Own(Texture),
+    /// A place on a shared page, given back when this is dropped.
+    Atlas(AtlasEntry),
 }
 
 /// Cached texture data.
 struct CachedTexture {
-    texture: Texture,
-    view: wgpu::TextureView,
+    backing: Backing,
+    /// The bind group it is drawn through: its own texture's, or its page's.
+    /// Made with the texture or the page and kept with it, so drawing it again
+    /// makes nothing, and every image on one page draws through the same one.
+    bind_group: Rc<BindGroup>,
+    /// Its texels within that texture, `[x, y, width, height]` in texture
+    /// coordinates — all of it, for a texture of its own.
+    uv_rect: [f32; 4],
     /// Original intrinsic dimensions
     intrinsic_width: u32,
     intrinsic_height: u32,
@@ -62,7 +75,10 @@ struct CachedTexture {
 impl CachedTexture {
     /// What it costs on the GPU, counted against the cache's budget.
     fn bytes(&self) -> usize {
-        texture_bytes(&self.texture)
+        match &self.backing {
+            Backing::Own(texture) => texture_bytes(texture),
+            Backing::Atlas(entry) => entry.bytes(),
+        }
     }
 }
 
@@ -99,12 +115,55 @@ impl Hash for CacheKey {
     }
 }
 
+/// A texture of its own, for an image too large for an atlas page.
+///
+/// `Rgba8Unorm`, like the pages, so colours pass through without an sRGB
+/// conversion.
+fn own_texture(device: &Device, queue: &Queue, width: u32, height: u32, rgba: &[u8]) -> Texture {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Image Texture"),
+        size: Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: TextureDimension::D2,
+        format: TextureFormat::Rgba8Unorm,
+        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * width),
+            rows_per_image: Some(height),
+        },
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    texture
+}
+
 /// Renderer for images as textured quads.
 pub struct ImageQuadRenderer {
     /// Pipeline, layout, sampler and index buffer — shared with the text
     /// renderer, which draws the same quad from a different texture.
     quad: TexturedQuadPipeline,
 
+    /// The pages small images are packed onto.
+    atlas: ImageAtlas,
     // Texture cache
     texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
     /// When the frame being prepared started: what a texture drawn in it is
@@ -147,6 +206,7 @@ impl ImageQuadRenderer {
     pub fn new(device: &Device, format: TextureFormat) -> Self {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
+            atlas: ImageAtlas::default(),
             texture_cache: FxHashMap::default(),
             frame_started: Instant::now(),
             cached_bytes: 0,
@@ -161,6 +221,12 @@ impl ImageQuadRenderer {
     /// Begin a new frame: what a texture drawn in it is stamped with.
     pub fn begin_frame(&mut self) {
         self.frame_started = Instant::now();
+        self.quad.begin_frame();
+    }
+
+    /// Write this frame's image quads to the GPU, once they are all prepared.
+    pub fn upload(&mut self, device: &Device, queue: &Queue) {
+        self.quad.upload(device, queue);
     }
 
     /// Bring the cache back under `budget` bytes, once the frame has drawn
@@ -171,6 +237,9 @@ impl ImageQuadRenderer {
     /// than [`KEEP_UNUSED`] would have its own images evicted by the frame
     /// about to draw them.
     pub fn trim(&mut self, budget: usize) {
+        // Before the budget is looked at: a page empties when the last frame's
+        // quads let go of what was evicted from it, which is not this call.
+        self.atlas.drop_empty_pages();
         if self.cached_bytes <= budget {
             return;
         }
@@ -206,6 +275,12 @@ impl ImageQuadRenderer {
     pub(crate) fn forget_textures(&mut self) {
         self.texture_cache.clear();
         self.cached_bytes = 0;
+    }
+
+    /// How many atlas pages there are.
+    #[cfg(feature = "testing")]
+    pub(crate) fn atlas_pages(&self) -> usize {
+        self.atlas.pages()
     }
 
     /// Hash an image source for cache lookup.
@@ -311,7 +386,7 @@ impl ImageQuadRenderer {
     /// the texture missing, which sends the source back to the worker.
     /// Decoding here instead is the stall that module exists to remove.
     fn load_texture(
-        &self,
+        &mut self,
         device: &Device,
         queue: &Queue,
         source: &ImageSource,
@@ -319,23 +394,13 @@ impl ImageQuadRenderer {
         svg_target: Option<(f32, f32)>,
         decoded: Option<&DecodedImage>,
     ) -> Option<CachedTexture> {
-        // Use Rgba8Unorm to pass colors through without sRGB conversion
-        let format = TextureFormat::Rgba8Unorm;
-
         match source {
             ImageSource::Path(_) | ImageSource::Bytes(_) => {
                 let Some(pixels) = decoded.and_then(DecodedImage::take) else {
                     crate::image_decode::texture_missing(source);
                     return None;
                 };
-                self.upload_raster(
-                    device,
-                    queue,
-                    &format,
-                    pixels.width,
-                    pixels.height,
-                    &pixels.rgba,
-                )
+                self.upload_raster(device, queue, pixels.width, pixels.height, &pixels.rgba)
             }
             ImageSource::Rgba {
                 width,
@@ -355,7 +420,7 @@ impl ImageQuadRenderer {
                     );
                     return None;
                 }
-                self.upload_raster(device, queue, &format, *width, *height, pixels)
+                self.upload_raster(device, queue, *width, *height, pixels)
             }
             ImageSource::SvgPath(path) => {
                 let data = match std::fs::read(path) {
@@ -365,20 +430,19 @@ impl ImageQuadRenderer {
                         return None;
                     }
                 };
-                self.load_svg(device, queue, &format, &data, render_scale, svg_target)
+                self.load_svg(device, queue, &data, render_scale, svg_target)
             }
             ImageSource::SvgBytes(bytes) => {
-                self.load_svg(device, queue, &format, bytes, render_scale, svg_target)
+                self.load_svg(device, queue, bytes, render_scale, svg_target)
             }
         }
     }
 
     /// Upload raw RGBA8 pixel data to GPU.
     fn upload_raster(
-        &self,
+        &mut self,
         device: &Device,
         queue: &Queue,
-        format: &TextureFormat,
         width: u32,
         height: u32,
         rgba: &[u8],
@@ -387,61 +451,16 @@ impl ImageQuadRenderer {
             return None;
         }
 
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Image Texture"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: *format,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * width),
-                rows_per_image: Some(height),
-            },
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
-
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        Some(CachedTexture {
-            texture,
-            view,
-            intrinsic_width: width,
-            intrinsic_height: height,
-            last_used: Cell::new(self.frame_started),
-            decoded_from: None,
-        })
+        self.store(device, queue, width, height, rgba, (width, height))
     }
 
     /// Fallback when the `svg` feature is disabled: SVG sources fail to
     /// decode with a warning instead of failing to compile.
     #[cfg(not(feature = "svg"))]
     fn load_svg(
-        &self,
+        &mut self,
         _device: &Device,
         _queue: &Queue,
-        _format: &TextureFormat,
         _bytes: &[u8],
         _scale: f32,
         _target: Option<(f32, f32)>,
@@ -459,10 +478,9 @@ impl ImageQuadRenderer {
     /// cost scales with pixels) and sharper (no GPU minification).
     #[cfg(feature = "svg")]
     fn load_svg(
-        &self,
+        &mut self,
         device: &Device,
         queue: &Queue,
-        format: &TextureFormat,
         bytes: &[u8],
         scale: f32,
         target: Option<(f32, f32)>,
@@ -500,47 +518,50 @@ impl ImageQuadRenderer {
         // Render the SVG
         resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-        // Upload to GPU
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("SVG Texture"),
-            size: Extent3d {
-                width: scaled_width,
-                height: scaled_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: *format,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+        self.store(
+            device,
+            queue,
+            scaled_width,
+            scaled_height,
             pixmap.data(),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * scaled_width),
-                rows_per_image: Some(scaled_height),
-            },
-            Extent3d {
-                width: scaled_width,
-                height: scaled_height,
-                depth_or_array_layers: 1,
-            },
-        );
+            (intrinsic_width, intrinsic_height),
+        )
+    }
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
+    /// Put `rgba`, `width` by `height` texels, where it will be drawn from: on
+    /// an atlas page if it is small enough for one, in a texture of its own if
+    /// not. `intrinsic` is the size the image lays out at, which for an SVG is
+    /// not the size it was rasterized at.
+    fn store(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        (intrinsic_width, intrinsic_height): (u32, u32),
+    ) -> Option<CachedTexture> {
+        let (backing, bind_group, uv_rect) = match self
+            .atlas
+            .insert(device, queue, &self.quad, width, height, rgba)
+        {
+            Some((entry, uv_rect)) => {
+                let bind_group = entry.bind_group().clone();
+                (Backing::Atlas(entry), bind_group, uv_rect)
+            }
+            None => {
+                let texture = own_texture(device, queue, width, height, rgba);
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let bind_group = self
+                    .quad
+                    .bind_texture(device, &view, "ImageQuad Bind Group");
+                (Backing::Own(texture), bind_group, [0.0, 0.0, 1.0, 1.0])
+            }
+        };
         Some(CachedTexture {
-            texture,
-            view,
+            backing,
+            bind_group,
+            uv_rect,
             intrinsic_width,
             intrinsic_height,
             last_used: Cell::new(self.frame_started),
@@ -612,17 +633,21 @@ impl ImageQuadRenderer {
             decoded.as_ref(),
         )?;
 
-        // Create bind group
-        let bind_group = self
-            .quad
-            .bind_texture(device, &cached.view, "ImageQuad Bind Group");
-
         // Calculate display rect and UV coordinates based on content fit
-        let (display_rect, uv) = self.calculate_display_rect_and_uv(
+        let (display_rect, (u_min, v_min, u_max, v_max)) = self.calculate_display_rect_and_uv(
             rect,
             cached.intrinsic_width,
             cached.intrinsic_height,
             *content_fit,
+        );
+        // From the image's own coordinates to the texture it is drawn from,
+        // which for one on an atlas page is a corner of the page.
+        let [x, y, width, height] = cached.uv_rect;
+        let uv = (
+            x + u_min * width,
+            y + v_min * height,
+            x + u_max * width,
+            y + v_max * height,
         );
 
         // An image is cut in the clip's own space, so a turned clip cuts the
@@ -631,7 +656,7 @@ impl ImageQuadRenderer {
             .clip()
             .map_or(QuadClip::NONE, |clip| QuadClip::shape(&clip, scale_factor));
 
-        let vertices = self.compute_vertices(
+        let corners = self.compute_vertices(
             &display_rect,
             &cmd.world_transform,
             uv,
@@ -640,17 +665,9 @@ impl ImageQuadRenderer {
             opacity_and_tint(cmd.opacity, *tint),
         );
 
-        // Create vertex buffer
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ImageQuad Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-
         Some(PreparedImageQuad {
+            quad: self.quad.push(corners),
             texture: cached,
-            bind_group,
-            vertex_buffer,
         })
     }
 
@@ -774,6 +791,6 @@ impl ImageQuadRenderer {
 
     /// Render the prepared image quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedImageQuad]) {
-        self.quad.draw(render_pass, quads);
+        self.quad.draw(render_pass, quads, Pipeline::Images);
     }
 }

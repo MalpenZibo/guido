@@ -21,6 +21,7 @@
 use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
 
+use crate::render_stats::{self, Pipeline};
 use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
@@ -579,6 +580,7 @@ impl BackdropRenderer {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
+        render_stats::record_draw_calls(Pipeline::Backdrop, 1);
     }
 
     /// Blur one region of the scene target, in place, cut out by the region's

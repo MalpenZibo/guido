@@ -120,7 +120,10 @@ pub const DEFAULT_IMAGE_CACHE_BUDGET: usize = 100 << 20;
 
 /// Set how many bytes of image texture the renderer may keep.
 ///
-/// A texture costs its width × height × 4 bytes. Under the budget nothing is
+/// An image costs its width × height × 4 bytes, and one small enough to share
+/// an atlas page costs its place there, a texel of gutter on every side
+/// included. The pages themselves, 4 MB each, are not counted: one goes once
+/// eviction has emptied it. Under the budget nothing is
 /// evicted; over it, the least recently drawn go first — but never one drawn
 /// within the last second, so the images a frame keeps drawing stay even when
 /// they alone are over the budget. The default is [`DEFAULT_IMAGE_CACHE_BUDGET`].

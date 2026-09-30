@@ -132,6 +132,17 @@ is the box, the mask is the shape, tested in the container's own space.
 `backdrop_blur_follows_its_shape` is the only golden that draws a backdrop blur
 at all — before it, the entire pass had no pixel watching it.
 
+## Images
+
+An image is a textured quad, as a transformed text is, and neither owns a GPU
+object: its corners go into the frame's one vertex buffer and its bind group is
+its texture's, made once. Small images — up to 256 texels a side — are packed
+onto 1024-square atlas pages with a one-texel gutter repeating their edge, and
+consecutive quads on one page are one draw call. Paint order ends a run, never
+the other way round. `docs/RENDERER.md` ("Textured Quads") has the rest;
+`tests/draw_calls_are_counted.rs` and `atlas_neighbours_do_not_bleed` are what
+watch it.
+
 ## Backdrop
 
 A backdrop effect samples pixels already drawn, which a pass cannot do to its
@@ -182,6 +193,13 @@ Run it on the revision before and the revision after, and diff the two tables.
 The counts repeat exactly, which is what makes the diff readable at all: a
 hand-scrolled run of the same example polled 136714 frames one time and 83209
 the next, and neither average described the other's workload.
+
+`benches/static_clip` plays the same gesture beside a clipped panel that
+stands still, and `benches/icon_grid` over a grid of a few hundred distinct
+small images, half raster and half SVG. Each prints `draw.*` — the draw calls
+per pipeline — and `quad.*` — the buffers and bind groups the image and
+transformed-text quads made — among its counts, so a claim about batching has
+a number that repeats.
 
 Under the table is what the run cost the heap, which is the number a change that
 exists to stop allocating has to move. It is counted by `CountingAllocator`, a

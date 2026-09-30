@@ -369,9 +369,13 @@ fn main() {
   decoded pixels are dropped once they are uploaded: after that the GPU texture
   is the image. If the texture is later evicted, the image is decoded again the
   next time it is drawn
-- Images are cached as GPU textures
-- The cache holds up to 100 MB of textures (width × height × 4 bytes each) and evicts
+- Images are cached as GPU textures. Small ones — up to 256 pixels a side once
+  rasterized — share atlas pages, so a screen full of icons is a few draw calls,
+  not one per icon
+- The cache's budget is 100 MB of images (about width × height × 4 bytes each) and it evicts
   the least recently drawn past that, never one drawn in the last second. An application
-  with other needs sets its own budget with `App::image_cache_budget`
+  with other needs sets its own budget with `App::image_cache_budget`. The atlas pages the
+  small images share are 4 MB each and are not counted: a page is given back once eviction
+  has emptied it, so the GPU memory held can run a few pages past the budget
 - SVGs are re-rasterized when their display scale changes significantly
 - Texture uploads happen once per unique image/scale combination

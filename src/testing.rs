@@ -879,6 +879,13 @@ impl Headless {
             .map_or(0, |renderer| renderer.image_textures())
     }
 
+    /// How many atlas pages the renderer holds small images on.
+    pub fn image_atlas_pages(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .map_or(0, |renderer| renderer.image_atlas_pages())
+    }
+
     /// Drop every image texture the renderer holds, as eviction would, so a
     /// test can ask what happens when one that was uploaded is needed again.
     pub fn forget_image_textures(&mut self) {

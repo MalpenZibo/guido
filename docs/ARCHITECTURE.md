@@ -773,7 +773,7 @@ The feature has zero overhead when disabled (code is completely compiled out).
 `src/heap.rs` holds `CountingAllocator`, a `GlobalAlloc` that forwards to the
 system allocator and counts on the way through. **The library never installs
 it**: a `#[global_allocator]` may only be set by the binary that links the
-program, so the two benchmarks and the tests that read the figures install it
+program, so the benchmarks and the tests that read the figures install it
 themselves, the line `dhat` and `stats_alloc` draw for the same reason.
 
 The counters are the whole process's, because the heap is — wgpu's threads and

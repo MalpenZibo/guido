@@ -38,6 +38,73 @@ pub enum Phase {
     CachePaintResults,
 }
 
+/// The pipeline a draw call went through.
+#[derive(Debug, Clone, Copy)]
+pub enum Pipeline {
+    /// The instanced SDF shapes, and the overlay bucket drawn with them.
+    Shapes,
+    /// Images, one textured quad each.
+    Images,
+    /// Text through glyphon: upright text in the frame, and the offscreen
+    /// passes that rasterize a transformed text's texture or a frosted text's
+    /// mask.
+    Text,
+    /// Transformed text, drawn as a textured quad of its own.
+    TextQuads,
+    /// Backdrop blur: every pass of its filter, and the present.
+    Backdrop,
+}
+
+/// Draw calls issued, by the pipeline that issued them.
+///
+/// Counted where each pipeline issues them, so a pipeline that starts batching
+/// moves its own column and no other.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DrawCalls {
+    pub shapes: u64,
+    pub images: u64,
+    pub text: u64,
+    pub text_quads: u64,
+    pub backdrop: u64,
+}
+
+impl DrawCalls {
+    /// Every pipeline's calls together.
+    pub fn total(&self) -> u64 {
+        self.shapes + self.images + self.text + self.text_quads + self.backdrop
+    }
+
+    #[cfg(feature = "render-stats")]
+    fn add(&mut self, pipeline: Pipeline, count: u64) {
+        let column = match pipeline {
+            Pipeline::Shapes => &mut self.shapes,
+            Pipeline::Images => &mut self.images,
+            Pipeline::Text => &mut self.text,
+            Pipeline::TextQuads => &mut self.text_quads,
+            Pipeline::Backdrop => &mut self.backdrop,
+        };
+        *column += count;
+    }
+}
+
+/// GPU objects the textured-quad pipelines created while preparing frames.
+///
+/// A texture that is already cached should cost a frame nothing to draw again,
+/// and these are the two things that drawing it could still create: a vertex
+/// buffer for its corners and a bind group for its texture.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct QuadAllocations {
+    pub buffers: u64,
+    pub bind_groups: u64,
+}
+
+/// A GPU object a textured-quad pipeline created.
+#[derive(Debug, Clone, Copy)]
+pub enum QuadObject {
+    Buffer,
+    BindGroup,
+}
+
 /// Per-phase timing statistics (microseconds).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct PhaseTiming {
@@ -88,6 +155,10 @@ pub struct StatsSnapshot {
     /// The bytes behind [`allocations`](Self::allocations). A reallocation
     /// asks for the difference between the old size and the new.
     pub bytes_allocated: u64,
+    /// The draw calls these frames issued.
+    pub draw_calls: DrawCalls,
+    /// The buffers and bind groups preparing images and transformed text made.
+    pub quad_allocations: QuadAllocations,
 }
 
 /// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
@@ -113,7 +184,9 @@ macro_rules! time_phase {
 
 #[cfg(feature = "render-stats")]
 mod inner {
-    use super::{LayoutReasons, Phase, PhaseTiming};
+    use super::{
+        DrawCalls, LayoutReasons, Phase, PhaseTiming, Pipeline, QuadAllocations, QuadObject,
+    };
     use crate::tree::DamageRegion;
     use std::cell::RefCell;
     use std::time::{Duration, Instant};
@@ -195,6 +268,8 @@ mod inner {
         allocations: u64,
         bytes_allocated: u64,
         heap_mark: (u64, u64),
+        draw_calls: DrawCalls,
+        quad_allocations: QuadAllocations,
         // Report timing
         last_print: Instant,
     }
@@ -234,6 +309,8 @@ mod inner {
                 allocations: 0,
                 bytes_allocated: 0,
                 heap_mark: heap_now(),
+                draw_calls: DrawCalls::default(),
+                quad_allocations: QuadAllocations::default(),
                 last_print: Instant::now(),
             }
         }
@@ -382,6 +459,26 @@ mod inner {
         });
     }
 
+    /// Record `count` draw calls issued through `pipeline`.
+    #[inline]
+    pub fn record_draw_calls(pipeline: Pipeline, count: u64) {
+        STATS.with(|s| {
+            s.borrow_mut().draw_calls.add(pipeline, count);
+        });
+    }
+
+    /// Record a buffer or bind group a textured-quad pipeline created.
+    #[inline]
+    pub fn record_quad_allocation(object: QuadObject) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            match object {
+                QuadObject::Buffer => stats.quad_allocations.buffers += 1,
+                QuadObject::BindGroup => stats.quad_allocations.bind_groups += 1,
+            }
+        });
+    }
+
     /// Return a snapshot of the current stats (for testing).
     pub fn get_stats() -> super::StatsSnapshot {
         STATS.with(|s| {
@@ -412,6 +509,8 @@ mod inner {
                 window_declined_containers: stats.window_declined_containers,
                 allocations: stats.allocations,
                 bytes_allocated: stats.bytes_allocated,
+                draw_calls: stats.draw_calls,
+                quad_allocations: stats.quad_allocations,
             }
         })
     }
@@ -553,6 +652,21 @@ mod inner {
                 );
             }
 
+            let calls = stats.draw_calls;
+            eprintln!(
+                "  draw calls: total={} shapes={} images={} text={} text_quads={} backdrop={}",
+                calls.total(),
+                calls.shapes,
+                calls.images,
+                calls.text,
+                calls.text_quads,
+                calls.backdrop
+            );
+            eprintln!(
+                "  quad allocations: buffers={} bind_groups={}",
+                stats.quad_allocations.buffers, stats.quad_allocations.bind_groups
+            );
+
             // The paint window, and what it could not narrow.
             if stats.window_children_total > 0 || stats.window_declined_children > 0 {
                 eprintln!(
@@ -631,6 +745,14 @@ pub fn record_paint_window(_total_children: u64, _iterated: u64) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_paint_window_declined(_total_children: u64) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_draw_calls(_pipeline: Pipeline, _count: u64) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_quad_allocation(_object: QuadObject) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

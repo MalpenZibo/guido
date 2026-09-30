@@ -668,6 +668,41 @@ Scaling them here as well would apply the scale twice and clip a HiDPI surface
 to a quarter of its viewport. `the_surface_scale_is_undone_once` in
 `src/renderer/flatten.rs` is what says so.
 
+### Textured Quads
+
+Images and transformed text are textured quads, drawn by
+`TexturedQuadPipeline` (`src/renderer/textured_quad.rs`). A quad owns no GPU
+object of its own:
+
+- **Its corners go into the frame's vertex buffer.** Every quad a frame
+  prepares is pushed into one `Vec` of vertices, four each, uploaded once
+  before the pass opens into a buffer that grows only when a frame holds more
+  quads than any frame before it. A shared index buffer draws quad `k` from
+  vertices `4k..4k + 4`.
+- **Its bind group is its texture's.** It is made when the texture is cached
+  and lives with it, so a frame that draws a cached texture again makes
+  nothing.
+- **A run is one draw call.** Consecutive quads that sample through the same
+  bind group and sit next to each other in the vertex buffer are one
+  `draw_indexed`. A quad that samples something else ends the run, even if a
+  later quad could have joined it, because drawing that one early would draw
+  it underneath the quad between.
+
+**Small images share an atlas page** (`src/renderer/image_atlas.rs`), which is
+what makes runs long. An image whose texture is at most `MAX_ENTRY` (256) texels
+a side goes onto a `PAGE` (1024) square page, allocated with `etagere`; a
+larger one keeps a texture of its own and ends the run it lands in. A full page
+opens another, and one with nothing left on it is dropped at the next trim.
+Nothing is ever copied between textures, and the shader samples a plain 2D
+texture either way. Each entry is surrounded by one texel repeating its own
+edge, which is what the clamped bilinear sampler read outside a texture of its
+own, so a packed image's edges look as they did.
+
+`tests/draw_calls_are_counted.rs` holds the counts — seven small images are one
+call, small, large, small is three, and a second frame of cached textures makes
+no buffer and no bind group — and `atlas_neighbours_do_not_bleed` the edges.
+`benches/icon_grid` says what a scrolling screen of them costs.
+
 ### Render Order
 
 1. **Shapes** - Background rectangles, borders, shadows
@@ -726,3 +761,5 @@ fn paint(&self, ctx: &mut PaintContext) {
 | `src/renderer/text.rs` | Text rendering via glyphon |
 | `src/renderer/text_quad.rs` | Transformed text as textured quads |
 | `src/renderer/image_quad.rs` | Image rendering |
+| `src/renderer/image_atlas.rs` | The pages small images are packed onto |
+| `src/renderer/textured_quad.rs` | The textured-quad pipeline, the frame's quad vertices, runs |

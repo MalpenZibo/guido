@@ -17,6 +17,7 @@ mod constants;
 mod flatten;
 mod gpu;
 mod gpu_context;
+mod image_atlas;
 mod image_quad;
 mod paint_context;
 mod render;

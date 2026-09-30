@@ -48,6 +48,8 @@ guido-macros = { workspace = true }
 wgpu = { version = "29.0", features = ["fragile-send-sync-non-atomic-wasm"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 glyphon = "0.11"
+# Packs small images onto atlas pages; glyphon packs its glyphs with it already.
+etagere = "0.3"
 cosmic-text = "0.18"
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
@@ -96,6 +98,13 @@ required-features = ["testing", "render-stats"]
 [[bench]]
 name = "static_clip"
 path = "benches/static_clip/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
+[[bench]]
+name = "icon_grid"
+path = "benches/icon_grid/main.rs"
 harness = false
 test = false
 required-features = ["testing", "render-stats"]
