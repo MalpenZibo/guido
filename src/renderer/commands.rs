@@ -353,6 +353,9 @@ pub enum DrawCommand {
         rect: Rect,
         /// How the image content fits within the rect
         content_fit: ContentFit,
+        /// The colour every pixel is drawn in, keeping its alpha. `None`
+        /// draws the image's own colours.
+        tint: Option<Color>,
     },
 }
 

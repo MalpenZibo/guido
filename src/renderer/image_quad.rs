@@ -19,8 +19,9 @@ use super::commands::DrawCommand;
 use super::constants::SVG_QUALITY_MULTIPLIER;
 use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
-use super::textured_vertex::{QuadClip, TexturedVertex};
+use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
+use crate::widgets::Color;
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
 
@@ -113,6 +114,15 @@ pub struct ImageQuadRenderer {
     cached_bytes: usize,
 }
 
+/// What a quad's vertices carry for its opacity and its tint. A tint's own
+/// alpha fades the image as an opacity would.
+fn opacity_and_tint(opacity: f32, tint: Option<Color>) -> (f32, [f32; 4]) {
+    match tint {
+        Some(c) => (opacity * c.a, [c.r, c.g, c.b, 1.0]),
+        None => (opacity, NO_TINT),
+    }
+}
+
 /// How long a texture no frame has drawn is kept once the cache is past its
 /// budget. One drawn more recently is never evicted — the cache grows past its
 /// budget instead — because a raster texture's pixels went with its upload: an
@@ -183,6 +193,12 @@ impl ImageQuadRenderer {
                 self.cached_bytes -= texture.bytes();
             }
         }
+    }
+
+    /// How many textures are cached.
+    #[cfg(feature = "testing")]
+    pub(crate) fn texture_count(&self) -> usize {
+        self.texture_cache.len()
     }
 
     /// Drop every texture, as eviction does, and say so as eviction does.
@@ -560,13 +576,14 @@ impl ImageQuadRenderer {
         cmd: &FlattenedCommand,
         scale_factor: f32,
     ) -> Option<PreparedImageQuad> {
-        let (source, decoded, rect, content_fit) = match &*cmd.command {
+        let (source, decoded, rect, content_fit, tint) = match &*cmd.command {
             DrawCommand::Image {
                 source,
                 decoded,
                 rect,
                 content_fit,
-            } => (source, decoded, rect, content_fit),
+                tint,
+            } => (source, decoded, rect, content_fit, tint),
             _ => return None,
         };
 
@@ -620,7 +637,7 @@ impl ImageQuadRenderer {
             uv,
             scale_factor,
             clip,
-            cmd.opacity,
+            opacity_and_tint(cmd.opacity, *tint),
         );
 
         // Create vertex buffer
@@ -706,7 +723,7 @@ impl ImageQuadRenderer {
         uv: (f32, f32, f32, f32),
         scale_factor: f32,
         clip: QuadClip,
-        opacity: f32,
+        (opacity, tint): (f32, [f32; 4]),
     ) -> [TexturedVertex; 4] {
         // Get local rect corners
         let local_corners = [
@@ -751,7 +768,7 @@ impl ImageQuadRenderer {
 
         std::array::from_fn(|i| {
             let (x, y) = screen_corners[i];
-            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip, opacity)
+            TexturedVertex::corner(self.quad.to_ndc(x, y), uvs[i], (x, y), &clip, opacity, tint)
         })
     }
 

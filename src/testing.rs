@@ -872,6 +872,13 @@ impl Headless {
         crate::image_decode::held_bytes()
     }
 
+    /// How many image textures the renderer holds.
+    pub fn image_textures(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .map_or(0, |renderer| renderer.image_textures())
+    }
+
     /// Drop every image texture the renderer holds, as eviction would, so a
     /// test can ask what happens when one that was uploaded is needed again.
     pub fn forget_image_textures(&mut self) {

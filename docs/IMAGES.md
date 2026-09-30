@@ -237,6 +237,17 @@ an image in the first frame.
 make "not yet decoded" deterministic, and is a binary of its own because the
 background-write queue is process-wide.
 
+## Tint
+
+`Image::tint` draws every texel in one colour and keeps its alpha:
+`rgb = tint.rgb`, `a = sampled.a * tint.a * opacity`. It travels on the
+textured-quad vertex (`TexturedVertex::tint`, `[r, g, b, amount]`) beside the
+opacity and for the same reason — a new colour is not a new texture — so it is
+neither in the texture cache's key nor a cause of a new raster. Paint reads it,
+so a new tint repaints and lays nothing out. Transformed text shares the
+pipeline and passes `NO_TINT`, an amount of zero, which leaves the texel as it
+was.
+
 ## Texture Caching
 
 The image texture renderer includes LRU caching:

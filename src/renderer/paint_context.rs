@@ -597,7 +597,13 @@ impl<'a> PaintContext<'a> {
     /// A raster `Path` or `Bytes` source is decoded off the frame: until its
     /// decode lands this draws nothing, and the widget painting it is
     /// repainted when it does.
-    pub fn draw_image(&mut self, source: ImageSource, rect: Rect, content_fit: ContentFit) {
+    pub fn draw_image(
+        &mut self,
+        source: ImageSource,
+        rect: Rect,
+        content_fit: ContentFit,
+        tint: Option<Color>,
+    ) {
         // Read while painting, so the widget drawing it is repainted when the
         // decode lands — and until then draws nothing.
         let decoded = match crate::image_decode::state(&source) {
@@ -605,7 +611,7 @@ impl<'a> PaintContext<'a> {
             Some((DecodeState::Ready, decoded)) => Some(decoded),
             Some((DecodeState::Pending | DecodeState::Failed, _)) => return,
         };
-        self.push_image(source, decoded, rect, content_fit);
+        self.push_image(source, decoded, rect, content_fit, tint);
     }
 
     /// Push an image whose decode the caller has already resolved — the
@@ -616,12 +622,14 @@ impl<'a> PaintContext<'a> {
         decoded: Option<DecodedImage>,
         rect: Rect,
         content_fit: ContentFit,
+        tint: Option<Color>,
     ) {
         self.node.commands.push(Rc::new(DrawCommand::Image {
             source,
             decoded,
             rect,
             content_fit,
+            tint,
         }));
     }
 

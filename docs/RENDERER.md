@@ -139,7 +139,7 @@ ctx.draw_text(text, rect, color, font_size);
 ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight, fit);
 
 // Image — a raster Path or Bytes source draws nothing until its decode lands
-ctx.draw_image(source, rect, content_fit);
+ctx.draw_image(source, rect, content_fit, tint);
 ```
 
 ### Children

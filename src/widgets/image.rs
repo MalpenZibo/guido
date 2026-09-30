@@ -12,7 +12,7 @@ use crate::reactive::{IntoSignal, Prop, Signal, create_memo};
 use crate::renderer::PaintContext;
 use crate::tree::LayoutCtx;
 
-use super::widget::{Rect, Widget};
+use super::widget::{Color, Rect, Widget};
 
 /// Source for an image - can be a file path or in-memory bytes.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +109,8 @@ pub enum ContentFit {
 pub struct Image {
     source: Signal<ImageSource>,
     content_fit: Prop<ContentFit>,
+    /// Read by paint alone: a new tint repaints, and lays nothing out again.
+    tint: Prop<Color>,
     /// Read under layout tracking, and used again by paint on the same frame.
     cached_content_fit: ContentFit,
     /// Cached intrinsic size from the image source
@@ -127,6 +129,7 @@ impl Image {
         Self {
             source: source.into_signal(),
             content_fit: Prop::Unset,
+            tint: Prop::Unset,
             cached_content_fit: ContentFit::default(),
             intrinsic_size: None,
             cached_source: None,
@@ -137,6 +140,28 @@ impl Image {
     /// Set the content fit mode.
     pub fn content_fit<M>(mut self, fit: impl IntoSignal<ContentFit, M>) -> Self {
         self.content_fit = fit.into_prop();
+        self
+    }
+
+    /// Draw every pixel in `color`, keeping the image's own alpha — a
+    /// monochrome icon in whatever colour its surroundings ask for.
+    ///
+    /// The colour is applied as the image is drawn, from the texture it
+    /// already has: a new tint is a repaint, not a new raster, so a hover or a
+    /// theme change costs what a font icon's colour change does. The tint's
+    /// own alpha fades the image as an opacity would.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// let hovered = create_signal(false);
+    /// container().width(16.0).height(16.0).child(
+    ///     image("./battery.svg").tint(move || {
+    ///         if hovered.get() { Color::WHITE } else { Color::rgb(0.6, 0.6, 0.6) }
+    ///     }),
+    /// );
+    /// ```
+    pub fn tint<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
+        self.tint = color.into_prop();
         self
     }
 
@@ -279,6 +304,7 @@ impl Widget for Image {
         if let Some(ref source) = self.cached_source {
             let size = tree.cached_size(id).unwrap_or_default();
             let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
+            let tint = self.tint.get();
             match &self.decode {
                 // The held entry's own signal: a paint does no lookup.
                 Some(decode) => {
@@ -288,10 +314,11 @@ impl Widget for Image {
                             Some(decoded),
                             local_bounds,
                             self.cached_content_fit,
+                            tint,
                         );
                     }
                 }
-                None => ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit),
+                None => ctx.draw_image(source.clone(), local_bounds, self.cached_content_fit, tint),
             }
         }
     }

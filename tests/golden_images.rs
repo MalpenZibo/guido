@@ -935,6 +935,45 @@ fn clipped_images() {
     golden("clipped_images", (330.0, 130.0), 1.0, BACKDROP, view);
 }
 
+/// A tint draws a monochrome SVG in its colour and keeps its coverage (#545).
+///
+/// A black ring with a bar through it, so the antialiased curve and the
+/// straight edge both have to keep their alpha when the colour changes. Left:
+/// untinted, the SVG's own black. Middle: tinted red, over exactly the same
+/// coverage. Right: tinted with a half-transparent green, which fades the
+/// icon as an opacity would.
+#[cfg(feature = "svg")]
+#[test]
+fn tinted_svg() {
+    let icon = || {
+        ImageSource::SvgBytes(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="9" fill="none" stroke="#000" stroke-width="3"/><rect x="4" y="11" width="16" height="2"/></svg>"##
+                .to_vec()
+                .into(),
+        )
+    };
+    let tile = |tint: Option<Color>| {
+        let image = image(icon());
+        let image = match tint {
+            Some(tint) => image.tint(tint),
+            None => image,
+        };
+        box_of(60.0, 60.0)
+            .background(Color::rgb(0.85, 0.85, 0.85))
+            .child(image)
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(20.0)
+        .layout(Flex::row().spacing(20.0))
+        .child(tile(None))
+        .child(tile(Some(Color::rgb(0.9, 0.1, 0.1))))
+        .child(tile(Some(Color::rgba(0.1, 0.7, 0.2, 0.5))));
+
+    golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
+}
+
 /// Two clips a quarter turn apart still cut exactly.
 ///
 /// `intersect_clips` rewrites the inner clip in the outer's coordinates when

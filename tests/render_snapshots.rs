@@ -247,8 +247,12 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
         DrawCommand::TextBackdropBlur { radius, .. } => {
             let _ = writeln!(out, "{pad}{kind} text backdrop blur r={}", n(*radius));
         }
-        DrawCommand::Image { rect: r, .. } => {
-            let _ = writeln!(out, "{pad}{kind} image {}", rect(r));
+        DrawCommand::Image { rect: r, tint, .. } => {
+            let _ = write!(out, "{pad}{kind} image {}", rect(r));
+            if let Some(t) = tint {
+                let _ = write!(out, " tint={}", color(t));
+            }
+            let _ = writeln!(out);
         }
     }
 }
@@ -706,4 +710,24 @@ fn an_input_declaration_is_carried_in_paint_order() {
         );
 
     assert_snapshot("input_regions", render(view, 200.0, 140.0));
+}
+
+/// A tint is part of what an image draws (#545), and only a tinted image's
+/// line says so: an untinted one reads as it always has.
+#[test]
+fn a_tinted_image_carries_its_tint() {
+    let icon = || {
+        ImageSource::SvgBytes(
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>"#
+                .to_vec()
+                .into(),
+        )
+    };
+    let view = container()
+        .padding(8.0)
+        .layout(Flex::row().spacing(8.0))
+        .child(box_of(16.0, 16.0).child(image(icon())))
+        .child(box_of(16.0, 16.0).child(image(icon()).tint(Color::RED)));
+
+    assert_snapshot("tinted_image", render(view, 64.0, 32.0));
 }
