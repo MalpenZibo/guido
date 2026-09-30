@@ -1,8 +1,7 @@
 //! How an image sizes itself inside the box a container gives it.
 //!
 //! These are layout-only: they assert the widget's size, never its pixels, so
-//! they need no GPU and no fonts. The source is raw RGBA, so the intrinsic
-//! size is known without touching the filesystem or a decoder.
+//! they need no GPU and no fonts.
 
 use guido::layout::{Constraints, Size};
 use guido::prelude::*;

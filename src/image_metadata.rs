@@ -7,7 +7,8 @@ use std::path::Path;
 
 use crate::widgets::image::ImageSource;
 
-/// Get the intrinsic dimensions of an image source without loading the full image.
+/// Get an image source's intrinsic size in whole pixels without loading the full image.
+/// Fractional SVG dimensions are rounded up.
 ///
 /// Returns `Some((width, height))` if the dimensions can be determined,
 /// or `None` if the image cannot be read or parsed.

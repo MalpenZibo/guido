@@ -190,7 +190,7 @@ impl Image {
         create_memo(move || crate::image_decode::is_ready(&source.get())).into_signal()
     }
 
-    /// Get the current intrinsic size if known.
+    /// Get the current intrinsic size in whole pixels, rounding SVG dimensions up.
     pub fn intrinsic_size(&self) -> Option<(u32, u32)> {
         self.intrinsic_size
             .map(|(width, height)| (width.ceil() as u32, height.ceil() as u32))
