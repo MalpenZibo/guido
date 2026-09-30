@@ -18,7 +18,7 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-use guido::render_stats::{self, PhaseTiming, StatsSnapshot};
+use guido::render_stats::{self, DrawCalls, PhaseTiming, QuadAllocations, StatsSnapshot};
 use guido::testing::Headless;
 
 /// The gap between frames. Named rather than slept through: every instant in
@@ -101,6 +101,10 @@ pub struct Counts {
     /// stood still. Zero is a gesture that stayed inside the list, which is the
     /// workload the benchmark is for — see [`script`].
     pub frames_pinned: u64,
+    /// The draw calls the painted frames issued, pipeline by pipeline.
+    pub draw_calls: DrawCalls,
+    /// The vertex buffers and bind groups preparing textured quads created.
+    pub quad_allocations: QuadAllocations,
 }
 
 impl Counts {
@@ -123,6 +127,14 @@ impl Counts {
         self.window_children_iterated += snapshot.window_children_iterated;
         self.window_declined_containers += snapshot.window_declined_containers;
         self.window_declined_children += snapshot.window_declined_children;
+        let (calls, drawn) = (&mut self.draw_calls, &snapshot.draw_calls);
+        calls.shapes += drawn.shapes;
+        calls.images += drawn.images;
+        calls.text += drawn.text;
+        calls.text_quads += drawn.text_quads;
+        calls.backdrop += drawn.backdrop;
+        self.quad_allocations.buffers += snapshot.quad_allocations.buffers;
+        self.quad_allocations.bind_groups += snapshot.quad_allocations.bind_groups;
     }
 
     /// A delta was asked for and nothing moved.
@@ -398,6 +410,17 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("flatten.nodes_flattened", counts.flatten_nodes_flattened),
         ("damage.partial", counts.damage_partial),
         ("damage.full", counts.damage_full),
+        ("draw.total", counts.draw_calls.total()),
+        ("draw.shapes", counts.draw_calls.shapes),
+        ("draw.images", counts.draw_calls.images),
+        ("draw.text", counts.draw_calls.text),
+        ("draw.text_quads", counts.draw_calls.text_quads),
+        ("draw.backdrop", counts.draw_calls.backdrop),
+        ("quad.buffers_created", counts.quad_allocations.buffers),
+        (
+            "quad.bind_groups_created",
+            counts.quad_allocations.bind_groups,
+        ),
         ("script.deltas_pinned", counts.frames_pinned),
     ] {
         out.push_str(&format!("  {name:<26} {value}\n"));

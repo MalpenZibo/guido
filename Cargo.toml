@@ -100,6 +100,13 @@ harness = false
 test = false
 required-features = ["testing", "render-stats"]
 
+[[bench]]
+name = "icon_grid"
+path = "benches/icon_grid/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
 [[example]]
 name = "status_bar"
 path = "examples/status_bar.rs"

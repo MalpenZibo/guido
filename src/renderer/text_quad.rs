@@ -23,6 +23,7 @@ use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEX
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
+use crate::render_stats::{self, Pipeline, QuadObject};
 use crate::widgets::font::FontWeight;
 use crate::widgets::{Rect, TextAlign};
 
@@ -351,6 +352,7 @@ impl TextQuadRenderer {
             self.text_renderer
                 .render(&self.atlas, &self.viewport, &mut render_pass)
                 .expect("Failed to render text to texture");
+            render_stats::record_draw_calls(Pipeline::Text, 1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -457,6 +459,7 @@ impl TextQuadRenderer {
         });
 
         // Create vertex buffer with the vertices already initialized
+        render_stats::record_quad_allocation(QuadObject::Buffer);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("TextQuad Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -471,7 +474,7 @@ impl TextQuadRenderer {
 
     /// Render the prepared text quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedTextQuad]) {
-        self.quad.draw(render_pass, quads);
+        self.quad.draw(render_pass, quads, Pipeline::TextQuads);
     }
 }
 

@@ -21,6 +21,7 @@ use super::flatten::FlattenedCommand;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
+use crate::render_stats::{self, Pipeline, QuadObject};
 use crate::widgets::Color;
 use crate::widgets::Rect;
 use crate::widgets::image::{ContentFit, ImageSource};
@@ -641,6 +642,7 @@ impl ImageQuadRenderer {
         );
 
         // Create vertex buffer
+        render_stats::record_quad_allocation(QuadObject::Buffer);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ImageQuad Vertex Buffer"),
             contents: bytemuck::cast_slice(&vertices),
@@ -774,6 +776,6 @@ impl ImageQuadRenderer {
 
     /// Render the prepared image quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedImageQuad]) {
-        self.quad.draw(render_pass, quads);
+        self.quad.draw(render_pass, quads, Pipeline::Images);
     }
 }

@@ -17,6 +17,7 @@ use wgpu::{
 };
 
 use super::textured_vertex::{TexturedVertex, to_ndc};
+use crate::render_stats::{self, Pipeline, QuadObject};
 
 /// Pipeline, bind group layout, sampler and index buffer for textured quads.
 pub(super) struct TexturedQuadPipeline {
@@ -175,6 +176,7 @@ impl TexturedQuadPipeline {
         view: &TextureView,
         label: &str,
     ) -> BindGroup {
+        render_stats::record_quad_allocation(QuadObject::BindGroup);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: &self.bind_group_layout,
@@ -192,11 +194,13 @@ impl TexturedQuadPipeline {
     }
 
     /// Draw prepared quads: one pipeline and index buffer for all of them,
-    /// then a bind group and vertex buffer per quad.
+    /// then a bind group and vertex buffer per quad — so one draw call per
+    /// quad, counted under `pipeline`.
     pub(super) fn draw<'a, Q: QuadDraw>(
         &'a self,
         render_pass: &mut RenderPass<'a>,
         quads: &'a [Q],
+        pipeline: Pipeline,
     ) {
         if quads.is_empty() {
             return;
@@ -210,5 +214,6 @@ impl TexturedQuadPipeline {
             render_pass.set_vertex_buffer(0, quad.vertex_buffer().slice(..));
             render_pass.draw_indexed(0..6, 0, 0..1);
         }
+        render_stats::record_draw_calls(pipeline, quads.len() as u64);
     }
 }

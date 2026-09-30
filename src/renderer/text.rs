@@ -8,6 +8,7 @@ use glyphon::{
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue};
 
+use crate::render_stats::{self, Pipeline};
 use crate::widgets::font::{FontFamily, FontWeight};
 use crate::widgets::{Rect, TextAlign, TextOverflow};
 
@@ -598,6 +599,7 @@ impl TextRenderState {
             renderer
                 .render(&self.atlas, &self.viewport, pass)
                 .expect("Failed to render text");
+            render_stats::record_draw_calls(Pipeline::Text, 1);
         }
     }
 }

@@ -36,6 +36,7 @@ use glyphon::{
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
+use crate::render_stats::{self, Pipeline};
 use crate::widgets::font::FontWeight;
 use crate::widgets::{FontFamily, TextAlign};
 
@@ -312,11 +313,12 @@ impl TextMaskRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Err(e) = shaper
+            match shaper
                 .text_renderer
                 .render(&shaper.atlas, &shaper.viewport, &mut pass)
             {
-                log::error!("text mask render failed: {e:?}");
+                Ok(()) => render_stats::record_draw_calls(Pipeline::Text, 1),
+                Err(e) => log::error!("text mask render failed: {e:?}"),
             }
         }
         queue.submit(std::iter::once(encoder.finish()));

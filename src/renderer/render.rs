@@ -21,6 +21,7 @@ use super::text::TextRenderState;
 use super::text_mask::{MaskSpec, TextMaskRenderer};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
 use super::types::TextEntry;
+use crate::render_stats::{self, Pipeline};
 use crate::shape::PlacedShape;
 use crate::widgets::{Color, Rect};
 
@@ -505,6 +506,7 @@ impl Renderer {
                 if !layer.shapes.is_empty() {
                     self.bind_shape_pipeline(&mut render_pass);
                     render_pass.draw_indexed(0..6, 0, layer.shapes.clone());
+                    render_stats::record_draw_calls(Pipeline::Shapes, 1);
                 }
 
                 if !layer.images.is_empty() {
@@ -524,6 +526,7 @@ impl Renderer {
                 if !layer.overlay.is_empty() {
                     self.bind_shape_pipeline(&mut render_pass);
                     render_pass.draw_indexed(0..6, 0, layer.overlay.clone());
+                    render_stats::record_draw_calls(Pipeline::Shapes, 1);
                 }
             }
         }
