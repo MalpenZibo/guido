@@ -520,7 +520,10 @@ impl ImageQuadRenderer {
         let mut pixmap = resvg::tiny_skia::Pixmap::new(scaled_width, scaled_height)?;
 
         // Create transform for scaling
-        let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            scaled_width as f32 / size.width(),
+            scaled_height as f32 / size.height(),
+        );
 
         // Render the SVG
         resvg::render(&tree, transform, &mut pixmap.as_mut());

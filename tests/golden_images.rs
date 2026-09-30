@@ -1047,6 +1047,35 @@ fn fractional_svg_keeps_its_vector_aspect() {
     );
 }
 
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_fills_its_raster_when_stretched() {
+    let Some((ctx, _)) = rasterizer("fractional_svg_fills_its_raster_when_stretched") else {
+        return;
+    };
+    let render = |width: &str, height: &str| {
+        let source = ImageSource::SvgBytes(
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><rect width=\"100%\" height=\"100%\" fill=\"#f27340\"/></svg>"
+            )
+            .into_bytes()
+            .into(),
+        );
+        render_with_own_renderer(
+            ctx,
+            box_of(2.0, 2.0).child(image(source).content_fit(ContentFit::Fill)),
+            (2.0, 2.0),
+            1.0,
+            BACKDROP,
+        )
+        .data
+    };
+
+    let expected = render("1", "1");
+    assert_eq!(render("0.6", "1.5"), expected);
+    assert_eq!(render("1.5", "0.6"), expected);
+}
+
 /// Two clips a quarter turn apart still cut exactly.
 ///
 /// `intersect_clips` rewrites the inner clip in the outer's coordinates when
