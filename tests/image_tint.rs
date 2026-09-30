@@ -40,6 +40,19 @@ fn a_tinted_svg_is_drawn_in_its_tint() {
     assert_eq!(app.read_pixel(surface, 10, 10), [255, 0, 0, 255]);
 }
 
+/// A second source beside the tinted one, so the texture count is one a
+/// counter stuck at a constant would not give.
+fn untinted_circle() -> Container {
+    container().width(20.0).height(20.0).child(
+        image(ImageSource::SvgBytes(
+            br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="10" fill="#fff"/></svg>"##
+                .to_vec()
+                .into(),
+        ))
+        .content_fit(ContentFit::Fill),
+    )
+}
+
 /// A new tint is a repaint, not a new raster: the texture the first one drew
 /// from is the one the second draws from.
 #[test]
@@ -48,15 +61,20 @@ fn a_new_tint_is_drawn_from_the_same_texture() {
     let tint = create_signal(Color::rgb(1.0, 0.0, 0.0));
     let surface = app.surface(
         SurfaceConfig::new().height(20).background_color(BACKDROP),
-        move || tinted(tint.into()),
+        move || {
+            container()
+                .layout(Flex::row())
+                .child(tinted(tint.into()))
+                .child(untinted_circle())
+        },
     );
-    app.configure(surface, 20, 20, 1.0);
+    app.configure(surface, 40, 20, 1.0);
     app.step();
-    assert_eq!(app.image_textures(), 1);
+    assert_eq!(app.image_textures(), 2, "one texture per source");
 
     tint.set(Color::rgb(0.0, 1.0, 0.0));
     app.step();
 
     assert_eq!(app.read_pixel(surface, 10, 10), [0, 255, 0, 255]);
-    assert_eq!(app.image_textures(), 1, "the second tint made no texture");
+    assert_eq!(app.image_textures(), 2, "the second tint made no texture");
 }
