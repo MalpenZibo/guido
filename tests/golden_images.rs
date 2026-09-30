@@ -1072,8 +1072,39 @@ fn fractional_svg_fills_its_raster_when_stretched() {
     };
 
     let expected = render("1", "1");
+    assert!(
+        expected
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 200 && pixel[1] > 70 && pixel[2] < 120)
+    );
     assert_eq!(render("0.6", "1.5"), expected);
     assert_eq!(render("1.5", "0.6"), expected);
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_fills_a_standalone_texture() {
+    let Some((ctx, _)) = rasterizer("fractional_svg_fills_a_standalone_texture") else {
+        return;
+    };
+    let source = ImageSource::SvgBytes(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="0.5" height="1.5"><rect width="50%" height="100%" fill="#f27340"/><rect x="50%" width="50%" height="100%" fill="#357ac9"/></svg>"##
+            .to_vec()
+            .into(),
+    );
+    let pixels = render_with_own_renderer(
+        ctx,
+        box_of(257.0, 257.0).child(image(source).content_fit(ContentFit::Fill)),
+        (257.0, 257.0),
+        1.0,
+        BACKDROP,
+    );
+    let pixel = |x, y| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    assert_eq!(&pixel(64, 128)[..3], &[242, 115, 64]);
+    assert_eq!(&pixel(192, 128)[..3], &[53, 122, 201]);
+    assert_eq!(pixel(256, 128), pixel(192, 128));
 }
 
 /// Two clips a quarter turn apart still cut exactly.
