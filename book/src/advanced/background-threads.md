@@ -2,6 +2,8 @@
 
 Guido signals (`RwSignal<T>` and `Signal<T>`) live on the main thread and are `!Send` — they cannot be captured directly in background tasks. To update signals from a background task, call `.writer()` on an `RwSignal<T>` to obtain a `WriteSignal<T>`, which **is** `Send`. Writes through a `WriteSignal` are queued and applied on the main thread during the next frame.
 
+A wait whose callback only needs the UI — a delay, a debounce, a clock tick — does not need any of this: [`set_timeout` and `set_interval`](../concepts/reactive-model.md#timers) run their callback on the UI thread, where signals can be read as well as written.
+
 `create_task` and `create_service` spawn async background work that is automatically cleaned up when the component unmounts — `create_task` for work that only pushes into signals, `create_service` when the UI also sends it commands. Both run as tokio tasks: if your `main` already runs inside a tokio runtime (e.g. `#[tokio::main]`), that runtime is used; otherwise guido lazily starts a small background runtime of its own, so a plain `fn main()` works too.
 
 ## Basic Pattern: A Task That Only Pushes

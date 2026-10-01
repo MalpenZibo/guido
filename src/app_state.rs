@@ -38,6 +38,7 @@ use crate::image_decode::{DecodeEntry, DecodeKey, Decoder, ImageEvent};
 use crate::jobs::{JobQueues, ScheduledJob};
 use crate::reactive::clipboard::{PasteTarget, PastedText, SelectionKind};
 use crate::reactive::cursor::CursorIcon;
+use crate::reactive::timer::Timers;
 use crate::reactive::{OwnerId, Prop};
 use crate::renderer::TextMeasurer;
 use crate::session_lock::{LockData, LockRequest};
@@ -68,6 +69,8 @@ pub(crate) struct AppState {
     /// for *this* frame": treating a scheduled job as pending is what turns a
     /// blink into a poll.
     pub(crate) scheduled_jobs: RefCell<Vec<ScheduledJob>>,
+    /// `set_timeout` and `set_interval`'s callbacks, waiting for their pass.
+    pub(crate) timers: RefCell<Timers>,
     /// Dynamic-children segments a write dirtied, waiting for the
     /// reconciliation that has the tree.
     pub(crate) dirty_segments: RefCell<FxHashMap<WidgetId, SmallVec<[u32; 4]>>>,
@@ -166,6 +169,7 @@ pub(crate) fn reset() {
         let AppState {
             pending_jobs,
             scheduled_jobs,
+            timers,
             dirty_segments,
             surface_commands,
             outgoing_cursor,
@@ -201,11 +205,12 @@ pub(crate) fn reset() {
         //
         // What holds an application closure goes first. A queued surface
         // command carries a widget factory, a lock request carries a
-        // lock-screen one and a paste its callback, and dropping any drops what it captured — a
+        // lock-screen one, a timer and a paste their callbacks, and dropping any drops what it captured — a
         // `ChildrenSource` among them, whose own `Drop` queues a job. So the
         // queues those land in are emptied below, after everything that can
         // still push into them.
         surface_commands.clear();
+        timers.take();
         lock_request.clear();
         paste_requests.clear();
         paste_reads.take();
