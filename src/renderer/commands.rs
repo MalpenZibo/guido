@@ -343,11 +343,11 @@ pub enum DrawCommand {
     Image {
         /// Image source (path or bytes)
         source: ImageSource,
-        /// Where a raster `Path` or `Bytes` source's decoded pixels wait,
-        /// off the frame, until the renderer takes them to upload — after
-        /// which it is empty and the texture is the image. The renderer never
-        /// decodes on the render path; `None` for a source that needs no
-        /// decode.
+        /// Where a raster `Path` or `Bytes` source's decoded pixels, or an
+        /// SVG's rasters, wait, off the frame, until the renderer takes them
+        /// to upload — after which it is empty and the texture is the image.
+        /// The renderer never decodes or rasterizes on the render path; `None`
+        /// for a source that needs neither.
         decoded: Option<DecodedImage>,
         /// Bounding rectangle in local coordinates
         rect: Rect,

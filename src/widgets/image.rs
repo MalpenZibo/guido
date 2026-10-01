@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::image_decode::{DecodeHandle, DecodeState};
+use crate::image_decode::DecodeHandle;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, Prop, Signal, create_memo};
 use crate::renderer::PaintContext;
@@ -165,12 +165,13 @@ impl Image {
         self
     }
 
-    /// Whether the image can be drawn: true once its source is decoded, and
-    /// from the start for a source that needs no decode (`Rgba`, SVG).
+    /// Whether the image can be drawn: true once its source is decoded or
+    /// rasterized, and from the start for `Rgba`, which needs neither.
     ///
-    /// A raster `Path` or `Bytes` source is decoded off the frame, so the first
-    /// frame lays the box out at the image's size and draws nothing in it. This
-    /// is what an application fades it in with — the image itself does not:
+    /// A raster `Path` or `Bytes` source is decoded off the frame, and an SVG
+    /// rasterized there, so the first frame lays the box out at the image's
+    /// size and draws nothing in it. This is what an application fades it in
+    /// with — the image itself does not:
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -307,7 +308,8 @@ impl Widget for Image {
             match &self.decode {
                 // The held entry's own signal: a paint does no lookup.
                 Some(decode) => {
-                    if let (DecodeState::Ready, decoded) = decode.state() {
+                    let (state, decoded) = decode.state();
+                    if crate::image_decode::paints(state, &decoded) {
                         ctx.push_image(
                             source.clone(),
                             Some(decoded),

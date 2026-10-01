@@ -196,7 +196,18 @@ fn render_pixels(
 
     renderer.set_screen_size(width as f32, height as f32);
     renderer.set_scale_factor(scale);
-    renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+    // An SVG asks the worker for its raster on the frame that first draws it,
+    // and is drawn on the next. The picture is the first frame that asked for
+    // nothing.
+    let mut started = guido::testing::finish_image_decodes();
+    loop {
+        renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+        let now = guido::testing::finish_image_decodes();
+        if now == started {
+            break;
+        }
+        started = now;
+    }
 
     // Readback. Rows in a mapped buffer are padded to 256 bytes; the copy is
     // made against the padded stride and unpadded on the way out.

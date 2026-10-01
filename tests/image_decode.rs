@@ -334,6 +334,159 @@ fn an_image_whose_texture_is_gone_is_decoded_again() {
     assert_eq!(app.image_bytes_held(), 0, "and let go of again");
 }
 
+/// A 20×20 SVG of one opaque colour.
+#[cfg(feature = "svg")]
+fn svg(fill: &str) -> Vec<u8> {
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="{fill}"/></svg>"#
+    )
+    .into_bytes()
+}
+
+/// An SVG is rasterized on the worker, like a raster source is decoded there:
+/// its first frame draws nothing and it appears on a later one (#547).
+///
+/// Red before: the renderer read, parsed and rasterized it inside the frame,
+/// so the first frame already held it, and held the frame until it had it.
+#[cfg(feature = "svg")]
+#[test]
+fn svg_bytes_are_drawn_on_the_frame_after_their_raster() {
+    a_pending_image_is_drawn_on_a_later_frame(ImageSource::SvgBytes(svg("#f00").into()));
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_file_is_drawn_on_the_frame_after_its_raster() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rasterized-later.svg");
+    std::fs::write(&path, svg("#f00")).expect("the SVG is written");
+    a_pending_image_is_drawn_on_a_later_frame(ImageSource::SvgPath(path));
+}
+
+/// Two images of one SVG at one size share one raster.
+///
+/// Red before: an SVG never reached the worker, so nothing was counted.
+#[cfg(feature = "svg")]
+#[test]
+fn two_svgs_of_one_source_rasterize_it_once() {
+    two_images_of_one_source_decode_it_once(
+        ImageSource::SvgBytes(svg("#f00").into()),
+        ImageSource::SvgBytes(svg("#f00").into()),
+    );
+}
+
+/// A box that changes size needs a raster of the new size, and until it lands
+/// the one it had is drawn stretched: an icon in a resize animation does not
+/// blink out on every step.
+///
+/// Red before: the new size was rasterized inside the frame and the worker
+/// never heard of it.
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    // Both sides: a raster is fitted to its box with the aspect kept, so a
+    // square SVG in a box only wider needs no raster of its own.
+    let side = create_signal(20.0f32);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            container().width(side).height(side).child(
+                image(ImageSource::SvgBytes(svg("#f00").into())).content_fit(ContentFit::Fill),
+            )
+        },
+    );
+    app.configure(surface, 60, 40, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(is_red(app.read_pixel(surface, 10, 10)), "drawn at 20");
+    assert_eq!(app.image_decodes_started(), 1);
+
+    let hold = app.hold_image_decodes();
+    side.set(40.0);
+    app.step();
+    for at in [10, 30] {
+        assert!(
+            is_red(app.read_pixel(surface, at, at)),
+            "the old raster is drawn at ({at}, {at}) while the new one is pending, got {:?}",
+            app.read_pixel(surface, at, at)
+        );
+    }
+    assert_eq!(app.image_decodes_started(), 2, "a raster of the new size");
+
+    hold.release();
+    app.wait_for_image_decodes();
+    app.step();
+    for at in [10, 30] {
+        assert!(
+            is_red(app.read_pixel(surface, at, at)),
+            "the new raster is drawn at ({at}, {at}), got {:?}",
+            app.read_pixel(surface, at, at)
+        );
+    }
+    assert_eq!(app.image_decodes_started(), 2, "and asked for once");
+    assert_eq!(
+        app.image_textures(),
+        2,
+        "and uploaded: the stretched one was not drawn for ever"
+    );
+}
+
+/// One source at two sizes is two rasters, each made once: the frame that
+/// uploads one size keeps the other, which an image beside it is about to
+/// draw.
+///
+/// Red before: taking one size dropped every other size already landed, so
+/// the second image asked for its raster again.
+#[cfg(feature = "svg")]
+#[test]
+fn one_svg_at_two_sizes_rasterizes_each_once() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let source = ImageSource::SvgBytes(svg("#f00").into());
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            container()
+                .layout(Flex::row())
+                .child(
+                    container()
+                        .width(20.0)
+                        .height(20.0)
+                        .child(image(source.clone()).content_fit(ContentFit::Fill)),
+                )
+                .child(
+                    container()
+                        .width(40.0)
+                        .height(40.0)
+                        .child(image(source).content_fit(ContentFit::Fill)),
+                )
+        },
+    );
+    app.configure(surface, 60, 40, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    assert_eq!(app.image_decodes_started(), 2, "one raster per size");
+    for (x, y) in [(10, 10), (40, 30)] {
+        assert!(
+            is_red(app.read_pixel(surface, x, y)),
+            "the image at ({x}, {y}) is drawn, got {:?}",
+            app.read_pixel(surface, x, y)
+        );
+    }
+}
+
 /// What one of the 20×20 PNGs above costs the cache: small enough for an atlas
 /// page, so its place there — the image and the one-texel gutter around it,
 /// 22 × 22, at 4 bytes a texel (#546).
