@@ -17,12 +17,11 @@
 //!
 //! **A timer belongs to its scope.** It is cancelled when the owner it was
 //! created under is disposed, and its callback runs under that owner, so a
-//! widget's timers go with the widget. An effect is not a scope of its own —
-//! it re-runs under the one it was created in — so an effect that schedules one
-//! per run cancels the last itself, through its handle; that is a debounce.
-//! leptos-use (`use_timeout_fn`) and Dioxus (`spawn`) tie theirs to the scope
-//! the same way; raw Leptos `set_timeout` does not, and leaves the clearing to
-//! the caller.
+//! widget's timers go with the widget. Each run of an effect owns what it
+//! makes, so an effect that schedules one per run cancels the last by running
+//! again; that is a debounce. leptos-use (`use_timeout_fn`) and Dioxus
+//! (`spawn`) tie theirs to the scope the same way; raw Leptos `set_timeout`
+//! does not, and leaves the clearing to the caller.
 //!
 //! **The handle is a name, not an owner.** [`TimerHandle`] is `Copy` and
 //! dropping it does nothing, as Leptos's and Floem's are. Slint stops a timer
@@ -85,17 +84,11 @@ impl TimerHandle {
 /// # use std::time::Duration;
 /// let query = create_signal(String::new());
 /// let results = create_signal(Vec::<String>::new());
-/// // Searched 300 ms after the last keystroke: each run cancels the
-/// // timer the run before it scheduled.
-/// let pending = std::cell::Cell::new(None::<TimerHandle>);
+/// // Searched 300 ms after the last keystroke: each run's timer is
+/// // cancelled by the next run.
 /// create_effect(move || {
 ///     let q = query.get();
-///     let timer = set_timeout(Duration::from_millis(300), move || {
-///         results.set(vec![q]);
-///     });
-///     if let Some(previous) = pending.replace(Some(timer)) {
-///         previous.cancel();
-///     }
+///     set_timeout(Duration::from_millis(300), move || results.set(vec![q]));
 /// });
 /// ```
 pub fn set_timeout(delay: Duration, f: impl FnOnce() + 'static) -> TimerHandle {
