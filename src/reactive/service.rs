@@ -180,17 +180,23 @@ where
 /// keep. It is aborted when the scope that created it is disposed, exactly as a
 /// service is.
 ///
+/// It is for work that belongs off the UI thread — a socket, a file, a
+/// process. A wait whose callback has to read UI state is
+/// [`set_timeout`](crate::reactive::set_timeout) or
+/// [`set_interval`](crate::reactive::set_interval) instead: the future here is
+/// `Send`, so what runs after its `sleep` can write a signal but never read one.
+///
 /// ```no_run
 /// # use guido::prelude::*;
 /// # use std::time::Duration;
-/// # let now = || String::from("09:41");
-/// let time = create_signal(String::new());
-/// let time_w = time.writer();
+/// # async fn read_battery() -> u8 { 100 }
+/// let level = create_signal(0u8);
+/// let level_w = level.writer();
 ///
 /// create_task(move |ctx| async move {
 ///     while ctx.is_running() {
-///         time_w.set(now());
-///         tokio::time::sleep(Duration::from_secs(1)).await;
+///         level_w.set(read_battery().await);
+///         tokio::time::sleep(Duration::from_secs(30)).await;
 ///     }
 /// });
 /// ```
