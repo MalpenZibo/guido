@@ -147,14 +147,7 @@ impl History {
             && since_last < Duration::from_millis(HISTORY_COALESCE_MS)
             && !self.undo_stack.is_empty();
 
-        if should_coalesce {
-            // Update the last entry instead of creating a new one
-            if let Some(last) = self.undo_stack.back_mut() {
-                last.cursor = entry.cursor;
-                last.anchor = entry.anchor;
-                // Keep the original text (state before the sequence of edits)
-            }
-        } else {
+        if !should_coalesce {
             self.undo_stack.push_back(entry);
             self.redo_stack.clear();
 

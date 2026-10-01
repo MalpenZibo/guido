@@ -586,6 +586,63 @@ fn a_delete_is_undoable_too() {
 }
 
 #[test]
+fn undoing_coalesced_typing_leaves_an_empty_field_editable() {
+    let mut field = Field::focused("");
+    field.type_text("ab");
+    field.ctrl('z');
+    assert_eq!(field.text(), "");
+
+    field.key(Key::Backspace);
+    assert_eq!(field.text(), "");
+    field.type_text("é");
+    assert_eq!(field.text(), "é");
+}
+
+#[test]
+fn undoing_coalesced_typing_restores_its_original_insertion_point() {
+    let mut field = Field::focused("aéb");
+    field.key(Key::Right);
+    field.type_text("XY");
+    field.ctrl('z');
+    assert_eq!(field.text(), "aéb");
+
+    field.type_text("Z");
+    assert_eq!(field.text(), "aZéb");
+}
+
+#[test]
+fn undoing_coalesced_replacement_restores_the_original_selection() {
+    let mut field = Field::focused("abcd");
+    field.key(Key::Right);
+    field.shift(Key::Right);
+    field.shift(Key::Right);
+    field.type_text("XY");
+    field.ctrl('z');
+    assert_eq!(field.text(), "abcd");
+
+    field.type_text("Z");
+    assert_eq!(field.text(), "aZd");
+}
+
+#[test]
+fn undoing_coalesced_deletion_restores_its_original_caret() {
+    let mut field = Field::focused("aéb");
+    field.key(Key::End);
+    field.key(Key::Backspace);
+    field.key(Key::Backspace);
+    assert_eq!(field.text(), "a");
+    field.ctrl('z');
+    assert_eq!(field.text(), "aéb");
+    field.ctrl('y');
+    assert_eq!(field.text(), "a");
+    field.ctrl('z');
+    assert_eq!(field.text(), "aéb");
+
+    field.type_text("Z");
+    assert_eq!(field.text(), "aébZ");
+}
+
+#[test]
 fn typing_after_an_undo_drops_what_was_undone() {
     // An undo has to end the coalescing window as well as move the text back.
     // If it does not, the next keystroke joins the entry the undo left behind
