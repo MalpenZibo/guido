@@ -264,12 +264,20 @@ text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
 `color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
-`text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
+`line_height`, `text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
 widgets that draw glyphs — from one list, so the two cannot drift apart.
 `color` and `font_size` are declarations, so they carry how they move as well
 as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
 because a family and a weight snap to an installed face and a stroke and a
-shadow have nothing to interpolate. `cursor_color`, `selection_color` and
+shadow have nothing to interpolate.
+
+`line_height` defaults to `LineHeight::Normal`: the ascent, descent and line
+gap of the face that draws the family at that weight, which is a fallback face
+where the family's own font is not installed. A bare number is
+`LineHeight::Relative`, a factor of the font size —
+`text("Notes").line_height(1.5)` — and `LineHeight::Absolute` is logical
+pixels. It is resolved in one place, `shape` in `src/renderer/text.rs`, which
+the measurer and all three draw paths call. `cursor_color`, `selection_color` and
 `placeholder_color` are `TextInput`'s own methods and nothing else's, because
 it is the only widget that draws a caret, a band or a placeholder.
 

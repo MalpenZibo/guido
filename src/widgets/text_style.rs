@@ -16,8 +16,8 @@
 //!
 //! Every field is an `Option`, so a declaration says only what it means to
 //! say. What fills the rest is the widget's own default — white, 14 logical
-//! pixels, the registered family, normal weight — not a neighbouring
-//! declaration: nothing is inherited from anywhere.
+//! pixels, the registered family, normal weight, the font's own line height —
+//! not a neighbouring declaration: nothing is inherited from anywhere.
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
@@ -59,7 +59,7 @@ use crate::reactive::{IntoSignal, Prop};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
-use super::font::{FontFamily, FontWeight};
+use super::font::{FontFamily, FontWeight, LineHeight};
 use super::widget::Color;
 
 /// A contour drawn around the glyphs.
@@ -223,7 +223,8 @@ pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
 /// Every field is optional and resolved independently: a state override that
 /// sets only `color` leaves the metrics the widget declared alone. Properties
 /// nothing declares fall back to [`Text`](crate::widgets::Text)'s defaults —
-/// white, 14 logical pixels, the registered default family, normal weight.
+/// white, 14 logical pixels, the registered default family, normal weight, the
+/// font's own line height.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct TextStyle {
     /// Colour of the glyphs.
@@ -234,6 +235,8 @@ pub struct TextStyle {
     pub font_family: Prop<FontFamily>,
     /// Font weight on the CSS 100-900 scale.
     pub font_weight: Prop<FontWeight>,
+    /// How tall each line is.
+    pub line_height: Prop<LineHeight>,
     /// Contour drawn around the glyphs, under the fill.
     pub stroke: Prop<TextStroke>,
     /// Soft shadow cast by the glyphs.
@@ -274,6 +277,7 @@ pub(crate) struct ResolvedTextStyle {
     font_size: Prop<f32>,
     font_family: Prop<FontFamily>,
     font_weight: Prop<FontWeight>,
+    line_height: Prop<LineHeight>,
     stroke: Prop<TextStroke>,
     shadow: Prop<TextShadow>,
 }
@@ -297,11 +301,12 @@ impl ResolvedTextStyle {
         self.take_unset(style);
     }
 
-    /// The four that resolve to one declaration: nearest wins, so whatever is
+    /// The five that resolve to one declaration: nearest wins, so whatever is
     /// already set was found first.
     fn take_unset(&mut self, style: &TextStyle) {
         self.font_family = self.font_family.or(style.font_family);
         self.font_weight = self.font_weight.or(style.font_weight);
+        self.line_height = self.line_height.or(style.line_height);
         self.stroke = self.stroke.or(style.stroke);
         self.shadow = self.shadow.or(style.shadow);
     }
@@ -330,6 +335,11 @@ impl ResolvedTextStyle {
     /// The weight to shape them at, on the CSS 100-900 scale.
     pub(crate) fn font_weight(&self) -> FontWeight {
         self.font_weight.get_or(FontWeight::NORMAL)
+    }
+
+    /// How tall each line is.
+    pub(crate) fn line_height(&self) -> LineHeight {
+        self.line_height.get_or(LineHeight::Normal)
     }
 
     /// The contour drawn around the glyphs, if one is declared.
@@ -482,9 +492,9 @@ impl TextAnims {
 ///
 /// These are the *declaration* sites, so `color` and `font_size` carry how they
 /// move as well as what they are — `color(theme.warn.transition(200.0))`. The
-/// four below them take values only, because they are not values that can be
-/// interpolated: a family and a weight snap to an installed face, and a stroke
-/// and a shadow are records with no `Animatable` between them.
+/// rest take values only: a family and a weight snap to an installed face, a
+/// line height may change its kind between two values, and a stroke and a
+/// shadow are records with no `Animatable` between them.
 ///
 /// The *override* site is [`TextStyle`], and its setters take values alone.
 /// That is not a second vocabulary but the rule falling out of the types: a
@@ -652,6 +662,17 @@ macro_rules! declares_text_style {
                 self.font_weight($crate::widgets::FontWeight::BOLD)
             }
 
+            /// How tall each line is. A bare number is a factor of the font
+            /// size; [`LineHeight::Absolute`]($crate::widgets::LineHeight::Absolute)
+            /// is logical pixels, and the default is the font's own.
+            pub fn line_height<M>(
+                mut self,
+                height: impl $crate::reactive::IntoSignal<$crate::widgets::LineHeight, M>,
+            ) -> Self {
+                self.text_style_mut().line_height = height.into_prop();
+                self
+            }
+
             /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
             pub fn mono(self) -> Self {
                 self.font_family($crate::widgets::FontFamily::Monospace)
@@ -728,6 +749,12 @@ impl TextStyle {
     /// Shorthand for [`font_weight`](Self::font_weight) at `FontWeight::BOLD`.
     pub fn bold(self) -> Self {
         self.font_weight(FontWeight::BOLD)
+    }
+
+    /// How tall each line is. A bare number is a factor of the font size.
+    pub fn line_height<M>(mut self, height: impl IntoSignal<LineHeight, M>) -> Self {
+        self.line_height = height.into_prop();
+        self
     }
 
     /// Shorthand for [`font_family`](Self::font_family) at the monospace family.

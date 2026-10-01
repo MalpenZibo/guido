@@ -30,7 +30,7 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::control::Control;
-use super::font::{FontFamily, FontWeight};
+use super::font::{FontFamily, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{DEFAULT_FONT_SIZE, TextStyle};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
@@ -408,6 +408,9 @@ pub struct TextInput<C = Plain> {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
+    cached_line_height: LineHeight,
+    /// The height of one line of this style, which is the field's height.
+    cached_line_box: f32,
 
     /// Whether the text refuses to change. Not the same as disabled: a
     /// read-only field still takes the focus, still says so, and still lets a
@@ -573,6 +576,8 @@ impl<C: Content> TextInput<C> {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
+            cached_line_height: LineHeight::Normal,
+            cached_line_box: 0.0,
             readonly: Prop::Unset,
             caret: Prop::Unset,
             cached_caret: true,
@@ -815,6 +820,12 @@ impl<C: Content> TextInput<C> {
             .last()
             .copied()
             .unwrap_or_default();
+        self.cached_line_box = crate::renderer::measure_line_height(
+            font_size,
+            *font_family,
+            font_weight,
+            self.cached_line_height,
+        );
 
         self.measurements_dirty = false;
     }
@@ -850,7 +861,7 @@ impl<C: Content> TextInput<C> {
     /// inside does — see `LayoutCtx::layout_child` — so a change to a declared
     /// metric re-lays-out this input and nothing else.
     fn refresh(&mut self, ctx: &mut LayoutCtx, id: WidgetId) -> f32 {
-        let (new_font_size, new_font_family, new_font_weight, overflow, new_color) = {
+        let (new_font_size, new_font_family, new_font_weight, new_line_height, overflow, new_color) = {
             let style = self.resolved_text_style(ctx.tree_ref(), id);
 
             // Assigned here rather than returned, as the font metrics are:
@@ -863,6 +874,7 @@ impl<C: Content> TextInput<C> {
                 style.font_size(id),
                 style.font_family(),
                 style.font_weight(),
+                style.line_height(),
                 crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
                 self.animates_text_color().then(|| style.color(id)),
             )
@@ -891,6 +903,10 @@ impl<C: Content> TextInput<C> {
         }
         if new_font_weight != self.cached_font_weight {
             self.cached_font_weight = new_font_weight;
+            self.measurements_dirty = true;
+        }
+        if new_line_height.key() != self.cached_line_height.key() {
+            self.cached_line_height = new_line_height;
             self.measurements_dirty = true;
         }
 
@@ -1512,7 +1528,7 @@ impl<C: Content> Widget for TextInput<C> {
             .cached_size(id)
             .map(|s| s.height)
             .unwrap_or(0.0);
-        let height = (self.cached_font_size * 1.2).max(prev_height);
+        let height = self.cached_line_box.max(prev_height);
 
         // Text inputs should fill available width (like HTML input elements)
         // Use max_width if available, otherwise fall back to measured width
@@ -1641,6 +1657,7 @@ impl<C: Content> Widget for TextInput<C> {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_line_height,
             crate::widgets::TextAlign::Start,
             stroke,
             shadow,

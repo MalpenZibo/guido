@@ -1,7 +1,7 @@
 //! Shared types for the renderer.
 
 use crate::transform::Transform;
-use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
 use crate::widgets::{Color, Rect, TextAlign};
 
 /// Gradient direction for linear gradients
@@ -137,6 +137,8 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// How tall each line is
+    pub line_height: LineHeight,
     /// Where each line sits across `rect`. Anything but `Start` is shaped at
     /// exactly the box's width, since that is the width the lines are aligned
     /// in.

@@ -7,7 +7,7 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::container::get_animated_value;
 use super::control::Control;
-use super::font::{FontFamily, FontWeight};
+use super::font::{FontFamily, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{DEFAULT_FONT_SIZE, TextAnims, TextShadow, TextStroke, TextStyle};
 use super::widget::{Color, Event, EventResponse, Rect, Widget};
@@ -127,6 +127,7 @@ pub struct Text {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
+    cached_line_height: LineHeight,
     cached_wrap: bool,
     /// The lines layout cut the text to, handed to paint so every path that
     /// shapes it cuts in the same place.
@@ -158,6 +159,7 @@ impl Text {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
+            cached_line_height: LineHeight::Normal,
             cached_wrap: true,
             cached_fit: None,
             cached_overflows: false,
@@ -186,8 +188,8 @@ impl Text {
     /// The most lines the text may take; `None` is as many as it needs.
     ///
     /// A text longer than that is measured as the lines it draws, not as the
-    /// content it holds, and [`overflow`](Self::overflow) says how the cut is
-    /// marked. A limit of `0` is read as `1`: a text shows at least one line.
+    /// content it holds — that many times its [line height](Self::line_height)
+    /// — and [`overflow`](Self::overflow) says how the cut is marked. A limit of `0` is read as `1`: a text shows at least one line.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -319,6 +321,7 @@ impl Text {
             declared_color = self.animates_text_color().then(|| style.color(id));
             self.cached_font_family = style.font_family();
             self.cached_font_weight = style.font_weight();
+            self.cached_line_height = style.line_height();
             self.cached_wrap = self.wrap.get_or(true);
             decoration_overflow(style.stroke(), style.shadow())
         };
@@ -400,6 +403,7 @@ impl Widget for Text {
             max_width,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_line_height,
             self.cached_fit,
         );
 
@@ -494,6 +498,7 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
+                self.cached_line_height,
                 align,
                 self.cached_fit,
             );
@@ -505,6 +510,7 @@ impl Widget for Text {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_line_height,
             align,
             if frosted { None } else { stroke },
             shadow,
@@ -592,16 +598,48 @@ mod tests {
 
     /// Lay out one text of a known line height in a box of `width`.
     ///
-    /// Twenty pixels, so a line is twenty-four: guido asks every line for
-    /// 1.2 times the font size, so the line count is the height over that.
+    /// The line is declared rather than left to the font, which would make it
+    /// whatever the machine's default family says; the line count is the
+    /// height over it.
     fn laid_out(text: Text, width: f32) -> crate::layout::Size {
         let mut tree = Tree::new();
-        let root = tree.register(Box::new(text.font_size(20.0)));
+        let root = tree.register(Box::new(
+            text.font_size(20.0).line_height(LineHeight::Absolute(LINE)),
+        ));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         measured(&mut tree, root, width)
     }
 
     const LINE: f32 = 24.0;
+
+    /// The line height reaches paint, so it takes a signal, and a write
+    /// re-measures the text rather than only redrawing it.
+    #[test]
+    fn the_line_height_answers_to_a_signal() {
+        let line = create_signal(LineHeight::Absolute(20.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new("a\nb").line_height(line)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        assert_eq!(measured(&mut tree, root, 400.0).height, 40.0);
+        line.set(LineHeight::Absolute(30.0));
+        assert_eq!(measured(&mut tree, root, 400.0).height, 60.0);
+    }
+
+    /// The lines a cut keeps are as tall as the line height says, not as a
+    /// fixed multiple of the font size.
+    #[test]
+    fn two_lines_of_twenty_are_forty_tall() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            Text::new(OVERLONG)
+                .font_size(14.0)
+                .line_height(LineHeight::Absolute(20.0))
+                .max_lines(2),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        assert_eq!(measured(&mut tree, root, 120.0).height, 40.0);
+    }
 
     /// `max_lines(1)` with an ellipsis measures one line high.
     ///
@@ -672,7 +710,10 @@ mod tests {
         let lines = create_signal(Some(1u32));
         let mut tree = Tree::new();
         let root = tree.register(Box::new(
-            Text::new(OVERLONG).font_size(20.0).max_lines(lines),
+            Text::new(OVERLONG)
+                .font_size(20.0)
+                .line_height(LineHeight::Absolute(LINE))
+                .max_lines(lines),
         ));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
 

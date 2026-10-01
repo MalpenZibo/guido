@@ -3,7 +3,7 @@
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
 use crate::image_decode::DecodedImage;
-use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
 use crate::widgets::{Color, Rect, TextAlign};
@@ -256,6 +256,8 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight
         font_weight: FontWeight,
+        /// How tall each line is
+        line_height: LineHeight,
         /// Where each line sits across `rect`.
         align: TextAlign,
         /// The lines it is cut to, when it is cut. `None` draws it whole in
@@ -332,6 +334,8 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight.
         font_weight: FontWeight,
+        /// How tall each line is.
+        line_height: LineHeight,
         /// Where each line sits across `rect` — the frost has to put its
         /// lines where the letters put theirs.
         align: TextAlign,

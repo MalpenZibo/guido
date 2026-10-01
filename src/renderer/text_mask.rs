@@ -38,7 +38,7 @@ use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 use crate::render_stats::{self, Pipeline};
 use crate::widgets::font::FontWeight;
-use crate::widgets::{FontFamily, TextAlign};
+use crate::widgets::{FontFamily, LineHeight, TextAlign};
 
 /// Masks kept before the unused ones are dropped.
 ///
@@ -59,6 +59,7 @@ pub struct MaskSpec<'a> {
     pub font_size: f32,
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
+    pub line_height: LineHeight,
     /// The lines the text is cut to, when it is cut.
     pub fit: Option<super::text_measurer::LineFit>,
     /// Where each line sits across the buffer, as the letters over the frost
@@ -91,6 +92,7 @@ struct MaskKey {
     font_size_bits: u32,
     weight: u16,
     family: FontFamily,
+    line_height: (u8, u32),
     align: TextAlign,
     width: u32,
     height: u32,
@@ -210,6 +212,7 @@ impl TextMaskRenderer {
             font_size_bits: font_size.to_bits(),
             weight: weight.0,
             family: spec.font_family,
+            line_height: spec.line_height.key(),
             align: spec.align,
             width,
             height,
@@ -239,6 +242,7 @@ impl TextMaskRenderer {
             font_size,
             spec.font_family,
             spec.font_weight,
+            spec.line_height,
             spec.align,
             (Some(spec.buffer.0), Some(spec.buffer.1)),
             spec.fit,

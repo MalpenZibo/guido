@@ -177,6 +177,64 @@ impl FontWeight {
     }
 }
 
+/// How tall each line of a text is.
+///
+/// A bare number is a factor of the font size, as CSS's `line-height`, iced
+/// and Flutter all read it: `line_height(1.5)` is `Relative(1.5)`. A height in
+/// pixels is spelled `Absolute`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("Notes").line_height(1.5);
+/// text("Sign in").font_size(14.0).line_height(LineHeight::Absolute(20.0));
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum LineHeight {
+    /// The font's own line height: its ascent, descent and line gap, scaled to
+    /// the size. Read from the face that draws the family at this weight — a
+    /// fallback face where the family's own font is not installed — and a
+    /// fallback glyph later in the line does not change it.
+    #[default]
+    Normal,
+    /// A multiple of the font size. A bare number means this.
+    Relative(f32),
+    /// Logical pixels.
+    Absolute(f32),
+}
+
+impl From<f32> for LineHeight {
+    fn from(factor: f32) -> Self {
+        LineHeight::Relative(factor)
+    }
+}
+
+/// So a bare literal, which Rust types as `f64` when nothing narrows it,
+/// is a factor too.
+impl From<f64> for LineHeight {
+    fn from(factor: f64) -> Self {
+        LineHeight::Relative(factor as f32)
+    }
+}
+
+crate::reactive::converts!(
+    f32 => LineHeight,
+    f64 => LineHeight,
+);
+
+impl LineHeight {
+    /// The line height as something a cache can key by: the number by its
+    /// bits, as every float in the text caches' keys is held.
+    pub(crate) fn key(self) -> (u8, u32) {
+        match self {
+            LineHeight::Normal => (0, 0),
+            LineHeight::Relative(factor) => (1, factor.to_bits()),
+            LineHeight::Absolute(height) => (2, height.to_bits()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
