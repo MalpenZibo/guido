@@ -271,6 +271,13 @@ as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
 because a family and a weight snap to an installed face and a stroke and a
 shadow have nothing to interpolate.
 
+A weight the family has no face for is drawn in the family's nearest one, as
+CSS Fonts 4 §5.2 matches it, and never in another family that happens to have
+it. For a generic family the family is the installed one that draws it — a
+fallback where cosmic-text's own name for it is not installed — and a variable
+face is drawn at the weight asked, on its `wght` axis (`resolve_font` in
+`src/renderer/text.rs`).
+
 `line_height` defaults to `LineHeight::Normal`: the ascent, descent and line
 gap of the face that draws the family at that weight, which is a fallback face
 where the family's own font is not installed. A bare number is

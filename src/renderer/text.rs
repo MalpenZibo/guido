@@ -98,7 +98,7 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 ///
 /// The line height is resolved here and nowhere else, so the measurer and the
 /// three draw paths cannot disagree about how tall a line is: `Normal` is the
-/// primary face's own (see [`font_line_ratio`]), `Relative` a multiple of the
+/// primary face's own (see [`resolve_font`]), `Relative` a multiple of the
 /// size, and `Absolute` logical pixels taken to physical ones by `scale`. A
 /// number that is not a height — zero, negative, not finite — is `Normal`'s
 /// answer, because `Metrics` handed one does not come back (#349).
@@ -132,9 +132,10 @@ pub(super) fn shape(
         LineHeight::Relative(factor) => Some(factor * px),
         LineHeight::Absolute(height) => Some(height * scale),
     };
+    let font = resolve_font(font_system, font_family, weight);
     let line_height = declared
         .filter(|h| h.is_finite() && *h > 0.0)
-        .unwrap_or_else(|| font_line_ratio(font_system, font_family, weight) * px);
+        .unwrap_or(font.line_ratio * px);
     let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
     let lines = fit.map(|fit| fit.max_lines.max(1) as usize);
     match fit {
@@ -154,7 +155,7 @@ pub(super) fn shape(
     buffer.set_text(
         text,
         &Attrs::new()
-            .family(font_family.to_cosmic())
+            .family(font.family.to_cosmic())
             .weight(weight.to_cosmic()),
         Shaping::Advanced,
         cosmic_align(align),
@@ -166,50 +167,90 @@ pub(super) fn shape(
     buffer
 }
 
-/// The line height a family asks for at this weight, over its size, when nothing
-/// else is declared.
+/// What a declared family and weight are drawn in: the installed family that
+/// draws it, and the line height over its size of that family's face nearest
+/// the weight.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedFont {
+    family: FontFamily,
+    line_ratio: f32,
+}
+
+/// Resolve a declared family and weight to the face that draws them.
 ///
-/// Read from the *primary* face — the one that draws a space in this family and
-/// weight — as CSS's `normal` reads it from the first available font: a fallback
-/// glyph further along the line does not make the line taller. The face is
-/// found by shaping, not by asking the font database for the family, because
-/// that is how cosmic-text finds it: a generic family names one font
-/// (sans-serif is Open Sans), and where that font is not installed the text is
-/// drawn in a fallback a database query never returns.
+/// **The family** is the one that draws a space in the declared family at 400,
+/// found by shaping one, because that is how cosmic-text finds it: a generic
+/// family names one font (sans-serif is Open Sans), and where that font is not
+/// installed the text is drawn in a fallback no query of the font database
+/// returns.
 ///
-/// Ascent, descent and line gap, as Chromium and Parley count them; Pango and
-/// Flutter leave the gap out, but a font that declares one is asking for it.
+/// Naming that family is what keeps a weight inside it. Handed a generic family
+/// whose font is missing, cosmic-text draws a weight the fallback does not
+/// have in the first face anywhere that has it exactly — a semibold clock in
+/// an emoji font's digits (#575). Handed the family by name, it takes the
+/// nearest weight the family has, as CSS Fonts 4 §5.2 matches it. The weight
+/// itself is passed on as declared: a variable face is listed once, at its
+/// default, and cosmic-text sets its `wght` axis from the weight it is given.
+///
+/// **The line ratio** is the ascent, descent and line gap over its em, as
+/// Chromium and Parley count them, of the family's face nearest the weight by
+/// `fontdb`'s CSS query — the face that draws the text, so a fallback glyph
+/// later in the line does not make the line taller.
 ///
 /// Kept per family and weight in the application's state: the faces every font
 /// system holds are the same ones, fixed once the first of them is built, and a
 /// probe is a shaping.
-fn font_line_ratio(font_system: &mut FontSystem, family: FontFamily, weight: FontWeight) -> f32 {
-    let known = with_app_state(|app| app.line_ratios.borrow().get(&(family, weight)).copied());
-    if let Some(ratio) = known {
-        return ratio;
+fn resolve_font(
+    font_system: &mut FontSystem,
+    family: FontFamily,
+    weight: FontWeight,
+) -> ResolvedFont {
+    let known = with_app_state(|app| app.resolved_fonts.borrow().get(&(family, weight)).copied());
+    if let Some(resolved) = known {
+        return resolved;
     }
     let mut probe = Buffer::new(font_system, Metrics::new(16.0, 16.0));
     probe.set_text(
         " ",
         &Attrs::new()
             .family(family.to_cosmic())
-            .weight(weight.to_cosmic()),
+            .weight(FontWeight::NORMAL.to_cosmic()),
         Shaping::Advanced,
         None,
     );
     probe.shape_until_scroll(font_system, false);
-    let face = probe
+    let drawing_family = probe
         .layout_runs()
-        .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id));
-    let ratio = face
-        .and_then(|id| font_system.get_font(id, weight.to_cosmic()))
+        .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id))
+        .and_then(|id| font_system.db().face(id))
+        .and_then(|face| face.families.first())
+        .map(|(name, _)| FontFamily::name(name));
+    let nearest = drawing_family.and_then(|drawing| {
+        let db = font_system.db();
+        let id = db.query(&glyphon::fontdb::Query {
+            families: &[drawing.to_cosmic()],
+            weight: weight.to_cosmic(),
+            ..Default::default()
+        })?;
+        Some((id, FontWeight(db.face(id)?.weight.0)))
+    });
+    let line_ratio = nearest
+        .and_then(|(id, weight)| font_system.get_font(id, weight.to_cosmic()))
         .and_then(|font| {
             let m = font.metrics();
             line_ratio(m.ascent, m.descent, m.leading, m.units_per_em)
         })
         .unwrap_or(RATIO_WITHOUT_A_FACE);
-    with_app_state(|app| app.line_ratios.borrow_mut().insert((family, weight), ratio));
-    ratio
+    let resolved = ResolvedFont {
+        family: drawing_family.unwrap_or(family),
+        line_ratio,
+    };
+    with_app_state(|app| {
+        app.resolved_fonts
+            .borrow_mut()
+            .insert((family, weight), resolved)
+    });
+    resolved
 }
 
 /// A face's line height over its size, from its metrics in font units: ascent,
@@ -1323,7 +1364,8 @@ fn normal_is_the_line_height_of_the_face_that_draws_the_text() {
     let mut db = glyphon::fontdb::Database::new();
     db.load_font_data(FONT.to_vec());
     let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
-    let ratio = font_line_ratio(&mut font_system, FontFamily::SansSerif, FontWeight::NORMAL);
+    let ratio =
+        resolve_font(&mut font_system, FontFamily::SansSerif, FontWeight::NORMAL).line_ratio;
     assert!(
         (ratio - 1.1640625).abs() < 1e-4,
         "{ratio} is not DejaVu Sans Mono's own 1.164"
@@ -1381,4 +1423,96 @@ fn an_absolute_line_height_is_scaled_with_the_text() {
     };
     assert_eq!(line(&mut font_system, 1.0), 20.0);
     assert_eq!(line(&mut font_system, 2.0), 40.0);
+}
+
+/// A weight the family does not have is the nearest one it does, as CSS Fonts 4
+/// §5.2 matches it — not the first face anywhere with that exact weight.
+///
+/// Asked as `sans-serif`, the way an application asks: cosmic-text names Open
+/// Sans for it, which is not here, so the family that draws it is the one the
+/// 400 probe finds — DejaVu Sans Mono, which has 400 and 700. "Weight Decoy"
+/// has a 600 and nothing else. Both extra faces are DejaVu Sans Mono Bold cut
+/// down to the digits, the decoy renamed, as its license asks of a derivative
+/// (`tests/assets/`).
+#[cfg(test)]
+#[test]
+fn a_missing_weight_is_the_nearest_one_of_the_same_family() {
+    const REGULAR: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const BOLD: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono-Bold-digits.ttf");
+    const DECOY: &[u8] = include_bytes!("../../tests/assets/WeightDecoy-SemiBold-digits.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    for font in [REGULAR, BOLD, DECOY] {
+        db.load_font_data(font.to_vec());
+    }
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+
+    let mut drawn_in = |weight: FontWeight| {
+        let buffer = shape(
+            &mut font_system,
+            "2356",
+            14.0,
+            FontFamily::SansSerif,
+            weight,
+            LineHeight::Normal,
+            TextAlign::Start,
+            (None, None),
+            None,
+            1.0,
+        );
+        buffer
+            .layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.font_id))
+            .map(|id| {
+                let face = font_system.db().face(id).expect("a face that drew a glyph");
+                (face.families[0].0.clone(), face.weight.0)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let semibold = drawn_in(FontWeight(600));
+    assert_eq!(semibold.len(), 4, "four digits drawn");
+    assert!(
+        semibold
+            .iter()
+            .all(|face| *face == ("DejaVu Sans Mono".into(), 700)),
+        "600 was drawn in {semibold:?}, not the family's nearest, 700"
+    );
+    let light = drawn_in(FontWeight(300));
+    assert!(
+        light
+            .iter()
+            .all(|face| *face == ("DejaVu Sans Mono".into(), 400)),
+        "300 was drawn in {light:?}, not the family's nearest, 400"
+    );
+}
+
+/// A variable face keeps the weight asked of it: fontdb lists the face once,
+/// at its default, and cosmic-text sets the `wght` axis from the weight it is
+/// handed — so resolving the weight to the face's own would draw every weight
+/// of a variable family at 400. `GuidoVariable.ttf` is built from nothing by
+/// `tests/assets/make_variable_fixture.py`: one `wght` axis, 100 to 900.
+#[cfg(test)]
+#[test]
+fn a_variable_face_is_shaped_at_the_weight_asked_of_it() {
+    const VARIABLE: &[u8] = include_bytes!("../../tests/assets/GuidoVariable.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(VARIABLE.to_vec());
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let buffer = shape(
+        &mut font_system,
+        "2356",
+        14.0,
+        FontFamily::name("Guido Variable"),
+        FontWeight::BOLD,
+        LineHeight::Normal,
+        TextAlign::Start,
+        (None, None),
+        None,
+        1.0,
+    );
+    let weights: Vec<u16> = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.font_weight.0))
+        .collect();
+    assert_eq!(weights, [700; 4], "the axis was set to {weights:?}");
 }

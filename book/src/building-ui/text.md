@@ -277,7 +277,10 @@ Available font families:
 
 ### Font Weight
 
-Set the font weight using predefined constants or numeric values (100-900):
+Set the font weight using predefined constants or numeric values (100-900).
+A weight the font has no face for is drawn in the nearest one it has — a
+semibold in a family with only regular and bold comes out bold — never in a
+different font:
 
 ```rust
 # extern crate guido;
