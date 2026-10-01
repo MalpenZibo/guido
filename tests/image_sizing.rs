@@ -195,6 +195,24 @@ fn fractional_svg_dimensions_remain_exact_in_layout() {
     );
 }
 
+/// An SVG that names one side takes the other from its viewBox's aspect
+/// ratio, as a browser does. resvg 0.48 started doing this (linebender/resvg
+/// #1045); before it the missing side was the viewBox's own, so this icon was
+/// 24×48 and its box changed under every caller with nothing failing.
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_that_names_one_side_keeps_its_viewbox_aspect() {
+    let source = ImageSource::SvgBytes(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" viewBox="0 0 48 48"/>"#
+            .to_vec()
+            .into(),
+    );
+    assert_eq!(
+        guido::image_metadata::get_intrinsic_size(&source),
+        Some((24.0, 24.0))
+    );
+}
+
 #[cfg(feature = "svg")]
 #[test]
 fn fractional_svg_file_dimensions_remain_exact_in_layout() {
