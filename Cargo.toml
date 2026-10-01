@@ -57,7 +57,7 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-resvg = { version = "0.46", optional = true }
+resvg = { version = "0.48", optional = true }
 pollster = "1"
 log = "0.4"
 bitflags = "2.4"
@@ -155,7 +155,7 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.cosmic-text]
 opt-level = 3
-[profile.dev.package.rustybuzz]
+[profile.dev.package.harfrust]
 opt-level = 3
 [profile.dev.package.ttf-parser]
 opt-level = 3
