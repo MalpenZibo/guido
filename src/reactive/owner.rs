@@ -301,8 +301,16 @@ pub(crate) fn under_scope<T>(scope: Option<OwnerId>, f: impl FnOnce() -> T) -> T
 /// **Note:** This function is not part of the public API and may change.
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
-    // Allocate new owner and register as child of current owner (if any)
-    let owner_id = with_reactive(|reactive| {
+    let owner_id = child_scope();
+    (under_owner(owner_id, f), owner_id)
+}
+
+/// Make a scope under the current one, if any, without entering it.
+///
+/// [`with_owner`] makes one and enters it at once; an effect makes one when it
+/// is created and enters it on each run.
+pub(crate) fn child_scope() -> OwnerId {
+    with_reactive(|reactive| {
         let parent_id = reactive.current_owner.get();
         let mut owners = reactive.owners.borrow_mut();
         let id = owners.allocate(parent_id);
@@ -315,9 +323,7 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
         }
 
         id
-    });
-
-    (under_owner(owner_id, f), owner_id)
+    })
 }
 
 /// Hand the current scope's declarations to `f`, or `None` if no scope is
@@ -426,16 +432,19 @@ pub fn dispose_owner_now(id: OwnerId) {
         Some(owner)
     });
 
-    let Some(owner) = owner else {
-        return; // Already disposed
-    };
+    if let Some(owner) = owner {
+        release(owner);
+    }
+}
 
-    // Dispose children first (depth-first)
+/// Dispose everything `owner` holds, taken out of the arena first (its
+/// `parent` is not read): its children depth-first, then its cleanups
+/// last-first, then its effects, then its signals.
+fn release(owner: Owner) {
     for child_id in owner.children {
         dispose_owner_now(child_id);
     }
 
-    // Run cleanup callbacks in reverse order (LIFO)
     for cleanup in owner.cleanups.into_iter().rev() {
         // Teardown code reads for the current value; the scope is going away
         crate::reactive::diagnostics::snapshot_zone(cleanup);
