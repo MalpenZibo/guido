@@ -58,7 +58,7 @@ wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
 raw-window-handle = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 resvg = { version = "0.46", optional = true }
-pollster = "0.4"
+pollster = "1"
 log = "0.4"
 bitflags = "2.4"
 libc = "0.2"
@@ -74,7 +74,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # directly. Same version and features as the dependency above, so the test
 # and the library share one wgpu and its types line up.
 wgpu = { version = "29.0", features = ["fragile-send-sync-non-atomic-wasm"] }
-pollster = "0.4"
+pollster = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # The scrolling benchmark. `harness = false` because it is a plain binary that
