@@ -3,7 +3,7 @@
 //! Images and text differ entirely in how they *produce* a texture — one
 //! decodes or rasterises a source, the other lays out glyphs into an atlas —
 //! but what they do with it afterwards is the same: the same shader, the same
-//! vertex format, the same premultiplied blend state, the same clamped
+//! vertex format, the same straight-alpha blend state, the same clamped
 //! bilinear sampler, the same two triangles.
 //!
 //! Both pipelines were written out in full, and the two copies were identical
@@ -114,8 +114,12 @@ impl TexturedQuadPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // Premultiplied alpha: the colour is already scaled, so it
-                    // is added whole and only the destination is attenuated.
+                    // Straight alpha: a texel's colour is not scaled by its
+                    // alpha, so the blend scales it. Images arrive that way —
+                    // decoded rasters, and SVG rasters taken out of
+                    // tiny-skia's premultiplied form. Text quads do not yet:
+                    // glyphon leaves their texture premultiplied (#556). The
+                    // alpha channel itself composites over.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::SrcAlpha,

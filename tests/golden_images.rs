@@ -1041,6 +1041,78 @@ fn tinted_svg() {
     golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
 }
 
+/// An untinted coloured SVG blends like a raster image of the same pixels
+/// (#549).
+///
+/// An orange circle over a light tile, twice: left as the SVG, right as an
+/// `ImageSource::Rgba` of the raster the renderer makes of it — 40 logical
+/// pixels at the 2× SVG quality is 80 — taken out of tiny-skia's premultiplied
+/// form by hand. Both are 80-pixel textures drawn into the same 40-pixel box,
+/// so they match to the bit or the SVG's pixels were uploaded differently.
+///
+/// Red before: the SVG was uploaded premultiplied into a pipeline that blends
+/// straight alpha, so its antialiased edge was multiplied by its alpha twice
+/// and came out as a dark ring.
+#[cfg(feature = "svg")]
+#[test]
+fn coloured_svg_edges_blend_like_a_raster() {
+    const NAME: &str = "coloured_svg_edges_blend_like_a_raster";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let svg: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#f27340"/></svg>"##;
+
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())
+        .expect("the SVG parses");
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(80, 80).expect("an 80-pixel pixmap");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(2.0, 2.0),
+        &mut pixmap.as_mut(),
+    );
+    let straight: Vec<u8> = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let c = pixel.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+
+    let tile = |source: ImageSource| {
+        box_of(40.0, 40.0)
+            .background(Color::rgb(0.92, 0.92, 0.88))
+            .child(image(source).content_fit(ContentFit::Fill))
+    };
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.0)
+        .layout(Flex::row().spacing(10.0))
+        .child(tile(ImageSource::SvgBytes(svg.to_vec().into())))
+        .child(tile(ImageSource::Rgba {
+            width: 80,
+            height: 80,
+            pixels: straight.into(),
+        }));
+    let pixels = render_with_own_renderer(ctx, view, (110.0, 60.0), 1.0, BACKDROP);
+
+    let pixel = |x: u32, y: u32| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    let differ: Vec<_> = (10..50)
+        .flat_map(|y| (10..50).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y) != pixel(x + 50, y))
+        .collect();
+    assert!(
+        differ.is_empty(),
+        "{} pixels of the SVG differ from the same raster drawn straight, first at {:?}: \
+         svg {:?}, raster {:?}",
+        differ.len(),
+        differ[0],
+        pixel(differ[0].0, differ[0].1),
+        pixel(differ[0].0 + 50, differ[0].1),
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
 /// An 80 × 240 raster, past the line an SVG is drawn inside the frame below:
 /// it is the worker's, and waiting for the worker needs `testing`.
 #[cfg(all(feature = "svg", feature = "testing"))]
