@@ -239,6 +239,14 @@ impl LineHeight {
 mod tests {
     use super::*;
 
+    /// A bare number is a factor of the font size, whichever width of float
+    /// the literal came out as.
+    #[test]
+    fn a_bare_number_is_a_factor() {
+        assert_eq!(LineHeight::from(1.5_f32), LineHeight::Relative(1.5));
+        assert_eq!(LineHeight::from(1.5_f64), LineHeight::Relative(1.5));
+    }
+
     #[test]
     fn font_family_default() {
         assert_eq!(FontFamily::default(), FontFamily::SansSerif);
