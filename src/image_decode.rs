@@ -806,6 +806,20 @@ fn rasterize(tree: &SvgTree, (width, height): (u32, u32)) -> Option<Pixels> {
         height as f32 / size.height(),
     );
     resvg::render(tree, transform, &mut pixmap.as_mut());
+    // tiny-skia keeps its pixels premultiplied, and the textured-quad pipeline
+    // blends straight alpha, as every raster image arrives: uploaded as they
+    // are, an edge's colour would be multiplied by its alpha twice. Undone in
+    // place, with `PremultipliedColorU8::demultiply`'s own rounding; a texel
+    // that is opaque or empty has nothing to undo.
+    for texel in pixmap.data_mut().as_chunks_mut::<4>().0 {
+        let alpha = texel[3];
+        if alpha != 0 && alpha != 255 {
+            let a = f64::from(alpha) / 255.0;
+            for channel in &mut texel[..3] {
+                *channel = (f64::from(*channel) / a + 0.5) as u8;
+            }
+        }
+    }
     Some(Pixels {
         width,
         height,
