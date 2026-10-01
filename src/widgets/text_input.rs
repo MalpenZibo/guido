@@ -135,13 +135,6 @@ impl History {
     fn push(&mut self, entry: HistoryEntry, edit_type: EditType, at: EventInstant) {
         let since_last = at.duration_since(self.last_edit_time);
 
-        // Don't push if it's the same as the last entry
-        if let Some(last) = self.undo_stack.back()
-            && last.text == entry.text
-        {
-            return;
-        }
-
         // Coalesce similar edits within the time window
         let should_coalesce = self.last_edit_type == Some(edit_type)
             && since_last < Duration::from_millis(HISTORY_COALESCE_MS)
