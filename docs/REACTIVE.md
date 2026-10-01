@@ -283,6 +283,14 @@ A property keeps what it was given, as a `Prop<T>`: `Prop::Const` for a static v
 
 `create_signal` returns `RwSignal<T>` (read-write, Clone+PartialEq+Send) which has `.set()`, `.update()`, and `.writer()`. `Signal<T>` is read-only — use it when you only need to read values.
 
+## Timers on the UI Thread
+
+`set_timeout(delay, FnOnce)` and `set_interval(period, FnMut)` (`src/reactive/timer.rs`) run a closure on the UI thread, inside the loop's pass, at the point where deferred work may write signals — so the callback reads signals as well as writing them, which a `create_task` future, being `Send`, cannot. Its reads are untracked: a timer is an event, not an effect. Both return a `Copy` `TimerHandle` with `cancel()` and `is_pending()`; dropping the handle does nothing.
+
+- **Clock.** A timer is created unarmed and asks the loop for a pass; the first pass that sees it arms it at the pass's moment (`frame_at`) plus its delay, and each pass runs the timers due by its own moment, earliest first. So deadlines are on the pass's clock, and `Headless::step_at` decides which timers fire — `tests/timers.rs` never sleeps. The loop sleeps until the earliest armed timer through `wake_deadline`.
+- **Ownership.** A timer is cancelled when the owner it was created under is disposed (`on_cleanup`), and its callback runs under that owner. An effect is not a scope of its own — it re-runs under the one it was created in — so an effect that schedules a timer per run cancels the previous one through its handle. That is how a debounce is written.
+- **Intervals.** Each deadline is the previous plus the period, so the beat does not drift; a pass that arrives several periods late runs it once and moves it to the next beat after the pass. A period under 1 ms is taken as 1 ms.
+
 ## Background Task Updates
 
 `RwSignal<T>` is `!Send` — it can only be read and written on the main thread. To update a signal from a background task, use `.writer()` on `RwSignal<T>` to obtain a `WriteSignal<T>`, which is `Send`. Writes from `WriteSignal` are queued and applied on the next frame.

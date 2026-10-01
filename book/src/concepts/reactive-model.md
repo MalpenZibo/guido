@@ -314,6 +314,59 @@ let value = count.get_untracked();
 
 This is useful in effects where you want to read initial values without re-running on changes.
 
+## Timers
+
+To do something later on the UI thread — hide a toast after a while, show a
+tooltip after a hover, search once typing pauses — use `set_timeout` and
+`set_interval`. The callback runs on the UI thread, so it can read and write
+signals like any other UI code:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use std::time::Duration;
+# fn main() {
+let visible = create_signal(true);
+let auto_close = set_timeout(Duration::from_secs(4), move || visible.set(false));
+
+// A close button hides it at once, and stops the timer that would have.
+let close = container().on_click(move || {
+    auto_close.cancel();
+    visible.set(false);
+});
+
+let seconds = create_signal(0u32);
+set_interval(Duration::from_secs(1), move || seconds.update(|s| *s += 1));
+# }
+```
+
+A timer stops when it is cancelled or when the scope that created it is
+disposed — a widget's timers go with the widget. Dropping the `TimerHandle` does
+*not* stop it. An effect re-runs in the scope it was created in, so an effect
+that schedules a timer on every run cancels the previous one itself — which is
+also how a debounce is written:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use std::time::Duration;
+# fn main() {
+# let search = |_q: String| {};
+let query = create_signal(String::new());
+let pending = std::cell::Cell::new(None::<TimerHandle>);
+create_effect(move || {
+    let q = query.get();
+    let timer = set_timeout(Duration::from_millis(300), move || search(q));
+    if let Some(previous) = pending.replace(Some(timer)) {
+        previous.cancel();
+    }
+});
+# }
+```
+
+Background work that has to leave the UI thread — a socket, a file — is
+[`create_task`](../advanced/background-threads.md) instead.
+
 ## Ownership & Cleanup
 
 Signals and effects created inside dynamic children are automatically cleaned up when the child is removed. Use `on_cleanup` to register custom cleanup logic:
@@ -517,6 +570,17 @@ impl<T: Clone + PartialEq> Memo<T> {
 # // not compiled: a signature listing — these declarations have no bodies.
 // Register cleanup callback (for use in dynamic children)
 pub fn on_cleanup(f: impl FnOnce() + 'static);
+```
+
+### Timers
+
+```rust,ignore
+# // not compiled: a signature listing — these declarations have no bodies.
+// Run once after a delay, on the UI thread; cancelled with its scope
+pub fn set_timeout(delay: Duration, f: impl FnOnce() + 'static) -> TimerHandle;
+// Run every period, on the UI thread; cancelled with its scope
+pub fn set_interval(period: Duration, f: impl FnMut() + 'static) -> TimerHandle;
+// TimerHandle is Copy: .cancel(), .is_pending()
 ```
 
 ### Background Services
