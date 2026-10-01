@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/MalpenZibo/guido/compare/v0.11.0...v0.11.1) - 2026-10-01
+
+### Other
+
+- A weight's line height is read from its own face, and a test says so ([#578](https://github.com/MalpenZibo/guido/pull/578))
+- A weight the family does not have is the nearest one it does ([#576](https://github.com/MalpenZibo/guido/pull/576))
+
 ## [0.11.0](https://github.com/MalpenZibo/guido/compare/v0.10.0...v0.11.0) - 2026-10-01
 
 ### Other
