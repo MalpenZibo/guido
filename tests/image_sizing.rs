@@ -1,8 +1,7 @@
 //! How an image sizes itself inside the box a container gives it.
 //!
 //! These are layout-only: they assert the widget's size, never its pixels, so
-//! they need no GPU and no fonts. The source is raw RGBA, so the intrinsic
-//! size is known without touching the filesystem or a decoder.
+//! they need no GPU and no fonts.
 
 use guido::layout::{Constraints, Size};
 use guido::prelude::*;
@@ -16,6 +15,14 @@ fn source() -> ImageSource {
         width: 200,
         height: 100,
     }
+}
+
+#[cfg(feature = "svg")]
+const FRACTIONAL_SVG: &[u8] = include_bytes!("fixtures/fractional.svg");
+
+#[cfg(feature = "svg")]
+fn fractional_svg() -> ImageSource {
+    ImageSource::SvgBytes(FRACTIONAL_SVG.to_vec().into())
 }
 
 fn size_of(widget: impl Widget + 'static, constraints: Constraints) -> Size {
@@ -168,6 +175,42 @@ fn none_is_still_clamped_by_a_box_too_small_for_it() {
         in_box(ContentFit::None, 50.0, 50.0),
         Size::new(50.0, 50.0),
         "a widget may not report a size larger than its constraints allow"
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_dimensions_remain_exact_in_layout() {
+    let source = fractional_svg();
+    assert_eq!(
+        guido::image_metadata::get_intrinsic_size(&source),
+        Some((1, 2))
+    );
+    assert_eq!(
+        size_of(
+            image(source).content_fit(ContentFit::None),
+            Constraints::new(0.0, 0.0, 100.0, 100.0),
+        ),
+        Size::new(0.5, 1.5)
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_file_dimensions_remain_exact_in_layout() {
+    let source = ImageSource::SvgPath(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fractional.svg"),
+    );
+    assert_eq!(
+        guido::image_metadata::get_intrinsic_size(&source),
+        Some((1, 2))
+    );
+    assert_eq!(
+        size_of(
+            image(source).content_fit(ContentFit::None),
+            Constraints::new(0.0, 0.0, 100.0, 100.0),
+        ),
+        Size::new(0.5, 1.5)
     );
 }
 

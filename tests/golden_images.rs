@@ -1024,6 +1024,83 @@ fn tinted_svg() {
     golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
 }
 
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_keeps_its_vector_aspect() {
+    let source = ImageSource::SvgBytes(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="0.5" height="1.5" viewBox="0 0 0.5 1.5"><rect width="0.5" height="1.5" fill="#f27340"/></svg>"##
+            .to_vec()
+            .into(),
+    );
+    let view = container().background(BACKDROP).padding(20.0).child(
+        box_of(120.0, 120.0)
+            .background(Color::rgb(0.12, 0.16, 0.22))
+            .child(image(source).content_fit(ContentFit::Contain)),
+    );
+
+    golden(
+        "fractional_svg_keeps_its_vector_aspect",
+        (160.0, 160.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_fills_its_raster_when_stretched() {
+    let Some((ctx, _)) = rasterizer("fractional_svg_fills_its_raster_when_stretched") else {
+        return;
+    };
+    let render = |width: &str, height: &str| {
+        let source = ImageSource::SvgBytes(
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><rect width=\"100%\" height=\"100%\" fill=\"#f27340\"/></svg>"
+            )
+            .into_bytes()
+            .into(),
+        );
+        render_with_own_renderer(
+            ctx,
+            box_of(2.0, 2.0).child(image(source).content_fit(ContentFit::Fill)),
+            (2.0, 2.0),
+            1.0,
+            BACKDROP,
+        )
+        .data
+    };
+
+    let expected = render("1", "1");
+    assert_eq!(expected, [242, 115, 64, 255].repeat(4));
+    assert_eq!(render("0.6", "1.5"), expected);
+    assert_eq!(render("1.5", "0.6"), expected);
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn fractional_svg_fills_a_standalone_texture() {
+    let Some((ctx, _)) = rasterizer("fractional_svg_fills_a_standalone_texture") else {
+        return;
+    };
+    let source = ImageSource::SvgBytes(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="0.5" height="1.5"><rect width="50%" height="100%" fill="#f27340"/><rect x="50%" width="50%" height="100%" fill="#357ac9"/></svg>"##
+            .to_vec()
+            .into(),
+    );
+    let pixels = render_with_own_renderer(
+        ctx,
+        box_of(257.0, 257.0).child(image(source).content_fit(ContentFit::Fill)),
+        (257.0, 257.0),
+        1.0,
+        BACKDROP,
+    );
+    let pixel = |x, y| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    assert_eq!(&pixel(64, 128)[..3], &[242, 115, 64]);
+    assert_eq!(&pixel(192, 128)[..3], &[53, 122, 201]);
+    assert_eq!(pixel(256, 128), pixel(192, 128));
+}
+
 /// Two clips a quarter turn apart still cut exactly.
 ///
 /// `intersect_clips` rewrites the inner clip in the outer's coordinates when
