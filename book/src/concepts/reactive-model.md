@@ -154,6 +154,25 @@ name.set("Guido".to_string()); // Effect re-runs, prints: Hello, Guido!
 
 Effects are useful for logging, syncing with external systems, or triggering actions.
 
+Each run owns what it makes. A signal, an effect, a timer, a task, an
+`on_cleanup` or a context provided inside the body is disposed before the effect runs again,
+and with the effect when its scope goes. A memo is an effect too, so the same
+holds for what a memo's closure makes. To keep something past the run, make it
+under a scope captured outside:
+
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let trigger = create_signal(0);
+let outer = current_owner().expect("created inside a scope");
+create_effect(move || {
+    trigger.get();
+    let kept = outer.run(|| create_signal(0)); // lives as long as `outer`
+});
+# }
+```
+
 ## Using Signals in Widgets
 
 Most widget properties accept either static values or reactive sources:
@@ -342,9 +361,9 @@ set_interval(Duration::from_secs(1), move || seconds.update(|s| *s += 1));
 
 A timer stops when it is cancelled or when the scope that created it is
 disposed — a widget's timers go with the widget. Dropping the `TimerHandle` does
-*not* stop it. An effect re-runs in the scope it was created in, so an effect
-that schedules a timer on every run cancels the previous one itself — which is
-also how a debounce is written:
+*not* stop it. What an effect's run makes goes when it runs again, so an effect
+that schedules a timer on every run fires only the last — which is how a
+debounce is written:
 
 ```rust
 # extern crate guido;
@@ -353,13 +372,9 @@ also how a debounce is written:
 # fn main() {
 # let search = |_q: String| {};
 let query = create_signal(String::new());
-let pending = std::cell::Cell::new(None::<TimerHandle>);
 create_effect(move || {
     let q = query.get();
-    let timer = set_timeout(Duration::from_millis(300), move || search(q));
-    if let Some(previous) = pending.replace(Some(timer)) {
-        previous.cancel();
-    }
+    set_timeout(Duration::from_millis(300), move || search(q));
 });
 # }
 ```

@@ -57,6 +57,11 @@ create_task(move |ctx| async move {
   the background side a `Send + Copy` set of write handles. See
   `tests/signal_fields.rs`.
 - **An effect that writes what it reads** re-runs itself. Use a `Memo`.
+- **A signal made in an effect is disposed by its next run.** Each run owns
+  what it makes — signals, nested effects, timers, tasks, `on_cleanup`s — and
+  the next run empties that scope first. Keep something past the run by making
+  it under a scope captured outside: `outer.run(|| create_signal(0))`, with
+  `outer` from `current_owner()`.
 - **A write from a background thread appears a frame late.** That is the queue,
   and it is intentional.
 
