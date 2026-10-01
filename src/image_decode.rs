@@ -206,7 +206,7 @@ pub(crate) struct DecodeEntry {
     /// The scope the signal lives in, under the root, disposed with the entry.
     scope: OwnerId,
     /// Read from the header when the entry was made.
-    size: Option<(u32, u32)>,
+    size: Option<(f32, f32)>,
     /// How many [`DecodeHandle`]s hold the entry.
     users: u32,
 }
@@ -299,7 +299,7 @@ pub(crate) struct DecodeHandle {
     key: DecodeKey,
     state: RwSignal<DecodeState>,
     pixels: DecodedImage,
-    size: Option<(u32, u32)>,
+    size: Option<(f32, f32)>,
 }
 
 impl DecodeHandle {
@@ -311,7 +311,7 @@ impl DecodeHandle {
     }
 
     /// The size the header gave, or `None` where it could not be read.
-    pub(crate) fn size(&self) -> Option<(u32, u32)> {
+    pub(crate) fn size(&self) -> Option<(f32, f32)> {
         self.size
     }
 }

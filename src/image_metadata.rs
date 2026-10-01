@@ -3,83 +3,74 @@
 //! This module provides functions to get image dimensions without loading
 //! the full image data, enabling correct layout calculations before rendering.
 
-use std::path::Path;
-
 use crate::widgets::image::ImageSource;
 
-/// Get an image source's intrinsic size in whole pixels without loading the full image.
-/// Fractional SVG dimensions are rounded up.
+/// The size an image source lays out at, in logical pixels, read without
+/// decoding or rasterizing it.
 ///
-/// Returns `Some((width, height))` if the dimensions can be determined,
-/// or `None` if the image cannot be read or parsed.
-pub fn get_intrinsic_size(source: &ImageSource) -> Option<(u32, u32)> {
-    match source {
-        ImageSource::Path(path) => image::image_dimensions(path).ok(),
+/// A raster image's is the header's, in whole pixels. An SVG's is what its
+/// root element declares, which can be fractional and is kept that way: a
+/// 0.5 × 1.5 icon is not a 0 × 1 one.
+///
+/// Returns `None` if the source cannot be read or parsed.
+pub fn get_intrinsic_size(source: &ImageSource) -> Option<(f32, f32)> {
+    let (width, height) = match source {
+        ImageSource::Path(path) => image::image_dimensions(path).ok()?,
         // The header, not the image: a full decode here would put back on the
         // frame exactly what `image_decode` takes off it.
         ImageSource::Bytes(bytes) => image::ImageReader::new(std::io::Cursor::new(&bytes[..]))
             .with_guessed_format()
             .ok()?
             .into_dimensions()
-            .ok(),
-        ImageSource::Rgba { width, height, .. } => Some((*width, *height)),
-        ImageSource::SvgPath(path) => get_svg_size_from_file(path),
-        ImageSource::SvgBytes(bytes) => get_svg_size_from_bytes(bytes),
-    }
-}
-
-pub(crate) fn get_layout_size(source: &ImageSource) -> Option<(f64, f64)> {
-    match source {
-        #[cfg(feature = "svg")]
-        ImageSource::SvgPath(path) => {
-            get_svg_layout_size_from_file(path).map(|(width, height)| (width as f64, height as f64))
+            .ok()?,
+        ImageSource::Rgba { width, height, .. } => (*width, *height),
+        ImageSource::SvgPath(_) | ImageSource::SvgBytes(_) => {
+            return parse_svg(source).map(|tree| svg_size(&tree));
         }
-        #[cfg(feature = "svg")]
-        ImageSource::SvgBytes(bytes) => get_svg_layout_size_from_bytes(bytes)
-            .map(|(width, height)| (width as f64, height as f64)),
-        _ => get_intrinsic_size(source).map(|(width, height)| (width as f64, height as f64)),
+    };
+    Some((width as f32, height as f32))
+}
+
+/// A parsed SVG document.
+#[cfg(feature = "svg")]
+pub(crate) type SvgTree = resvg::usvg::Tree;
+
+/// Without the `svg` feature there is no document to hold: nothing parses one.
+#[cfg(not(feature = "svg"))]
+pub(crate) enum SvgTree {}
+
+/// An SVG source's document, parsed — read from disk first for a path. The
+/// one place either is done: the decode cache keeps what this returns, so its
+/// rasters are drawn from the parse that gave the size.
+#[cfg(feature = "svg")]
+pub(crate) fn parse_svg(source: &ImageSource) -> Option<SvgTree> {
+    let read;
+    let bytes = match source {
+        ImageSource::SvgPath(path) => {
+            read = std::fs::read(path).ok()?;
+            &read[..]
+        }
+        ImageSource::SvgBytes(bytes) => &bytes[..],
+        _ => return None,
+    };
+    SvgTree::from_data(bytes, &resvg::usvg::Options::default()).ok()
+}
+
+/// Without the `svg` feature an SVG source fails with a warning instead of
+/// failing to compile.
+#[cfg(not(feature = "svg"))]
+pub(crate) fn parse_svg(_source: &ImageSource) -> Option<SvgTree> {
+    log::warn!("SVG image used but the `svg` feature is disabled");
+    None
+}
+
+/// The size an SVG document declares.
+pub(crate) fn svg_size(tree: &SvgTree) -> (f32, f32) {
+    #[cfg(feature = "svg")]
+    {
+        let size = tree.size();
+        (size.width(), size.height())
     }
-}
-
-/// Get SVG dimensions from a file path.
-#[cfg(feature = "svg")]
-fn get_svg_size_from_file(path: &Path) -> Option<(u32, u32)> {
-    let data = std::fs::read(path).ok()?;
-    get_svg_size_from_bytes(&data)
-}
-
-/// Get SVG dimensions from raw bytes.
-#[cfg(feature = "svg")]
-fn get_svg_size_from_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
-    get_svg_layout_size_from_bytes(bytes).map(svg_pixel_extent)
-}
-
-#[cfg(feature = "svg")]
-fn get_svg_layout_size_from_file(path: &Path) -> Option<(f32, f32)> {
-    let data = std::fs::read(path).ok()?;
-    get_svg_layout_size_from_bytes(&data)
-}
-
-#[cfg(feature = "svg")]
-fn get_svg_layout_size_from_bytes(bytes: &[u8]) -> Option<(f32, f32)> {
-    let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
-    let size = tree.size();
-    Some((size.width(), size.height()))
-}
-
-#[cfg(feature = "svg")]
-fn svg_pixel_extent((width, height): (f32, f32)) -> (u32, u32) {
-    (width.ceil() as u32, height.ceil() as u32)
-}
-
-#[cfg(not(feature = "svg"))]
-fn get_svg_size_from_file(_path: &Path) -> Option<(u32, u32)> {
-    log::warn!("SVG image used but the `svg` feature is disabled");
-    None
-}
-
-#[cfg(not(feature = "svg"))]
-fn get_svg_size_from_bytes(_bytes: &[u8]) -> Option<(u32, u32)> {
-    log::warn!("SVG image used but the `svg` feature is disabled");
-    None
+    #[cfg(not(feature = "svg"))]
+    match *tree {}
 }
