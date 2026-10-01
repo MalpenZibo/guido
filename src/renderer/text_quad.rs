@@ -97,6 +97,7 @@ struct TextCacheKey {
     font_size_bits: u32,
     weight: u16,
     family: crate::widgets::FontFamily,
+    line_height: (u8, u32),
     align: TextAlign,
     color: [u8; 4],
     tex_width: u32,
@@ -234,6 +235,7 @@ impl TextQuadRenderer {
             font_size_bits: scaled_font_size.to_bits(),
             weight: weight.0,
             family: entry.font_family,
+            line_height: entry.line_height.key(),
             align: entry.align,
             color: [
                 (entry.color.r * 255.0) as u8,
@@ -261,6 +263,7 @@ impl TextQuadRenderer {
             scaled_font_size,
             entry.font_family,
             entry.font_weight,
+            entry.line_height,
             entry.align,
             (Some(buffer_width), Some(buffer_height)),
             entry.fit,

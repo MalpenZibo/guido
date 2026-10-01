@@ -50,11 +50,11 @@ pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
 pub use paint_context::PaintContext;
 pub use render::Renderer;
-pub(crate) use text_measurer::TextMeasurer;
 pub use text_measurer::{
     LineFit, Measured, char_index_from_x, char_index_from_x_styled, measure_char_positions_styled,
     measure_text, measure_text_full, measure_text_styled, measure_text_to_char,
     measure_text_to_char_styled,
 };
+pub(crate) use text_measurer::{TextMeasurer, measure_line_height};
 pub use tree::{NodeId, RenderNode};
 pub use types::{Gradient, GradientDir, Shadow, TextEntry};

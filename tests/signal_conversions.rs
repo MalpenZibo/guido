@@ -180,3 +180,20 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = container().when_hovered(move |s| s.shadow(move || lift.get()));
     let _ = container().when_hovered(move |s| s.shadow(lift));
 }
+
+/// A bare number is a line height's factor, in every form a property takes.
+#[test]
+fn a_number_is_a_line_height_factor_in_every_form() {
+    let n = create_signal(1.5f32);
+    let read: Signal<f32> = n.read_only();
+    let doubled = create_memo(move || n.get() * 2.0);
+    let _ = text("x")
+        .line_height(1.5f32)
+        .line_height(1.5)
+        .line_height(move || n.get())
+        .line_height(read)
+        .line_height(n)
+        .line_height(doubled);
+    let _ = text_input(create_signal(String::new())).line_height(n);
+    let _ = text("x").when_hovered(|s| s.line_height(n));
+}

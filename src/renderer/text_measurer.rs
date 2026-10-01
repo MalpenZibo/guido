@@ -1,6 +1,6 @@
 use crate::app_state::with_app_state;
 use crate::layout::Size;
-use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
 use crate::widgets::{TextAlign, TextOverflow};
 use cosmic_text::{Buffer, FontSystem};
 use rustc_hash::FxHashMap;
@@ -14,27 +14,23 @@ use rustc_hash::FxHashMap;
 /// small still measures as itself.
 const SMALLEST_SHAPEABLE: f32 = 0.01;
 
-/// A size the shaper can actually work with, and the line height that goes
-/// with it.
+/// A size the shaper can actually work with.
 ///
-/// One door, because there are four places that build `Metrics` from a font
-/// size — this measurer and the three draw paths — and each would otherwise
-/// have to know that a non-finite or non-positive one is the single input that
-/// does not come back.
+/// Asked by [`shape`](super::text::shape), the one place `Metrics` is built
+/// for the measurer and the three draw paths alike, because a non-finite or
+/// non-positive size is the single input that does not come back. The line
+/// height that goes with it is resolved beside it there.
 ///
 /// A clamped size draws a glyph far too small to see, which is what a caller
 /// who asked for nothing drawable should get.
-pub(crate) fn shapeable_metrics(font_size: f32) -> (f32, f32) {
-    let size = if font_size.is_finite() && font_size >= SMALLEST_SHAPEABLE {
+pub(crate) fn shapeable_size(font_size: f32) -> f32 {
+    if font_size.is_finite() && font_size >= SMALLEST_SHAPEABLE {
         font_size
     } else {
         SMALLEST_SHAPEABLE
-    };
-    (size, size * LINE_HEIGHT_RATIO)
+    }
 }
 
-/// The line height guido asks for, as a multiple of the font size.
-const LINE_HEIGHT_RATIO: f32 = 1.2;
 use std::hash::{Hash, Hasher};
 
 /// How a text is cut to the lines it may take, decided by layout and carried to
@@ -88,6 +84,7 @@ struct MeasureCacheKey {
     text_len: u32,
     font_size_bits: u32,
     font_weight: FontWeight,
+    line_height: (u8, u32),
     max_width_bits: Option<u32>,
     /// The cut, when there is one.
     fit: Option<LineFitKey>,
@@ -100,6 +97,7 @@ impl MeasureCacheKey {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        line_height: LineHeight,
         fit: Option<LineFit>,
     ) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
@@ -110,6 +108,7 @@ impl MeasureCacheKey {
             text_len: text.len() as u32,
             font_size_bits: font_size.to_bits(),
             font_weight,
+            line_height: line_height.key(),
             max_width_bits: max_width.map(|w| w.to_bits()),
             fit: fit.map(|f| f.key()),
         }
@@ -155,6 +154,7 @@ impl TextMeasurer {
             max_width,
             FontFamily::default(),
             FontWeight::NORMAL,
+            LineHeight::Normal,
         )
     }
 
@@ -165,9 +165,18 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        line_height: LineHeight,
     ) -> Size {
-        self.measure_full(text, font_size, max_width, font_family, font_weight, None)
-            .size
+        self.measure_full(
+            text,
+            font_size,
+            max_width,
+            font_family,
+            font_weight,
+            line_height,
+            None,
+        )
+        .size
     }
 
     /// Measure, and also report where the first line sits on its baseline.
@@ -177,6 +186,7 @@ impl TextMeasurer {
     ///
     /// A text cut by `fit` is measured as the lines it keeps, at the width the
     /// fit carries rather than `max_width`.
+    #[allow(clippy::too_many_arguments)]
     pub fn measure_full(
         &mut self,
         text: &str,
@@ -184,11 +194,19 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        line_height: LineHeight,
         fit: Option<LineFit>,
     ) -> Measured {
         let max_width = fit.map_or(max_width, |f| f.width);
-        let cache_key =
-            MeasureCacheKey::new(text, font_size, max_width, font_family, font_weight, fit);
+        let cache_key = MeasureCacheKey::new(
+            text,
+            font_size,
+            max_width,
+            font_family,
+            font_weight,
+            line_height,
+            fit,
+        );
 
         // Check cache first (no allocation on this path)
         if let Some(&cached) = self.measure_cache.get(&cache_key) {
@@ -196,7 +214,15 @@ impl TextMeasurer {
         }
 
         let measured = {
-            let buffer = self.shape(text, font_size, max_width, font_family, font_weight, fit);
+            let buffer = self.shape(
+                text,
+                font_size,
+                max_width,
+                font_family,
+                font_weight,
+                line_height,
+                fit,
+            );
 
             let mut width = 0.0f32;
             let mut height = 0.0f32;
@@ -209,9 +235,9 @@ impl TextMeasurer {
                 baseline.get_or_insert(run.line_y);
             }
 
-            // Ensure minimum height for empty text
+            // Empty text is still one line tall, of the height it would have.
             if height == 0.0 {
-                height = font_size * 1.2;
+                height = buffer.metrics().line_height;
             }
 
             Measured {
@@ -236,6 +262,7 @@ impl TextMeasurer {
     /// Uses `Shaping::Advanced`, matching the renderer — measurement with
     /// `Shaping::Basic` could disagree with rendered glyphs for ligatures
     /// and complex scripts, making layout diverge from pixels.
+    #[allow(clippy::too_many_arguments)]
     fn shape(
         &mut self,
         text: &str,
@@ -243,6 +270,7 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        line_height: LineHeight,
         fit: Option<LineFit>,
     ) -> Buffer {
         super::text::shape(
@@ -251,6 +279,7 @@ impl TextMeasurer {
             font_size,
             font_family,
             font_weight,
+            line_height,
             TextAlign::Start,
             (max_width, None),
             fit,
@@ -289,7 +318,16 @@ impl TextMeasurer {
         }
         char_index_at_byte[text.len()] = char_count;
 
-        let buffer = self.shape(text, font_size, None, font_family, font_weight, None);
+        // Widths only, which no line height changes.
+        let buffer = self.shape(
+            text,
+            font_size,
+            None,
+            font_family,
+            font_weight,
+            LineHeight::Normal,
+            None,
+        );
 
         let mut total_width = 0.0f32;
         let mut any_glyphs = false;
@@ -352,8 +390,15 @@ impl TextMeasurer {
             .unwrap_or(text.len());
 
         let prefix = &text[..byte_pos];
-        self.measure_styled(prefix, font_size, None, font_family, font_weight)
-            .width
+        self.measure_styled(
+            prefix,
+            font_size,
+            None,
+            font_family,
+            font_weight,
+            LineHeight::Normal,
+        )
+        .width
     }
 
     /// Find the character index from an x-coordinate using binary search.
@@ -383,7 +428,14 @@ impl TextMeasurer {
 
         let char_count = text.chars().count();
         let total_width = self
-            .measure_styled(text, font_size, None, font_family, font_weight)
+            .measure_styled(
+                text,
+                font_size,
+                None,
+                font_family,
+                font_weight,
+                LineHeight::Normal,
+            )
             .width;
         if x >= total_width {
             return char_count;
@@ -438,15 +490,25 @@ pub fn measure_text(text: &str, font_size: f32, max_width: Option<f32>) -> Size 
     with_measurer(|m| m.measure(text, font_size, max_width))
 }
 
-/// Measure text dimensions with specified font family and weight
+/// Measure text dimensions with specified font family, weight and line height
 pub fn measure_text_styled(
     text: &str,
     font_size: f32,
     max_width: Option<f32>,
     font_family: FontFamily,
     font_weight: FontWeight,
+    line_height: LineHeight,
 ) -> Size {
-    with_measurer(|m| m.measure_styled(text, font_size, max_width, font_family, font_weight))
+    with_measurer(|m| {
+        m.measure_styled(
+            text,
+            font_size,
+            max_width,
+            font_family,
+            font_weight,
+            line_height,
+        )
+    })
 }
 
 /// Measure text and report where its first line sits on the baseline, as the
@@ -457,9 +519,43 @@ pub fn measure_text_full(
     max_width: Option<f32>,
     font_family: FontFamily,
     font_weight: FontWeight,
+    line_height: LineHeight,
     fit: Option<LineFit>,
 ) -> Measured {
-    with_measurer(|m| m.measure_full(text, font_size, max_width, font_family, font_weight, fit))
+    with_measurer(|m| {
+        m.measure_full(
+            text,
+            font_size,
+            max_width,
+            font_family,
+            font_weight,
+            line_height,
+            fit,
+        )
+    })
+}
+
+/// How tall one line of this style is, in logical pixels: the height an
+/// empty text measures, and so the line a text beside it is measured on.
+pub(crate) fn measure_line_height(
+    font_size: f32,
+    font_family: FontFamily,
+    font_weight: FontWeight,
+    line_height: LineHeight,
+) -> f32 {
+    with_measurer(|m| {
+        m.measure_full(
+            "",
+            font_size,
+            None,
+            font_family,
+            font_weight,
+            line_height,
+            None,
+        )
+        .size
+        .height
+    })
 }
 
 /// Measure text width up to a specific character index (for cursor positioning)
@@ -534,6 +630,7 @@ mod baseline_tests {
                     Some(100.0),
                     FontFamily::default(),
                     FontWeight::NORMAL,
+                    LineHeight::Normal,
                     None,
                 );
                 assert!(
@@ -563,6 +660,7 @@ mod baseline_tests {
                 None,
                 FontFamily::default(),
                 FontWeight::NORMAL,
+                LineHeight::Normal,
                 None,
             );
             assert!(
@@ -599,12 +697,28 @@ mod fit_tests {
         let mut measurer = TextMeasurer::new();
         let family = FontFamily::default();
         let lines = measurer
-            .shape(text, 20.0, None, family, FontWeight::NORMAL, fit)
+            .shape(
+                text,
+                20.0,
+                None,
+                family,
+                FontWeight::NORMAL,
+                LineHeight::Normal,
+                fit,
+            )
             .layout_runs()
             .map(|run| run.glyphs.iter().map(|g| g.glyph_id).collect())
             .collect();
         let mark = measurer
-            .shape("\u{2026}", 20.0, None, family, FontWeight::NORMAL, None)
+            .shape(
+                "\u{2026}",
+                20.0,
+                None,
+                family,
+                FontWeight::NORMAL,
+                LineHeight::Normal,
+                None,
+            )
             .layout_runs()
             .next()
             .and_then(|run| run.glyphs.first().map(|g| g.glyph_id))
@@ -655,6 +769,7 @@ mod fit_tests {
             None,
             FontFamily::default(),
             FontWeight::NORMAL,
+            LineHeight::Normal,
             Some(fit(90.0, 1, TextOverflow::Ellipsis, false)),
         );
         assert!(cut.size.width <= 90.0, "{:?}", cut.size);
@@ -721,5 +836,118 @@ mod fit_tests {
         let (limited, _) = drawn("short", Some(fit(400.0, 1, TextOverflow::Ellipsis, true)));
         assert_eq!(free, limited);
         assert!(!limited[0].contains(&mark));
+    }
+}
+
+/// What a line is as tall as, measured with the vendored font alone, so the
+/// font's own spacing is DejaVu Sans Mono's and not the machine's.
+#[cfg(test)]
+mod line_height_tests {
+    use super::*;
+
+    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+
+    /// DejaVu Sans Mono's own line height over its size: hhea's ascent (1901)
+    /// less its descent (-483) plus its line gap (0), over 2048 units per em.
+    const DEJAVU_RATIO: f32 = (1901.0 + 483.0) / 2048.0;
+
+    fn measurer() -> TextMeasurer {
+        let mut db = cosmic_text::fontdb::Database::new();
+        db.load_font_data(FONT.to_vec());
+        TextMeasurer {
+            font_system: FontSystem::new_with_locale_and_db("en-US".into(), db),
+            measure_cache: FxHashMap::default(),
+        }
+    }
+
+    fn height(measurer: &mut TextMeasurer, text: &str, line_height: LineHeight) -> f32 {
+        measurer
+            .measure_full(
+                text,
+                14.0,
+                None,
+                FontFamily::name("DejaVu Sans Mono"),
+                FontWeight::NORMAL,
+                line_height,
+                None,
+            )
+            .size
+            .height
+    }
+
+    fn assert_near(actual: f32, expected: f32, what: &str) {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "{what}: measured {actual}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn two_lines_are_two_of_the_line_height_asked_for() {
+        let mut m = measurer();
+        assert_near(
+            height(&mut m, "a\nb", LineHeight::Normal),
+            2.0 * DEJAVU_RATIO * 14.0,
+            "by default a line is as tall as the font says",
+        );
+        assert_near(
+            height(&mut m, "a\nb", LineHeight::Relative(1.5)),
+            2.0 * 21.0,
+            "a factor is a multiple of the font size",
+        );
+        assert_near(
+            height(&mut m, "a\nb", LineHeight::Absolute(20.0)),
+            40.0,
+            "an absolute height is logical pixels",
+        );
+    }
+
+    /// Two texts that differ only in line height are two measurements: a cache
+    /// keyed without it hands the second the first one's lines.
+    #[test]
+    fn a_line_height_is_part_of_the_measurement_s_key() {
+        let mut m = measurer();
+        let normal = height(&mut m, "a\nb", LineHeight::Normal);
+        let tall = height(&mut m, "a\nb", LineHeight::Absolute(30.0));
+        assert_near(
+            tall,
+            60.0,
+            "the second text was handed the first one's lines",
+        );
+        assert!(normal < tall);
+    }
+
+    #[test]
+    fn empty_text_is_one_line_of_the_resolved_height() {
+        let mut m = measurer();
+        assert_near(
+            height(&mut m, "", LineHeight::Normal),
+            DEJAVU_RATIO * 14.0,
+            "an empty text by default",
+        );
+        assert_near(
+            height(&mut m, "", LineHeight::Absolute(20.0)),
+            20.0,
+            "an empty text at an absolute height",
+        );
+    }
+
+    /// A number nobody can lay out falls back to the font's own line, never to
+    /// `Metrics`, which a non-positive line height would hand to cosmic-text.
+    #[test]
+    fn a_line_height_that_is_not_a_height_is_the_font_s() {
+        let mut m = measurer();
+        for bad in [
+            LineHeight::Relative(0.0),
+            LineHeight::Relative(-1.0),
+            LineHeight::Absolute(f32::NAN),
+            LineHeight::Absolute(f32::INFINITY),
+        ] {
+            assert_near(
+                height(&mut m, "a", bad),
+                DEJAVU_RATIO * 14.0,
+                &format!("{bad:?}"),
+            );
+        }
     }
 }

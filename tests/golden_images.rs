@@ -2632,3 +2632,36 @@ fn frost_survives_a_turned_sibling() {
         view,
     );
 }
+
+/// Three two-line paragraphs at 14 pixels, each on a card exactly as tall as
+/// its lines: the font's own line height (1.164 × 14 ≈ 16.3 for DejaVu Sans
+/// Mono), one and a half times the size (21), and twenty pixels.
+///
+/// The three pitches are the property — the distance from the first line's
+/// glyphs to the second's — and each card's height says the measurer agrees
+/// with where glyphon put them. A line height only one of the two honoured
+/// would draw the second line off its card.
+#[test]
+fn line_height_follows_the_font_or_the_declaration() {
+    let paragraph = |line_height: LineHeight| {
+        container()
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .child(label("line one\nline two", 14.0).line_height(line_height))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::column().spacing(12.0))
+        .child(paragraph(LineHeight::Normal))
+        .child(paragraph(LineHeight::Relative(1.5)))
+        .child(paragraph(LineHeight::Absolute(20.0)));
+
+    golden(
+        "line_height_follows_the_font_or_the_declaration",
+        (120.0, 172.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}

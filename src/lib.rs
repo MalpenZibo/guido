@@ -242,8 +242,8 @@ pub mod prelude {
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
-        IntoClickHandler, Key, LinearGradient, Modifiers, MouseButton, Overflow, Padding,
-        PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
+        IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers, MouseButton, Overflow,
+        Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
         ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextAlign, TextInput,
         TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed,
         password_input, text, text_input,

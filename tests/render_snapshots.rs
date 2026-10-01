@@ -629,6 +629,11 @@ fn bar_like_composition() {
     assert_snapshot("bar_like_composition", render(view, 600.0, 36.0));
 }
 
+/// A line height that does not depend on the machine's fonts, for the two
+/// scenarios below that hold a text: `Normal` is the drawing face's own, and
+/// which face draws the default family is the machine's to say.
+const FIXED_LINE: LineHeight = LineHeight::Relative(1.2);
+
 /// After `examples/text_input_example.rs`: a text input narrower than its own
 /// content. The field is a viewport — the glyphs that do not fit are cut at
 /// its horizontal edges, and only there, so descenders and any glyph
@@ -647,7 +652,12 @@ fn text_input_clips_overflowing_content() {
             .padding(8.0)
             .background(Color::rgb(0.18, 0.18, 0.24))
             .corners(6.0)
-            .child(text_input(value).color(Color::WHITE).font_size(14.0)),
+            .child(
+                text_input(value)
+                    .color(Color::WHITE)
+                    .font_size(14.0)
+                    .line_height(FIXED_LINE),
+            ),
     );
 
     assert_snapshot(
@@ -667,9 +677,9 @@ fn baseline_alignment_lines_text_up() {
     let row = |align: CrossAlignment| {
         container()
             .layout(Flex::row().spacing(8.0).cross_alignment(align))
-            .child(container().child(text("Big").font_size(24.0)))
-            .child(container().child(text("small").font_size(12.0)))
-            .child(container().child(text("mid").font_size(16.0)))
+            .child(container().child(text("Big").font_size(24.0).line_height(FIXED_LINE)))
+            .child(container().child(text("small").font_size(12.0).line_height(FIXED_LINE)))
+            .child(container().child(text("mid").font_size(16.0).line_height(FIXED_LINE)))
             // A box reports no baseline: it aligns by its bottom edge.
             .child(swatch(20.0, 30.0, Color::CYAN))
     };

@@ -8,8 +8,9 @@ use glyphon::{
 use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue};
 
+use crate::app_state::with_app_state;
 use crate::render_stats::{self, Pipeline};
-use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
 use crate::widgets::{Rect, TextAlign, TextOverflow};
 
 use super::text_measurer::LineFit;
@@ -22,6 +23,7 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     entry.text.hash(&mut hasher);
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
+    entry.line_height.key().hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
     entry.align.hash(&mut hasher);
     let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
@@ -65,6 +67,7 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
         entry.font_size * scale_factor,
         entry.font_family,
         entry.font_weight,
+        entry.line_height,
         entry.align,
         {
             let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
@@ -93,6 +96,13 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 /// the wider width and does not fit the box, and a marked line kept as many
 /// glyphs as fit the wider width, which all fit the box.
 ///
+/// The line height is resolved here and nowhere else, so the measurer and the
+/// three draw paths cannot disagree about how tall a line is: `Normal` is the
+/// primary face's own (see [`font_line_ratio`]), `Relative` a multiple of the
+/// size, and `Absolute` logical pixels taken to physical ones by `scale`. A
+/// number that is not a height — zero, negative, not finite — is `Normal`'s
+/// answer, because `Metrics` handed one does not come back (#349).
+///
 /// A cut text is given the height of the lines it keeps, which is where every
 /// reader of its lines stops and where shaping stops too. Half a line short of
 /// the next one, so a line whose glyphs are taller than the line box neither
@@ -105,12 +115,26 @@ pub(super) fn shape(
     font_size: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    line_height: LineHeight,
     align: TextAlign,
     size: (Option<f32>, Option<f32>),
     fit: Option<LineFit>,
     scale: f32,
 ) -> Buffer {
-    let (px, line_height) = crate::renderer::text_measurer::shapeable_metrics(font_size);
+    let px = crate::renderer::text_measurer::shapeable_size(font_size);
+    let weight = if font_weight == FontWeight::default() {
+        FontWeight::NORMAL
+    } else {
+        font_weight
+    };
+    let declared = match line_height {
+        LineHeight::Normal => None,
+        LineHeight::Relative(factor) => Some(factor * px),
+        LineHeight::Absolute(height) => Some(height * scale),
+    };
+    let line_height = declared
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .unwrap_or_else(|| font_line_ratio(font_system, font_family, weight) * px);
     let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
     let lines = fit.map(|fit| fit.max_lines.max(1) as usize);
     match fit {
@@ -127,11 +151,6 @@ pub(super) fn shape(
             }
         }
     }
-    let weight = if font_weight == FontWeight::default() {
-        FontWeight::NORMAL
-    } else {
-        font_weight
-    };
     buffer.set_text(
         text,
         &Attrs::new()
@@ -146,6 +165,57 @@ pub(super) fn shape(
     }
     buffer
 }
+
+/// The line height a family asks for at this weight, over its size, when nothing
+/// else is declared.
+///
+/// Read from the *primary* face — the one that draws a space in this family and
+/// weight — as CSS's `normal` reads it from the first available font: a fallback
+/// glyph further along the line does not make the line taller. The face is
+/// found by shaping, not by asking the font database for the family, because
+/// that is how cosmic-text finds it: a generic family names one font
+/// (sans-serif is Open Sans), and where that font is not installed the text is
+/// drawn in a fallback a database query never returns.
+///
+/// Ascent, descent and line gap, as Chromium and Parley count them; Pango and
+/// Flutter leave the gap out, but a font that declares one is asking for it.
+///
+/// Kept per family and weight in the application's state: the faces every font
+/// system holds are the same ones, fixed once the first of them is built, and a
+/// probe is a shaping.
+fn font_line_ratio(font_system: &mut FontSystem, family: FontFamily, weight: FontWeight) -> f32 {
+    let known = with_app_state(|app| app.line_ratios.borrow().get(&(family, weight)).copied());
+    if let Some(ratio) = known {
+        return ratio;
+    }
+    let mut probe = Buffer::new(font_system, Metrics::new(16.0, 16.0));
+    probe.set_text(
+        " ",
+        &Attrs::new()
+            .family(family.to_cosmic())
+            .weight(weight.to_cosmic()),
+        Shaping::Advanced,
+        None,
+    );
+    probe.shape_until_scroll(font_system, false);
+    let face = probe
+        .layout_runs()
+        .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id));
+    let ratio = face
+        .and_then(|id| font_system.get_font(id, weight.to_cosmic()))
+        .map(|font| {
+            let m = font.metrics();
+            (m.ascent - m.descent + m.leading) / f32::from(m.units_per_em)
+        })
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .unwrap_or(RATIO_WITHOUT_A_FACE);
+    with_app_state(|app| app.line_ratios.borrow_mut().insert((family, weight), ratio));
+    ratio
+}
+
+/// The line height over the size when no face draws even a space — a font
+/// system with no faces at all, where nothing draws. CSS 2.1 suggests 1.0 to 1.2 for `normal`.
+const RATIO_WITHOUT_A_FACE: f32 = 1.2;
 
 /// cosmic-text's word for an alignment. `Start` is no word at all, so the
 /// text's own direction decides where its lines begin.
@@ -618,6 +688,7 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_size: 16.0,
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
+        line_height: LineHeight::Normal,
         align: Default::default(),
         fit: None,
         opacity: 1.0,
@@ -1089,6 +1160,27 @@ mod a_line_is_aligned_in_its_own_box {
     }
 }
 
+/// Two texts that differ only in line height are two buffers, so the glyphon
+/// path's cache must not hand one the other's lines.
+#[cfg(test)]
+#[test]
+fn line_height_is_part_of_the_buffer_key() {
+    use crate::transform::Transform;
+    let entry = |line_height| TextEntry {
+        line_height,
+        ..test_entry(Rect::new(0.0, 0.0, 120.0, 40.0), Transform::default())
+    };
+    assert_ne!(
+        text_buffer_key(&entry(LineHeight::Normal), 1.0),
+        text_buffer_key(&entry(LineHeight::Absolute(30.0)), 1.0),
+    );
+    assert_ne!(
+        text_buffer_key(&entry(LineHeight::Relative(2.0)), 1.0),
+        text_buffer_key(&entry(LineHeight::Absolute(2.0)), 1.0),
+        "a factor and a height of the same number are not the same line",
+    );
+}
+
 /// An aligned text that is cut is cut where it was measured, and its lines are
 /// aligned across its own box.
 ///
@@ -1101,7 +1193,7 @@ mod a_line_is_aligned_in_its_own_box {
 mod an_aligned_cut_is_the_measured_cut {
     use super::shape;
     use crate::renderer::LineFit;
-    use crate::widgets::{FontFamily, FontWeight, TextAlign, TextOverflow};
+    use crate::widgets::{FontFamily, FontWeight, LineHeight, TextAlign, TextOverflow};
     use glyphon::FontSystem;
 
     const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
@@ -1138,6 +1230,7 @@ mod an_aligned_cut_is_the_measured_cut {
             SIZE * scale,
             family,
             FontWeight::NORMAL,
+            LineHeight::Normal,
             align,
             (width, Some(1000.0)),
             Some(fit),
@@ -1163,6 +1256,7 @@ mod an_aligned_cut_is_the_measured_cut {
             SIZE,
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
+            LineHeight::Normal,
             TextAlign::Start,
             (None, None),
             None,
@@ -1208,4 +1302,22 @@ mod an_aligned_cut_is_the_measured_cut {
             }
         }
     }
+}
+
+/// A generic family whose configured name is not installed still has a face
+/// that draws it — cosmic-text falls back to one — and `Normal` is that face's
+/// line height, not a guess. cosmic-text names Open Sans for sans-serif, which
+/// most machines do not have; here the only face is DejaVu Sans Mono.
+#[cfg(test)]
+#[test]
+fn normal_is_the_line_height_of_the_face_that_draws_the_text() {
+    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(FONT.to_vec());
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let ratio = font_line_ratio(&mut font_system, FontFamily::SansSerif, FontWeight::NORMAL);
+    assert!(
+        (ratio - 1.1640625).abs() < 1e-4,
+        "{ratio} is not DejaVu Sans Mono's own 1.164"
+    );
 }
