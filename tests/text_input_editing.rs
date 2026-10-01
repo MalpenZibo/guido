@@ -666,6 +666,53 @@ fn typing_after_an_undo_drops_what_was_undone() {
 }
 
 #[test]
+fn returning_to_saved_text_keeps_the_next_undo_group() {
+    let mut field = Field::focused("a");
+    field.ctrl('a');
+    field.type_text("b");
+    field.ctrl('a');
+    field.type_text("a");
+    field.pause();
+    field.type_text("c");
+    assert_eq!(field.text(), "ac");
+    field.ctrl('z');
+    assert_eq!(field.text(), "a");
+    field.type_text("Z");
+    assert_eq!(field.text(), "aZ");
+}
+
+#[test]
+fn editing_an_externally_cleared_value_discards_redo() {
+    let mut field = Field::focused("");
+    field.type_text("a");
+    field.pause();
+    field.type_text("b");
+    field.ctrl('z');
+    assert_eq!(field.text(), "a");
+    field.value.set(String::new());
+    field.harness.tree.mark_needs_layout(field.harness.root);
+    field.harness.lay_out(WIDTH, HEIGHT);
+    field.type_text("X");
+    assert_eq!(field.text(), "X");
+    field.ctrl('y');
+    assert_eq!(field.text(), "X");
+}
+
+#[test]
+fn rapid_return_to_saved_text_keeps_the_original_group_selection() {
+    let mut field = Field::focused("a");
+    field.ctrl('a');
+    field.type_text("b");
+    field.ctrl('a');
+    field.type_text("a");
+    field.type_text("c");
+    field.ctrl('z');
+    assert_eq!(field.text(), "a");
+    field.type_text("Z");
+    assert_eq!(field.text(), "Z");
+}
+
+#[test]
 fn typing_restarts_the_blink_rather_than_letting_the_caret_stay_dark() {
     let mut field = Field::focused("");
     assert!(field.caret().is_some(), "a focused field shows a caret");
