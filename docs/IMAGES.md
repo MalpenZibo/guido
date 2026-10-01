@@ -144,15 +144,20 @@ SVGs are rasterized at an effective scale that accounts for:
 - Transform scale (from parent containers)
 - Quality multiplier (2.0x for crisp rendering)
 
-This ensures SVGs remain crisp when scaled up via transforms.
+This ensures SVGs remain crisp when scaled up via transforms. The scale is
+quantized to quarters and the box to whole pixels before the raster's pixel
+size is worked out (`svg_extent` in `src/renderer/image_quad.rs`), so a scale
+animation asks for a raster per step rather than per frame.
 
 ## Decoding Off the Frame
 
 A raster `ImageSource::Path` or `ImageSource::Bytes` is decoded on a worker
-thread, never on the render path (`src/image_decode.rs`). A 2912×1632 PNG takes
-about 140 ms to decode; done inside the first frame, that frame is held back
-until it finishes, which a lock screen shows as the compositor's "locker has
-not drawn" colour.
+thread, and an SVG rasterized there, never on the render path
+(`src/image_decode.rs`). A 2912×1632 PNG takes about 140 ms to decode; done
+inside the first frame, that frame is held back until it finishes, which a lock
+screen shows as the compositor's "locker has not drawn" colour. A panel that
+appears with a dozen SVG icons paid all of them in its first frame the same way
+until #547.
 
 - **One entry per source, one signal per entry.** The application's decode
   cache (`AppState::decoded_images`) is keyed by the source — a path, or the
@@ -164,10 +169,27 @@ not drawn" colour.
   the header (`image_metadata::get_intrinsic_size`, which for bytes too reads
   only the header), so the first layout gives the box its size. A header that
   cannot be read makes the entry `Failed` at once, and no worker is involved.
+  An SVG has no header: its entry parses the document once
+  (`image_metadata::parse_svg`) for the size, and keeps it, so every raster
+  the worker draws of it is drawn from that one parse.
+- **An SVG's rasters are asked for by the renderer.** What an SVG becomes
+  depends on the size it is drawn at, which only the renderer knows — it
+  carries the transform, the HiDPI factor and the box. So an SVG's
+  `DecodedImage` holds a slot per pixel size, and a frame that needs a size
+  with no texture and no pixels sends the worker a job for it
+  (`DecodedImage::rasterize`) — a job on a channel, not a signal write, so it
+  is on its way before the frame is out. Until it lands the frame draws the
+  raster that source was last drawn from, stretched to the new box: an icon in
+  a resize animation does not blink out on every step. The first raster has
+  nothing before it, so an SVG's first frame draws nothing, as a raster
+  source's does. The paint pushes an SVG's command while it is still `Pending`
+  for that reason — the push is what carries the size to the renderer — where a
+  raster source is pushed only once it is `Ready` (`image_decode::paints`).
 - **The worker.** One `guido-image-decode` thread per application, spawned by
   the first decode and ended when the application is dropped (its channel
   closes). It puts the pixels in the entry's `DecodedImage` and writes `Ready`
-  through the entry's `WriteSignal`, so the
+  through the entry's `WriteSignal` — always, so an SVG already ready is told
+  of each new size that lands — so the
   write rides the background-write queue: it wakes the loop through the ingress
   channel and is applied at the flush point like any other background write.
   A std thread rather than the service runtime, because that runtime is one
@@ -223,7 +245,8 @@ not drawn" colour.
   it — so the budget bounds what the entries occupy, not the GPU memory the
   pages reserve.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
-  is decoded, true from the start for `Rgba` and SVG, never for a failed one.
+  is decoded or its first raster has landed, true from the start for `Rgba`,
+  never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
   fade inside the widget — so an application fades in with `opacity`:
 
@@ -235,9 +258,8 @@ container()
     .child(wallpaper)
 ```
 
-SVG rasterisation stays synchronous, on the render path, until somebody
-measures it as slow. `ImageSource::Rgba` needs no decode and is the way to have
-an image in the first frame.
+`ImageSource::Rgba` needs no decode and is the way to have an image in the
+first frame.
 
 `tests/image_decode.rs` holds the worker (`Headless::hold_image_decodes`) to
 make "not yet decoded" deterministic, and is a binary of its own because the

@@ -70,6 +70,11 @@ When the decode finishes the image is drawn on the next frame, with nothing from
 your application needed to prompt it. Two images showing the same source share
 one decode.
 
+An SVG is rasterized on the same background thread, at the size it is shown, and
+appears on a later frame the same way. When its box changes size it needs a new
+raster, and until that one is ready the previous one is drawn, stretched — so an
+icon in a resize animation never blinks out.
+
 The image does not fade itself in. It tells you when it is ready, as a signal,
 and a fade is then an `opacity` with a transition on the container around it:
 
@@ -91,8 +96,9 @@ container()
 
 `ready()` follows the source: when a reactive source changes, it is false until
 the new one is decoded. A source that failed to decode is never ready, and says
-why once in the log. SVGs and `ImageSource::Rgba` are ready from the start —
-`Rgba` is the way to have an image in the very first frame, if you decoded it
+why once in the log. An SVG is rasterized off the frame too, so it is not
+ready until its first raster lands. `ImageSource::Rgba` is ready from the start
+— it is the way to have an image in the very first frame, if you decoded it
 yourself.
 
 ## Sizing
@@ -377,5 +383,6 @@ fn main() {
   with other needs sets its own budget with `App::image_cache_budget`. The atlas pages the
   small images share are 4 MB each and are not counted: a page is given back once eviction
   has emptied it, so the GPU memory held can run a few pages past the budget
-- SVGs are re-rasterized when their display scale changes significantly
+- SVGs are re-rasterized off the frame when their display size or scale changes; until the new
+  raster lands the previous one is drawn, stretched to the new size
 - Texture uploads happen once per unique image/scale combination
