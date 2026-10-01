@@ -223,10 +223,10 @@ pub mod prelude {
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
         Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
-        Trigger, WriteSignal, create_derived, create_effect, create_memo, create_password,
-        create_service, create_signal, create_stored, create_task, create_trigger, expect_context,
-        has_context, on_cleanup, provide_context, provide_signal_context, use_context,
-        with_context,
+        TimerHandle, Trigger, WriteSignal, create_derived, create_effect, create_memo,
+        create_password, create_service, create_signal, create_stored, create_task, create_trigger,
+        expect_context, has_context, on_cleanup, provide_context, provide_signal_context,
+        set_interval, set_timeout, use_context, with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{
@@ -2058,12 +2058,16 @@ struct Pending {
 }
 
 /// The earliest moment the loop has to wake with nothing else to do: a
-/// scheduled job, or the device outliving the last surface.
+/// scheduled job, a timer, or the device outliving the last surface.
 fn wake_deadline(gpu: &GpuSlot) -> Option<std::time::Instant> {
-    [jobs::next_deadline(), gpu.release_at()]
-        .into_iter()
-        .flatten()
-        .min()
+    [
+        jobs::next_deadline(),
+        reactive::timer::next_deadline(),
+        gpu.release_at(),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 /// How long this iteration may sleep before it has to look again.
@@ -2581,6 +2585,11 @@ fn iterate<P: Platform>(
             wgpu_surface.format(),
         ));
     }
+
+    // Timers due by this pass's moment, on the pass's own clock, so a driver
+    // that names the moment names which fire. Before the surfaces draw, so
+    // what a callback writes is in this frame.
+    reactive::timer::run_due_timers(frame_at);
 
     // Pastes whose text has arrived, handed to whoever asked before the
     // surfaces draw, so a field shows what it was given in this frame.

@@ -18,6 +18,7 @@ pub mod service;
 pub mod signal;
 pub(crate) mod state;
 pub mod storage;
+pub mod timer;
 mod trigger;
 
 pub(crate) use clipboard::paste_into;
@@ -69,6 +70,7 @@ pub use callback::Callback;
 pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service, create_task};
 pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored};
+pub use timer::{TimerHandle, set_interval, set_timeout};
 
 /// Reset all reactive system state.
 ///
