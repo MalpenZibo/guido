@@ -276,10 +276,8 @@ pub fn write_if_blessed(path: &std::path::Path, blessing: Blessing, write: impl 
 /// The heap counter a benchmark run reports is the whole process's, because a
 /// frame's allocations are — wgpu's threads and the graphics driver's allocate
 /// inside a frame as surely as the frame loop does. So two tests playing
-/// scripts on two threads would each be charged the other's frames. The same
-/// holds for the background-write queue an image decode lands through, which
-/// a test on another thread would drain. The lock is per binary, which is what
-/// is wanted: a binary is a process.
+/// scripts on two threads would each be charged the other's frames. The lock
+/// is per binary, which is what is wanted: a binary is a process.
 ///
 /// Poison is stepped over rather than propagated. It means an earlier test
 /// panicked, which is already a failure; making every later test fail too

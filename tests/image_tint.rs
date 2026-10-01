@@ -1,23 +1,11 @@
 #![cfg(all(feature = "testing", feature = "svg"))]
 //! A tint colours a monochrome image on the GPU, from the texture it already
 //! has (#545).
-//!
-//! Its tests are taken one at a time, as `tests/image_decode.rs`'s are and for
-//! its reason: an SVG is rasterized on a worker, whose result lands through
-//! the background-write queue, which is process-wide.
 
 use guido::prelude::*;
-use guido::testing::Headless;
 
 mod common;
-use common::{headless, one_play_at_a_time as serial};
-
-/// The first frame, and the one that draws the rasters it asked for.
-fn first_frames(app: &mut Headless) {
-    app.step();
-    app.wait_for_image_decodes();
-    app.step();
-}
+use common::headless;
 
 const BACKDROP: Color = Color::rgb(0.0, 0.0, 1.0);
 
@@ -40,7 +28,6 @@ fn tinted(tint: Signal<Color>) -> Container {
 
 #[test]
 fn a_tinted_svg_is_drawn_in_its_tint() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let tint = create_signal(Color::rgb(1.0, 0.0, 0.0));
     let surface = app.surface(
@@ -48,7 +35,7 @@ fn a_tinted_svg_is_drawn_in_its_tint() {
         move || tinted(tint.into()),
     );
     app.configure(surface, 20, 20, 1.0);
-    first_frames(&mut app);
+    app.step();
 
     assert_eq!(app.read_pixel(surface, 10, 10), [255, 0, 0, 255]);
 }
@@ -70,7 +57,6 @@ fn untinted_circle() -> Container {
 /// from is the one the second draws from.
 #[test]
 fn a_new_tint_is_drawn_from_the_same_texture() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let tint = create_signal(Color::rgb(1.0, 0.0, 0.0));
     let surface = app.surface(
@@ -83,7 +69,7 @@ fn a_new_tint_is_drawn_from_the_same_texture() {
         },
     );
     app.configure(surface, 40, 20, 1.0);
-    first_frames(&mut app);
+    app.step();
     assert_eq!(app.image_textures(), 2, "one texture per source");
 
     tint.set(Color::rgb(0.0, 1.0, 0.0));

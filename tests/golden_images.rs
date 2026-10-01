@@ -196,18 +196,24 @@ fn render_pixels(
 
     renderer.set_screen_size(width as f32, height as f32);
     renderer.set_scale_factor(scale);
-    // An SVG asks the worker for its raster on the frame that first draws it,
-    // and is drawn on the next. The picture is the first frame that asked for
-    // nothing.
-    let mut started = guido::testing::finish_image_decodes();
-    loop {
-        renderer.render_to_view(&view, width, height, &commands, &layers, clear);
-        let now = guido::testing::finish_image_decodes();
-        if now == started {
-            break;
+    // A large SVG asks the worker for its raster on the frame that first draws
+    // it, and is drawn on the next. The picture is the first frame that asked
+    // for nothing. Waiting for the worker is `testing`'s, so without it a
+    // scenario of a large SVG does not exist — see the two that say so.
+    #[cfg(feature = "testing")]
+    {
+        let mut started = guido::testing::finish_image_decodes();
+        loop {
+            renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+            let now = guido::testing::finish_image_decodes();
+            if now == started {
+                break;
+            }
+            started = now;
         }
-        started = now;
     }
+    #[cfg(not(feature = "testing"))]
+    renderer.render_to_view(&view, width, height, &commands, &layers, clear);
 
     // Readback. Rows in a mapped buffer are padded to 256 bytes; the copy is
     // made against the padded stride and unpadded on the way out.
@@ -1035,7 +1041,9 @@ fn tinted_svg() {
     golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
 }
 
-#[cfg(feature = "svg")]
+/// An 80 × 240 raster, past the line an SVG is drawn inside the frame below:
+/// it is the worker's, and waiting for the worker needs `testing`.
+#[cfg(all(feature = "svg", feature = "testing"))]
 #[test]
 fn fractional_svg_keeps_its_vector_aspect() {
     let source = ImageSource::SvgBytes(
@@ -1088,7 +1096,8 @@ fn fractional_svg_fills_its_raster_when_stretched() {
     assert_eq!(render("1.5", "0.6"), expected);
 }
 
-#[cfg(feature = "svg")]
+/// A 514 × 514 raster: the worker's, as the one above is.
+#[cfg(all(feature = "svg", feature = "testing"))]
 #[test]
 fn fractional_svg_fills_a_standalone_texture() {
     let Some((ctx, _)) = rasterizer("fractional_svg_fills_a_standalone_texture") else {

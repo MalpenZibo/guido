@@ -2538,6 +2538,9 @@ fn iterate<P: Platform>(
 
     // What the renderer said about image textures last pass, and which images
     // let go of their decodes — settled here, where a signal may be written.
+    // Before the background writes are flushed below: a raster the worker
+    // delivered since is newer than the renderer's report that it had none,
+    // and its write has to land last.
     image_decode::settle_image_events();
 
     // Process dynamic surface commands

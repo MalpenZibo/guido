@@ -343,8 +343,9 @@ impl ImageQuadRenderer {
     /// (ContentFit::None) keeps the intrinsic size, which is what that fit
     /// mode displays.
     ///
-    /// An SVG with no raster of that size yet is asked of the worker, and is
-    /// drawn from the raster it was last drawn from until the new one lands.
+    /// An SVG with no raster of that size yet draws one now if it is small;
+    /// a larger one is asked of the worker, and is drawn from the raster it
+    /// was last drawn from until the new one lands.
     fn get_or_create_texture(
         &mut self,
         device: &Device,
@@ -375,11 +376,18 @@ impl ImageQuadRenderer {
                 texture
             }
             None => {
-                let last = CacheKey {
-                    extent: *self.last_svg_raster.get(&key.source_hash)?,
-                    ..key
-                };
-                self.texture_cache.get(&last)?.clone()
+                let last = self
+                    .last_svg_raster
+                    .get(&key.source_hash)
+                    .and_then(|&extent| self.texture_cache.get(&CacheKey { extent, ..key }));
+                match (last, decoded) {
+                    (Some(last), _) => last.clone(),
+                    (None, Some(decoded)) if extent.is_some() => {
+                        decoded.drew_nothing();
+                        return None;
+                    }
+                    (None, _) => return None,
+                }
             }
         };
         texture.last_used.set(self.frame_started);
@@ -394,8 +402,9 @@ impl ImageQuadRenderer {
     /// what drops them from the cache. A raster source whose pixels were
     /// already taken has none left: this draws nothing and reports the texture
     /// missing, which sends the source back to the worker. An SVG with none
-    /// of this size asks the worker for them. Decoding or rasterizing here
-    /// instead is the stall that module exists to remove.
+    /// of this size rasterizes them here if they are few, and asks the worker
+    /// for them if not. Decoding a raster image or rasterizing a large SVG
+    /// here instead is the stall that module exists to remove.
     fn load_texture(
         &mut self,
         device: &Device,

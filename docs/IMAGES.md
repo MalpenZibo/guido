@@ -152,12 +152,11 @@ animation asks for a raster per step rather than per frame.
 ## Decoding Off the Frame
 
 A raster `ImageSource::Path` or `ImageSource::Bytes` is decoded on a worker
-thread, and an SVG rasterized there, never on the render path
+thread, and a large SVG rasterized there, never on the render path
 (`src/image_decode.rs`). A 2912×1632 PNG takes about 140 ms to decode; done
 inside the first frame, that frame is held back until it finishes, which a lock
-screen shows as the compositor's "locker has not drawn" colour. A panel that
-appears with a dozen SVG icons paid all of them in its first frame the same way
-until #547.
+screen shows as the compositor's "locker has not drawn" colour. An SVG
+rasterized at 1024 px costs 4–8 ms the same way.
 
 - **One entry per source, one signal per entry.** The application's decode
   cache (`AppState::decoded_images`) is keyed by the source — a path, or the
@@ -171,25 +170,40 @@ until #547.
   cannot be read makes the entry `Failed` at once, and no worker is involved.
   An SVG has no header: its entry parses the document once
   (`image_metadata::parse_svg`) for the size, and keeps it, so every raster
-  the worker draws of it is drawn from that one parse.
-- **An SVG's rasters are asked for by the renderer.** What an SVG becomes
+  of it is drawn from that one parse.
+- **An SVG is rasterized where the renderer decides.** What an SVG becomes
   depends on the size it is drawn at, which only the renderer knows — it
   carries the transform, the HiDPI factor and the box. So an SVG's
-  `DecodedImage` holds a slot per pixel size, and a frame that needs a size
-  with no texture and no pixels sends the worker a job for it
-  (`DecodedImage::rasterize`) — a job on a channel, not a signal write, so it
-  is on its way before the frame is out. Until it lands the frame draws the
-  raster that source was last drawn from, stretched to the new box: an icon in
-  a resize animation does not blink out on every step. The first raster has
-  nothing before it, so an SVG's first frame draws nothing, as a raster
-  source's does. The paint pushes an SVG's command while it is still `Pending`
+  `DecodedImage` holds a slot per pixel size, and a frame that needs a size it
+  has no texture of calls `DecodedImage::take_or_rasterize`. Up to
+  `INLINE_RASTER_BYTES` of pixels — 128 × 128, a 64 px icon at the 2× quality
+  multiplier — the raster is drawn there, inside the frame. That is what
+  Chromium (below 1 MB, on its raster threads), iced, Qt's QIcon and
+  Android's VectorDrawable do with small vectors: a 6 KB icon costs
+  140–220 µs at 56 px, less than drawing it a frame late and repainting it
+  when it lands. The line is lower than Chromium's because this renderer runs
+  on the loop's thread, where a 1 MB raster costs 1.1–2.7 ms.
+- **A larger raster is asked of the worker.** The frame sends it a job — a
+  job on a channel, not a signal write, so it is on its way before the frame
+  is out. Until it lands the frame draws the raster that source was last drawn
+  from, stretched to the new box: a large SVG in a resize animation does not
+  blink out on every step. Elsewhere that is an opt-in (Flutter's
+  gaplessPlayback, Qt Quick's retainWhileLoading); here #547 decided it.
+  The first raster has nothing before it, so it draws nothing, as a raster
+  source does. The paint pushes an SVG's command while it is still `Pending`
   for that reason — the push is what carries the size to the renderer — where a
   raster source is pushed only once it is `Ready` (`image_decode::paints`).
+- **An SVG's readiness is the renderer's report.** Only the renderer knows
+  whether a frame drew it, and it may not write a signal, so it reports: a
+  raster drawn, or nothing drawn while one is on the worker. The loop settles
+  those into `Ready` and `Pending`. An entry starts `Ready` when its raster at
+  its intrinsic size would be drawn inline, `Pending` when not — a guess, which
+  the first report corrects.
 - **The worker.** One `guido-image-decode` thread per application, spawned by
   the first decode and ended when the application is dropped (its channel
   closes). It puts the pixels in the entry's `DecodedImage` and writes `Ready`
-  through the entry's `WriteSignal` — always, so an SVG already ready is told
-  of each new size that lands — so the
+  through the entry's `WriteSignal` — always, so a large SVG already ready is
+  told of each new size that lands — so the
   write rides the background-write queue: it wakes the loop through the ingress
   channel and is applied at the flush point like any other background write.
   A std thread rather than the service runtime, because that runtime is one
@@ -245,8 +259,8 @@ until #547.
   it — so the budget bounds what the entries occupy, not the GPU memory the
   pages reserve.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
-  is decoded or its first raster has landed, true from the start for `Rgba`,
-  never for a failed one.
+  is decoded or a raster of it drawn — from the start for `Rgba` and for an
+  SVG small enough to draw inline — and never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
   fade inside the widget — so an application fades in with `opacity`:
 

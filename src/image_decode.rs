@@ -28,12 +28,15 @@
 //! header, read synchronously when the entry is made, which costs a few bytes
 //! rather than the whole image.
 //!
-//! An SVG goes the same way, with one difference: what it becomes depends on
-//! the size it is drawn at, which only the renderer knows. So its entry holds
-//! the parsed document — parsed once, when the entry is made, for its size —
-//! and one slot per pixel size, and the renderer asks the worker for a size it
-//! has no raster of. Until that raster lands the renderer draws the last one
-//! it had, stretched, so an icon in a resize animation does not blink out on
+//! An SVG is parsed once, when its entry is made, for its size, and the entry
+//! keeps the document. What it becomes depends on the size it is drawn at,
+//! which only the renderer knows, so the entry holds one slot per pixel size
+//! and the renderer decides per size. A small raster — an icon — is drawn
+//! inside the frame from the parsed document, as Chromium, iced, Qt and
+//! Android all rasterize small vectors: up to [`INLINE_RASTER_BYTES`] it costs
+//! less than handing it off and drawing it a frame late. A larger one is asked
+//! of the worker, and until it lands the renderer draws the last raster it
+//! had, stretched, so a large SVG in a resize animation does not blink out on
 //! every step; the first one draws nothing, as a raster source does.
 
 use std::hash::{Hash, Hasher};
@@ -70,6 +73,19 @@ struct Shared {
 /// Which raster of a source: `None` for a raster image, which has one, at its
 /// own size; an SVG's pixel size for one of its.
 pub(crate) type Extent = Option<(u32, u32)>;
+
+/// The largest SVG raster drawn inside the frame, in bytes of RGBA: 128 × 128
+/// pixels, a 64 px icon at the renderer's 2× quality. Measured with resvg in
+/// release on the assets in `assets/`: a 6 KB icon costs 140–220 µs at 56 px
+/// and 350–510 µs at this size, and 1.1–2.7 ms at 1 MB, which is Chromium's
+/// line — but Chromium rasterizes on raster threads, and this renderer runs
+/// on the loop's.
+pub(crate) const INLINE_RASTER_BYTES: usize = 128 * 128 * 4;
+
+/// Whether an SVG raster `width` by `height` is drawn inside the frame.
+fn inline((width, height): (u32, u32)) -> bool {
+    (width as usize) * (height as usize) * 4 <= INLINE_RASTER_BYTES
+}
 
 #[derive(Default)]
 struct Slots {
@@ -140,14 +156,28 @@ impl DecodedImage {
     }
 
     /// An SVG's raster of `extent`, for the renderer to upload as `take`'s
-    /// are — or, when there is none, asked of the worker unless it has been
-    /// asked already. The renderer's to call, on a frame that needed a size it
-    /// has no texture of: what it sends is a job, not a signal write, so the
-    /// raster is on its way before the frame is out.
+    /// are. The renderer's to call, on a frame that needed a size it has no
+    /// texture of. A small one is drawn here and now; a larger one is taken if
+    /// the worker has delivered it, and asked of the worker if it has not been
+    /// asked already — a job, not a signal write, so it is on its way before
+    /// the frame is out.
     pub(crate) fn take_or_rasterize(&self, extent: Extent) -> Option<Pixels> {
+        let size = extent?;
+        if inline(size) {
+            let Some(pixels) = rasterize(self.0.svg.as_ref()?, size) else {
+                log::warn!("Failed to rasterize {} at {size:?}", describe(self.key()));
+                self.report(ImageEvent::Failed);
+                return None;
+            };
+            self.slots().by_extent.insert(extent, Slot::Uploaded);
+            self.report(ImageEvent::Drawn);
+            return Some(pixels);
+        }
         {
             let mut slots = self.slots();
             if let Some(pixels) = slots.take(extent) {
+                drop(slots);
+                self.report(ImageEvent::Drawn);
                 return Some(pixels);
             }
             if matches!(slots.by_extent.get(&extent), Some(Slot::Pending(_))) {
@@ -156,12 +186,20 @@ impl DecodedImage {
             slots.ask(extent);
         }
         if !send_job(self, extent) {
-            with_app_state(|app| {
-                app.image_events
-                    .push(ImageEvent::Failed(self.key().clone()))
-            });
+            self.report(ImageEvent::Failed);
         }
         None
+    }
+
+    /// The renderer drew nothing of this SVG: its raster is on the worker
+    /// and there was no earlier one to stretch.
+    pub(crate) fn drew_nothing(&self) {
+        self.report(ImageEvent::Waiting);
+    }
+
+    fn report(&self, event: fn(DecodeKey) -> ImageEvent) {
+        let event = event(self.key().clone());
+        with_app_state(|app| app.image_events.push(event));
     }
 
     /// The source these are the pixels of.
@@ -356,7 +394,22 @@ fn entry(key: DecodeKey, source: &ImageSource, users: u32) -> DecodeEntry {
     } else {
         (None, crate::image_metadata::get_intrinsic_size(source))
     };
-    let initial = if size.is_some() {
+    // An SVG small enough to draw inside the frame is ready at once. Its size
+    // here is a guess — the renderer knows the box and the scale and says
+    // otherwise when it draws — taken at the quality the renderer rasterizes
+    // at, so a large SVG is not ready on a frame that draws it blank.
+    let quality = crate::renderer::constants::SVG_QUALITY_MULTIPLIER;
+    let initial = if let (Some(_), Some((width, height))) = (&svg, size) {
+        let guess = (
+            (width * quality).ceil() as u32,
+            (height * quality).ceil() as u32,
+        );
+        if inline(guess) {
+            DecodeState::Ready
+        } else {
+            DecodeState::Pending
+        }
+    } else if size.is_some() {
         DecodeState::Pending
     } else {
         log::warn!("Failed to read the image header of {}", describe(&key));
@@ -412,7 +465,8 @@ pub(crate) fn state(source: &ImageSource) -> Option<(DecodeState, DecodedImage)>
 
 /// Whether a paint pushes an image whose decode is in `state`. A raster image
 /// is pushed once it is decoded. An SVG is pushed while it is pending too:
-/// the renderer is what asks for its raster, at the size the push says.
+/// the renderer is what draws or asks for its raster, at the size the push
+/// says.
 pub(crate) fn paints(state: DecodeState, pixels: &DecodedImage) -> bool {
     match state {
         DecodeState::Ready => true,
@@ -503,6 +557,10 @@ pub(crate) enum ImageEvent {
     Released(DecodeKey),
     /// The renderer asked for an SVG's raster and there was no worker to ask.
     Failed(DecodeKey),
+    /// The renderer drew a raster of the SVG.
+    Drawn(DecodeKey),
+    /// The renderer drew nothing of the SVG: its raster is on the worker.
+    Waiting(DecodeKey),
 }
 
 /// The renderer drew `source`, found no texture and no pixels.
@@ -527,13 +585,19 @@ pub(crate) fn texture_evicted(key: DecodeKey, extent: Extent) {
 ///   **released**. An uploaded one stays while a texture does, so an image
 ///   mounted again is drawn from it without a decode.
 /// - A raster that could not be asked for **failed** its entry.
+/// - An SVG the renderer **drew** is ready; one it drew nothing of while its
+///   raster is on the worker is **waiting**, and not ready. Settled in the
+///   order they were reported, so a frame that drew a raster which landed
+///   after the previous frame drew nothing ends ready.
 pub(crate) fn settle_image_events() {
     for event in with_app_state(|app| app.image_events.drain()) {
         let key = match &event {
             ImageEvent::Missing(key)
             | ImageEvent::Evicted(key, _)
             | ImageEvent::Released(key)
-            | ImageEvent::Failed(key) => key,
+            | ImageEvent::Failed(key)
+            | ImageEvent::Drawn(key)
+            | ImageEvent::Waiting(key) => key,
         };
         let Some(entry) = with_app_state(|app| app.decoded_images.borrow().get(key).cloned())
         else {
@@ -563,6 +627,12 @@ pub(crate) fn settle_image_events() {
             }
             ImageEvent::Released(key) => remove_if_unheld(&key, entry),
             ImageEvent::Failed(_) => entry.state.set(DecodeState::Failed),
+            ImageEvent::Drawn(_) => entry.state.set(DecodeState::Ready),
+            ImageEvent::Waiting(_) => {
+                if entry.state.get_untracked() == DecodeState::Ready {
+                    entry.state.set(DecodeState::Pending);
+                }
+            }
         }
     }
 }
