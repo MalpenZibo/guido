@@ -225,8 +225,8 @@ pub mod prelude {
         Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
         TimerHandle, Trigger, WriteSignal, create_derived, create_effect, create_memo,
         create_password, create_service, create_signal, create_stored, create_task, create_trigger,
-        expect_context, has_context, on_cleanup, provide_context, provide_signal_context,
-        set_interval, set_timeout, use_context, with_context,
+        current_owner, expect_context, has_context, on_cleanup, provide_context,
+        provide_signal_context, set_interval, set_timeout, use_context, with_context,
     };
     pub use crate::renderer::{Shadow, measure_text};
     pub use crate::session_lock::{

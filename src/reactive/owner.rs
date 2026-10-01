@@ -63,6 +63,29 @@ pub struct OwnerId {
     generation: NonZeroU32,
 }
 
+impl OwnerId {
+    /// Run `f` with this scope current, so what it creates belongs here.
+    ///
+    /// For an effect body that makes something meant to outlive the run:
+    /// everything else a run creates is disposed when the effect runs again.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let trigger = create_signal(0);
+    /// let outer = current_owner().expect("created inside a scope");
+    /// create_effect(move || {
+    ///     trigger.get();
+    ///     let kept = outer.run(|| create_signal(0)); // lives as long as `outer`
+    /// });
+    /// ```
+    ///
+    /// It enters a scope that exists; [`with_owner`] is what makes one. Under a
+    /// scope that has been disposed, what `f` creates is owned by nothing.
+    pub fn run<T>(self, f: impl FnOnce() -> T) -> T {
+        under_owner(self, f)
+    }
+}
+
 /// An owner that manages the lifecycle of reactive primitives.
 struct Owner {
     /// The owner this one was created under, if any. Used to prune this
@@ -96,6 +119,16 @@ impl Owner {
             children: Vec::new(),
             contexts: None,
         }
+    }
+
+    /// Whether the scope holds nothing — what most effect runs leave behind,
+    /// which then costs no more than this check.
+    fn is_empty(&self) -> bool {
+        self.signals.is_empty()
+            && self.effects.is_empty()
+            && self.cleanups.is_empty()
+            && self.children.is_empty()
+            && self.contexts.is_none()
     }
 }
 
@@ -301,8 +334,16 @@ pub(crate) fn under_scope<T>(scope: Option<OwnerId>, f: impl FnOnce() -> T) -> T
 /// **Note:** This function is not part of the public API and may change.
 /// Use `on_cleanup` for registering cleanup callbacks in user code.
 pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
-    // Allocate new owner and register as child of current owner (if any)
-    let owner_id = with_reactive(|reactive| {
+    let owner_id = child_scope();
+    (under_owner(owner_id, f), owner_id)
+}
+
+/// Make a scope under the current one, if any, without entering it.
+///
+/// [`with_owner`] makes one and enters it at once; an effect makes one when it
+/// is created and enters it on each run.
+pub(crate) fn child_scope() -> OwnerId {
+    with_reactive(|reactive| {
         let parent_id = reactive.current_owner.get();
         let mut owners = reactive.owners.borrow_mut();
         let id = owners.allocate(parent_id);
@@ -315,9 +356,7 @@ pub fn with_owner<T>(f: impl FnOnce() -> T) -> (T, OwnerId) {
         }
 
         id
-    });
-
-    (under_owner(owner_id, f), owner_id)
+    })
 }
 
 /// Hand the current scope's declarations to `f`, or `None` if no scope is
@@ -426,16 +465,37 @@ pub fn dispose_owner_now(id: OwnerId) {
         Some(owner)
     });
 
-    let Some(owner) = owner else {
-        return; // Already disposed
-    };
+    if let Some(owner) = owner {
+        release(owner);
+    }
+}
 
-    // Dispose children first (depth-first)
+/// Dispose what `id` holds and keep the scope itself, empty, for whatever is
+/// made in it next.
+///
+/// What an effect does before each run: what the last run made goes, in the
+/// order [`dispose_owner_now`] disposes it, and the next run fills the same
+/// scope again.
+pub(crate) fn empty_owner(id: OwnerId) {
+    let held = with_reactive(|reactive| {
+        let mut arena = reactive.owners.borrow_mut();
+        let owner = arena.get_mut(id).filter(|owner| !owner.is_empty())?;
+        let parent = owner.parent;
+        Some(std::mem::replace(owner, Owner::new(parent)))
+    });
+    if let Some(held) = held {
+        release(held);
+    }
+}
+
+/// Dispose everything `owner` holds, taken out of the arena first (its
+/// `parent` is not read): its children depth-first, then its cleanups
+/// last-first, then its effects, then its signals.
+fn release(owner: Owner) {
     for child_id in owner.children {
         dispose_owner_now(child_id);
     }
 
-    // Run cleanup callbacks in reverse order (LIFO)
     for cleanup in owner.cleanups.into_iter().rev() {
         // Teardown code reads for the current value; the scope is going away
         crate::reactive::diagnostics::snapshot_zone(cleanup);
@@ -538,13 +598,15 @@ pub(crate) fn register_effect(id: EffectId) {
 
 /// Check if an effect is owned by any owner.
 ///
-/// The effect's slot in the runtime is where the answer lives, since #337 put
-/// the scope there so a re-run could be given it without a lookup. A map here
-/// beside it would be a second copy of one fact, maintained on the creation and
-/// disposal paths to answer a question only these tests ask.
+/// The effect's slot in the runtime holds its own scope, which is a child of
+/// the one that owns the effect. A map here beside it would be a second copy of
+/// one fact, maintained on the creation and disposal paths to answer a question
+/// only these tests ask.
 #[cfg(test)]
 pub(crate) fn effect_has_owner(id: EffectId) -> bool {
-    crate::reactive::runtime::with_runtime(|rt| rt.effect_scope(id)).is_some()
+    crate::reactive::runtime::with_runtime(|rt| rt.effect_scope(id)).is_some_and(|scope| {
+        with_reactive(|reactive| reactive.owners.borrow().get(scope)?.parent).is_some()
+    })
 }
 
 /// Dispose an owner: all its signals, effects, and cleanup callbacks.

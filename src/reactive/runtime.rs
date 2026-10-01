@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use smallvec::SmallVec;
 
 use super::invalidation::suspend_widget_tracking;
-use super::owner::{OwnerId, current_owner, under_scope};
+use super::owner::{OwnerId, empty_owner, under_owner};
 use super::state::with_reactive;
 
 /// Buffered signal reads for an effect. Most effects read 1–4 signals,
@@ -245,19 +245,17 @@ enum EffectState {
 
 /// An effect's callback, taken out of its slot to be run, and the scope to run
 /// it in.
-type EffectRun = (Box<dyn FnMut()>, Option<OwnerId>);
+type EffectRun = (Box<dyn FnMut()>, OwnerId);
 
 /// Storage slot for one effect. The generation survives disposal so recycled
 /// indices can be told apart from their previous occupants.
-#[derive(Default)]
 struct EffectSlot {
     callback: Option<Box<dyn FnMut()>>,
-    /// The scope the effect was created in, which is where its body runs —
-    /// every run, not just the first (#337).
-    ///
-    /// Held here rather than looked up in the owner arena's `effect_owners`
-    /// map: a re-run would pay a hash for it, and the slot is already in hand.
-    scope: Option<OwnerId>,
+    /// The effect's own scope, a child of the one it was created in. Every run
+    /// happens under it, so a context read in the body answers the same on each
+    /// (#337), and it is emptied before each run, so what a run made lasts
+    /// until the next.
+    scope: OwnerId,
     /// Signals this effect reads. Vec with dedup — most effects depend on
     /// 1–3 signals, making linear scan faster than HashSet.
     dependencies: Vec<SignalId>,
@@ -319,10 +317,7 @@ impl Runtime {
         }
     }
 
-    pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>) -> EffectId {
-        // Reading the current scope borrows nothing this call holds: it is a
-        // `Cell` beside the arena, not the arena.
-        let scope = current_owner();
+    pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>, scope: OwnerId) -> EffectId {
         let paused = super::owner::current_owner_is_paused();
         // Reuse a freed slot if available, bumping its generation so stale
         // ids for the previous occupant can never act on this effect
@@ -476,7 +471,7 @@ impl Runtime {
         if slot.generation != effect_id.generation || slot.state == EffectState::Vacant {
             return None;
         }
-        slot.scope
+        Some(slot.scope)
     }
 
     pub fn dispose_effect(&mut self, effect_id: EffectId) {
@@ -540,12 +535,11 @@ pub(crate) fn run_effect_by_id(effect_id: EffectId) {
             .borrow_mut()
             .push((effect_id, EffectReads::new()));
     });
-    // Under the scope the effect was created in, not the one the flush happens
-    // to be under: a context read in the body answers the same on the first run
-    // and on every one a dependency schedules (#337), and a signal the body
-    // makes belongs where the effect does rather than outliving it.
+    // What the last run made goes first, then the body runs under the
+    // effect's own scope rather than the one the flush happens to be under.
     let panic_payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        under_scope(scope, || suspend_widget_tracking(&mut *callback));
+        empty_owner(scope);
+        under_owner(scope, || suspend_widget_tracking(&mut *callback));
     }))
     .err();
     let reads = with_reactive(|reactive| reactive.effect_tracking.borrow_mut().pop())

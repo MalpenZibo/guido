@@ -183,6 +183,25 @@ create_effect(move || {
 name.set("Guido".to_string()); // Effect re-runs, prints: Hello, Guido!
 ```
 
+**Each run owns what it makes.** An effect has a scope of its own, a child of
+the one it was created in, made once with the effect. Every run happens under
+it, and before each re-run it is emptied in the order an owner is disposed:
+child scopes, then `on_cleanup`s last-first, then effects, then signals. So a
+signal, nested effect, timer, task, `on_cleanup` or context declared by one run
+is gone when the next starts, and the last run's go with the effect. A memo and `watch()` are
+effects, so what a memo's closure makes is disposed when it recomputes. This is
+Solid's and Leptos's rule.
+
+Something a run makes to keep — a signal handed to code outside the effect — is
+made under a scope captured outside it:
+
+```rust
+let outer = current_owner().expect("created inside a scope");
+create_effect(move || {
+    let kept = outer.run(|| create_signal(0)); // lives as long as `outer`
+});
+```
+
 ### State the whole application shares
 
 A signal belongs to the scope that was current when it was created, and that
@@ -288,7 +307,7 @@ A property keeps what it was given, as a `Prop<T>`: `Prop::Const` for a static v
 `set_timeout(delay, FnOnce)` and `set_interval(period, FnMut)` (`src/reactive/timer.rs`) run a closure on the UI thread, inside the loop's pass, at the point where deferred work may write signals — so the callback reads signals as well as writing them, which a `create_task` future, being `Send`, cannot. Its reads are untracked: a timer is an event, not an effect. Both return a `Copy` `TimerHandle` with `cancel()` and `is_pending()`; dropping the handle does nothing.
 
 - **Clock.** A timer is created unarmed and asks the loop for a pass; the first pass that sees it arms it at the pass's moment (`frame_at`) plus its delay, and each pass runs the timers due by its own moment, earliest first. So deadlines are on the pass's clock, and `Headless::step_at` decides which timers fire — `tests/timers.rs` never sleeps. The loop sleeps until the earliest armed timer through `wake_deadline`.
-- **Ownership.** A timer is cancelled when the owner it was created under is disposed (`on_cleanup`), and its callback runs under that owner. An effect is not a scope of its own — it re-runs under the one it was created in — so an effect that schedules a timer per run cancels the previous one through its handle. That is how a debounce is written.
+- **Ownership.** A timer is cancelled when the owner it was created under is disposed (`on_cleanup`), and its callback runs under that owner. Each run of an effect owns what it makes, so an effect that schedules a timer per run cancels the previous one by running again. That is how a debounce is written.
 - **Intervals.** Each deadline is the previous plus the period, so the beat does not drift; a pass that arrives several periods late runs it once and moves it to the next beat after the pass. A period under 1 ms is taken as 1 ms.
 
 ## Background Task Updates
@@ -701,6 +720,8 @@ container().children(move || {
 ### Nested Owners
 
 Owner scopes are automatically nested. When a parent owner is disposed, children are disposed first (depth-first). This happens automatically when removing nested dynamic children.
+
+Each effect has one too, a child of the scope it was created in, emptied before every re-run (see [Effects](#effects)). `OwnerId::run` enters a scope that already exists — `current_owner()` names the current one — so a run can make something that outlives it.
 
 ### Paused Owners
 

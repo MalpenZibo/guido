@@ -49,11 +49,12 @@ pub use prop::Prop;
 pub use crate::jobs::JobType;
 pub use invalidation::with_signal_tracking;
 pub use memo::{Memo, create_memo};
-// with_owner and OwnerId are internal and automatically used by the
-// dynamic children system; the public dispose_owner is deferred (safe to
-// call from anywhere), the synchronous engine stays crate-internal.
-pub(crate) use owner::{OwnerId, create_root_owner, dispose_owner_now, under_owner, with_owner};
-pub use owner::{dispose_owner, on_cleanup};
+// with_owner is internal and automatically used by the dynamic children
+// system; the public dispose_owner is deferred (safe to call from anywhere),
+// the synchronous engine stays crate-internal. `OwnerId` and `current_owner`
+// are public for `OwnerId::run`, which is how an effect keeps what it makes.
+pub use owner::{OwnerId, current_owner, dispose_owner, on_cleanup};
+pub(crate) use owner::{create_root_owner, dispose_owner_now, under_owner, with_owner};
 pub use password::{Password, create_password};
 pub use trigger::{Trigger, create_trigger};
 
@@ -135,53 +136,31 @@ mod bench {
         (0..5).map(|_| round()).min().expect("five rounds")
     }
 
-    /// What an effect's re-run costs now that it enters the scope it was
-    /// created in: a signal written a million times, with one effect reading
-    /// it, which is a million scheduled re-runs.
-    ///
-    /// Twice, because `under_scope` declines to enter a scope already current:
-    /// an effect created where the flush runs pays a compare, and one created
-    /// in a scope of its own — a row of a list, which is the case this exists
-    /// for — pays the swap.
+    /// What an effect's re-run costs: a signal written a million times, with
+    /// one effect reading it, which is a million scheduled re-runs. Each one
+    /// empties the effect's own scope — nothing in it, here, which is the
+    /// common case — and enters it.
     ///
     /// `cargo test --release --lib bench:: -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn an_effect_rerun() {
         let rounds = 1_000_000u32;
-        let time_a_million_reruns = |in_a_scope_of_its_own: bool| -> Duration {
-            owner::create_root_owner();
-            let source = create_signal(0u32);
-            let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
-            let recorder = std::rc::Rc::clone(&seen);
+        owner::create_root_owner();
+        let source = create_signal(0u32);
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let recorder = std::rc::Rc::clone(&seen);
+        create_effect(move || recorder.set(source.get()));
 
-            let effect = move || {
-                let recorder = std::rc::Rc::clone(&recorder);
-                create_effect(move || recorder.set(source.get()));
-            };
-            if in_a_scope_of_its_own {
-                owner::with_owner(effect);
-            } else {
-                effect();
+        let best = best_of_five(|| {
+            let started = Instant::now();
+            for round in 0..rounds {
+                source.set(round);
             }
-
-            let best = best_of_five(|| {
-                let started = Instant::now();
-                for round in 0..rounds {
-                    source.set(round);
-                }
-                started.elapsed()
-            });
-            assert_eq!(seen.get(), rounds - 1, "the effect ran");
-            best
-        };
-
-        let where_the_flush_is = time_a_million_reruns(false);
-        let in_a_scope_of_its_own = time_a_million_reruns(true);
-        println!(
-            "{rounds} effect re-runs: {where_the_flush_is:?} for an effect of the \
-             flush's own scope, {in_a_scope_of_its_own:?} for one in a scope below it"
-        );
+            started.elapsed()
+        });
+        assert_eq!(seen.get(), rounds - 1, "the effect ran");
+        println!("{rounds} effect re-runs: {best:?}");
     }
 
     /// A frame of a list, which is where the per-read number lands: three
