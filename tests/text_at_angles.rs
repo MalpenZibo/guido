@@ -149,7 +149,9 @@ fn glyph_pixels_of(
         .expect("the GPU never finished the readback");
     rx.recv().expect("map callback").expect("map");
 
-    let mapped = slice.get_mapped_range();
+    let mapped = slice
+        .get_mapped_range()
+        .expect("the readback buffer was just mapped whole");
     let mut white = 0usize;
     for row in 0..HEIGHT {
         let start = (row * padded) as usize;

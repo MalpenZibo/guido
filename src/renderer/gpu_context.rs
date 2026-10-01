@@ -9,6 +9,11 @@ use wgpu::{Device, Instance, Queue, Surface, SurfaceConfiguration};
 pub(crate) const GPU_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Where the loop's device comes from.
+///
+/// The device is held inline although it makes `Lazy` hundreds of bytes
+/// larger than the other variants: there is one slot per application, so
+/// boxing it would save nothing.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum GpuSlot {
     /// Made when a surface needs it, dropped [`GPU_GRACE`] after the last.
     Lazy {
@@ -117,6 +122,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: None,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })) {
                 Ok(adapter) => adapter,
                 Err(e) => {
@@ -172,6 +178,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::LowPower,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             }))
             .unwrap(),
         );
@@ -201,6 +208,7 @@ impl GpuContext {
         let config = SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -321,7 +329,10 @@ impl OffscreenTarget {
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("readback never completed");
-        let data = buffer.slice(..).get_mapped_range();
+        let data = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("the readback buffer was just mapped whole");
         let at = (y * bytes_per_row + x * 4) as usize;
         [data[at], data[at + 1], data[at + 2], data[at + 3]]
     }

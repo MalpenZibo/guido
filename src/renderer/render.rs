@@ -214,7 +214,7 @@ impl Renderer {
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_main"),
-                buffers: &[QuadVertex::desc()],
+                buffers: &[Some(QuadVertex::desc())],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -389,7 +389,7 @@ impl Renderer {
             clear_color,
         );
 
-        output.present();
+        self.queue.present(output);
         true
     }
 
