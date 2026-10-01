@@ -1516,3 +1516,27 @@ fn a_variable_face_is_shaped_at_the_weight_asked_of_it() {
         .collect();
     assert_eq!(weights, [700; 4], "the axis was set to {weights:?}");
 }
+
+/// The line height of a weight is read from the face that draws that weight,
+/// not from the family's regular one. The Bold fixture declares a line gap
+/// the Regular does not (410 units of 2048), so the two lines differ.
+#[cfg(test)]
+#[test]
+fn a_weight_s_line_height_is_its_own_face_s() {
+    const REGULAR: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const BOLD: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono-Bold-digits.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    for font in [REGULAR, BOLD] {
+        db.load_font_data(font.to_vec());
+    }
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let ratio = |font_system: &mut FontSystem, weight| {
+        resolve_font(font_system, FontFamily::SansSerif, weight).line_ratio
+    };
+    assert!((ratio(&mut font_system, FontWeight::NORMAL) - 1.1640625).abs() < 1e-4);
+    let bold = ratio(&mut font_system, FontWeight::BOLD);
+    assert!(
+        (bold - 1.3642578).abs() < 1e-4,
+        "{bold} is the regular face's line, not the bold one's 1.364"
+    );
+}
