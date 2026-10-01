@@ -282,13 +282,26 @@ background-write queue is process-wide.
 ## Tint
 
 `Image::tint` draws every texel in one colour and keeps its alpha:
-`rgb = tint.rgb`, `a = sampled.a * tint.a * opacity`. It travels on the
+`rgb = tint.rgb`, `a = sampled.a * tint.a * opacity` — written to the
+framebuffer premultiplied, as everything the textured-quad pipeline draws is
+(see Alpha below). It travels on the
 textured-quad vertex (`TexturedVertex::tint`, `[r, g, b, amount]`) beside the
 opacity and for the same reason — a new colour is not a new texture — so it is
 neither in the texture cache's key nor a cause of a new raster. Paint reads it,
 so a new tint repaints and lays nothing out. Transformed text shares the
 pipeline and passes `NO_TINT`, an amount of zero, which leaves the texel as it
 was.
+
+## Alpha
+
+The textured-quad pipeline — images and transformed text — composites
+premultiplied alpha (`One / OneMinusSrcAlpha`), as Skia stores its textures, so
+every texture it samples holds colour already scaled by coverage. glyphon fills a
+text quad's texture that way and tiny-skia an SVG's raster; a decoded image is
+premultiplied on the worker and an `ImageSource::Rgba` when it is uploaded (a
+copy only when a texel is not opaque). Bilinear filtering then mixes colour
+weighted by coverage, so a scaled image's edge does not pick up the black of the
+empty texels beside it.
 
 ## Texture Caching
 

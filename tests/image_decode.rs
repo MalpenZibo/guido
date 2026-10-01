@@ -807,3 +807,95 @@ fn images_on_screen_over_the_budget_stay_drawn() {
         "each decoded once"
     );
 }
+
+/// A decoded image is premultiplied before it is drawn, and its scaled edge
+/// stays between its colour and what is under it (#556).
+///
+/// An orange disc with an antialiased rim, generated with straight alpha, is
+/// drawn twice from the same 80-pixel pixels into a 40-pixel box: left encoded
+/// as a PNG and decoded on the worker, right handed over as
+/// `ImageSource::Rgba`, which is premultiplied at upload. They must match to
+/// the bit — the decode premultiplies as the upload does — and every rim pixel
+/// must lie on the line from the tile's colour to the disc's: filtering
+/// premultiplied texels mixes colour weighted by coverage, where straight
+/// texels would pull in the black of the empty ones around the disc.
+///
+/// Red without the decode's premultiply: the PNG's rim is added at full
+/// colour, lighter than the line and than the raw pixels beside it.
+#[test]
+fn a_decoded_image_is_premultiplied_like_raw_pixels() {
+    const SIDE: u32 = 80;
+    const FILL: [u8; 3] = [242, 115, 64];
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let disc = ::image::RgbaImage::from_fn(SIDE, SIDE, |x, y| {
+        let centre = SIDE as f32 / 2.0;
+        let distance =
+            ((x as f32 + 0.5 - centre).powi(2) + (y as f32 + 0.5 - centre).powi(2)).sqrt();
+        let coverage = (34.0 - distance).clamp(0.0, 1.0);
+        ::image::Rgba([FILL[0], FILL[1], FILL[2], (coverage * 255.0).round() as u8])
+    });
+    let mut png = Vec::new();
+    disc.write_to(&mut Cursor::new(&mut png), ::image::ImageFormat::Png)
+        .expect("a PNG encodes");
+    let sources = vec![
+        ImageSource::Bytes(png.into()),
+        ImageSource::Rgba {
+            width: SIDE,
+            height: SIDE,
+            pixels: disc.into_raw().into(),
+        },
+    ];
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(Color::rgb(0.92, 0.92, 0.88)),
+        move || {
+            container()
+                .layout(Flex::row())
+                .children(sources.clone().into_iter().map(|source| {
+                    container()
+                        .width(40.0)
+                        .height(40.0)
+                        .child(image(source).content_fit(ContentFit::Fill))
+                }))
+        },
+    );
+    app.configure(surface, 80, 40, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    let pixel = |x: u32, y: u32| app.read_pixel(surface, x, y);
+    let differ: Vec<_> = (0..40)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y) != pixel(x + 40, y))
+        .collect();
+    assert!(
+        differ.is_empty(),
+        "{} pixels of the decoded image differ from the same pixels handed over raw, \
+         first at {:?}: decoded {:?}, raw {:?}",
+        differ.len(),
+        differ[0],
+        pixel(differ[0].0, differ[0].1),
+        pixel(differ[0].0 + 40, differ[0].1),
+    );
+
+    let background = pixel(0, 0);
+    let along = |p: [u8; 4], c: usize| {
+        (f32::from(p[c]) - f32::from(background[c]))
+            / (f32::from(FILL[c]) - f32::from(background[c]))
+    };
+    let worst = (0..40)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .map(|(x, y)| pixel(x, y))
+        .filter(|&p| along(p, 2) > 0.1)
+        .map(|p| (along(p, 1) - along(p, 2)).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        worst < 0.05,
+        "a rim pixel is {worst:.3} further along the line in green than in blue: \
+         the scaled edge left the line from the tile to the disc"
+    );
+}

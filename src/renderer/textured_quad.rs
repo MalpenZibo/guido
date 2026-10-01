@@ -3,7 +3,7 @@
 //! Images and text differ entirely in how they *produce* a texture — one
 //! decodes or rasterises a source, the other lays out glyphs into an atlas —
 //! but what they do with it afterwards is the same: the same shader, the same
-//! vertex format, the same straight-alpha blend state, the same clamped
+//! vertex format, the same premultiplied blend state, the same clamped
 //! bilinear sampler, the same two triangles.
 //!
 //! Both pipelines were written out in full, and the two copies were identical
@@ -114,24 +114,15 @@ impl TexturedQuadPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // Straight alpha: a texel's colour is not scaled by its
-                    // alpha, so the blend scales it. Images arrive that way —
-                    // decoded rasters, and SVG rasters taken out of
-                    // tiny-skia's premultiplied form. Text quads do not yet:
-                    // glyphon leaves their texture premultiplied (#556). The
-                    // alpha channel itself composites over.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+                    // Premultiplied alpha, as Skia stores textures: a texel's
+                    // colour is already scaled by its coverage, so it is added
+                    // whole and only the destination is attenuated. Every
+                    // texture arrives that way — glyphon leaves a text quad's
+                    // premultiplied, tiny-skia an SVG's, and raster images are
+                    // premultiplied when decoded or uploaded. Bilinear
+                    // filtering then mixes colour weighted by coverage, so an
+                    // empty texel's black never bleeds into a scaled edge.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),

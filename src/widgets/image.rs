@@ -21,7 +21,9 @@ pub enum ImageSource {
     Path(PathBuf),
     /// Raster image from in-memory bytes
     Bytes(Arc<[u8]>),
-    /// Raw pre-decoded RGBA8 pixels (row-major, `width * height * 4` bytes).
+    /// Raw pre-decoded RGBA8 pixels (row-major, `width * height * 4` bytes),
+    /// with straight alpha — not premultiplied, as an image decoder gives
+    /// them. Premultiplied pixels would have their edges darkened twice.
     ///
     /// Skips the decode step entirely — for pixel data that never existed in
     /// an encoded format, like tray icon pixmaps or album art from D-Bus.

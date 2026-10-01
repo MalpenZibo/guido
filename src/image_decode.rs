@@ -774,7 +774,11 @@ fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
     };
     match decoded {
         Ok(image) => {
-            let rgba = image.into_rgba8();
+            let has_alpha = image.color().has_alpha();
+            let mut rgba = image.into_rgba8();
+            if has_alpha {
+                premultiply(&mut rgba);
+            }
             let (width, height) = rgba.dimensions();
             if width == 0 || height == 0 {
                 log::warn!("{} decodes to an empty image", describe(key));
@@ -793,6 +797,33 @@ fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
     }
 }
 
+/// Scale each texel's colour by its alpha, in place: the textured-quad
+/// pipeline takes premultiplied texels, and a decoded image, like an
+/// `ImageSource::Rgba`, is straight. Rounded as tiny-skia rounds, so a raster
+/// and an SVG of the same pixels premultiply alike.
+pub(crate) fn premultiply(rgba: &mut [u8]) {
+    for texel in rgba.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(texel[3]);
+        if alpha != 255 {
+            for channel in &mut texel[..3] {
+                let product = u16::from(*channel) * alpha + 128;
+                *channel = ((product + (product >> 8)) >> 8) as u8;
+            }
+        }
+    }
+}
+
+/// `rgba` premultiplied: borrowed when every texel is opaque and there is
+/// nothing to scale, copied when one is not.
+pub(crate) fn premultiplied(rgba: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if rgba.as_chunks::<4>().0.iter().all(|texel| texel[3] == 255) {
+        return std::borrow::Cow::Borrowed(rgba);
+    }
+    let mut copy = rgba.to_vec();
+    premultiply(&mut copy);
+    std::borrow::Cow::Owned(copy)
+}
+
 /// Draw an SVG's document into `width` by `height` pixels, stretched to fill
 /// them: the pixel size was rounded up from the size it is shown at, and a
 /// texture is drawn whole, so a raster that left its last row empty would
@@ -806,20 +837,7 @@ fn rasterize(tree: &SvgTree, (width, height): (u32, u32)) -> Option<Pixels> {
         height as f32 / size.height(),
     );
     resvg::render(tree, transform, &mut pixmap.as_mut());
-    // tiny-skia keeps its pixels premultiplied, and the textured-quad pipeline
-    // blends straight alpha, as every raster image arrives: uploaded as they
-    // are, an edge's colour would be multiplied by its alpha twice. Undone in
-    // place, with `PremultipliedColorU8::demultiply`'s own rounding; a texel
-    // that is opaque or empty has nothing to undo.
-    for texel in pixmap.data_mut().as_chunks_mut::<4>().0 {
-        let alpha = texel[3];
-        if alpha != 0 && alpha != 255 {
-            let a = f64::from(alpha) / 255.0;
-            for channel in &mut texel[..3] {
-                *channel = (f64::from(*channel) / a + 0.5) as u8;
-            }
-        }
-    }
+    // Premultiplied already, which is what the textured-quad pipeline takes.
     Some(Pixels {
         width,
         height,
