@@ -731,3 +731,75 @@ fn a_tinted_image_carries_its_tint() {
 
     assert_snapshot("tinted_image", render(view, 64.0, 32.0));
 }
+
+// ---------------------------------------------------------------------------
+// A dynamic child lays out as the same child added statically (#558)
+// ---------------------------------------------------------------------------
+
+/// A `ZStack` follower that fills: sized to the sibling that leads the stack,
+/// whether it was added as a widget or as a closure.
+///
+/// Red before #558: the wrapper a dynamic child is adopted as did not forward
+/// `layout_hints`, so the stack saw no fill, let the follower lead, and grew to
+/// the whole viewport with everything centred around it.
+#[test]
+fn a_dynamic_zstack_follower_fills_like_a_static_one() {
+    let follower = || {
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(Flex::column().center())
+            .child(swatch(100.0, 20.0, Color::BLUE))
+    };
+    let view = |dynamic: bool| {
+        let stack = container()
+            .layout(ZStack::new())
+            .child(swatch(360.0, 90.0, Color::RED));
+        let stack = if dynamic {
+            stack.child(move || Some(follower()))
+        } else {
+            stack.child(follower())
+        };
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(Flex::column().center())
+            .child(stack)
+    };
+    assert_eq!(
+        render(view(true), 1000.0, 800.0),
+        render(view(false), 1000.0, 800.0),
+        "the dynamic follower laid out differently from the static one"
+    );
+}
+
+/// A `Flex` row of `[100, fill, 50]` in 400: the fill takes the 250 left over,
+/// whether it was added as a widget or as a closure.
+///
+/// Red before #558: measured as a child that does not fill, against the whole
+/// 400, it pushed the last sibling out of the row.
+#[test]
+fn a_dynamic_flex_child_fills_like_a_static_one() {
+    let filler = || {
+        container()
+            .width(fill())
+            .height(10.0)
+            .background(Color::BLUE)
+    };
+    let view = |dynamic: bool| {
+        let row = container()
+            .layout(Flex::row())
+            .child(swatch(100.0, 10.0, Color::RED));
+        let row = if dynamic {
+            row.child(move || Some(filler()))
+        } else {
+            row.child(filler())
+        };
+        row.child(swatch(50.0, 10.0, Color::GREEN))
+    };
+    assert_eq!(
+        render(view(true), 400.0, 10.0),
+        render(view(false), 400.0, 10.0),
+        "the dynamic fill child laid out differently from the static one"
+    );
+}
