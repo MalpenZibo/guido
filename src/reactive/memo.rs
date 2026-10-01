@@ -71,7 +71,8 @@ where
     //
     // Lifetime: the effect belongs to whatever scope created the memo, and
     // outlives the binding either way — a memo created outside any scope
-    // keeps updating for as long as the application runs.
+    // keeps updating for as long as the application runs. Being an effect,
+    // what `f` itself creates is disposed when it recomputes.
     create_effect(move || {
         signal.set(f());
     });

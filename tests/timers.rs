@@ -71,25 +71,20 @@ fn a_timeout_reads_a_signal_and_writes_another_when_due() {
     );
 }
 
-/// An effect that schedules a timeout on every run and cancels the one before
-/// it fires only the last: a debounce, with no generation counter. The cancel
-/// is written out — an effect re-runs under the scope it was created in, so its
-/// last run's timer is still that scope's.
+/// An effect that schedules a timeout on every run fires only the last: a
+/// debounce, with nothing kept. Each run's timer belongs to that run, and the
+/// next run cancels it.
 #[test]
-fn a_timeout_scheduled_again_by_its_effect_replaces_the_last() {
+fn a_timeout_scheduled_per_run_is_a_debounce() {
     let Some(mut app) = headless() else { return };
     let query = create_signal(String::from("gu"));
     let searched = Rc::new(RefCell::new(Vec::new()));
 
     let log = searched.clone();
-    let last = Cell::new(None::<TimerHandle>);
     create_effect(move || {
         let q = query.get();
         let log = log.clone();
-        let timer = set_timeout(300 * MS, move || log.borrow_mut().push(q));
-        if let Some(previous) = last.replace(Some(timer)) {
-            previous.cancel();
-        }
+        set_timeout(300 * MS, move || log.borrow_mut().push(q));
     });
 
     let t0 = Instant::now();
