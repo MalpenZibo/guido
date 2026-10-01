@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::image_decode::{DecodeHandle, DecodeState};
+use crate::image_decode::DecodeHandle;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, Prop, Signal, create_memo};
 use crate::renderer::PaintContext;
@@ -21,7 +21,9 @@ pub enum ImageSource {
     Path(PathBuf),
     /// Raster image from in-memory bytes
     Bytes(Arc<[u8]>),
-    /// Raw pre-decoded RGBA8 pixels (row-major, `width * height * 4` bytes).
+    /// Raw pre-decoded RGBA8 pixels (row-major, `width * height * 4` bytes),
+    /// with straight alpha — not premultiplied, as an image decoder gives
+    /// them. Premultiplied pixels would have their edges darkened twice.
     ///
     /// Skips the decode step entirely — for pixel data that never existed in
     /// an encoded format, like tray icon pixmaps or album art from D-Bus.
@@ -114,7 +116,7 @@ pub struct Image {
     /// Read under layout tracking, and used again by paint on the same frame.
     cached_content_fit: ContentFit,
     /// Cached intrinsic size from the image source
-    intrinsic_size: Option<(f64, f64)>,
+    intrinsic_size: Option<(f32, f32)>,
     /// Cached source for change detection
     cached_source: Option<ImageSource>,
     /// The decode cache's entry for the source, held while it is shown so the
@@ -165,12 +167,13 @@ impl Image {
         self
     }
 
-    /// Whether the image can be drawn: true once its source is decoded, and
-    /// from the start for a source that needs no decode (`Rgba`, SVG).
+    /// Whether the image can be drawn: true once its source is decoded or
+    /// rasterized, and from the start for `Rgba`, which needs neither.
     ///
-    /// A raster `Path` or `Bytes` source is decoded off the frame, so the first
-    /// frame lays the box out at the image's size and draws nothing in it. This
-    /// is what an application fades it in with — the image itself does not:
+    /// A raster `Path` or `Bytes` source is decoded off the frame, and an SVG
+    /// rasterized there, so the first frame lays the box out at the image's
+    /// size and draws nothing in it. This is what an application fades it in
+    /// with — the image itself does not:
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -190,10 +193,10 @@ impl Image {
         create_memo(move || crate::image_decode::is_ready(&source.get())).into_signal()
     }
 
-    /// Get the current intrinsic size in whole pixels, rounding SVG dimensions up.
-    pub fn intrinsic_size(&self) -> Option<(u32, u32)> {
+    /// The size the source lays out at, once a layout has read it — see
+    /// [`get_intrinsic_size`](crate::image_metadata::get_intrinsic_size).
+    pub fn intrinsic_size(&self) -> Option<(f32, f32)> {
         self.intrinsic_size
-            .map(|(width, height)| (width.ceil() as u32, height.ceil() as u32))
     }
 
     /// The box this image occupies, from the constraints and the fit mode.
@@ -215,7 +218,6 @@ impl Image {
     /// mode falls back to the intrinsic size there.
     fn calculate_size(&self, constraints: &Constraints) -> Size {
         let (intrinsic_w, intrinsic_h) = self.intrinsic_size.unwrap_or((100.0, 100.0));
-        let (intrinsic_w, intrinsic_h) = (intrinsic_w as f32, intrinsic_h as f32);
         let aspect = intrinsic_w / intrinsic_h;
 
         let offered_w = if constraints.max_width.is_finite() {
@@ -286,10 +288,8 @@ impl Widget for Image {
         }
         if source_changed || self.intrinsic_size.is_none() {
             self.intrinsic_size = match &self.decode {
-                Some(decode) => decode
-                    .size()
-                    .map(|(width, height)| (width as f64, height as f64)),
-                None => crate::image_metadata::get_layout_size(&current_source),
+                Some(decode) => decode.size(),
+                None => crate::image_metadata::get_intrinsic_size(&current_source),
             };
         }
 
@@ -310,7 +310,8 @@ impl Widget for Image {
             match &self.decode {
                 // The held entry's own signal: a paint does no lookup.
                 Some(decode) => {
-                    if let (DecodeState::Ready, decoded) = decode.state() {
+                    let (state, decoded) = decode.state();
+                    if crate::image_decode::paints(state, &decoded) {
                         ctx.push_image(
                             source.clone(),
                             Some(decoded),
@@ -405,31 +406,6 @@ mod tests {
             drawn.0
         );
         assert_eq!(drawn.1, ContentFit::Fill, "and with the fit it declares");
-    }
-
-    #[test]
-    fn fractional_intrinsic_size_has_a_nonzero_pixel_extent() {
-        let mut image = Image::new(ImageSource::Rgba {
-            pixels: vec![0; 4].into(),
-            width: 1,
-            height: 1,
-        });
-        image.intrinsic_size = Some((0.5, 1.5));
-
-        assert_eq!(image.intrinsic_size(), Some((1, 2)));
-    }
-
-    #[test]
-    fn raster_intrinsic_size_keeps_integers_beyond_f32_precision() {
-        let source = ImageSource::Rgba {
-            pixels: vec![0; 4].into(),
-            width: 16_777_217,
-            height: 1,
-        };
-        let mut image = Image::new(source.clone());
-        image.intrinsic_size = crate::image_metadata::get_layout_size(&source);
-
-        assert_eq!(image.intrinsic_size(), Some((16_777_217, 1)));
     }
 
     /// How an image fills its box is a value it can be told.

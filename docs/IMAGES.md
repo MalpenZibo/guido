@@ -144,15 +144,19 @@ SVGs are rasterized at an effective scale that accounts for:
 - Transform scale (from parent containers)
 - Quality multiplier (2.0x for crisp rendering)
 
-This ensures SVGs remain crisp when scaled up via transforms.
+This ensures SVGs remain crisp when scaled up via transforms. The scale is
+quantized to quarters and the box to whole pixels before the raster's pixel
+size is worked out (`svg_extent` in `src/renderer/image_quad.rs`), so a scale
+animation asks for a raster per step rather than per frame.
 
 ## Decoding Off the Frame
 
 A raster `ImageSource::Path` or `ImageSource::Bytes` is decoded on a worker
-thread, never on the render path (`src/image_decode.rs`). A 2912×1632 PNG takes
-about 140 ms to decode; done inside the first frame, that frame is held back
-until it finishes, which a lock screen shows as the compositor's "locker has
-not drawn" colour.
+thread, and a large SVG rasterized there, never on the render path
+(`src/image_decode.rs`). A 2912×1632 PNG takes about 140 ms to decode; done
+inside the first frame, that frame is held back until it finishes, which a lock
+screen shows as the compositor's "locker has not drawn" colour. An SVG
+rasterized at 1024 px costs 4–8 ms the same way.
 
 - **One entry per source, one signal per entry.** The application's decode
   cache (`AppState::decoded_images`) is keyed by the source — a path, or the
@@ -164,10 +168,42 @@ not drawn" colour.
   the header (`image_metadata::get_intrinsic_size`, which for bytes too reads
   only the header), so the first layout gives the box its size. A header that
   cannot be read makes the entry `Failed` at once, and no worker is involved.
+  An SVG has no header: its entry parses the document once
+  (`image_metadata::parse_svg`) for the size, and keeps it, so every raster
+  of it is drawn from that one parse.
+- **An SVG is rasterized where the renderer decides.** What an SVG becomes
+  depends on the size it is drawn at, which only the renderer knows — it
+  carries the transform, the HiDPI factor and the box. So an SVG's
+  `DecodedImage` holds a slot per pixel size, and a frame that needs a size it
+  has no texture of calls `DecodedImage::take_or_rasterize`. Up to
+  `INLINE_RASTER_BYTES` of pixels — 128 × 128, a 64 px icon at the 2× quality
+  multiplier — the raster is drawn there, inside the frame. That is what
+  Chromium (below 1 MB, on its raster threads), iced, Qt's QIcon and
+  Android's VectorDrawable do with small vectors: a 6 KB icon costs
+  140–220 µs at 56 px, less than drawing it a frame late and repainting it
+  when it lands. The line is lower than Chromium's because this renderer runs
+  on the loop's thread, where a 1 MB raster costs 1.1–2.7 ms.
+- **A larger raster is asked of the worker.** The frame sends it a job — a
+  job on a channel, not a signal write, so it is on its way before the frame
+  is out. Until it lands the frame draws the raster that source was last drawn
+  from, stretched to the new box: a large SVG in a resize animation does not
+  blink out on every step. Elsewhere that is an opt-in (Flutter's
+  gaplessPlayback, Qt Quick's retainWhileLoading); here #547 decided it.
+  The first raster has nothing before it, so it draws nothing, as a raster
+  source does. The paint pushes an SVG's command while it is still `Pending`
+  for that reason — the push is what carries the size to the renderer — where a
+  raster source is pushed only once it is `Ready` (`image_decode::paints`).
+- **An SVG's readiness is the renderer's report.** Only the renderer knows
+  whether a frame drew it, and it may not write a signal, so it reports: a
+  raster drawn, or nothing drawn while one is on the worker. The loop settles
+  those into `Ready` and `Pending`. An entry starts `Ready` when its raster at
+  its intrinsic size would be drawn inline, `Pending` when not — a guess, which
+  the first report corrects.
 - **The worker.** One `guido-image-decode` thread per application, spawned by
   the first decode and ended when the application is dropped (its channel
   closes). It puts the pixels in the entry's `DecodedImage` and writes `Ready`
-  through the entry's `WriteSignal`, so the
+  through the entry's `WriteSignal` — always, so a large SVG already ready is
+  told of each new size that lands — so the
   write rides the background-write queue: it wakes the loop through the ingress
   channel and is applied at the flush point like any other background write.
   A std thread rather than the service runtime, because that runtime is one
@@ -223,7 +259,8 @@ not drawn" colour.
   it — so the budget bounds what the entries occupy, not the GPU memory the
   pages reserve.
 - **Ready signal.** `Image::ready()` is a `Signal<bool>`: true once the source
-  is decoded, true from the start for `Rgba` and SVG, never for a failed one.
+  is decoded or a raster of it drawn — from the start for `Rgba` and for an
+  SVG small enough to draw inline — and never for a failed one.
   There is no built-in fade — Flutter's frameBuilder shape rather than a
   fade inside the widget — so an application fades in with `opacity`:
 
@@ -235,9 +272,8 @@ container()
     .child(wallpaper)
 ```
 
-SVG rasterisation stays synchronous, on the render path, until somebody
-measures it as slow. `ImageSource::Rgba` needs no decode and is the way to have
-an image in the first frame.
+`ImageSource::Rgba` needs no decode and is the way to have an image in the
+first frame.
 
 `tests/image_decode.rs` holds the worker (`Headless::hold_image_decodes`) to
 make "not yet decoded" deterministic, and is a binary of its own because the
@@ -246,13 +282,26 @@ background-write queue is process-wide.
 ## Tint
 
 `Image::tint` draws every texel in one colour and keeps its alpha:
-`rgb = tint.rgb`, `a = sampled.a * tint.a * opacity`. It travels on the
+`rgb = tint.rgb`, `a = sampled.a * tint.a * opacity` — written to the
+framebuffer premultiplied, as everything the textured-quad pipeline draws is
+(see Alpha below). It travels on the
 textured-quad vertex (`TexturedVertex::tint`, `[r, g, b, amount]`) beside the
 opacity and for the same reason — a new colour is not a new texture — so it is
 neither in the texture cache's key nor a cause of a new raster. Paint reads it,
 so a new tint repaints and lays nothing out. Transformed text shares the
 pipeline and passes `NO_TINT`, an amount of zero, which leaves the texel as it
 was.
+
+## Alpha
+
+The textured-quad pipeline — images and transformed text — composites
+premultiplied alpha (`One / OneMinusSrcAlpha`), as Skia stores its textures, so
+every texture it samples holds colour already scaled by coverage. glyphon fills a
+text quad's texture that way and tiny-skia an SVG's raster; a decoded image is
+premultiplied on the worker and an `ImageSource::Rgba` when it is uploaded (a
+copy only when a texel is not opaque). Bilinear filtering then mixes colour
+weighted by coverage, so a scaled image's edge does not pick up the black of the
+empty texels beside it.
 
 ## Texture Caching
 

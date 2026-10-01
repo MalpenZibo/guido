@@ -9,7 +9,7 @@ use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::Widget;
-use super::widget::{Event, EventResponse};
+use super::widget::{Event, EventResponse, LayoutHints};
 
 /// What a dynamic segment runs to learn its rows — told which of its keys
 /// are still leaving.
@@ -727,6 +727,14 @@ impl Widget for OwnedWidget {
 
     fn owned_scope(&self) -> Option<OwnerId> {
         Some(self.owner.id())
+    }
+
+    fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
+        self.inner.refresh_paint_bounds(tree, id)
+    }
+
+    fn layout_hints(&self) -> LayoutHints {
+        self.inner.layout_hints()
     }
 
     /// Registration is reactive work, so it happens under this widget's own

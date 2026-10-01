@@ -20,7 +20,7 @@ use super::flatten::FlattenedCommand;
 use super::image_atlas::{AtlasEntry, ImageAtlas};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
-use crate::image_decode::{DecodeKey, DecodedImage, hash_sampled};
+use crate::image_decode::{DecodeKey, DecodedImage, Extent, hash_sampled};
 use crate::render_stats::Pipeline;
 use crate::widgets::Color;
 use crate::widgets::Rect;
@@ -67,9 +67,9 @@ struct CachedTexture {
     /// When a frame last drew it. A `Cell` because the frame that draws it
     /// holds it through an `Rc` already.
     last_used: Cell<Instant>,
-    /// The raster source it was uploaded from, whose decoded pixels went with
-    /// the upload: the decode cache is told when this texture goes.
-    decoded_from: Option<DecodeKey>,
+    /// The source and raster it was uploaded from, whose pixels went with the
+    /// upload: the decode cache is told when this texture goes.
+    decoded_from: Option<(DecodeKey, Extent)>,
 }
 
 impl CachedTexture {
@@ -84,35 +84,43 @@ impl CachedTexture {
 
 impl Drop for CachedTexture {
     fn drop(&mut self) {
-        if let Some(key) = self.decoded_from.take() {
-            crate::image_decode::texture_evicted(key);
+        if let Some((key, extent)) = self.decoded_from.take() {
+            crate::image_decode::texture_evicted(key, extent);
         }
     }
 }
 
-/// Cache key for image textures.
-#[derive(Clone, Debug)]
+/// Cache key for image textures: the source, and which of its rasters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct CacheKey {
-    /// Hash of the source
     source_hash: u64,
-    /// Rasterization variant (for SVGs): quantized scale + target size.
-    /// Raster images always use 0 — they decode at intrinsic size.
-    svg_variant: u64,
+    extent: Extent,
 }
 
-impl PartialEq for CacheKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.source_hash == other.source_hash && self.svg_variant == other.svg_variant
-    }
-}
-
-impl Eq for CacheKey {}
-
-impl Hash for CacheKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.source_hash.hash(state);
-        self.svg_variant.hash(state);
-    }
+/// The pixel size to rasterize an SVG of `intrinsic` size at.
+///
+/// With a `target` — the box it is shown in, in logical pixels — the raster
+/// is fitted to that box, preserving aspect ratio, rather than to the SVG's
+/// intrinsic size: a 16px weather icon with a 104px viewBox costs a 16px
+/// raster, not a 104px one, which is both faster and sharper. `scale` carries
+/// transform scale, HiDPI factor and the quality multiplier.
+///
+/// Both are quantized first — the scale to quarters, the box to whole pixels —
+/// so a scale animation asks for a raster per step rather than per frame.
+fn svg_extent(
+    (width, height): (f32, f32),
+    scale: f32,
+    target: Option<(f32, f32)>,
+) -> Option<(u32, u32)> {
+    let scale = (scale * 4.0).round() / 4.0;
+    let scale = match target {
+        Some((tw, th)) if tw >= 1.0 && th >= 1.0 => {
+            scale * (tw.round() / width).min(th.round() / height)
+        }
+        _ => scale,
+    };
+    let extent = ((width * scale).ceil(), (height * scale).ceil());
+    (extent.0 >= 1.0 && extent.1 >= 1.0).then_some((extent.0 as u32, extent.1 as u32))
 }
 
 /// A texture of its own, for an image too large for an atlas page.
@@ -166,6 +174,9 @@ pub struct ImageQuadRenderer {
     atlas: ImageAtlas,
     // Texture cache
     texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
+    /// The size of the raster each SVG source was last drawn from, by source
+    /// hash: what is drawn, stretched, while a new size is on its way.
+    last_svg_raster: FxHashMap<u64, Extent>,
     /// When the frame being prepared started: what a texture drawn in it is
     /// stamped with.
     frame_started: Instant,
@@ -208,6 +219,7 @@ impl ImageQuadRenderer {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
             atlas: ImageAtlas::default(),
             texture_cache: FxHashMap::default(),
+            last_svg_raster: FxHashMap::default(),
             frame_started: Instant::now(),
             cached_bytes: 0,
         }
@@ -251,7 +263,7 @@ impl ImageQuadRenderer {
                     .saturating_duration_since(texture.last_used.get())
                     > KEEP_UNUSED
             })
-            .map(|(key, texture)| (texture.last_used.get(), key.clone()))
+            .map(|(key, texture)| (texture.last_used.get(), *key))
             .collect();
         idle.sort_unstable_by_key(|(last_used, _)| *last_used);
         for (_, key) in idle {
@@ -260,6 +272,9 @@ impl ImageQuadRenderer {
             }
             if let Some(texture) = self.texture_cache.remove(&key) {
                 self.cached_bytes -= texture.bytes();
+                if self.last_svg_raster.get(&key.source_hash) == Some(&key.extent) {
+                    self.last_svg_raster.remove(&key.source_hash);
+                }
             }
         }
     }
@@ -274,6 +289,7 @@ impl ImageQuadRenderer {
     #[cfg(feature = "testing")]
     pub(crate) fn forget_textures(&mut self) {
         self.texture_cache.clear();
+        self.last_svg_raster.clear();
         self.cached_bytes = 0;
     }
 
@@ -322,11 +338,14 @@ impl ImageQuadRenderer {
 
     /// Get or create a cached texture for the given source.
     ///
-    /// `svg_target` is the widget rect the SVG will be displayed in
-    /// (logical pixels): the rasterization is sized to it instead of the
-    /// SVG's intrinsic size, so a 16px icon costs a 16px raster no matter
-    /// how large its viewBox is. `None` (ContentFit::None) keeps the
-    /// intrinsic size, which is what that fit mode displays.
+    /// `svg_target` is the widget rect the SVG will be displayed in (logical
+    /// pixels), which its raster is sized to — see [`svg_extent`]. `None`
+    /// (ContentFit::None) keeps the intrinsic size, which is what that fit
+    /// mode displays.
+    ///
+    /// An SVG with no raster of that size yet draws one now if it is small;
+    /// a larger one is asked of the worker, and is drawn from the raster it
+    /// was last drawn from until the new one lands.
     fn get_or_create_texture(
         &mut self,
         device: &Device,
@@ -336,71 +355,71 @@ impl ImageQuadRenderer {
         svg_target: Option<(f32, f32)>,
         decoded: Option<&DecodedImage>,
     ) -> Option<Rc<CachedTexture>> {
-        let is_svg = source.is_svg();
-
-        // Quantize scale to reduce cache entries (round to 0.25 increments)
-        let quantized_scale = (render_scale * 4.0).round() as u32;
-
-        let source_hash = Self::hash_source(source);
-        // SVG rasterization variant: scale + quantized target size (the
-        // same icon shown at 16px and 48px needs two textures).
-        let svg_variant = if is_svg {
-            let (qw, qh) = match svg_target {
-                Some((w, h)) => (w.round().max(1.0) as u64, h.round().max(1.0) as u64),
-                None => (0, 0),
-            };
-            (quantized_scale as u64) << 40 | qw << 20 | qh
-        } else {
-            0
+        let extent = match decoded.and_then(DecodedImage::svg_size) {
+            Some(size) => Some(svg_extent(size, render_scale, svg_target)?),
+            None => None,
         };
         let key = CacheKey {
-            source_hash,
-            svg_variant,
+            source_hash: Self::hash_source(source),
+            extent,
         };
 
-        // Check if we already have this texture cached
-        if let Some(cached) = self.texture_cache.get(&key) {
-            cached.last_used.set(self.frame_started);
-            return Some(cached.clone());
-        }
-
-        // Load and create texture
-        let mut texture =
-            self.load_texture(device, queue, source, render_scale, svg_target, decoded)?;
-        if decoded.is_some() {
-            texture.decoded_from = DecodeKey::of(source);
-        }
-
-        let cached = Rc::new(texture);
-        self.cached_bytes += cached.bytes();
-        self.texture_cache.insert(key, cached.clone());
-        Some(cached)
+        let texture = match self.texture_cache.get(&key) {
+            Some(cached) => Some(cached.clone()),
+            None => self.load_texture(device, queue, source, key, decoded),
+        };
+        let texture = match texture {
+            Some(texture) => {
+                if extent.is_some() {
+                    self.last_svg_raster.insert(key.source_hash, extent);
+                }
+                texture
+            }
+            None => {
+                let last = self
+                    .last_svg_raster
+                    .get(&key.source_hash)
+                    .and_then(|&extent| self.texture_cache.get(&CacheKey { extent, ..key }));
+                match (last, decoded) {
+                    (Some(last), _) => last.clone(),
+                    (None, Some(decoded)) if extent.is_some() => {
+                        decoded.drew_nothing();
+                        return None;
+                    }
+                    (None, _) => return None,
+                }
+            }
+        };
+        texture.last_used.set(self.frame_started);
+        Some(texture)
     }
 
-    /// Load and upload a texture to the GPU.
+    /// Upload a texture to the GPU, and cache it under `key`.
     ///
-    /// A raster `Path` or `Bytes` source arrives already decoded — the worker
-    /// in `image_decode` did that off the frame — so this only uploads, and
-    /// taking the pixels to upload them is what drops them from the cache.
-    /// Pixels that were already taken are gone: this draws nothing and reports
-    /// the texture missing, which sends the source back to the worker.
-    /// Decoding here instead is the stall that module exists to remove.
+    /// A raster `Path` or `Bytes` source arrives already decoded and an SVG
+    /// already rasterized — the worker in `image_decode` did that off the
+    /// frame — so this only uploads, and taking the pixels to upload them is
+    /// what drops them from the cache. A raster source whose pixels were
+    /// already taken has none left: this draws nothing and reports the texture
+    /// missing, which sends the source back to the worker. An SVG with none
+    /// of this size rasterizes them here if they are few, and asks the worker
+    /// for them if not. Decoding a raster image or rasterizing a large SVG
+    /// here instead is the stall that module exists to remove.
     fn load_texture(
         &mut self,
         device: &Device,
         queue: &Queue,
         source: &ImageSource,
-        render_scale: f32,
-        svg_target: Option<(f32, f32)>,
+        key: CacheKey,
         decoded: Option<&DecodedImage>,
-    ) -> Option<CachedTexture> {
-        match source {
+    ) -> Option<Rc<CachedTexture>> {
+        let mut texture = match source {
             ImageSource::Path(_) | ImageSource::Bytes(_) => {
                 let Some(pixels) = decoded.and_then(DecodedImage::take) else {
                     crate::image_decode::texture_missing(source);
                     return None;
                 };
-                self.upload_raster(device, queue, pixels.width, pixels.height, &pixels.rgba)
+                self.upload_raster(device, queue, pixels.width, pixels.height, &pixels.rgba)?
             }
             ImageSource::Rgba {
                 width,
@@ -420,22 +439,30 @@ impl ImageQuadRenderer {
                     );
                     return None;
                 }
-                self.upload_raster(device, queue, *width, *height, pixels)
+                // Raw pixels are straight; the pipeline takes them
+                // premultiplied.
+                let pixels = crate::image_decode::premultiplied(pixels);
+                self.upload_raster(device, queue, *width, *height, &pixels)?
             }
-            ImageSource::SvgPath(path) => {
-                let data = match std::fs::read(path) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        log::warn!("Failed to read SVG {}: {e}", path.display());
-                        return None;
-                    }
-                };
-                self.load_svg(device, queue, &data, render_scale, svg_target)
+            ImageSource::SvgPath(_) | ImageSource::SvgBytes(_) => {
+                let decoded = decoded?;
+                let pixels = decoded.take_or_rasterize(key.extent)?;
+                self.store(
+                    device,
+                    queue,
+                    pixels.width,
+                    pixels.height,
+                    &pixels.rgba,
+                    decoded.svg_size()?,
+                )?
             }
-            ImageSource::SvgBytes(bytes) => {
-                self.load_svg(device, queue, bytes, render_scale, svg_target)
-            }
-        }
+        };
+        texture.decoded_from = decoded.map(|decoded| (decoded.key().clone(), key.extent));
+
+        let cached = Rc::new(texture);
+        self.cached_bytes += cached.bytes();
+        self.texture_cache.insert(key, cached.clone());
+        Some(cached)
     }
 
     /// Upload raw RGBA8 pixel data to GPU.
@@ -458,83 +485,6 @@ impl ImageQuadRenderer {
             height,
             rgba,
             (width as f32, height as f32),
-        )
-    }
-
-    /// Fallback when the `svg` feature is disabled: SVG sources fail to
-    /// decode with a warning instead of failing to compile.
-    #[cfg(not(feature = "svg"))]
-    fn load_svg(
-        &mut self,
-        _device: &Device,
-        _queue: &Queue,
-        _bytes: &[u8],
-        _scale: f32,
-        _target: Option<(f32, f32)>,
-    ) -> Option<CachedTexture> {
-        log::warn!("SVG image used but the `svg` feature is disabled");
-        None
-    }
-
-    /// Load and rasterize an SVG.
-    ///
-    /// With a `target` (the widget rect in logical pixels) the raster is
-    /// sized to what will actually be displayed rather than the SVG's
-    /// intrinsic size — a 16px weather icon with a 104px viewBox costs a
-    /// 16px raster, not a 104px one. This is both faster (rasterization
-    /// cost scales with pixels) and sharper (no GPU minification).
-    #[cfg(feature = "svg")]
-    fn load_svg(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        bytes: &[u8],
-        scale: f32,
-        target: Option<(f32, f32)>,
-    ) -> Option<CachedTexture> {
-        let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).ok()?;
-        let size = tree.size();
-
-        let intrinsic_width = size.width();
-        let intrinsic_height = size.height();
-
-        // Fit the raster to the display target, preserving aspect ratio
-        // (contain). `scale` already carries transform scale, HiDPI factor
-        // and the quality multiplier.
-        let scale = match target {
-            Some((tw, th)) if tw >= 1.0 && th >= 1.0 => {
-                scale * (tw / size.width()).min(th / size.height())
-            }
-            _ => scale,
-        };
-
-        // Calculate scaled dimensions
-        let scaled_width = (size.width() * scale).ceil() as u32;
-        let scaled_height = (size.height() * scale).ceil() as u32;
-
-        if scaled_width == 0 || scaled_height == 0 {
-            return None;
-        }
-
-        // Create a pixmap for rendering
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(scaled_width, scaled_height)?;
-
-        // Create transform for scaling
-        let transform = resvg::tiny_skia::Transform::from_scale(
-            scaled_width as f32 / size.width(),
-            scaled_height as f32 / size.height(),
-        );
-
-        // Render the SVG
-        resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-        self.store(
-            device,
-            queue,
-            scaled_width,
-            scaled_height,
-            pixmap.data(),
-            (intrinsic_width, intrinsic_height),
         )
     }
 

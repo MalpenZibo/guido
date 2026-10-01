@@ -27,6 +27,17 @@
 //! The box does not wait for the pixels: the intrinsic size comes from the
 //! header, read synchronously when the entry is made, which costs a few bytes
 //! rather than the whole image.
+//!
+//! An SVG is parsed once, when its entry is made, for its size, and the entry
+//! keeps the document. What it becomes depends on the size it is drawn at,
+//! which only the renderer knows, so the entry holds one slot per pixel size
+//! and the renderer decides per size. A small raster — an icon — is drawn
+//! inside the frame from the parsed document, as Chromium, iced, Qt and
+//! Android all rasterize small vectors: up to [`INLINE_RASTER_BYTES`] it costs
+//! less than handing it off and drawing it a frame late. A larger one is asked
+//! of the worker, and until it lands the renderer draws the last raster it
+//! had, stretched, so a large SVG in a resize animation does not blink out on
+//! every step; the first one draws nothing, as a raster source does.
 
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -35,30 +46,91 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use crate::app_state::with_app_state;
 use crate::reactive::owner::with_root_owner;
+use rustc_hash::FxHashMap;
+
+use crate::image_metadata::SvgTree;
 use crate::reactive::{OwnerId, RwSignal, WriteSignal, create_signal, dispose_owner, with_owner};
 use crate::widgets::image::ImageSource;
 
 /// Where one source's decoded pixels wait for the renderer.
 ///
-/// A handle: the entry, the job decoding into it and every draw command
+/// A handle: the entry, the jobs decoding into it and every draw command
 /// painted from it hold the same one, and the pixels in it are there only
-/// until the renderer takes them to upload. A paint cache
-/// that keeps the command keeps an empty handle, not a copy of the image.
-#[derive(Clone, Debug, Default)]
-pub struct DecodedImage(Arc<Mutex<Slot>>);
+/// until the renderer takes them to upload. A paint cache that keeps the
+/// command keeps an empty handle, not a copy of the image.
+#[derive(Clone)]
+pub struct DecodedImage(Arc<Shared>);
 
-#[derive(Debug, Default)]
+struct Shared {
+    key: DecodeKey,
+    /// The entry's state, written by the worker when a raster lands.
+    write: WriteSignal<DecodeState>,
+    /// What an SVG's rasters are drawn from.
+    svg: Option<SvgTree>,
+    slots: Mutex<Slots>,
+}
+
+/// Which raster of a source: `None` for a raster image, which has one, at its
+/// own size; an SVG's pixel size for one of its.
+pub(crate) type Extent = Option<(u32, u32)>;
+
+/// The largest SVG raster drawn inside the frame, in bytes of RGBA: 128 × 128
+/// pixels, a 64 px icon at the renderer's 2× quality. Measured with resvg in
+/// release on the assets in `assets/`: a 6 KB icon costs 140–220 µs at 56 px
+/// and 350–510 µs at this size, and 1.1–2.7 ms at 1 MB, which is Chromium's
+/// line — but Chromium rasterizes on raster threads, and this renderer runs
+/// on the loop's.
+pub(crate) const INLINE_RASTER_BYTES: usize = 128 * 128 * 4;
+
+/// Whether an SVG raster `width` by `height` is drawn inside the frame.
+fn inline((width, height): (u32, u32)) -> bool {
+    (width as usize) * (height as usize) * 4 <= INLINE_RASTER_BYTES
+}
+
+#[derive(Default)]
+struct Slots {
+    by_extent: FxHashMap<Extent, Slot>,
+    /// How many rasters have been asked for: each slot's place in that order.
+    asked: u64,
+    /// Nobody will draw them: pixels that arrive now are dropped on arrival.
+    abandoned: bool,
+}
+
+impl Slots {
+    /// Mark `extent` as asked of the worker.
+    fn ask(&mut self, extent: Extent) {
+        self.asked += 1;
+        self.by_extent.insert(extent, Slot::Pending(self.asked));
+    }
+
+    /// The pixels of `extent`, leaving it uploaded. A size asked for before it
+    /// and still waiting goes with them: a box in a resize animation asks for
+    /// a raster per step, and the steps it has passed would otherwise be held
+    /// for as long as the entry is. One asked for after it stays — another
+    /// image of the source may be about to draw it.
+    fn take(&mut self, extent: Extent) -> Option<Pixels> {
+        let Some(&Slot::Filled(asked, _)) = self.by_extent.get(&extent) else {
+            return None;
+        };
+        self.by_extent
+            .retain(|_, slot| !matches!(slot, Slot::Filled(earlier, _) if *earlier < asked));
+        match self.by_extent.insert(extent, Slot::Uploaded) {
+            Some(Slot::Filled(_, pixels)) => Some(pixels),
+            _ => None,
+        }
+    }
+}
+
+/// One raster of a source. A raster with no slot has not been asked for, or
+/// its texture was evicted. The number is when it was asked for.
 enum Slot {
-    /// No pixels: the decode has not landed, or its texture was evicted.
-    #[default]
-    Waiting,
+    /// Asked of the worker, which has not delivered it yet.
+    Pending(u64),
     /// Decoded, waiting for the renderer.
-    Filled(Pixels),
+    Filled(u64, Pixels),
     /// The renderer took the pixels, so a texture of them exists — until it
     /// says it evicted it.
     Uploaded,
-    /// Nobody will draw them: pixels that arrive now are dropped on arrival.
-    Abandoned,
 }
 
 /// Decoded RGBA8 pixels, row-major, `width * height * 4` bytes.
@@ -70,46 +142,119 @@ pub(crate) struct Pixels {
 }
 
 impl DecodedImage {
-    fn slot(&self) -> MutexGuard<'_, Slot> {
+    fn slots(&self) -> MutexGuard<'_, Slots> {
         self.0
+            .slots
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The pixels, for the renderer to upload — once. What was taken is gone
-    /// from here, which is the drop the upload is.
+    /// A raster image's pixels, for the renderer to upload — once. What was
+    /// taken is gone from here, which is the drop the upload is.
     pub(crate) fn take(&self) -> Option<Pixels> {
-        let mut slot = self.slot();
-        match std::mem::take(&mut *slot) {
-            Slot::Filled(pixels) => {
-                *slot = Slot::Uploaded;
-                Some(pixels)
-            }
-            other => {
-                *slot = other;
-                None
-            }
+        self.slots().take(None)
+    }
+
+    /// An SVG's raster of `extent`, for the renderer to upload as `take`'s
+    /// are. The renderer's to call, on a frame that needed a size it has no
+    /// texture of. A small one is drawn here and now; a larger one is taken if
+    /// the worker has delivered it, and asked of the worker if it has not been
+    /// asked already — a job, not a signal write, so it is on its way before
+    /// the frame is out.
+    pub(crate) fn take_or_rasterize(&self, extent: Extent) -> Option<Pixels> {
+        let size = extent?;
+        if inline(size) {
+            let Some(pixels) = rasterize(self.0.svg.as_ref()?, size) else {
+                log::warn!("Failed to rasterize {} at {size:?}", describe(self.key()));
+                self.report(ImageEvent::Failed);
+                return None;
+            };
+            self.slots().by_extent.insert(extent, Slot::Uploaded);
+            self.report(ImageEvent::Drawn);
+            return Some(pixels);
         }
+        {
+            let mut slots = self.slots();
+            if let Some(pixels) = slots.take(extent) {
+                drop(slots);
+                self.report(ImageEvent::Drawn);
+                return Some(pixels);
+            }
+            if matches!(slots.by_extent.get(&extent), Some(Slot::Pending(_))) {
+                return None;
+            }
+            slots.ask(extent);
+        }
+        if !send_job(self, extent) {
+            self.report(ImageEvent::Failed);
+        }
+        None
+    }
+
+    /// The renderer drew nothing of this SVG: its raster is on the worker
+    /// and there was no earlier one to stretch.
+    pub(crate) fn drew_nothing(&self) {
+        self.report(ImageEvent::Waiting);
+    }
+
+    fn report(&self, event: fn(DecodeKey) -> ImageEvent) {
+        let event = event(self.key().clone());
+        with_app_state(|app| app.image_events.push(event));
+    }
+
+    /// The source these are the pixels of.
+    pub(crate) fn key(&self) -> &DecodeKey {
+        &self.0.key
+    }
+
+    /// The size an SVG lays out at, from the document its rasters are drawn
+    /// from; `None` for a raster image, whose pixels carry theirs.
+    pub(crate) fn svg_size(&self) -> Option<(f32, f32)> {
+        self.0.svg.as_ref().map(crate::image_metadata::svg_size)
     }
 
     /// How many bytes of pixels are waiting here: zero once uploaded.
     #[cfg(feature = "testing")]
     pub(crate) fn byte_size(&self) -> usize {
-        match &*self.slot() {
-            Slot::Filled(pixels) => pixels.rgba.len(),
-            _ => 0,
+        self.slots()
+            .by_extent
+            .values()
+            .map(|slot| match slot {
+                Slot::Filled(_, pixels) => pixels.rgba.len(),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// Fill the slot the job was sent for, if it is still waiting for them.
+    fn fill(&self, extent: Extent, pixels: Pixels) {
+        let mut slots = self.slots();
+        if slots.abandoned {
+            return;
+        }
+        if let Some(slot) = slots.by_extent.get_mut(&extent)
+            && let Slot::Pending(asked) = *slot
+        {
+            *slot = Slot::Filled(asked, pixels);
         }
     }
 
-    fn fill(&self, pixels: Pixels) {
-        let mut slot = self.slot();
-        if !matches!(*slot, Slot::Abandoned) {
-            *slot = Slot::Filled(pixels);
-        }
+    /// Whether a texture of any of its rasters exists.
+    fn uploaded(&self) -> bool {
+        self.slots()
+            .by_extent
+            .values()
+            .any(|slot| matches!(slot, Slot::Uploaded))
     }
 }
 
-/// Two handles are the same when they are the same slot.
+impl std::fmt::Debug for DecodedImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DecodedImage").field(&self.0.key).finish()
+    }
+}
+
+/// Two handles are the same when they are the same entry's.
 impl PartialEq for DecodedImage {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -122,12 +267,14 @@ pub(crate) enum DecodeState {
     /// Queued or running on the worker.
     Pending,
     /// Decoded: the pixels wait for the renderer, or are already a texture.
+    /// An SVG is ready from its first raster on, though another of its sizes
+    /// may still be on the way.
     Ready,
     /// The header or the decode failed, and said why once, in the log.
     Failed,
 }
 
-/// What an entry is found by: the source, for the two kinds that decode.
+/// What an entry is found by: the source, for the kinds that decode.
 ///
 /// Bytes hash a sample rather than every byte, because a paint looks its entry
 /// up and a paint must not read a 9 MB buffer end to end. Equality then
@@ -136,6 +283,8 @@ pub(crate) enum DecodeState {
 pub(crate) enum DecodeKey {
     Path(PathBuf),
     Bytes(Arc<[u8]>),
+    SvgPath(PathBuf),
+    SvgBytes(Arc<[u8]>),
 }
 
 impl DecodeKey {
@@ -143,7 +292,9 @@ impl DecodeKey {
         match source {
             ImageSource::Path(path) => Some(Self::Path(path.clone())),
             ImageSource::Bytes(bytes) => Some(Self::Bytes(bytes.clone())),
-            ImageSource::Rgba { .. } | ImageSource::SvgPath(_) | ImageSource::SvgBytes(_) => None,
+            ImageSource::SvgPath(path) => Some(Self::SvgPath(path.clone())),
+            ImageSource::SvgBytes(bytes) => Some(Self::SvgBytes(bytes.clone())),
+            ImageSource::Rgba { .. } => None,
         }
     }
 }
@@ -151,8 +302,10 @@ impl DecodeKey {
 impl PartialEq for DecodeKey {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Path(a), Self::Path(b)) => a == b,
-            (Self::Bytes(a), Self::Bytes(b)) => Arc::ptr_eq(a, b) || a[..] == b[..],
+            (Self::Path(a), Self::Path(b)) | (Self::SvgPath(a), Self::SvgPath(b)) => a == b,
+            (Self::Bytes(a), Self::Bytes(b)) | (Self::SvgBytes(a), Self::SvgBytes(b)) => {
+                Arc::ptr_eq(a, b) || a[..] == b[..]
+            }
             _ => false,
         }
     }
@@ -169,6 +322,14 @@ impl Hash for DecodeKey {
             }
             Self::Bytes(bytes) => {
                 1u8.hash(state);
+                hash_sampled(bytes, state);
+            }
+            Self::SvgPath(path) => {
+                2u8.hash(state);
+                path.hash(state);
+            }
+            Self::SvgBytes(bytes) => {
+                3u8.hash(state);
                 hash_sampled(bytes, state);
             }
         }
@@ -205,8 +366,8 @@ pub(crate) struct DecodeEntry {
     pixels: DecodedImage,
     /// The scope the signal lives in, under the root, disposed with the entry.
     scope: OwnerId,
-    /// Read from the header when the entry was made.
-    size: Option<(u32, u32)>,
+    /// Read from the header, or the SVG's document, when the entry was made.
+    size: Option<(f32, f32)>,
     /// How many [`DecodeHandle`]s hold the entry.
     users: u32,
 }
@@ -226,8 +387,29 @@ fn entry(key: DecodeKey, source: &ImageSource, users: u32) -> DecodeEntry {
 
     // Outside the borrow: creating a signal reaches the runtime and the owner
     // arena, and neither may find the map borrowed.
-    let size = crate::image_metadata::get_intrinsic_size(source);
-    let initial = if size.is_some() {
+    let (svg, size) = if source.is_svg() {
+        let svg = crate::image_metadata::parse_svg(source);
+        let size = svg.as_ref().map(crate::image_metadata::svg_size);
+        (svg, size)
+    } else {
+        (None, crate::image_metadata::get_intrinsic_size(source))
+    };
+    // An SVG small enough to draw inside the frame is ready at once. Its size
+    // here is a guess — the renderer knows the box and the scale and says
+    // otherwise when it draws — taken at the quality the renderer rasterizes
+    // at, so a large SVG is not ready on a frame that draws it blank.
+    let quality = crate::renderer::constants::SVG_QUALITY_MULTIPLIER;
+    let initial = if let (Some(_), Some((width, height))) = (&svg, size) {
+        let guess = (
+            (width * quality).ceil() as u32,
+            (height * quality).ceil() as u32,
+        );
+        if inline(guess) {
+            DecodeState::Ready
+        } else {
+            DecodeState::Pending
+        }
+    } else if size.is_some() {
         DecodeState::Pending
     } else {
         log::warn!("Failed to read the image header of {}", describe(&key));
@@ -238,13 +420,20 @@ fn entry(key: DecodeKey, source: &ImageSource, users: u32) -> DecodeEntry {
     let (state, scope) = with_root_owner(|| with_owner(|| create_signal(initial)));
     let entry = DecodeEntry {
         state,
-        pixels: DecodedImage::default(),
+        pixels: DecodedImage(Arc::new(Shared {
+            key: key.clone(),
+            write: state.writer(),
+            svg,
+            slots: Mutex::default(),
+        })),
         scope,
         size,
         users,
     };
-    if size.is_some() {
-        decode_later(key.clone(), &entry);
+    // A raster image has one raster to decode, so its decode starts now. An
+    // SVG's waits for the renderer to say at what size.
+    if size.is_some() && !source.is_svg() && !decode_later(&entry.pixels, None) {
+        state.set(DecodeState::Failed);
     }
     with_app_state(|app| {
         app.decoded_images.borrow_mut().insert(key, entry.clone());
@@ -254,15 +443,16 @@ fn entry(key: DecodeKey, source: &ImageSource, users: u32) -> DecodeEntry {
 
 fn describe(key: &DecodeKey) -> String {
     match key {
-        DecodeKey::Path(path) => path.display().to_string(),
-        DecodeKey::Bytes(bytes) => format!("an in-memory image of {} bytes", bytes.len()),
+        DecodeKey::Path(path) | DecodeKey::SvgPath(path) => path.display().to_string(),
+        DecodeKey::Bytes(bytes) | DecodeKey::SvgBytes(bytes) => {
+            format!("an in-memory image of {} bytes", bytes.len())
+        }
     }
 }
 
 /// Where the decode of `source` has got to, read so that the reader is told
 /// when it moves, and where its pixels wait — or `None` for a source that
-/// needs no decode: its pixels are already there (`Rgba`) or are rasterised
-/// when drawn (SVG).
+/// needs no decode, whose pixels are already there (`Rgba`).
 ///
 /// Makes the entry and starts its decode if nobody has asked before. An entry
 /// made here rather than by an [`acquire`] is held by nobody: it lives while
@@ -271,6 +461,18 @@ pub(crate) fn state(source: &ImageSource) -> Option<(DecodeState, DecodedImage)>
     let key = DecodeKey::of(source)?;
     let entry = entry(key, source, 0);
     Some((entry.state.get(), entry.pixels))
+}
+
+/// Whether a paint pushes an image whose decode is in `state`. A raster image
+/// is pushed once it is decoded. An SVG is pushed while it is pending too:
+/// the renderer is what draws or asks for its raster, at the size the push
+/// says.
+pub(crate) fn paints(state: DecodeState, pixels: &DecodedImage) -> bool {
+    match state {
+        DecodeState::Ready => true,
+        DecodeState::Pending => pixels.0.svg.is_some(),
+        DecodeState::Failed => false,
+    }
 }
 
 /// Whether `source` can be drawn now: decoded, or needing no decode.
@@ -299,7 +501,7 @@ pub(crate) struct DecodeHandle {
     key: DecodeKey,
     state: RwSignal<DecodeState>,
     pixels: DecodedImage,
-    size: Option<(u32, u32)>,
+    size: Option<(f32, f32)>,
 }
 
 impl DecodeHandle {
@@ -310,8 +512,9 @@ impl DecodeHandle {
         (self.state.get(), self.pixels.clone())
     }
 
-    /// The size the header gave, or `None` where it could not be read.
-    pub(crate) fn size(&self) -> Option<(u32, u32)> {
+    /// The size the header or the document gave, or `None` where it could
+    /// not be read.
+    pub(crate) fn size(&self) -> Option<(f32, f32)> {
         self.size
     }
 }
@@ -348,10 +551,16 @@ pub(crate) enum ImageEvent {
     /// A frame drew the source, its texture was not there, and its pixels had
     /// already gone to an upload.
     Missing(DecodeKey),
-    /// The renderer evicted the source's texture.
-    Evicted(DecodeKey),
+    /// The renderer evicted the texture of one of the source's rasters.
+    Evicted(DecodeKey, Extent),
     /// The last image holding the entry let go of it.
     Released(DecodeKey),
+    /// The renderer asked for an SVG's raster and there was no worker to ask.
+    Failed(DecodeKey),
+    /// The renderer drew a raster of the SVG.
+    Drawn(DecodeKey),
+    /// The renderer drew nothing of the SVG: its raster is on the worker.
+    Waiting(DecodeKey),
 }
 
 /// The renderer drew `source`, found no texture and no pixels.
@@ -361,9 +570,10 @@ pub(crate) fn texture_missing(source: &ImageSource) {
     }
 }
 
-/// The renderer evicted the texture of the source `key` names.
-pub(crate) fn texture_evicted(key: DecodeKey) {
-    with_app_state(|app| app.image_events.push(ImageEvent::Evicted(key)));
+/// The renderer evicted the texture of the raster `extent` of the source
+/// `key` names.
+pub(crate) fn texture_evicted(key: DecodeKey, extent: Extent) {
+    with_app_state(|app| app.image_events.push(ImageEvent::Evicted(key, extent)));
 }
 
 /// Settle what the renderer and the widgets reported since the last pass.
@@ -371,36 +581,58 @@ pub(crate) fn texture_evicted(key: DecodeKey) {
 /// - A **missing** texture of a ready source sends it back to pending and to
 ///   the worker: its readers repaint to nothing, and again when it lands.
 /// - An entry nobody holds goes when nothing is left to be drawn from — its
-///   texture **evicted**, or never made when the last holder was
-///   **released**. An uploaded one stays while its texture does, so an image
+///   textures **evicted**, or never made when the last holder was
+///   **released**. An uploaded one stays while a texture does, so an image
 ///   mounted again is drawn from it without a decode.
+/// - A raster that could not be asked for **failed** its entry.
+/// - An SVG the renderer **drew** is ready; one it drew nothing of while its
+///   raster is on the worker is **waiting**, and not ready. Settled in the
+///   order they were reported, so a frame that drew a raster which landed
+///   after the previous frame drew nothing ends ready.
 pub(crate) fn settle_image_events() {
     for event in with_app_state(|app| app.image_events.drain()) {
         let key = match &event {
-            ImageEvent::Missing(key) | ImageEvent::Evicted(key) | ImageEvent::Released(key) => key,
+            ImageEvent::Missing(key)
+            | ImageEvent::Evicted(key, _)
+            | ImageEvent::Released(key)
+            | ImageEvent::Failed(key)
+            | ImageEvent::Drawn(key)
+            | ImageEvent::Waiting(key) => key,
         };
         let Some(entry) = with_app_state(|app| app.decoded_images.borrow().get(key).cloned())
         else {
             continue;
         };
         match event {
-            ImageEvent::Missing(key) => {
-                let gone = !matches!(*entry.pixels.slot(), Slot::Filled(_));
+            ImageEvent::Missing(_) => {
+                let gone = !matches!(
+                    entry.pixels.slots().by_extent.get(&None),
+                    Some(Slot::Filled(..))
+                );
                 if gone && entry.state.get_untracked() == DecodeState::Ready {
                     entry.state.set(DecodeState::Pending);
-                    decode_later(key, &entry);
+                    if !decode_later(&entry.pixels, None) {
+                        entry.state.set(DecodeState::Failed);
+                    }
                 }
             }
-            ImageEvent::Evicted(key) => {
+            ImageEvent::Evicted(key, extent) => {
                 {
-                    let mut slot = entry.pixels.slot();
-                    if matches!(*slot, Slot::Uploaded) {
-                        *slot = Slot::Waiting;
+                    let mut slots = entry.pixels.slots();
+                    if matches!(slots.by_extent.get(&extent), Some(Slot::Uploaded)) {
+                        slots.by_extent.remove(&extent);
                     }
                 }
                 remove_if_unheld(&key, entry);
             }
             ImageEvent::Released(key) => remove_if_unheld(&key, entry),
+            ImageEvent::Failed(_) => entry.state.set(DecodeState::Failed),
+            ImageEvent::Drawn(_) => entry.state.set(DecodeState::Ready),
+            ImageEvent::Waiting(_) => {
+                if entry.state.get_untracked() == DecodeState::Ready {
+                    entry.state.set(DecodeState::Pending);
+                }
+            }
         }
     }
 }
@@ -410,11 +642,11 @@ pub(crate) fn settle_image_events() {
 /// Its readers are told, so a paint that looked it up by source looks again
 /// and finds a fresh one; pixels still on their way are dropped on arrival.
 fn remove_if_unheld(key: &DecodeKey, entry: DecodeEntry) {
-    if entry.users > 0 || matches!(*entry.pixels.slot(), Slot::Uploaded) {
+    if entry.users > 0 || entry.pixels.uploaded() {
         return;
     }
     with_app_state(|app| app.decoded_images.borrow_mut().remove(key));
-    *entry.pixels.slot() = Slot::Abandoned;
+    entry.pixels.slots().abandoned = true;
     entry.state.set_always(DecodeState::Pending);
     dispose_owner(entry.scope);
 }
@@ -423,11 +655,10 @@ fn remove_if_unheld(key: &DecodeKey, entry: DecodeEntry) {
 // The worker
 // ---------------------------------------------------------------------------
 
-/// A source to decode, where to put the pixels, and the signal that says so.
+/// A raster to make, and the entry to put it in.
 struct DecodeJob {
-    key: DecodeKey,
-    pixels: DecodedImage,
-    write: WriteSignal<DecodeState>,
+    image: DecodedImage,
+    extent: Extent,
 }
 
 /// The application's decode worker: one thread, fed through a channel, which
@@ -472,14 +703,16 @@ impl Decoder {
                     drop(worker.changed.wait_while(worker.lock(), |state| state.held));
                     // Queued before the count goes down, so whoever waits for
                     // the count finds the write already in the queue.
-                    let state = match decode(&job.key) {
+                    let state = match decode(&job.image, job.extent) {
                         Some(pixels) => {
-                            job.pixels.fill(pixels);
+                            job.image.fill(job.extent, pixels);
                             DecodeState::Ready
                         }
                         None => DecodeState::Failed,
                     };
-                    job.write.set(state);
+                    // Always: an SVG already ready is told of each new size
+                    // as it lands, so its readers draw it.
+                    job.image.0.write.set_always(state);
                     worker.lock().in_flight -= 1;
                     worker.changed.notify_all();
                 }
@@ -501,37 +734,51 @@ fn with_decoder<R>(f: impl FnOnce(&Decoder) -> R) -> Option<R> {
     })
 }
 
-/// Hand `key` to the worker, which fills the entry's pixels and writes its
-/// state.
-fn decode_later(key: DecodeKey, entry: &DecodeEntry) {
-    let write = entry.state.writer();
-    let pixels = entry.pixels.clone();
-    let sent = with_decoder(|decoder| {
+/// Hand the raster `extent` of `image` to the worker, which fills its slot
+/// and writes the entry's state. `false` if there is no worker to do it, and
+/// the caller fails the entry rather than leave it pending for ever.
+fn decode_later(image: &DecodedImage, extent: Extent) -> bool {
+    image.slots().ask(extent);
+    send_job(image, extent)
+}
+
+/// Send the worker the job of a slot already marked pending.
+fn send_job(image: &DecodedImage, extent: Extent) -> bool {
+    let job = DecodeJob {
+        image: image.clone(),
+        extent,
+    };
+    with_decoder(|decoder| {
         {
             let mut progress = decoder.progress.lock();
             progress.in_flight += 1;
             progress.started += 1;
         }
-        decoder.jobs.send(DecodeJob { key, pixels, write }).is_ok()
-    });
-    // No worker to decode it: the entry is failed rather than pending for ever.
-    if sent != Some(true) {
-        write.set(DecodeState::Failed);
-    }
+        decoder.jobs.send(job).is_ok()
+    }) == Some(true)
 }
 
-/// Decode on the worker. A failure is loud, once: a missing decoder feature
-/// (`webp` disabled) or a bad file would otherwise be a silently empty box.
-/// An empty image is a failure too — there is nothing to upload, and a ready
-/// entry the renderer cannot upload would be sent back to the worker for ever.
-fn decode(key: &DecodeKey) -> Option<Pixels> {
+/// Decode or rasterize on the worker. A failure is loud, once: a missing
+/// decoder feature (`webp` disabled) or a bad file would otherwise be a
+/// silently empty box. An empty image is a failure too — there is nothing to
+/// upload, and a ready entry the renderer cannot upload would be sent back to
+/// the worker for ever.
+fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
+    let key = &image.0.key;
     let decoded = match key {
         DecodeKey::Path(path) => image::open(path),
         DecodeKey::Bytes(bytes) => image::load_from_memory(bytes),
+        DecodeKey::SvgPath(_) | DecodeKey::SvgBytes(_) => {
+            return rasterize(image.0.svg.as_ref()?, extent?);
+        }
     };
     match decoded {
         Ok(image) => {
-            let rgba = image.into_rgba8();
+            let has_alpha = image.color().has_alpha();
+            let mut rgba = image.into_rgba8();
+            if has_alpha {
+                premultiply(&mut rgba);
+            }
             let (width, height) = rgba.dimensions();
             if width == 0 || height == 0 {
                 log::warn!("{} decodes to an empty image", describe(key));
@@ -548,6 +795,59 @@ fn decode(key: &DecodeKey) -> Option<Pixels> {
             None
         }
     }
+}
+
+/// Scale each texel's colour by its alpha, in place: the textured-quad
+/// pipeline takes premultiplied texels, and a decoded image, like an
+/// `ImageSource::Rgba`, is straight. Rounded as tiny-skia rounds, so a raster
+/// and an SVG of the same pixels premultiply alike.
+pub(crate) fn premultiply(rgba: &mut [u8]) {
+    for texel in rgba.as_chunks_mut::<4>().0 {
+        let alpha = u16::from(texel[3]);
+        if alpha != 255 {
+            for channel in &mut texel[..3] {
+                let product = u16::from(*channel) * alpha + 128;
+                *channel = ((product + (product >> 8)) >> 8) as u8;
+            }
+        }
+    }
+}
+
+/// `rgba` premultiplied: borrowed when every texel is opaque and there is
+/// nothing to scale, copied when one is not.
+pub(crate) fn premultiplied(rgba: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if rgba.as_chunks::<4>().0.iter().all(|texel| texel[3] == 255) {
+        return std::borrow::Cow::Borrowed(rgba);
+    }
+    let mut copy = rgba.to_vec();
+    premultiply(&mut copy);
+    std::borrow::Cow::Owned(copy)
+}
+
+/// Draw an SVG's document into `width` by `height` pixels, stretched to fill
+/// them: the pixel size was rounded up from the size it is shown at, and a
+/// texture is drawn whole, so a raster that left its last row empty would
+/// show that row stretched across the image.
+#[cfg(feature = "svg")]
+fn rasterize(tree: &SvgTree, (width, height): (u32, u32)) -> Option<Pixels> {
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    let size = tree.size();
+    let transform = resvg::tiny_skia::Transform::from_scale(
+        width as f32 / size.width(),
+        height as f32 / size.height(),
+    );
+    resvg::render(tree, transform, &mut pixmap.as_mut());
+    // Premultiplied already, which is what the textured-quad pipeline takes.
+    Some(Pixels {
+        width,
+        height,
+        rgba: pixmap.take(),
+    })
+}
+
+#[cfg(not(feature = "svg"))]
+fn rasterize(tree: &SvgTree, _extent: (u32, u32)) -> Option<Pixels> {
+    match *tree {}
 }
 
 // ---------------------------------------------------------------------------
@@ -675,16 +975,13 @@ mod tests {
 
     /// A source that needs no decode has no entry and is ready at once.
     #[test]
-    fn raw_pixels_and_svg_need_no_decode() {
+    fn raw_pixels_need_no_decode() {
         let rgba = ImageSource::Rgba {
             width: 1,
             height: 1,
             pixels: vec![0; 4].into(),
         };
-        let svg = ImageSource::SvgBytes(b"<svg/>".to_vec().into());
-        for source in [rgba, svg] {
-            assert!(acquire(&source).is_none());
-            assert!(is_ready(&source));
-        }
+        assert!(acquire(&rgba).is_none());
+        assert!(is_ready(&rgba));
     }
 }

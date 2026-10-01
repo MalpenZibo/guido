@@ -196,6 +196,23 @@ fn render_pixels(
 
     renderer.set_screen_size(width as f32, height as f32);
     renderer.set_scale_factor(scale);
+    // A large SVG asks the worker for its raster on the frame that first draws
+    // it, and is drawn on the next. The picture is the first frame that asked
+    // for nothing. Waiting for the worker is `testing`'s, so without it a
+    // scenario of a large SVG does not exist — see the two that say so.
+    #[cfg(feature = "testing")]
+    {
+        let mut started = guido::testing::finish_image_decodes();
+        loop {
+            renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+            let now = guido::testing::finish_image_decodes();
+            if now == started {
+                break;
+            }
+            started = now;
+        }
+    }
+    #[cfg(not(feature = "testing"))]
     renderer.render_to_view(&view, width, height, &commands, &layers, clear);
 
     // Readback. Rows in a mapped buffer are padded to 256 bytes; the copy is
@@ -1024,7 +1041,163 @@ fn tinted_svg() {
     golden("tinted_svg", (260.0, 100.0), 1.0, BACKDROP, view);
 }
 
+/// Transformed text is composited over its background, not darkened past it
+/// (#556).
+///
+/// An orange label on a light tile is drawn by glyphon directly and, scaled by
+/// 1.0001 — a transform, so it goes through the text quad — once more beside
+/// it. Correct compositing puts every pixel of a label on the straight line
+/// from the tile's colour to the text's, whatever its coverage, and so does
+/// any filtering of premultiplied texels: the quad samples a texture
+/// rasterized at twice the resolution, so its pixels cannot match glyphon's,
+/// but they must lie on the same line. Measured on the green and blue
+/// channels, where orange and the tile are far apart: the fraction of the way
+/// along the line each says a pixel is has to agree.
+///
+/// Red before: glyphon leaves the quad's texture premultiplied and the quad
+/// blended it as straight alpha, so an edge pixel was `rgb·a·a + dst·(1−a)` —
+/// darker than the line, and further off it in green than in blue.
+#[test]
+fn transformed_text_lies_between_its_colour_and_the_background() {
+    const NAME: &str = "transformed_text_lies_between_its_colour_and_the_background";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let tile = |scale: f32| {
+        box_of(120.0, 50.0)
+            .background(Color::rgb(0.92, 0.92, 0.88))
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .scale(scale)
+                    .child(label("Guido", 32.0).color(Color::rgb(0.95, 0.45, 0.25))),
+            )
+    };
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.0)
+        .layout(Flex::row().spacing(10.0))
+        .child(tile(1.0))
+        .child(tile(1.0001));
+    let pixels = render_with_own_renderer(ctx, view, (270.0, 70.0), 1.0, BACKDROP);
+
+    let at = |x: u32, y: u32| -> [f32; 3] {
+        let i = ((y * pixels.width + x) * 4) as usize;
+        std::array::from_fn(|c| f32::from(pixels.data[i + c]))
+    };
+    // The tile's colour from a corner no glyph reaches, and the text's from
+    // the pixel furthest from it — a stem 32 px type covers whole.
+    let worst_off_the_line = |left: u32| -> f32 {
+        // Inside the tile by a margin: its own edge blends into the backdrop.
+        let region: Vec<[f32; 3]> = (13..57)
+            .flat_map(|y| (left + 3..left + 117).map(move |x| (x, y)))
+            .map(|(x, y)| at(x, y))
+            .collect();
+        let background = at(left + 3, 13);
+        let along = |p: [f32; 3], text: [f32; 3], c: usize| {
+            (p[c] - background[c]) / (text[c] - background[c])
+        };
+        let text = *region
+            .iter()
+            .max_by(|p, q| (background[2] - p[2]).total_cmp(&(background[2] - q[2])))
+            .expect("a tile has pixels");
+        region
+            .iter()
+            .filter(|&&p| along(p, text, 2) > 0.1)
+            .map(|&p| (along(p, text, 1) - along(p, text, 2)).abs())
+            .fold(0.0, f32::max)
+    };
+    let (direct, transformed) = (worst_off_the_line(10), worst_off_the_line(140));
+    assert!(
+        direct < 0.05,
+        "glyphon's own text is off the line by {direct:.3}: the measure is wrong, not the quad"
+    );
+    assert!(
+        transformed < 0.05,
+        "a pixel of the transformed label is {transformed:.3} further along the line in \
+         green than in blue: it was darkened past its colour, not composited over the tile \
+         (glyphon's own text: {direct:.3})"
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// An untinted coloured SVG blends like a raster image of the same pixels
+/// (#549).
+///
+/// An orange circle over a light tile, twice: left as the SVG, right as an
+/// `ImageSource::Rgba` of the raster the renderer makes of it — 40 logical
+/// pixels at the 2× SVG quality is 80 — taken out of tiny-skia's premultiplied
+/// form by hand, since `Rgba` takes straight pixels. Both are 80-pixel textures
+/// drawn into the same 40-pixel box, so they match to the bit or the SVG's
+/// pixels were uploaded differently.
+///
+/// Red before: the SVG was uploaded premultiplied into a pipeline that blends
+/// straight alpha, so its antialiased edge was multiplied by its alpha twice
+/// and came out as a dark ring.
 #[cfg(feature = "svg")]
+#[test]
+fn coloured_svg_edges_blend_like_a_raster() {
+    const NAME: &str = "coloured_svg_edges_blend_like_a_raster";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let svg: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#f27340"/></svg>"##;
+
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())
+        .expect("the SVG parses");
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(80, 80).expect("an 80-pixel pixmap");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(2.0, 2.0),
+        &mut pixmap.as_mut(),
+    );
+    let straight: Vec<u8> = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let c = pixel.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+
+    let tile = |source: ImageSource| {
+        box_of(40.0, 40.0)
+            .background(Color::rgb(0.92, 0.92, 0.88))
+            .child(image(source).content_fit(ContentFit::Fill))
+    };
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.0)
+        .layout(Flex::row().spacing(10.0))
+        .child(tile(ImageSource::SvgBytes(svg.to_vec().into())))
+        .child(tile(ImageSource::Rgba {
+            width: 80,
+            height: 80,
+            pixels: straight.into(),
+        }));
+    let pixels = render_with_own_renderer(ctx, view, (110.0, 60.0), 1.0, BACKDROP);
+
+    let pixel = |x: u32, y: u32| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    let differ: Vec<_> = (10..50)
+        .flat_map(|y| (10..50).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y) != pixel(x + 50, y))
+        .collect();
+    assert!(
+        differ.is_empty(),
+        "{} pixels of the SVG differ from the same raster drawn straight, first at {:?}: \
+         svg {:?}, raster {:?}",
+        differ.len(),
+        differ[0],
+        pixel(differ[0].0, differ[0].1),
+        pixel(differ[0].0 + 50, differ[0].1),
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// An 80 × 240 raster, past the line an SVG is drawn inside the frame below:
+/// it is the worker's, and waiting for the worker needs `testing`.
+#[cfg(all(feature = "svg", feature = "testing"))]
 #[test]
 fn fractional_svg_keeps_its_vector_aspect() {
     let source = ImageSource::SvgBytes(
@@ -1077,7 +1250,8 @@ fn fractional_svg_fills_its_raster_when_stretched() {
     assert_eq!(render("1.5", "0.6"), expected);
 }
 
-#[cfg(feature = "svg")]
+/// A 514 × 514 raster: the worker's, as the one above is.
+#[cfg(all(feature = "svg", feature = "testing"))]
 #[test]
 fn fractional_svg_fills_a_standalone_texture() {
     let Some((ctx, _)) = rasterizer("fractional_svg_fills_a_standalone_texture") else {

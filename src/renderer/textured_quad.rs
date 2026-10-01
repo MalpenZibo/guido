@@ -114,20 +114,15 @@ impl TexturedQuadPipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // Premultiplied alpha: the colour is already scaled, so it
-                    // is added whole and only the destination is attenuated.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+                    // Premultiplied alpha, as Skia stores textures: a texel's
+                    // colour is already scaled by its coverage, so it is added
+                    // whole and only the destination is attenuated. Every
+                    // texture arrives that way — glyphon leaves a text quad's
+                    // premultiplied, tiny-skia an SVG's, and raster images are
+                    // premultiplied when decoded or uploaded. Bilinear
+                    // filtering then mixes colour weighted by coverage, so an
+                    // empty texel's black never bleeds into a scaled edge.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),

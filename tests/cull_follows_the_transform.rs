@@ -11,6 +11,7 @@ mod common;
 use common::Harness;
 use guido::prelude::*;
 use guido::renderer::RenderNode;
+use guido::widgets::AnyWidget;
 
 const ROW_WIDTH: f32 = 120.0;
 const ROW_HEIGHT: f32 = 24.0;
@@ -60,7 +61,7 @@ fn rows(n: usize) -> Vec<guido::widgets::Container> {
         .collect()
 }
 
-fn scroller(children: Vec<guido::widgets::Container>) -> guido::widgets::Container {
+fn scroller<M>(children: impl IntoChildren<M>) -> guido::widgets::Container {
     container()
         .width(200.0)
         .height(VIEWPORT)
@@ -132,13 +133,49 @@ fn an_untranslated_column_still_narrows_to_its_viewport() {
 #[test]
 fn a_row_its_own_transform_lifts_into_view_survives_both_frames() {
     let mut rows = rows(20);
-    rows[15] = container()
+    rows[15] = lifted_row();
+    the_lifted_row_is_painted_on_both_frames(scroller(rows));
+}
+
+/// The same row behind `into_any`, which every list of mixed children is
+/// built with. An `AnyWidget` is a `Box<dyn Widget>`, and adding it boxes it
+/// again, so the tree reaches the row through the box's own `Widget` impl —
+/// which has to forward the transform's reach as the row would report it.
+///
+/// Red before #558: the box answered with the trait's default, no reach, and
+/// the row was culled where it was laid out.
+#[test]
+fn a_lifted_row_added_as_any_widget_survives_both_frames() {
+    let mut rows: Vec<AnyWidget> = rows(20).into_iter().map(Widget::into_any).collect();
+    rows[15] = lifted_row().into_any();
+    the_lifted_row_is_painted_on_both_frames(scroller(rows));
+}
+
+/// The same row as a dynamic child, which the tree reaches through the
+/// wrapper every dynamic child is adopted as.
+///
+/// Red before #558: that wrapper did not forward the reach either.
+#[test]
+fn a_lifted_row_added_dynamically_survives_both_frames() {
+    the_lifted_row_is_painted_on_both_frames(scroller(move || {
+        let mut rows = rows(20);
+        rows[15] = lifted_row();
+        rows
+    }));
+}
+
+/// Row fifteen, told from its neighbours by width, lifted by its own
+/// transform from below the fold into the middle of the viewport.
+fn lifted_row() -> guido::widgets::Container {
+    container()
         .width(MARKED_WIDTH)
         .height(ROW_HEIGHT)
         .background(Color::rgb(1.0, 0.0, 0.0))
-        .translate(Translate::new(0.0, -ROW_LIFT));
+        .translate(Translate::new(0.0, -ROW_LIFT))
+}
 
-    let mut harness = Harness::laid_out(scroller(rows), 400.0, VIEWPORT);
+fn the_lifted_row_is_painted_on_both_frames(view: impl Widget + 'static) {
+    let mut harness = Harness::laid_out(view, 400.0, VIEWPORT);
     let mut root = RenderNode::new(harness.root.as_u64());
 
     for frame in 1..=2 {

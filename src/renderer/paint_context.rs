@@ -6,7 +6,7 @@ use super::commands::{Border, CornerRadii, DrawCommand};
 use super::text_measurer::LineFit;
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
-use crate::image_decode::{DecodeState, DecodedImage};
+use crate::image_decode::DecodedImage;
 use crate::pivot::Pivot;
 use crate::transform::Transform;
 use crate::tree::{Tree, WidgetId};
@@ -594,9 +594,9 @@ impl<'a> PaintContext<'a> {
 
     /// Draw an image in local coordinates.
     ///
-    /// A raster `Path` or `Bytes` source is decoded off the frame: until its
-    /// decode lands this draws nothing, and the widget painting it is
-    /// repainted when it does.
+    /// A raster `Path` or `Bytes` source is decoded off the frame, and an SVG
+    /// rasterized there: until that lands this draws nothing, and the widget
+    /// painting it is repainted when it does.
     pub fn draw_image(
         &mut self,
         source: ImageSource,
@@ -608,8 +608,8 @@ impl<'a> PaintContext<'a> {
         // decode lands — and until then draws nothing.
         let decoded = match crate::image_decode::state(&source) {
             None => None,
-            Some((DecodeState::Ready, decoded)) => Some(decoded),
-            Some((DecodeState::Pending | DecodeState::Failed, _)) => return,
+            Some((state, decoded)) if crate::image_decode::paints(state, &decoded) => Some(decoded),
+            Some(_) => return,
         };
         self.push_image(source, decoded, rect, content_fit, tint);
     }

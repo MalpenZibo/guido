@@ -52,28 +52,33 @@ fn png_file(name: &str, rgb: [u8; 3]) -> PathBuf {
     path
 }
 
-/// A strip of 20×20 images side by side on the backdrop, starting at x = 0.
-fn strip(sources: Vec<ImageSource>, ready: Rc<Cell<Option<Signal<bool>>>>) -> Container {
+/// A strip of square images `side` across, side by side on the backdrop,
+/// starting at x = 0.
+fn strip(sources: Vec<ImageSource>, side: u32, ready: Rc<Cell<Option<Signal<bool>>>>) -> Container {
     container()
         .layout(Flex::row())
         .children(sources.into_iter().map(move |source| {
             let image = image(source).content_fit(ContentFit::Fill);
             ready.set(Some(image.ready()));
-            container().width(20.0).height(20.0).child(image)
+            container()
+                .width(side as f32)
+                .height(side as f32)
+                .child(image)
         }))
 }
 
-fn surface(app: &mut Headless, sources: Vec<ImageSource>) -> (SurfaceId, Signal<bool>) {
+/// A surface three images wide, showing `sources` at `side` each.
+fn surface(app: &mut Headless, sources: Vec<ImageSource>, side: u32) -> (SurfaceId, Signal<bool>) {
     let ready = Rc::new(Cell::new(None));
     let captured = ready.clone();
     let surface = app.surface(
         SurfaceConfig::new()
-            .height(20)
+            .height(side)
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
             .background_color(BACKDROP),
-        move || strip(sources, captured),
+        move || strip(sources, side, captured),
     );
-    app.configure(surface, 60, 20, 1.0);
+    app.configure(surface, 3 * side, side, 1.0);
     (surface, ready.get().expect("an image was built"))
 }
 
@@ -91,11 +96,11 @@ fn is_backdrop(pixel: [u8; 4]) -> bool {
 ///
 /// Red before #507: the renderer decoded inside the frame, so the first frame
 /// already held the image, and held the frame until it had it.
-fn a_pending_image_is_drawn_on_a_later_frame(source: ImageSource) {
+fn a_pending_image_is_drawn_on_a_later_frame(source: ImageSource, side: u32) {
     let _serial = serial();
     let Some(mut app) = headless() else { return };
     let hold = app.hold_image_decodes();
-    let (surface, ready) = surface(&mut app, vec![source]);
+    let (surface, ready) = surface(&mut app, vec![source], side);
 
     app.step();
     assert_eq!(
@@ -129,29 +134,29 @@ fn a_pending_image_is_drawn_on_a_later_frame(source: ImageSource) {
 
 #[test]
 fn an_image_file_is_drawn_on_the_frame_after_its_decode() {
-    a_pending_image_is_drawn_on_a_later_frame(ImageSource::Path(png_file(
-        "decoded-later.png",
-        [255, 0, 0],
-    )));
+    a_pending_image_is_drawn_on_a_later_frame(
+        ImageSource::Path(png_file("decoded-later.png", [255, 0, 0])),
+        20,
+    );
 }
 
 #[test]
 fn image_bytes_are_drawn_on_the_frame_after_their_decode() {
-    a_pending_image_is_drawn_on_a_later_frame(ImageSource::Bytes(png([255, 0, 0]).into()));
+    a_pending_image_is_drawn_on_a_later_frame(ImageSource::Bytes(png([255, 0, 0]).into()), 20);
 }
 
 /// Two images of one source share one decode, and both are drawn by it.
-fn two_images_of_one_source_decode_it_once(first: ImageSource, second: ImageSource) {
+fn two_images_of_one_source_decode_it_once(first: ImageSource, second: ImageSource, side: u32) {
     let _serial = serial();
     let Some(mut app) = headless() else { return };
-    let (surface, _) = surface(&mut app, vec![first, second]);
+    let (surface, _) = surface(&mut app, vec![first, second], side);
 
     app.step();
     app.wait_for_image_decodes();
     app.step();
 
     assert_eq!(app.image_decodes_started(), 1, "one decode for both");
-    for x in [10, 30] {
+    for x in [side / 2, side * 3 / 2] {
         assert!(
             is_red(app.read_pixel(surface, x, 10)),
             "the image at x = {x} is drawn, got {:?}",
@@ -166,6 +171,7 @@ fn two_images_of_one_file_decode_it_once() {
     two_images_of_one_source_decode_it_once(
         ImageSource::Path(path.clone()),
         ImageSource::Path(path),
+        20,
     );
 }
 
@@ -176,7 +182,11 @@ fn two_images_of_equal_bytes_decode_them_once() {
     let first: Arc<[u8]> = png([255, 0, 0]).into();
     let second: Arc<[u8]> = png([255, 0, 0]).into();
     assert!(!Arc::ptr_eq(&first, &second));
-    two_images_of_one_source_decode_it_once(ImageSource::Bytes(first), ImageSource::Bytes(second));
+    two_images_of_one_source_decode_it_once(
+        ImageSource::Bytes(first),
+        ImageSource::Bytes(second),
+        20,
+    );
 }
 
 /// A source that needs no decode is ready from the start and drawn on the
@@ -194,6 +204,7 @@ fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
             height: 20,
             pixels: red.into(),
         }],
+        20,
     );
 
     app.step();
@@ -214,7 +225,7 @@ fn the_pixels_go_once_the_renderer_has_uploaded_them() {
     let _serial = serial();
     let Some(mut app) = headless() else { return };
     let path = png_file("uploaded-then-dropped.png", [255, 0, 0]);
-    let (surface, ready) = surface(&mut app, vec![ImageSource::Path(path)]);
+    let (surface, ready) = surface(&mut app, vec![ImageSource::Path(path)], 20);
 
     app.step();
     app.wait_for_image_decodes();
@@ -332,6 +343,262 @@ fn an_image_whose_texture_is_gone_is_decoded_again() {
     );
     assert_eq!(app.image_decodes_started(), 2, "one decode more");
     assert_eq!(app.image_bytes_held(), 0, "and let go of again");
+}
+
+/// A square SVG `side` across, of one opaque colour.
+#[cfg(feature = "svg")]
+fn svg(fill: &str, side: u32) -> Vec<u8> {
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{side}" height="{side}"><rect width="{side}" height="{side}" fill="{fill}"/></svg>"#
+    )
+    .into_bytes()
+}
+
+/// A box whose raster is too large to draw inside the frame: 100 logical
+/// pixels is 200 rasterized, 160 KB against the 64 KB line.
+#[cfg(feature = "svg")]
+const LARGE: u32 = 100;
+
+/// An icon is rasterized inside the frame that first draws it, as Chromium,
+/// iced, Qt and Android draw small vectors: it is ready, drawn, and the worker
+/// never hears of it.
+///
+/// Red before: every SVG went to the worker, so an icon was blank on its first
+/// frame and repainted when it landed.
+#[cfg(feature = "svg")]
+#[test]
+fn a_small_svg_is_drawn_on_its_first_frame() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let _hold = app.hold_image_decodes();
+    let (surface, ready) = surface(
+        &mut app,
+        vec![ImageSource::SvgBytes(svg("#f00", 20).into())],
+        20,
+    );
+
+    app.step();
+
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "drawn on the first frame, got {:?}",
+        app.read_pixel(surface, 10, 10)
+    );
+    assert!(ready.get_untracked(), "and ready");
+    assert_eq!(app.image_decodes_started(), 0, "with no worker");
+}
+
+/// Whether an SVG is ready is what the renderer drew, not what its intrinsic
+/// size suggested. A large document shown as an icon — a 512-unit viewBox at
+/// 20 px — is guessed not ready, is drawn inline on its first frame, and is
+/// ready from the next with no worker involved.
+///
+/// Red without the renderer's report: nothing else would ever make it ready,
+/// and an icon faded in on `ready()` would stay invisible.
+#[cfg(feature = "svg")]
+#[test]
+fn a_large_document_drawn_as_an_icon_becomes_ready() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let (surface, ready) = surface(
+        &mut app,
+        vec![ImageSource::SvgBytes(svg("#f00", 512).into())],
+        20,
+    );
+
+    app.step();
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "drawn on the first frame, got {:?}",
+        app.read_pixel(surface, 10, 10)
+    );
+    assert!(!ready.get_untracked(), "though guessed not ready");
+
+    app.step();
+    assert!(
+        ready.get_untracked(),
+        "ready once the renderer said it drew it"
+    );
+    assert_eq!(app.image_decodes_started(), 0, "with no worker");
+}
+
+/// The other wrong guess: a small document shown large is guessed ready, draws
+/// nothing on its first frame while its raster is on the worker, and is not
+/// ready until that raster lands.
+///
+/// Red without the renderer's report: it would say ready over a blank box.
+#[cfg(feature = "svg")]
+#[test]
+fn a_small_document_drawn_large_is_not_ready_until_its_raster_lands() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let hold = app.hold_image_decodes();
+    let (surface, ready) = surface(
+        &mut app,
+        vec![ImageSource::SvgBytes(svg("#f00", 20).into())],
+        LARGE,
+    );
+
+    app.step();
+    assert!(is_backdrop(app.read_pixel(surface, 10, 10)), "blank");
+    app.step();
+    assert!(!ready.get_untracked(), "and not ready while blank");
+
+    hold.release();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "drawn once it lands"
+    );
+    assert!(ready.get_untracked(), "and ready");
+}
+
+/// A large SVG is rasterized on the worker, like a raster source is decoded
+/// there: its first frame draws nothing and it appears on a later one (#547).
+///
+/// Red before: the renderer read, parsed and rasterized it inside the frame,
+/// so the first frame already held it, and held the frame until it had it.
+#[cfg(feature = "svg")]
+#[test]
+fn svg_bytes_are_drawn_on_the_frame_after_their_raster() {
+    a_pending_image_is_drawn_on_a_later_frame(
+        ImageSource::SvgBytes(svg("#f00", LARGE).into()),
+        LARGE,
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_file_is_drawn_on_the_frame_after_its_raster() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("rasterized-later.svg");
+    std::fs::write(&path, svg("#f00", LARGE)).expect("the SVG is written");
+    a_pending_image_is_drawn_on_a_later_frame(ImageSource::SvgPath(path), LARGE);
+}
+
+/// Two images of one large SVG at one size share one raster.
+///
+/// Red before: an SVG never reached the worker, so nothing was counted.
+#[cfg(feature = "svg")]
+#[test]
+fn two_svgs_of_one_source_rasterize_it_once() {
+    two_images_of_one_source_decode_it_once(
+        ImageSource::SvgBytes(svg("#f00", LARGE).into()),
+        ImageSource::SvgBytes(svg("#f00", LARGE).into()),
+        LARGE,
+    );
+}
+
+/// A box that changes size needs a raster of the new size, and until it lands
+/// the one it had is drawn stretched: a large SVG in a resize animation does
+/// not blink out on every step.
+///
+/// Red before: the new size was rasterized inside the frame and the worker
+/// never heard of it.
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    // Both sides: a raster is fitted to its box with the aspect kept, so a
+    // square SVG in a box only wider needs no raster of its own.
+    let side = create_signal(LARGE as f32);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(2 * LARGE)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            container().width(side).height(side).child(
+                image(ImageSource::SvgBytes(svg("#f00", LARGE).into()))
+                    .content_fit(ContentFit::Fill),
+            )
+        },
+    );
+    app.configure(surface, 2 * LARGE, 2 * LARGE, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(is_red(app.read_pixel(surface, 10, 10)), "drawn at {LARGE}");
+    assert_eq!(app.image_decodes_started(), 1);
+
+    let hold = app.hold_image_decodes();
+    side.set((2 * LARGE) as f32);
+    app.step();
+    let inside_both_and_only_the_new = [10, LARGE * 3 / 2];
+    for at in inside_both_and_only_the_new {
+        assert!(
+            is_red(app.read_pixel(surface, at, at)),
+            "the old raster is drawn at ({at}, {at}) while the new one is pending, got {:?}",
+            app.read_pixel(surface, at, at)
+        );
+    }
+    assert_eq!(app.image_decodes_started(), 2, "a raster of the new size");
+
+    hold.release();
+    app.wait_for_image_decodes();
+    app.step();
+    for at in inside_both_and_only_the_new {
+        assert!(
+            is_red(app.read_pixel(surface, at, at)),
+            "the new raster is drawn at ({at}, {at}), got {:?}",
+            app.read_pixel(surface, at, at)
+        );
+    }
+    assert_eq!(app.image_decodes_started(), 2, "and asked for once");
+    assert_eq!(
+        app.image_textures(),
+        2,
+        "and uploaded: the stretched one was not drawn for ever"
+    );
+}
+
+/// One source at two sizes is two rasters, each made once: the frame that
+/// uploads one size keeps the other, which an image beside it is about to
+/// draw.
+///
+/// Red before: taking one size dropped every other size already landed, so
+/// the second image asked for its raster again.
+#[cfg(feature = "svg")]
+#[test]
+fn one_svg_at_two_sizes_rasterizes_each_once() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let source = ImageSource::SvgBytes(svg("#f00", LARGE).into());
+    let (small, large) = (LARGE, LARGE * 3 / 2);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(large)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            let boxed = |side: u32, source: ImageSource| {
+                container()
+                    .width(side as f32)
+                    .height(side as f32)
+                    .child(image(source).content_fit(ContentFit::Fill))
+            };
+            container()
+                .layout(Flex::row())
+                .child(boxed(small, source.clone()))
+                .child(boxed(large, source))
+        },
+    );
+    app.configure(surface, small + large, large, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    assert_eq!(app.image_decodes_started(), 2, "one raster per size");
+    for (x, y) in [(small / 2, small / 2), (small + large / 2, large / 2)] {
+        assert!(
+            is_red(app.read_pixel(surface, x, y)),
+            "the image at ({x}, {y}) is drawn, got {:?}",
+            app.read_pixel(surface, x, y)
+        );
+    }
 }
 
 /// What one of the 20×20 PNGs above costs the cache: small enough for an atlas
@@ -538,5 +805,97 @@ fn images_on_screen_over_the_budget_stay_drawn() {
         app.image_decodes_started(),
         u64::from(IMAGES),
         "each decoded once"
+    );
+}
+
+/// A decoded image is premultiplied before it is drawn, and its scaled edge
+/// stays between its colour and what is under it (#556).
+///
+/// An orange disc with an antialiased rim, generated with straight alpha, is
+/// drawn twice from the same 80-pixel pixels into a 40-pixel box: left encoded
+/// as a PNG and decoded on the worker, right handed over as
+/// `ImageSource::Rgba`, which is premultiplied at upload. They must match to
+/// the bit — the decode premultiplies as the upload does — and every rim pixel
+/// must lie on the line from the tile's colour to the disc's: filtering
+/// premultiplied texels mixes colour weighted by coverage, where straight
+/// texels would pull in the black of the empty ones around the disc.
+///
+/// Red without the decode's premultiply: the PNG's rim is added at full
+/// colour, lighter than the line and than the raw pixels beside it.
+#[test]
+fn a_decoded_image_is_premultiplied_like_raw_pixels() {
+    const SIDE: u32 = 80;
+    const FILL: [u8; 3] = [242, 115, 64];
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let disc = ::image::RgbaImage::from_fn(SIDE, SIDE, |x, y| {
+        let centre = SIDE as f32 / 2.0;
+        let distance =
+            ((x as f32 + 0.5 - centre).powi(2) + (y as f32 + 0.5 - centre).powi(2)).sqrt();
+        let coverage = (34.0 - distance).clamp(0.0, 1.0);
+        ::image::Rgba([FILL[0], FILL[1], FILL[2], (coverage * 255.0).round() as u8])
+    });
+    let mut png = Vec::new();
+    disc.write_to(&mut Cursor::new(&mut png), ::image::ImageFormat::Png)
+        .expect("a PNG encodes");
+    let sources = vec![
+        ImageSource::Bytes(png.into()),
+        ImageSource::Rgba {
+            width: SIDE,
+            height: SIDE,
+            pixels: disc.into_raw().into(),
+        },
+    ];
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(Color::rgb(0.92, 0.92, 0.88)),
+        move || {
+            container()
+                .layout(Flex::row())
+                .children(sources.clone().into_iter().map(|source| {
+                    container()
+                        .width(40.0)
+                        .height(40.0)
+                        .child(image(source).content_fit(ContentFit::Fill))
+                }))
+        },
+    );
+    app.configure(surface, 80, 40, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    let pixel = |x: u32, y: u32| app.read_pixel(surface, x, y);
+    let differ: Vec<_> = (0..40)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y) != pixel(x + 40, y))
+        .collect();
+    assert!(
+        differ.is_empty(),
+        "{} pixels of the decoded image differ from the same pixels handed over raw, \
+         first at {:?}: decoded {:?}, raw {:?}",
+        differ.len(),
+        differ[0],
+        pixel(differ[0].0, differ[0].1),
+        pixel(differ[0].0 + 40, differ[0].1),
+    );
+
+    let background = pixel(0, 0);
+    let along = |p: [u8; 4], c: usize| {
+        (f32::from(p[c]) - f32::from(background[c]))
+            / (f32::from(FILL[c]) - f32::from(background[c]))
+    };
+    let worst = (0..40)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .map(|(x, y)| pixel(x, y))
+        .filter(|&p| along(p, 2) > 0.1)
+        .map(|p| (along(p, 1) - along(p, 2)).abs())
+        .fold(0.0, f32::max);
+    assert!(
+        worst < 0.05,
+        "a rim pixel is {worst:.3} further along the line in green than in blue: \
+         the scaled edge left the line from the tile to the disc"
     );
 }

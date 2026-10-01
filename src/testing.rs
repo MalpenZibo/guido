@@ -897,6 +897,16 @@ impl Headless {
 
 pub use crate::image_decode::DecodeHold;
 
+/// Block until every image decode and SVG raster this thread's application
+/// started has finished, and say how many it has started in all — for a test
+/// that drives a `Renderer` itself rather than a [`Headless`]: a count that
+/// moved across a frame is a frame that asked for pixels, which wait in the
+/// decode cache for the next frame to upload them.
+pub fn finish_image_decodes() -> u64 {
+    crate::image_decode::wait();
+    crate::image_decode::started()
+}
+
 #[cfg(test)]
 mod the_two_refusals_the_loop_cannot_reach {
     use super::*;

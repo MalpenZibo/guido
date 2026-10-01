@@ -1063,6 +1063,9 @@ impl Widget for Box<dyn Widget> {
     fn owned_scope(&self) -> Option<crate::reactive::__internal::OwnerId> {
         (**self).owned_scope()
     }
+    fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
+        (**self).refresh_paint_bounds(tree, id)
+    }
     fn layout_hints(&self) -> LayoutHints {
         (**self).layout_hints()
     }
