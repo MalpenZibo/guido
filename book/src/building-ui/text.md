@@ -31,7 +31,7 @@ text("Hello").font_size(24.0).color(theme.text)
 ```
 
 The methods — `color`, `font_size`, `font_family`, `font_weight`, `bold`,
-`mono`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
+`mono`, `line_height`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
 glyphs, `Text` and `TextInput`, and are written from one list so the two always
 offer the same thing.
 
@@ -311,6 +311,26 @@ Available weight constants:
 - `FontWeight::BOLD` (700)
 - `FontWeight::EXTRA_BOLD` (800)
 - `FontWeight::BLACK` (900)
+
+### Line Height
+
+Each line is as tall as the font says by default: its ascent, descent and line
+gap, scaled to the size. A bare number is a multiple of the font size, as in
+CSS; `LineHeight::Absolute` is logical pixels, which is how a design system
+writes a type scale such as 14/20:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().child(text("Loose notes").line_height(1.5));
+container().child(text("Body").font_size(14.0).line_height(LineHeight::Absolute(20.0)))
+# ;
+# }
+```
+
+A `TextInput` is one line tall, so a field and a label with the same style
+have the same height.
 
 ### Text Wrapping
 
