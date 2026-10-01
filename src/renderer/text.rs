@@ -203,14 +203,22 @@ fn font_line_ratio(font_system: &mut FontSystem, family: FontFamily, weight: Fon
         .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id));
     let ratio = face
         .and_then(|id| font_system.get_font(id, weight.to_cosmic()))
-        .map(|font| {
+        .and_then(|font| {
             let m = font.metrics();
-            (m.ascent - m.descent + m.leading) / f32::from(m.units_per_em)
+            line_ratio(m.ascent, m.descent, m.leading, m.units_per_em)
         })
-        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
         .unwrap_or(RATIO_WITHOUT_A_FACE);
     with_app_state(|app| app.line_ratios.borrow_mut().insert((family, weight), ratio));
     ratio
+}
+
+/// A face's line height over its size, from its metrics in font units: ascent,
+/// descent (negative, below the baseline), line gap and units per em. `None`
+/// for metrics that do not make a height — a face that says nothing, or an em
+/// of zero.
+fn line_ratio(ascent: f32, descent: f32, line_gap: f32, units_per_em: u16) -> Option<f32> {
+    let ratio = (ascent - descent + line_gap) / f32::from(units_per_em);
+    (ratio.is_finite() && ratio > 0.0).then_some(ratio)
 }
 
 /// The line height over the size when no face draws even a space — a font
@@ -1320,4 +1328,57 @@ fn normal_is_the_line_height_of_the_face_that_draws_the_text() {
         (ratio - 1.1640625).abs() < 1e-4,
         "{ratio} is not DejaVu Sans Mono's own 1.164"
     );
+}
+
+/// A face's own line is its ascent, its descent and its line gap, all three:
+/// the vendored font declares no gap, so only a face that does can tell a gap
+/// added from a gap taken away.
+#[cfg(test)]
+#[test]
+fn a_face_s_line_counts_its_ascent_descent_and_gap() {
+    assert_eq!(line_ratio(800.0, -200.0, 200.0, 1000), Some(1.2));
+    assert_eq!(line_ratio(800.0, -200.0, 0.0, 2000), Some(0.5));
+}
+
+/// Metrics that make no height are not a ratio, so the caller falls back
+/// rather than hand `Metrics` a line that does not come back (#349).
+#[cfg(test)]
+#[test]
+fn metrics_that_make_no_height_are_no_ratio() {
+    assert_eq!(line_ratio(800.0, -200.0, 0.0, 0), None, "an em of zero");
+    assert_eq!(
+        line_ratio(0.0, 0.0, 0.0, 1000),
+        None,
+        "a face that says nothing"
+    );
+    assert_eq!(line_ratio(f32::NAN, -200.0, 0.0, 1000), None);
+}
+
+/// An absolute line height is logical pixels, so a text shaped at twice the
+/// scale has lines twice as tall — the step every draw path at HiDPI takes.
+#[cfg(test)]
+#[test]
+fn an_absolute_line_height_is_scaled_with_the_text() {
+    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(FONT.to_vec());
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let line = |font_system: &mut FontSystem, scale: f32| {
+        shape(
+            font_system,
+            "a",
+            14.0 * scale,
+            FontFamily::name("DejaVu Sans Mono"),
+            FontWeight::NORMAL,
+            LineHeight::Absolute(20.0),
+            TextAlign::Start,
+            (None, None),
+            None,
+            scale,
+        )
+        .metrics()
+        .line_height
+    };
+    assert_eq!(line(&mut font_system, 1.0), 20.0);
+    assert_eq!(line(&mut font_system, 2.0), 40.0);
 }
