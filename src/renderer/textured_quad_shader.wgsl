@@ -13,10 +13,10 @@ struct VertexInput {
     @location(2) clip_pos: vec2<f32>,
     @location(3) clip_rect: vec4<f32>,
     @location(4) clip_params: vec4<f32>,
-    // clip curvature, opacity, _pad, _pad — the opacity is multiplied into
-    // every texel's alpha
+    // clip curvature, opacity, _pad, _pad — the opacity scales every texel,
+    // all four channels, since texels are premultiplied
     @location(5) curvature_opacity: vec4<f32>,
-    // r, g, b, amount — the colour every texel takes, keeping its alpha
+    // r, g, b, amount — the colour every texel takes, keeping its coverage
     @location(6) tint: vec4<f32>,
 }
 
@@ -161,9 +161,12 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Texels are premultiplied, so the colour is filtered with its coverage
+    // and everything that fades a texel scales all four channels. A tint
+    // replaces the colour and keeps the coverage: `tint.rgb · a`.
     let sampled = textureSample(t_texture, s_sampler, in.uv);
-    let rgb = mix(sampled.rgb, in.tint.rgb, in.tint.a);
-    var color = vec4<f32>(rgb, sampled.a * in.opacity);
+    let rgb = mix(sampled.rgb, in.tint.rgb * sampled.a, in.tint.a);
+    var color = vec4<f32>(rgb, sampled.a) * in.opacity;
 
     // Apply clipping if enabled (negative width/height = no clip sentinel)
     if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
@@ -178,7 +181,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let clip_aa = fwidth(clip_dist);
         let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
 
-        color = vec4<f32>(color.rgb, color.a * clip_alpha);
+        color = color * clip_alpha;
     }
 
     return color;

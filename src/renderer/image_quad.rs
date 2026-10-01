@@ -439,7 +439,10 @@ impl ImageQuadRenderer {
                     );
                     return None;
                 }
-                self.upload_raster(device, queue, *width, *height, pixels)?
+                // Raw pixels are straight; the pipeline takes them
+                // premultiplied.
+                let pixels = crate::image_decode::premultiplied(pixels);
+                self.upload_raster(device, queue, *width, *height, &pixels)?
             }
             ImageSource::SvgPath(_) | ImageSource::SvgBytes(_) => {
                 let decoded = decoded?;
