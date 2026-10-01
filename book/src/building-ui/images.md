@@ -70,6 +70,14 @@ When the decode finishes the image is drawn on the next frame, with nothing from
 your application needed to prompt it. Two images showing the same source share
 one decode.
 
+An SVG is rasterized at the size it is shown. An icon-sized one is cheap enough to
+draw in the frame that shows it, so it appears at once. A large one — anything
+past 128 × 128 pixels once HiDPI and the 2× quality are counted — is rasterized
+on the same background thread and appears on a later frame the same way. When
+its box changes size it needs a new raster, and until that one is ready the
+previous one is drawn, stretched, so a large SVG in a resize animation never
+blinks out.
+
 The image does not fade itself in. It tells you when it is ready, as a signal,
 and a fade is then an `opacity` with a transition on the container around it:
 
@@ -91,9 +99,10 @@ container()
 
 `ready()` follows the source: when a reactive source changes, it is false until
 the new one is decoded. A source that failed to decode is never ready, and says
-why once in the log. SVGs and `ImageSource::Rgba` are ready from the start —
-`Rgba` is the way to have an image in the very first frame, if you decoded it
-yourself.
+why once in the log. An SVG is ready from the first frame that draws it: an
+icon-sized one is drawn, and usually ready, from the start, and a large one once
+its first raster lands. `ImageSource::Rgba` is ready from the start — the way to
+have a raster image in the very first frame, if you decoded it yourself.
 
 ## Sizing
 
@@ -377,5 +386,6 @@ fn main() {
   with other needs sets its own budget with `App::image_cache_budget`. The atlas pages the
   small images share are 4 MB each and are not counted: a page is given back once eviction
   has emptied it, so the GPU memory held can run a few pages past the budget
-- SVGs are re-rasterized when their display scale changes significantly
+- SVGs are re-rasterized when their display size or scale changes — in the frame for an icon,
+  off it for a large one, which draws the previous raster stretched until the new one lands
 - Texture uploads happen once per unique image/scale combination

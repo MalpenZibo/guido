@@ -316,6 +316,7 @@ where
 
     let start = Instant::now();
     app.step_at(start);
+    app.wait_for_image_decodes();
 
     let mut run = Run {
         adapter: app.adapter_name().to_string(),
@@ -337,6 +338,10 @@ where
             );
         }
         app.step_at(at);
+        // An SVG a frame scrolls into view is rasterized on the worker and
+        // drawn on a later frame. Which one would be the worker's speed, and
+        // the counts would not repeat: waiting makes it always the next.
+        app.wait_for_image_decodes();
 
         let snapshot = render_stats::get_stats();
         assert!(

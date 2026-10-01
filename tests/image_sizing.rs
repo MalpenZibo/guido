@@ -184,7 +184,7 @@ fn fractional_svg_dimensions_remain_exact_in_layout() {
     let source = fractional_svg();
     assert_eq!(
         guido::image_metadata::get_intrinsic_size(&source),
-        Some((1, 2))
+        Some((0.5, 1.5))
     );
     assert_eq!(
         size_of(
@@ -203,7 +203,7 @@ fn fractional_svg_file_dimensions_remain_exact_in_layout() {
     );
     assert_eq!(
         guido::image_metadata::get_intrinsic_size(&source),
-        Some((1, 2))
+        Some((0.5, 1.5))
     );
     assert_eq!(
         size_of(

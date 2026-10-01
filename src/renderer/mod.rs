@@ -13,7 +13,7 @@
 mod backdrop_pass;
 pub(crate) mod clip;
 mod commands;
-mod constants;
+pub(crate) mod constants;
 mod flatten;
 mod gpu;
 mod gpu_context;
