@@ -114,16 +114,16 @@ pub(super) fn shape(
     let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
     let lines = fit.map(|fit| fit.max_lines.max(1) as usize);
     match fit {
-        None => buffer.set_size(font_system, size.0, size.1),
+        None => buffer.set_size(size.0, size.1),
         Some(fit) => {
             let width = match align {
                 TextAlign::Start => fit.width.map(|w| w * scale),
                 _ => size.0,
             };
             let cut = lines.map(|n| (n as f32 - 0.5) * line_height);
-            buffer.set_size(font_system, width, cut);
+            buffer.set_size(width, cut);
             if !fit.wrap {
-                buffer.set_wrap(font_system, Wrap::None);
+                buffer.set_wrap(Wrap::None);
             }
         }
     }
@@ -133,7 +133,6 @@ pub(super) fn shape(
         font_weight
     };
     buffer.set_text(
-        font_system,
         text,
         &Attrs::new()
             .family(font_family.to_cosmic())

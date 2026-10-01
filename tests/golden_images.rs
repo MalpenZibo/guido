@@ -260,7 +260,9 @@ fn render_pixels(
         .expect("the map callback never fired")
         .expect("the readback buffer would not map");
 
-    let mapped = slice.get_mapped_range();
+    let mapped = slice
+        .get_mapped_range()
+        .expect("the readback buffer was just mapped whole");
     let mut data = Vec::with_capacity((unpadded * height) as usize);
     for row in 0..height {
         let start = (row * padded) as usize;
