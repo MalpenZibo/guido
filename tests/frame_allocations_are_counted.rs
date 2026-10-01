@@ -1,4 +1,3 @@
-#![cfg(feature = "render-stats")]
 //! What says the frame counter counts frames, and the region counts regions.
 //!
 //! `guido::heap` counts the whole program, because the heap is the whole
@@ -20,11 +19,14 @@
 //! to watch it. So the counts are sevens, the sizes are kilobytes, and the
 //! assertions are exact. `7` is not `1`, and `n / m` is not `n - m`.
 //!
-//! **One test, on purpose.** The counter is process-wide, so a second test
-//! allocating on another thread would be counted into this one's window — and
-//! so would the test runner spawning that thread. A test binary is one process,
-//! a file is one binary, so a file with one test is the only place an exact
-//! delta can be asserted. Everything smaller — the arithmetic of `alloc`,
+//! **No harness, on purpose.** The counter is process-wide, so anything
+//! allocating on another thread is counted into this one's window. A second
+//! test would be such a thread, and so is libtest itself: it runs a test on a
+//! thread of its own while its main thread goes on with its bookkeeping, and an
+//! allocation of that bookkeeping that lands inside a window made this test
+//! count 9 where it asked for 7 — once in CI, on a change that touched no code.
+//! So the file is a `main` with `harness = false` (`Cargo.toml`), and this is
+//! the only thread there is: the one place an exact delta can be asserted. Everything smaller — the arithmetic of `alloc`,
 //! `dealloc` and `realloc` — is asserted beside the allocator in `src/heap.rs`,
 //! on counters of its own; everything larger is the two
 //! `*_benchmark_is_repeatable.rs` tests.
@@ -51,8 +53,8 @@ const BLOCK: usize = 1024;
 const KEPT: usize = 4096;
 const BIG: usize = 1 << 20;
 
-#[test]
-fn a_frame_is_charged_for_what_it_allocated_and_for_nothing_else() {
+/// A frame is charged for what it allocated, and for nothing else.
+fn main() {
     // Somewhere to keep the blocks, with room for every one this test makes.
     // Built out here because a `Vec` that grew inside a window would be an
     // allocation this test did not ask for and cannot see.
