@@ -123,6 +123,15 @@ pub(crate) struct Timers {
     scopes: FxHashSet<OwnerId>,
 }
 
+impl Timers {
+    pub(crate) fn successor(&self) -> Self {
+        Self {
+            next_id: self.next_id,
+            ..Self::default()
+        }
+    }
+}
+
 struct Timer {
     id: u64,
     /// The scope it was created under, which its callback runs under.
