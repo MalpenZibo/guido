@@ -384,7 +384,7 @@ pub(crate) fn with_scope_declarations<R>(f: impl FnOnce(&mut Declarations) -> R)
 ///
 /// The handle is cloned and the arena borrow released before it goes back to
 /// the caller, which is what lets a borrowed read hand the value to a closure
-/// that reads a signal — the shape `try_call_derived` uses, for the same
+/// that reads a signal — the shape `call_derived` uses, for the same
 /// reason.
 pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
     with_reactive(|reactive| {
