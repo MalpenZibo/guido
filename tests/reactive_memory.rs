@@ -12,8 +12,8 @@
 //! `main` is the only thread there is.
 
 use guido::heap::Region;
-use guido::reactive::owner::with_owner;
-use guido::reactive::{create_effect, create_signal};
+use guido::reactive::owner::{dispose_owner_now, with_owner};
+use guido::reactive::{RwSignal, create_derived, create_effect, create_signal};
 
 #[global_allocator]
 static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
@@ -39,6 +39,7 @@ fn main() {
 
     a_signal_nothing_subscribes_to_keeps_no_subscriber_list();
     an_effect_rerun_allocates_nothing(source);
+    a_derived_signal_is_its_closure_and_its_slot(source);
 }
 
 /// A signal nobody reads costs its slot and its value, and no subscriber
@@ -55,7 +56,7 @@ fn a_signal_nothing_subscribes_to_keeps_no_subscriber_list() {
 /// An effect's run takes its subscriptions out and puts this run's back, and
 /// none of that is allocation: the lists it was in are kept for it, empty,
 /// across the run.
-fn an_effect_rerun_allocates_nothing(source: guido::reactive::RwSignal<u32>) {
+fn an_effect_rerun_allocates_nothing(source: RwSignal<u32>) {
     source.set(2);
     let region = Region::start();
     for value in 3..103 {
@@ -64,4 +65,27 @@ fn an_effect_rerun_allocates_nothing(source: guido::reactive::RwSignal<u32>) {
     let allocations = region.allocations();
     println!("100 effect re-runs: {allocations} allocations");
     assert_eq!(allocations, 0, "an effect re-run allocated");
+}
+
+/// A derived signal is two allocations: the closure's box, and the `Rc` that
+/// holds it with the scope it was written in, which is its slot's value. There
+/// was a third, a placeholder value for a slot whose closure lived in a map
+/// beside it.
+///
+/// Counted on a slot a disposed derived left free, so that neither the slot
+/// arena nor anything keyed by slot has to grow: what is left is the derived
+/// signal's own.
+fn a_derived_signal_is_its_closure_and_its_slot(source: RwSignal<u32>) {
+    let (_, scope) = with_owner(|| create_derived(move || source.get() + 1));
+    dispose_owner_now(scope);
+
+    let region = Region::start();
+    let derived = create_derived(move || source.get() + 1);
+    let allocations = region.allocations();
+    println!("create_derived: {allocations} allocations");
+    assert_eq!(
+        allocations, 2,
+        "a derived signal is its closure and its slot"
+    );
+    assert_eq!(derived.get_untracked(), source.get_untracked() + 1);
 }
