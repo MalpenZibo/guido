@@ -1424,7 +1424,9 @@ impl Tree {
     /// Which of `parent`'s children `event` is offered to, in the order they
     /// stand.
     ///
-    /// An event the pointer did not send goes to every child. A pointer event
+    /// A key or a focus change goes to the children on the key route — see
+    /// `dispatch_key` — and a paste, handed straight to one widget, is never
+    /// routed through a container at all. A pointer event
     /// goes to the children that can be under `at` — those ordered along
     /// `sorted` narrowed to the window paint uses, those in no order tested
     /// against their reach — and to those the pointer record owes one. With no
