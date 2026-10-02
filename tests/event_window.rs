@@ -102,19 +102,27 @@ fn a_wheel_event_over_a_list_visits_the_rows_near_the_pointer() {
 #[derive(Default)]
 struct Log {
     hover: Vec<(usize, bool)>,
+    down: Vec<usize>,
     moves: Vec<usize>,
     up: Vec<usize>,
     clicks: Vec<usize>,
 }
 
-fn logged_rows(log: Rc<RefCell<Log>>) -> impl Iterator<Item = Box<dyn Widget>> {
-    (0..ROWS).map(move |i| {
-        let (h, m, u, c) = (log.clone(), log.clone(), log.clone(), log.clone());
+fn logged_rows(log: Rc<RefCell<Log>>, count: usize) -> impl Iterator<Item = Box<dyn Widget>> {
+    (0..count).map(move |i| {
+        let (h, d, m, u, c) = (
+            log.clone(),
+            log.clone(),
+            log.clone(),
+            log.clone(),
+            log.clone(),
+        );
         Box::new(
             container()
                 .height(ROW_HEIGHT)
                 .width(fill())
                 .on_hover(move |on| h.borrow_mut().hover.push((i, on)))
+                .on_mouse_down(move |_, _| d.borrow_mut().down.push(i))
                 .on_pointer_move(move |_, _| m.borrow_mut().moves.push(i))
                 .on_mouse_up(move |_, _| u.borrow_mut().up.push(i))
                 .on_click(move || c.borrow_mut().clicks.push(i)),
@@ -127,7 +135,7 @@ fn a_row_the_pointer_jumps_away_from_is_no_longer_hovered() {
     let Some(mut app) = headless() else { return };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
-    let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone())));
+    let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
 
     at += Duration::from_millis(16);
     app.event_at(id, Event::mouse_move(50.0, 50.0), at);
@@ -149,7 +157,7 @@ fn a_press_dragged_far_away_still_gets_its_moves_and_its_release() {
     let Some(mut app) = headless() else { return };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
-    let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone())));
+    let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
 
     for event in [
         Event::mouse_down(50.0, 50.0, MouseButton::Left),
@@ -218,7 +226,7 @@ fn a_row_left_for_a_header_and_back_is_no_longer_hovered() {
         container()
             .layout(Flex::column())
             .child(container().height(50.0).width(fill()))
-            .child(list(logged_rows(rows.clone())).height(550.0))
+            .child(list(logged_rows(rows.clone(), ROWS)).height(550.0))
     });
 
     for y in [120.0, 25.0, 260.0] {
@@ -285,11 +293,12 @@ fn a_release_and_a_leave_leave_nothing_owed() {
     );
     #[cfg(feature = "render-stats")]
     {
+        // The scroller offers its one child, the list, and the list its rows.
         let stats = guido::render_stats::get_stats();
-        assert_eq!(stats.event_window_children_total, ROWS as u64);
+        assert_eq!(stats.event_window_children_total, 1 + ROWS as u64);
         assert_eq!(
             stats.event_window_children_offered,
-            window_over_row_15 as u64
+            1 + window_over_row_15 as u64
         );
     }
 
@@ -398,5 +407,221 @@ fn a_press_held_while_the_list_changes_still_gets_its_release() {
         *released.borrow(),
         [2],
         "the release reaches the row the press landed on"
+    );
+}
+
+/// `rows` in a list under a 50-pixel header, the shape of a launcher's search
+/// field over its results: the list clips, so a point on the header is outside
+/// it.
+fn under_a_header(rows: impl Iterator<Item = Box<dyn Widget>>) -> Container {
+    container()
+        .layout(Flex::column())
+        .child(container().height(50.0).width(fill()))
+        .child(list(rows).height(550.0))
+}
+
+#[test]
+fn a_row_pressed_in_a_list_and_released_outside_it_gets_its_release() {
+    let Some(mut app) = headless() else { return };
+    let log = Rc::new(RefCell::new(Log::default()));
+    let rows = log.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        under_a_header(logged_rows(rows.clone(), ROWS))
+    });
+
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [
+            Event::mouse_down(50.0, 120.0, MouseButton::Left),
+            Event::mouse_move(50.0, 25.0),
+            Event::mouse_up(50.0, 25.0, MouseButton::Left),
+        ],
+    );
+
+    let log = log.borrow();
+    assert_eq!(
+        log.moves,
+        vec![3],
+        "the drag reaches the pressed row over the header"
+    );
+    assert_eq!(log.up, vec![3], "and so does the release");
+    assert!(log.clicks.is_empty());
+}
+
+#[test]
+fn a_row_hovered_in_a_list_is_no_longer_hovered_once_the_pointer_leaves_the_list() {
+    for count in [5, ROWS] {
+        let Some(mut app) = headless() else { return };
+        let log = Rc::new(RefCell::new(Log::default()));
+        let rows = log.clone();
+        let (id, mut at) = surface(&mut app, move || {
+            under_a_header(logged_rows(rows.clone(), count))
+        });
+
+        play(
+            &mut app,
+            id,
+            &mut at,
+            [
+                Event::mouse_move(50.0, 120.0),
+                Event::mouse_move(50.0, 25.0),
+            ],
+        );
+
+        assert_eq!(
+            log.borrow().hover,
+            [(3, true), (3, false)],
+            "a list of {count}: the pointer left row 3 for the header"
+        );
+    }
+}
+
+#[test]
+fn a_leave_visits_what_the_pointer_was_over_and_nothing_else() {
+    let Some(mut app) = headless() else { return };
+    let visits = Rc::new(Cell::new(0));
+    let counter = visits.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        let counter = counter.clone();
+        list((0..ROWS).map(move |_| Box::new(Counted(counter.clone())) as Box<dyn Widget>))
+    });
+
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 310.0)]);
+    visits.set(0);
+    play(&mut app, id, &mut at, [Event::MouseLeave]);
+
+    assert_eq!(
+        visits.get(),
+        3,
+        "the pointer was over row 15's window when it left the surface"
+    );
+}
+
+/// The list under the header, scrolled ten pixels: row 0 now stands half under
+/// the header, from 40 to 60, and the list clips the half above 50 away.
+///
+/// `direct` puts the rows straight into the scroller rather than into a column
+/// inside it: the scroller's own children are then the ones the clip hides.
+fn row_0_half_under_the_header(
+    log: Rc<RefCell<Log>>,
+    direct: bool,
+) -> (Headless, SurfaceId, Instant) {
+    let mut app = headless().expect("checked by the caller");
+    let rows = log.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        if direct {
+            container()
+                .layout(Flex::column())
+                .child(container().height(50.0).width(fill()))
+                .child(
+                    container()
+                        .scroll(Scroll::vertical())
+                        .layout(Flex::column())
+                        .height(550.0)
+                        .children(logged_rows(rows.clone(), ROWS)),
+                )
+        } else {
+            under_a_header(logged_rows(rows.clone(), ROWS))
+        }
+    });
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [Event::scroll(50.0, 300.0, 0.0, 10.0, ScrollSource::Wheel)],
+    );
+    (app, id, at)
+}
+
+#[test]
+fn a_row_half_under_the_clip_loses_its_hover_to_the_header_over_it() {
+    if headless().is_none() {
+        return;
+    }
+    for direct in [false, true] {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let (mut app, id, mut at) = row_0_half_under_the_header(log.clone(), direct);
+
+        // Onto the half of row 0 that shows, then onto the header over the
+        // half that does not.
+        play(
+            &mut app,
+            id,
+            &mut at,
+            [Event::mouse_move(50.0, 55.0), Event::mouse_move(50.0, 45.0)],
+        );
+
+        assert_eq!(
+            log.borrow().hover,
+            [(0, true), (0, false)],
+            "rows held directly: {direct}. The header is what is under the \
+             pointer, not the part of row 0 it hides"
+        );
+    }
+}
+
+#[test]
+fn a_press_on_the_header_does_not_reach_the_row_it_hides() {
+    if headless().is_none() {
+        return;
+    }
+    for direct in [false, true] {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let (mut app, id, mut at) = row_0_half_under_the_header(log.clone(), direct);
+
+        play(
+            &mut app,
+            id,
+            &mut at,
+            [
+                // A tap on the half of row 0 that shows, which leaves it owed
+                // the next event…
+                Event::mouse_down(50.0, 55.0, MouseButton::Left),
+                Event::mouse_up(50.0, 55.0, MouseButton::Left),
+                // …and a press on the header over the half that does not.
+                Event::mouse_down(50.0, 45.0, MouseButton::Left),
+                Event::mouse_up(50.0, 45.0, MouseButton::Left),
+            ],
+        );
+
+        let log = log.borrow();
+        assert_eq!(
+            log.down,
+            [0],
+            "rows held directly: {direct}. Pressed through the clip"
+        );
+        assert_eq!(
+            log.clicks,
+            [0],
+            "rows held directly: {direct}. Clicked through it"
+        );
+    }
+}
+
+#[test]
+fn a_leave_clears_the_hover_after_another_surface_had_the_pointer() {
+    let Some(mut app) = headless() else { return };
+    let log = Rc::new(RefCell::new(Log::default()));
+    let rows = log.clone();
+    let (list_surface, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
+    let (other, _) = surface(&mut app, container);
+
+    // Row 2 hovered on the first surface; the pointer is then reported on the
+    // second before the first hears it left — two bars, or a bar and its popup.
+    play(
+        &mut app,
+        list_surface,
+        &mut at,
+        [Event::mouse_move(50.0, 50.0)],
+    );
+    play(&mut app, other, &mut at, [Event::mouse_move(10.0, 10.0)]);
+    play(&mut app, list_surface, &mut at, [Event::MouseLeave]);
+
+    assert_eq!(
+        log.borrow().hover,
+        [(2, true), (2, false)],
+        "the leave reached the row the other surface's event had no business with"
     );
 }

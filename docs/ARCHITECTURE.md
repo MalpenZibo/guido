@@ -638,8 +638,18 @@ clears its hover however far the pointer went — or whatever else it passed ove
 on the way back — and those of the press, until the release, so a drag reaches
 the widget it started on wherever it goes. Flutter keeps the same two —
 `MouseTracker`'s last hit set and `GestureBinding`'s hit path per pointer.
-Events without a position, and children in no order, are still offered to
-every child (#586 tracks the rest).
+Children in no order are offered a positioned event where their reach covers
+the point, and recorded the same way.
+
+A pointer event with nowhere to narrow to goes to the record alone: the surface
+leave, the position-less events a collapsed transform sends its subtree, and a
+point a clipping container withholds from what it holds. Below a clipped point
+the owed are told without it — so a row half under a header is not hovered or
+pressed through the header — except the children a press holds, which keep it
+for their drag and their release. So the row the pointer was over is told it
+left, a press is told it was given up, and a drag keeps reaching what it
+started on outside the scroller around it — and nothing else is asked. Keys and
+focus changes still go to every widget (#241 routes them).
 
 A `Container` that scrolls does two things around that dispatch rather than
 one. Going down, a finger's press arms the watch that a drag needs — before a

@@ -407,10 +407,10 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
 // 5. Clipping behaves like the rest
 // ---------------------------------------------------------------------------
 
-/// `skip_child_dispatch` decides whether a clipping container's children are
-/// asked at all, by testing the point against the bounds. With no point there
-/// is nothing to fall outside, so the children are still asked — and still
-/// answer no.
+/// `outside_clip` decides whether a clipping container's children are asked by
+/// position, by testing the point against the bounds. With no point there is
+/// nothing to fall outside: the children the pointer record owes are asked —
+/// and answer no.
 #[test]
 fn a_collapsed_clipping_container_neither_takes_nor_strands() {
     let (clicks, bump) = counter();

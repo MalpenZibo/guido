@@ -810,6 +810,25 @@ impl Event {
         }
     }
 
+    /// Whether the pointer sent it, positioned or not: what the pointer record
+    /// routes, where a key or a focus change goes to every widget.
+    pub(crate) fn is_pointer(&self) -> bool {
+        match self {
+            Event::MouseMove { .. }
+            | Event::MouseDown { .. }
+            | Event::MouseUp { .. }
+            | Event::MouseEnter { .. }
+            | Event::MouseLeave
+            | Event::Scroll { .. }
+            | Event::ScrollEnd { .. } => true,
+            Event::KeyDown { .. }
+            | Event::KeyUp { .. }
+            | Event::FocusIn
+            | Event::FocusOut
+            | Event::Pasted(_) => false,
+        }
+    }
+
     /// The same event somewhere else, or nowhere.
     ///
     /// `None` is what a container passes down when its own transform cannot
