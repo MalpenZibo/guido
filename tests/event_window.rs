@@ -234,3 +234,169 @@ fn a_row_left_for_a_header_and_back_is_no_longer_hovered() {
          row 10, and row 3 still believes it is under the pointer: {hover:?}"
     );
 }
+
+/// Sends `events` one per frame, each sixteen milliseconds after the last.
+fn play(
+    app: &mut Headless,
+    id: SurfaceId,
+    at: &mut Instant,
+    events: impl IntoIterator<Item = Event>,
+) {
+    for event in events {
+        *at += Duration::from_millis(16);
+        app.event_at(id, event, *at);
+        app.step_at(*at);
+    }
+}
+
+#[test]
+fn a_release_and_a_leave_leave_nothing_owed() {
+    let Some(mut app) = headless() else { return };
+    let visits = Rc::new(Cell::new(0));
+    let counter = visits.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        let counter = counter.clone();
+        list((0..ROWS).map(move |_| Box::new(Counted(counter.clone())) as Box<dyn Widget>))
+    });
+    // The window over a point inside row 15 is rows 14 to 16: the row, and one
+    // either side for the boundary.
+    let window_over_row_15 = 3;
+
+    // A press and its release at the top: once released, the press is owed
+    // nothing.
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [
+            Event::mouse_down(50.0, 50.0, MouseButton::Left),
+            Event::mouse_up(50.0, 50.0, MouseButton::Left),
+            Event::mouse_move(50.0, 310.0),
+        ],
+    );
+    visits.set(0);
+    #[cfg(feature = "render-stats")]
+    guido::render_stats::reset_stats();
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 310.0)]);
+    assert_eq!(
+        visits.get(),
+        window_over_row_15,
+        "a move over row 15 visits its window, and nothing the released press held"
+    );
+    #[cfg(feature = "render-stats")]
+    {
+        let stats = guido::render_stats::get_stats();
+        assert_eq!(stats.event_window_children_total, ROWS as u64);
+        assert_eq!(
+            stats.event_window_children_offered,
+            window_over_row_15 as u64
+        );
+    }
+
+    // The pointer leaves the surface and comes back somewhere else: what it
+    // was over before is owed nothing either.
+    play(&mut app, id, &mut at, [Event::MouseLeave]);
+    visits.set(0);
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 510.0)]);
+    assert_eq!(
+        visits.get(),
+        window_over_row_15,
+        "the first move after a leave visits its own window only"
+    );
+}
+
+/// A row that takes every move it is offered, and says which it was.
+struct Greedy(usize, Rc<RefCell<Vec<usize>>>);
+
+impl Widget for Greedy {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        Size::new(100.0, ROW_HEIGHT)
+    }
+
+    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
+        if matches!(event, Event::MouseMove { .. }) {
+            self.1.borrow_mut().push(self.0);
+            return EventResponse::Handled;
+        }
+        EventResponse::Ignored
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+}
+
+#[test]
+fn the_children_owed_an_event_are_offered_it_in_the_order_they_stand() {
+    let Some(mut app) = headless() else { return };
+    let took = Rc::new(RefCell::new(Vec::new()));
+    let rows = took.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        let rows = rows.clone();
+        list((0..ROWS).map(move |i| Box::new(Greedy(i, rows.clone())) as Box<dyn Widget>))
+    });
+
+    // The first move's window over row 25 starts at row 24, which takes it.
+    // The second lands on row 2, whose window starts at row 1 — and row 24 is
+    // owed it, but stands below row 1, so row 1 takes it first, as the walk
+    // over every child would have had it.
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [
+            Event::mouse_move(50.0, 510.0),
+            Event::mouse_move(50.0, 50.0),
+        ],
+    );
+    assert_eq!(*took.borrow(), [24, 1]);
+}
+
+#[test]
+fn a_press_held_while_the_list_changes_still_gets_its_release() {
+    let Some(mut app) = headless() else { return };
+    let keys = Rc::new(Cell::new(None));
+    let released = Rc::new(RefCell::new(Vec::new()));
+    let (data, ups) = (keys.clone(), released.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        let shown = create_signal((0..ROWS as u32).collect::<Vec<_>>());
+        data.set(Some(shown));
+        let ups = ups.clone();
+        container()
+            .scroll(Scroll::vertical())
+            .child(container().layout(Flex::column()).children(keyed(
+                move || shown.get(),
+                |k| *k,
+                move |k| {
+                    let ups = ups.clone();
+                    container()
+                        .height(ROW_HEIGHT)
+                        .width(fill())
+                        .on_mouse_up(move |_, _| ups.borrow_mut().push(k))
+                },
+            )))
+    });
+    let keys = keys.get().expect("the view ran");
+
+    // Row 2 is pressed. Ten rows arrive above it before the release, so it is
+    // no longer where the press found it.
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [Event::mouse_down(50.0, 50.0, MouseButton::Left)],
+    );
+    keys.update(|k| k.splice(0..0, 10_000..10_010).for_each(drop));
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [Event::mouse_up(50.0, 590.0, MouseButton::Left)],
+    );
+
+    assert_eq!(
+        *released.borrow(),
+        [2],
+        "the release reaches the row the press landed on"
+    );
+}
