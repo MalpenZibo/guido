@@ -1818,13 +1818,17 @@ fn a_finger_in_a_list_inside_a_page_drags_the_list() {
 }
 
 /// A finger that wanders out of the page's box does not hand it the gesture
-/// the list is already holding.
+/// the list is already holding — and the list goes on following it.
 ///
 /// The page stopped watching the press the moment the list took it, which is
-/// the half of that ruling nothing else would notice: a container that clips
-/// does not dispatch a positioned event that falls outside it, so a page that
-/// kept its watch would find the list out of the way and claim a gesture that
-/// has been somebody else's for a dozen frames.
+/// the half of that ruling nothing else would notice: the page clips, and a
+/// positioned event outside it is not offered to what it holds by position, so
+/// a page that kept its watch would find the list out of the way and claim a
+/// gesture that has been somebody else's for a dozen frames.
+///
+/// The list is not out of the way, though: the press landed on it, and a press
+/// is owed every move until its release, wherever the finger goes (#587). It
+/// used to stop at the page's edge.
 #[test]
 fn a_drag_that_leaves_the_page_does_not_become_the_pages() {
     let Some(mut app) = headless() else { return };
@@ -1833,15 +1837,16 @@ fn a_drag_that_leaves_the_page_does_not_become_the_pages() {
     drag_up(&mut app, surface, &mut at, 480.0);
 
     // Out of the surface sideways, which the compositor goes on reporting
-    // while the finger is down, and 180px up from where it landed.
+    // while the finger is down, and 20px further up than the drag had got.
     at += Duration::from_millis(8);
-    app.event_at(surface, Event::finger_move(150.0, 300.0), at);
+    app.event_at(surface, Event::finger_move(150.0, 360.0), at);
     app.step_at(at);
 
     assert_eq!(
         page_and_list(&app, surface),
-        (0.0, 82.0),
-        "the list kept the gesture it won, and the page claimed nothing"
+        (0.0, 102.0),
+        "the list kept the gesture it won and followed the finger out of the \
+         page, and the page claimed nothing"
     );
 }
 

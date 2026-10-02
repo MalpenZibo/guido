@@ -34,7 +34,7 @@ use crate::reactive::{
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
-use crate::tree::{LayoutCtx, PointerTargets, Tree, WidgetId};
+use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
@@ -1801,41 +1801,55 @@ impl Widget for Container {
         // below it (a collapsed submenu used to do exactly that).
         let clips_children = self.overflow_resolved.get() == Overflow::Hidden
             || self.scroll_axis != ScrollAxis::None;
-        // An event with no position falls outside nothing, so the children
-        // are still asked — and still answer no, because their own bounds
+        // An event with no position falls outside nothing; it reaches the
+        // children owed one, and they answer no, because their own bounds
         // test is given the same absence.
-        let skip_child_dispatch = clips_children
+        let outside_clip = clips_children
             && local_event
                 .coords()
                 .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
 
         let mut a_child_took_it = false;
-        if !skip_child_dispatch {
-            let children = self.children_source.get();
-            // A positioned event goes to the children that can be under it —
-            // the window paint narrows to — and to those the pointer record
-            // still owes one (#584). An event with no position, and children
-            // in no order, are offered to every child.
-            let targets = child_event
-                .coords()
-                .zip(self.children_sorted_along)
-                .and_then(|(at, axis)| tree.pointer_targets(id, children, axis, at))
-                .unwrap_or_else(|| PointerTargets::every(children.len()));
-            for index in targets {
-                let child_id = children[index];
-                // A child playing its exit is drawn and takes nothing: the
-                // event goes on to whatever is under it.
-                if is_detached(child_id) {
-                    continue;
-                }
-                if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
-                    child.event(tree, child_id, &child_event)
-                }) && response == EventResponse::Handled
-                {
-                    a_child_took_it = true;
-                    break;
-                }
+        let children = self.children_source.get();
+        // A pointer event goes to the children that can be under its point —
+        // the window paint narrows to — and to those the pointer record still
+        // owes one; an event with no position, or a point this container clips
+        // away, to the owed alone (#584, #587). Anything else the pointer did
+        // not send goes to every child.
+        // Below a point this container clipped away nothing is under it: the
+        // children it is owed to are told without it, and only a press keeps
+        // it for its drag and its release.
+        let withheld = outside_clip.then(|| tree.begin_withholding());
+        let targets = tree.event_targets(
+            id,
+            children,
+            &child_event,
+            child_event.coords().filter(|_| !outside_clip),
+            self.children_sorted_along,
+        );
+        let mut blind: Option<Event> = None;
+        for (index, positioned) in targets {
+            let child_id = children[index];
+            // A child playing its exit is drawn and takes nothing: the event
+            // goes on to whatever is under it.
+            if is_detached(child_id) {
+                continue;
             }
+            let event = if positioned {
+                &*child_event
+            } else {
+                &*blind.get_or_insert_with(|| child_event.with_coords(None))
+            };
+            if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
+                child.event(tree, child_id, event)
+            }) && response == EventResponse::Handled
+            {
+                a_child_took_it = true;
+                break;
+            }
+        }
+        if let Some(was) = withheld {
+            tree.end_withholding(was);
         }
 
         // After the children, so that a scroller inside this one claims the

@@ -245,6 +245,9 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
 /// container, the child's place among its children, and the child.
 #[derive(Clone, Copy)]
 struct Offered {
+    /// The surface root the offer was dispatched from: the tree holds every
+    /// surface, and each keeps its own.
+    root: WidgetId,
     parent: WidgetId,
     index: u32,
     child: WidgetId,
@@ -268,47 +271,99 @@ struct Offered {
 /// that needs no widget to report anything.
 #[derive(Default)]
 struct PointerRecord {
-    /// Offered through a window during the event being dispatched.
+    /// What the event being dispatched offered by position.
     offering: Vec<Offered>,
-    /// The containers that event reached with a position. What the record
-    /// owes in a container it did not reach — a scroller withholding a point
-    /// outside its clip, a sibling taking the event first — stays owed.
+    /// The containers that event reached. What the record owes in a container
+    /// it did not reach — one whose parent clipped the point away, one a
+    /// sibling's `Handled` stopped the walk before — stays owed.
     reached: Vec<WidgetId>,
-    /// Offered through a window during the last positioned event that
-    /// reached each container.
+    /// What the last positioned event to reach each container offered by
+    /// position. Sorted by container, so each finds its own with a search.
     last: Vec<Offered>,
-    /// Offered through a window during the press, until the release.
+    /// What the press offered by position, until the release. Sorted the same.
     pressed: Vec<Offered>,
+    /// A container above is offering a point it clipped away. Below it nothing
+    /// is under that point: only the owed are told, and only the press keeps
+    /// the point, which its drag and its release need.
+    withholding: bool,
+    /// The surface root the event being dispatched entered at.
+    root: Option<WidgetId>,
 }
 
-/// The children a positioned event is offered to, in the order they stand: a
-/// window of them, and the few outside it the pointer record still owes one.
+/// The key the record is sorted by.
+fn by_parent(entry: &Offered) -> u64 {
+    entry.parent.as_u64()
+}
+
+/// Drop what nothing above still leads to.
+///
+/// An event reaches a container through its parent, so an entry is only worth
+/// keeping while its container is itself recorded under one that is — down
+/// from `root`. An entry carried because the event did not reach its
+/// container is otherwise kept forever once the rows above it scroll away and
+/// nothing reaches them either, and the record grows with every row the
+/// pointer has crossed.
+fn keep_what_the_root_reaches(record: &mut Vec<Offered>, root: WidgetId) {
+    let mut reachable: SmallVec<[WidgetId; 32]> = SmallVec::new();
+    reachable.push(root);
+    // Another surface's entries are that surface's business.
+    let mut kept: SmallVec<[bool; 64]> = record.iter().map(|entry| entry.root != root).collect();
+    let mut next = 0;
+    while let Some(&parent) = reachable.get(next) {
+        next += 1;
+        let key = parent.as_u64();
+        let start = record.partition_point(|entry| by_parent(entry) < key);
+        for (offset, entry) in record[start..].iter().enumerate() {
+            if entry.parent != parent {
+                break;
+            }
+            if !kept[start + offset] {
+                kept[start + offset] = true;
+                reachable.push(entry.child);
+            }
+        }
+    }
+    let mut index = 0;
+    record.retain(|_| {
+        index += 1;
+        kept[index - 1]
+    });
+}
+
+/// The children an event is offered to, in the order they stand: a window of
+/// them, and the few outside it the pointer record owes one or a bounds test
+/// found under the point.
 pub(crate) struct PointerTargets {
     window: std::ops::Range<usize>,
     owed: std::iter::Peekable<smallvec::IntoIter<[usize; 4]>>,
+    /// Owed and offered without the event's position: the children a clipped
+    /// point is owed to for anything but the press holding them.
+    blind: SmallVec<[usize; 4]>,
 }
 
 impl PointerTargets {
-    /// Every child: a container too small to narrow, or an event with nowhere
-    /// to narrow to.
-    pub(crate) fn every(len: usize) -> Self {
+    /// Every child: what an event the pointer did not send is offered to.
+    fn every(len: usize) -> Self {
         Self {
             window: 0..len,
             owed: SmallVec::new().into_iter().peekable(),
+            blind: SmallVec::new(),
         }
     }
 }
 
 impl Iterator for PointerTargets {
-    type Item = usize;
+    /// A child, and whether it is offered the event's position.
+    type Item = (usize, bool);
 
     /// The two merged in order. The owed ones lie outside the window, so
     /// nothing comes out twice.
-    fn next(&mut self) -> Option<usize> {
-        match self.owed.peek() {
+    fn next(&mut self) -> Option<(usize, bool)> {
+        let index = match self.owed.peek() {
             Some(&owed) if self.window.is_empty() || owed < self.window.start => self.owed.next(),
             _ => self.window.next(),
-        }
+        }?;
+        Some((index, !self.blind.contains(&index)))
     }
 }
 
@@ -662,6 +717,13 @@ impl Tree {
         // does not stop matching on its own: its ancestors would go on
         // answering "the focus is inside me" for a widget that is gone.
         crate::reactive::release_focus_if_within(id);
+
+        // A surface root leaving takes its pointer record with it: a surface
+        // closed under the pointer is never sent the leave that would.
+        if self.dense[dense_index].parent.is_none() {
+            self.pointer.last.retain(|entry| entry.root != id);
+            self.pointer.pressed.retain(|entry| entry.root != id);
+        }
 
         // First, remove from parent's children list (before modifying dense array)
         if let Some(parent_id) = self.dense[dense_index].parent
@@ -1214,6 +1276,8 @@ impl Tree {
         use crate::widgets::Event;
         self.pointer.offering.clear();
         self.pointer.reached.clear();
+        self.pointer.withholding = false;
+        self.pointer.root = Some(root);
         let response = self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
         let record = &mut self.pointer;
         if event.coords().is_some() {
@@ -1223,94 +1287,158 @@ impl Tree {
                 reached,
                 ..
             } = record;
-            last.retain(|entry| !reached.contains(&entry.parent));
+            reached.sort_unstable_by_key(|id| id.as_u64());
+            last.retain(|entry| {
+                reached
+                    .binary_search_by_key(&by_parent(entry), |id| id.as_u64())
+                    .is_err()
+            });
             last.append(offering);
+            last.sort_unstable_by_key(by_parent);
+            keep_what_the_root_reaches(last, root);
         }
         match event {
-            Event::MouseDown { .. } => record.pressed.clone_from(&record.last),
+            Event::MouseDown { .. } => {
+                record.pressed.clear();
+                record
+                    .pressed
+                    .extend(record.last.iter().filter(|entry| entry.root == root));
+            }
             Event::MouseUp { .. } => record.pressed.clear(),
             Event::MouseLeave => {
                 record.pressed.clear();
-                record.last.clear();
+                record.last.retain(|entry| entry.root != root);
             }
             _ => {}
         }
         response
     }
 
-    /// Which of `parent`'s children a positioned event at `at` is offered to,
-    /// in the order they stand: those that can be under the point, and those
-    /// the pointer record still owes one. `None` for a container too small to
-    /// be worth narrowing, whose children are all offered and none recorded.
+    /// Which of `parent`'s children `event` is offered to, in the order they
+    /// stand.
     ///
-    /// The window's offers are kept for the next event. The children it is
-    /// owed are not: having had it, they are owed nothing more unless the
-    /// press holds them.
-    pub(crate) fn pointer_targets(
+    /// An event the pointer did not send goes to every child. A pointer event
+    /// goes to the children that can be under `at` — those ordered along
+    /// `sorted` narrowed to the window paint uses, those in no order tested
+    /// against their reach — and to those the pointer record owes one. With no
+    /// point to narrow to — the event has none, or the container clipped it
+    /// away and passes `None` — only the owed are told: a widget the pointer
+    /// was over learns it left, a press that it was given up or that its drag
+    /// went on outside, and nothing else can be under a point that is nowhere.
+    ///
+    /// What the event offered by position is owed the next one. The children
+    /// it was owed are not: having had it, they are owed nothing more unless
+    /// the press holds them.
+    pub(crate) fn event_targets(
         &mut self,
         parent: WidgetId,
         children: &[WidgetId],
-        axis: crate::layout::Axis,
-        at: crate::widgets::Point,
-    ) -> Option<PointerTargets> {
-        // Below this, walking every child costs less than narrowing them, and
-        // a row's handful of cells recorded on every move would make the record
-        // grow with the depth of the tree rather than with its lists.
-        const NARROWED_ABOVE: usize = 16;
-        if children.len() <= NARROWED_ABOVE {
-            return None;
+        event: &crate::widgets::Event,
+        at: Option<crate::widgets::Point>,
+        sorted: Option<crate::layout::Axis>,
+    ) -> PointerTargets {
+        if !event.is_pointer() {
+            return PointerTargets::every(children.len());
         }
-        let along = at.along(axis);
-        let window = self.window_of(children, axis, (along, along), self.children_reach(parent));
-
+        let withholding = self.pointer.withholding;
+        let at = at.filter(|_| !withholding);
+        let reach = self.children_reach(parent);
         let mut owed: SmallVec<[usize; 4]> = SmallVec::new();
-        let PointerRecord {
-            offering,
-            last,
-            pressed,
-            reached,
-        } = &mut self.pointer;
-        reached.push(parent);
-        for entry in last.iter_mut().chain(pressed.iter_mut()) {
-            if entry.parent != parent {
-                continue;
+        let mut blind: SmallVec<[usize; 4]> = SmallVec::new();
+        let window = match (at, sorted) {
+            (Some(at), Some(axis)) => {
+                let along = at.along(axis);
+                let window = self.window_of(children, axis, (along, along), reach);
+                crate::render_stats::record_event_window(
+                    children.len() as u64,
+                    window.len() as u64,
+                );
+                window
             }
-            // A reconcile can have moved the child since it was offered; the
-            // id is what is owed, and the index only the quick way to it. The
-            // index is put right once, so a drag over a list that changed
-            // looks again once rather than on every move.
-            let index = match children.get(entry.index as usize) {
-                Some(&child) if child == entry.child => Some(entry.index as usize),
-                _ => children.iter().position(|&child| child == entry.child),
-            };
-            match index {
-                Some(index) => {
-                    entry.index = index as u32;
-                    if !window.contains(&index) {
-                        owed.push(index);
+            (Some(at), None) => {
+                owed.extend((0..children.len()).filter(|&index| {
+                    self.get_bounds(children[index])
+                        .is_some_and(|b| b.outset(reach).contains(at.x, at.y))
+                }));
+                0..0
+            }
+            (None, _) => 0..0,
+        };
+        let record = &mut self.pointer;
+        record.reached.push(parent);
+        let root = record.root.unwrap_or(parent);
+        record.offering.extend(
+            window
+                .clone()
+                .chain(owed.iter().copied())
+                .map(|index| Offered {
+                    root,
+                    parent,
+                    index: index as u32,
+                    child: children[index],
+                }),
+        );
+
+        let key = parent.as_u64();
+        for (held, list) in [(false, &mut record.last), (true, &mut record.pressed)] {
+            let start = list.partition_point(|entry| by_parent(entry) < key);
+            let end = start + list[start..].partition_point(|entry| by_parent(entry) == key);
+            for entry in &mut list[start..end] {
+                // A reconcile can have moved the child since it was offered;
+                // the id is what is owed, and the index only the quick way to
+                // it. The index is put right once, so a drag over a list that
+                // changed looks again once rather than on every move.
+                let index = match children.get(entry.index as usize) {
+                    Some(&child) if child == entry.child => Some(entry.index as usize),
+                    _ => children.iter().position(|&child| child == entry.child),
+                };
+                match index {
+                    Some(index) => {
+                        entry.index = index as u32;
+                        if !window.contains(&index) {
+                            owed.push(index);
+                        }
+                        if withholding && !held {
+                            blind.push(index);
+                        }
                     }
+                    // Gone from the container: nothing is owed to it here.
+                    None => entry.index = u32::MAX,
                 }
-                // Gone from the container: nothing is owed to it here.
-                None => entry.index = u32::MAX,
             }
         }
-        pressed.retain(|entry| entry.index != u32::MAX);
+        record.pressed.retain(|entry| entry.index != u32::MAX);
         owed.sort_unstable();
         owed.dedup();
-
-        offering.extend(window.clone().map(|index| Offered {
-            parent,
-            index: index as u32,
-            child: children[index],
-        }));
-        crate::render_stats::record_event_window(
-            children.len() as u64,
-            (window.len() + owed.len()) as u64,
-        );
-        Some(PointerTargets {
+        // A child the press holds keeps the position even where the last
+        // event's offer would have made it blind.
+        if withholding {
+            let pressed = &record.pressed;
+            let start = pressed.partition_point(|entry| by_parent(entry) < key);
+            let held = &pressed[start..];
+            blind.retain(|index| {
+                !held
+                    .iter()
+                    .take_while(|entry| entry.parent == parent)
+                    .any(|entry| entry.index as usize == *index)
+            });
+        }
+        PointerTargets {
             window,
             owed: owed.into_iter().peekable(),
-        })
+            blind,
+        }
+    }
+
+    /// Offer what follows as a point a container above clipped away, until
+    /// the returned value is handed back to [`Self::end_withholding`].
+    pub(crate) fn begin_withholding(&mut self) -> bool {
+        std::mem::replace(&mut self.pointer.withholding, true)
+    }
+
+    /// Put back what [`Self::begin_withholding`] returned.
+    pub(crate) fn end_withholding(&mut self, was: bool) {
+        self.pointer.withholding = was;
     }
 
     /// The widest reach among this widget's children.
@@ -1816,7 +1944,64 @@ impl Default for Tree {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    /// A surface closed while the pointer is on it hears no leave — the
+    /// compositor's arrives for a surface that is gone — so its root leaving
+    /// the tree is what takes its record with it: a popup closed by a click on
+    /// one of its items must not stay in the record for the life of the bar.
+    #[test]
+    fn a_surface_root_leaving_the_tree_takes_its_pointer_record() {
+        let mut tree = Tree::new();
+        let closed = tree.register(Box::new(MockWidget::new()));
+        let open = tree.register(Box::new(MockWidget::new()));
+        let child = tree.register(Box::new(MockWidget::new()));
+        for root in [closed, open] {
+            let entry = Offered {
+                root,
+                parent: root,
+                index: 0,
+                child,
+            };
+            tree.pointer.last.push(entry);
+            tree.pointer.pressed.push(entry);
+        }
+
+        tree.unregister(closed);
+
+        let roots = |list: &Vec<Offered>| list.iter().map(|e| e.root).collect::<Vec<_>>();
+        assert_eq!(roots(&tree.pointer.last), [open]);
+        assert_eq!(roots(&tree.pointer.pressed), [open]);
+    }
+
+    /// The record keeps what the root still leads to, and nothing an event
+    /// can no longer reach: an entry under a container nothing recorded leads
+    /// to is gone, however long it was carried.
+    #[test]
+    fn the_pointer_record_keeps_only_what_the_root_reaches() {
+        let id = |n| WidgetId::from_u64(n);
+        let offered = |root: u64, parent: u64, child: u64| Offered {
+            root: id(root),
+            parent: id(parent),
+            index: 0,
+            child: id(child),
+        };
+        // root 1 → 2 → 3 is a path; 7 → 8 was carried under a row that has
+        // scrolled away; 20 → 21 is another surface's, and stays.
+        let mut record = vec![
+            offered(1, 1, 2),
+            offered(1, 2, 3),
+            offered(1, 7, 8),
+            offered(20, 20, 21),
+        ];
+        record.sort_unstable_by_key(by_parent);
+
+        keep_what_the_root_reaches(&mut record, id(1));
+
+        let kept: Vec<_> = record.iter().map(|e| (e.parent, e.child)).collect();
+        assert_eq!(kept, [(id(1), id(2)), (id(2), id(3)), (id(20), id(21))]);
+    }
 
     // Mock widget for testing
     struct MockWidget;
