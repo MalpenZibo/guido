@@ -71,6 +71,11 @@ impl FocusPath {
         self.chain.last().copied()
     }
 
+    /// The focused widget and its ancestors, innermost first.
+    pub(crate) fn chain(&self) -> &[WidgetId] {
+        &self.chain
+    }
+
     pub fn is_empty(&self) -> bool {
         self.chain.is_empty()
     }
@@ -82,6 +87,12 @@ static FOCUS: GlobalSignal<FocusPath> = GlobalSignal::new(FocusPath::default);
 
 fn focus() -> RwSignal<FocusPath> {
     FOCUS.get()
+}
+
+/// The focus path as it stands, subscribing nothing: what routes a key, which
+/// is not something a key's delivery should be woken by.
+pub(crate) fn focus_path_untracked() -> FocusPath {
+    focus().get_untracked()
 }
 
 /// The current focus path. Reading this subscribes, like any other signal.

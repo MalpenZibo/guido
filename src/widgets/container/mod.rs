@@ -1107,7 +1107,9 @@ impl Container {
         self
     }
 
-    /// Called for every key press this container's surface receives.
+    /// Called for a key press nothing with the focus took: one typed while a
+    /// focused widget inside lets it through, or with nothing focused at all.
+    /// Where two containers both declare it, the inner one hears the key.
     ///
     /// Delivered while the surface has keyboard focus — a layer surface with
     /// [`KeyboardInteractivity`](crate::platform::KeyboardInteractivity) set,
@@ -1569,6 +1571,14 @@ impl Widget for Container {
                 })
                 .flatten(),
         );
+
+        if self
+            .interaction
+            .as_ref()
+            .is_some_and(|ix| ix.on_key_down.is_some())
+        {
+            tree.listen_for_keys(id);
+        }
 
         // Register pending children
         self.children_source.register_pending(tree, id);

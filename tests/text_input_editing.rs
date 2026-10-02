@@ -238,8 +238,9 @@ fn assert_caret_at(field: &mut Field, expected: f32, why: &str) {
 
 #[test]
 fn an_unfocused_field_does_not_hear_the_keyboard() {
-    // The sharpest of the twenty-five: with the guard gone, every field on a
-    // surface takes every keystroke, and everything else here stays green.
+    // The sharpest of the twenty-five: a key travels the focus path, and a
+    // field nobody focused is not on it. Route keys any wider and every field
+    // on a surface takes every keystroke, with everything else here green.
     let mut field = Field::unfocused("");
 
     let response = field.key(Key::Char('a'));

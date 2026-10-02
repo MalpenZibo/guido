@@ -810,21 +810,19 @@ impl Event {
         }
     }
 
-    /// Whether the pointer sent it, positioned or not: what the pointer record
-    /// routes, where a key or a focus change goes to every widget.
-    pub(crate) fn is_pointer(&self) -> bool {
+    /// Whether it goes where the keyboard focus is: a key, or the surface
+    /// gaining or losing the keyboard. The pointer's events go where the
+    /// pointer is, and a paste to the widget that asked for it.
+    pub(crate) fn follows_the_focus(&self) -> bool {
         match self {
+            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut => true,
             Event::MouseMove { .. }
             | Event::MouseDown { .. }
             | Event::MouseUp { .. }
             | Event::MouseEnter { .. }
             | Event::MouseLeave
             | Event::Scroll { .. }
-            | Event::ScrollEnd { .. } => true,
-            Event::KeyDown { .. }
-            | Event::KeyUp { .. }
-            | Event::FocusIn
-            | Event::FocusOut
+            | Event::ScrollEnd { .. }
             | Event::Pasted(_) => false,
         }
     }
@@ -999,6 +997,15 @@ pub trait Widget {
     /// `ctx.id()` is which widget this is and `ctx.tree()` is the tree it is
     /// in, for the bounds and the children a drawing needs.
     fn paint(&self, ctx: &mut PaintContext);
+    /// Handle an event routed to this widget.
+    ///
+    /// Not every event reaches every widget. One from the pointer reaches the
+    /// widgets that can be under its point, and those it owes one — the widget
+    /// it just left, the one a press landed on. A key reaches the widget with
+    /// the focus and the containers on the way to it, then those listening
+    /// with `on_key_down`. A container hands an event to its children through
+    /// `Tree::event_targets`; a widget that holds children of its own and
+    /// offers them events by hand steps outside that routing.
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         let _ = (tree, id, event);
         EventResponse::Ignored

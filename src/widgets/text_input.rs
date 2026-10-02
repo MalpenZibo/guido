@@ -1795,7 +1795,8 @@ impl<C: Content> Widget for TextInput<C> {
             {
                 tree.keep_the_focus_this_press_landed_on();
             }
-            Event::KeyDown { key, modifiers } if has_focus(id) => {
+            // A key is only ever routed to the field with the focus.
+            Event::KeyDown { key, modifiers } => {
                 let response = self.handle_key(id, key, modifiers.ctrl, modifiers.shift, edit);
                 if response == EventResponse::Handled {
                     request_job(id, JobRequest::Paint);
