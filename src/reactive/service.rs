@@ -78,6 +78,10 @@ impl<Cmd: 'static> Service<Cmd> {
     /// scope was disposed logs a warning and does nothing — the task it would
     /// reach was aborted with that scope.
     pub fn send(&self, cmd: Cmd) {
+        if !self.sender.is_live() {
+            log::warn!("ignoring command to disposed service");
+            return;
+        }
         self.sender.with_untracked(|tx| {
             let _ = tx.send(cmd);
         });
@@ -250,6 +254,58 @@ mod tests {
     use crate::reactive::owner::{dispose_owner_now, with_owner};
     use std::sync::atomic::AtomicI32;
     use std::time::Duration;
+
+    #[test]
+    fn sending_after_service_disposal_is_a_noop() {
+        let (service, owner) = with_owner(|| create_service(|_rx, _ctx| async {}));
+        dispose_owner_now(owner);
+
+        service.send(());
+        service.send(());
+    }
+
+    #[test]
+    fn a_disposed_service_cannot_send_to_a_recycled_channel() {
+        let ((stale, mut old_rx), owner) = with_owner(|| {
+            let (tx, rx) = mpsc::unbounded_channel::<i32>();
+            (
+                Service {
+                    sender: create_stored(tx),
+                },
+                rx,
+            )
+        });
+        dispose_owner_now(owner);
+        let (tx, mut rx) = mpsc::unbounded_channel::<i32>();
+        let replacement = Service {
+            sender: create_stored(tx),
+        };
+        assert!(!stale.sender.is_live());
+        assert_eq!(crate::reactive::storage::slot_count(), 1);
+
+        stale.send(11);
+        replacement.send(23);
+
+        assert_eq!(rx.try_recv(), Ok(23));
+        assert_eq!(rx.try_recv(), Err(mpsc::error::TryRecvError::Empty));
+        assert_eq!(
+            old_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Disconnected)
+        );
+    }
+
+    #[test]
+    fn a_live_service_still_sends_and_ignores_a_closed_receiver() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<i32>();
+        let (service, owner) = with_owner(|| Service {
+            sender: create_stored(tx),
+        });
+        service.send(17);
+        assert_eq!(rx.try_recv(), Ok(17));
+        drop(rx);
+        service.send(29);
+        dispose_owner_now(owner);
+    }
 
     /// Regression test: create_service must work WITHOUT an ambient tokio
     /// runtime (plain `fn main()`, the documented default setup). It
