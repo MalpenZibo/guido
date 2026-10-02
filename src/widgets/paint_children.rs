@@ -109,21 +109,7 @@ fn visible_window<'a>(
 
     // Grown by the widest reach among the children, because the bounds being
     // searched are where they were laid out and not where they draw.
-    let (near, far) = cull.span(axis);
-    let (near, far) = (near - opts.children_reach, far + opts.children_reach);
-    let span = |cid: WidgetId| tree.get_bounds(cid).map(|b| b.span(axis));
-    let first = children.partition_point(|&cid| span(cid).is_some_and(|(_, f)| f <= near));
-    // From `first`, so `last` cannot come out below it however degenerate the
-    // rect is, and the slice below is well formed by construction.
-    let last =
-        first + children[first..].partition_point(|&cid| span(cid).is_some_and(|(n, _)| n < far));
-
-    // One either side, for the boundary rather than for transforms: the
-    // predicates compare edges with `<=` and `<`, so a child whose edge lands
-    // exactly on the rect can fall either way under float rounding. What a
-    // child's own transform does to where it draws is `children_reach` above,
-    // measured rather than guessed at one child's width.
-    let window = &children[first.saturating_sub(1)..(last + 1).min(children.len())];
+    let window = &children[tree.window_of(children, axis, cull.span(axis), opts.children_reach)];
     crate::render_stats::record_paint_window(children.len() as u64, window.len() as u64);
     if window.len() < children.len() {
         ctx.mark_partial();

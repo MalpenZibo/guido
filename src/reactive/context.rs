@@ -573,7 +573,7 @@ mod tests {
             Event::mouse_down(10.0, 10.0, MouseButton::Left),
             Event::mouse_up(10.0, 10.0, MouseButton::Left),
         ] {
-            tree.with_widget_mut(root, |w, id, tree| w.event(tree, id, &event));
+            tree.dispatch(root, &event);
         }
 
         assert_eq!(

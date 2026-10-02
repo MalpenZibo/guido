@@ -71,9 +71,7 @@ impl Field {
 
     fn event(&mut self, event: &Event) {
         let id = self.id;
-        self.tree.with_widget_mut(id, |w, id, t| {
-            w.event(t, id, event);
-        });
+        self.tree.dispatch(id, event);
     }
 
     /// Drag across the whole field, which is how the primary selection is filled.

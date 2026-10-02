@@ -34,7 +34,7 @@ use crate::reactive::{
 };
 use crate::renderer::{GradientDir, PaintContext, Shadow};
 use crate::transform::{Scale, Transform, Translate};
-use crate::tree::{LayoutCtx, Tree, WidgetId};
+use crate::tree::{LayoutCtx, PointerTargets, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::children::ChildrenSource;
@@ -1811,7 +1811,18 @@ impl Widget for Container {
 
         let mut a_child_took_it = false;
         if !skip_child_dispatch {
-            for &child_id in self.children_source.get() {
+            let children = self.children_source.get();
+            // A positioned event goes to the children that can be under it —
+            // the window paint narrows to — and to those the pointer record
+            // still owes one (#584). An event with no position, and children
+            // in no order, are offered to every child.
+            let targets = child_event
+                .coords()
+                .zip(self.children_sorted_along)
+                .and_then(|(at, axis)| tree.pointer_targets(id, children, axis, at))
+                .unwrap_or_else(|| PointerTargets::every(children.len()));
+            for index in targets {
+                let child_id = children[index];
                 // A child playing its exit is drawn and takes nothing: the
                 // event goes on to whatever is under it.
                 if is_detached(child_id) {

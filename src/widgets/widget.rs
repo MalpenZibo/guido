@@ -185,6 +185,14 @@ impl Point {
     pub fn offset(self, dx: f32, dy: f32) -> Self {
         Self::new(self.x + dx, self.y + dy)
     }
+    /// The coordinate along `axis` — a point's [`Rect::span`].
+    #[inline]
+    pub(crate) fn along(self, axis: crate::layout::Axis) -> f32 {
+        match axis {
+            crate::layout::Axis::Horizontal => self.x,
+            crate::layout::Axis::Vertical => self.y,
+        }
+    }
 }
 
 /// The superellipse "length" of a vector — the shader's `superellipse_length`.

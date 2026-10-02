@@ -157,7 +157,7 @@ impl H {
         // harness reporting on itself.
         crate::reactive::diagnostics::snapshot_zone(|| {
             self.tree
-                .with_widget_mut(root, |w, id, t| w.event(t, id, &event))
+                .dispatch(root, &event)
                 .expect("root is registered")
         })
     }

@@ -462,9 +462,9 @@ impl Surface {
     /// `mark_needs_paint` when the job queue is drained (`jobs.rs`).
     fn scroll_at(&mut self, x: f32, y: f32, delta: f32, scroller: WidgetId) {
         let root = self.surface.root;
-        self.surface.tree.with_widget_mut(root, |w, id, t| {
-            w.event(t, id, &Event::scroll(x, y, 0.0, delta, ScrollSource::Wheel))
-        });
+        self.surface
+            .tree
+            .dispatch(root, &Event::scroll(x, y, 0.0, delta, ScrollSource::Wheel));
         self.surface.tree.mark_needs_paint(scroller);
     }
 
