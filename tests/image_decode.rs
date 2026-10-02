@@ -145,6 +145,85 @@ fn image_bytes_are_drawn_on_the_frame_after_their_decode() {
     a_pending_image_is_drawn_on_a_later_frame(ImageSource::Bytes(png([255, 0, 0]).into()), 20);
 }
 
+fn raster_file(format: ::image::ImageFormat, extension: &str, scenario: &str) -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("{scenario}-{format:?}"))
+        .with_extension(extension);
+    let pixels = ::image::RgbImage::from_pixel(20, 20, ::image::Rgb([255, 0, 0]));
+    let mut encoded = Cursor::new(Vec::new());
+    pixels.write_to(&mut encoded, format).unwrap();
+    std::fs::write(&path, encoded.into_inner()).unwrap();
+    path
+}
+
+#[test]
+fn raster_file_dimensions_follow_the_contents() {
+    for format in [::image::ImageFormat::Png, ::image::ImageFormat::Jpeg] {
+        for extension in ["png", "jpg", "dat", ""] {
+            let source = ImageSource::Path(raster_file(format, extension, "dimensions"));
+            assert_eq!(
+                guido::image_metadata::get_intrinsic_size(&source),
+                Some((20.0, 20.0)),
+                "{format:?} dimensions with extension {extension:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn raster_files_are_drawn_regardless_of_their_extensions() {
+    for format in [::image::ImageFormat::Png, ::image::ImageFormat::Jpeg] {
+        for extension in ["png", "jpg", "dat", ""] {
+            a_pending_image_is_drawn_on_a_later_frame(
+                ImageSource::Path(raster_file(format, extension, "drawn")),
+                20,
+            );
+        }
+    }
+}
+
+#[test]
+fn unreadable_raster_files_stay_failed() {
+    let _serial = serial();
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let corrupt = root.join("corrupt-image.png");
+    std::fs::write(&corrupt, b"not an image").unwrap();
+    for path in [root.join("missing-image-539.png"), corrupt] {
+        let source = ImageSource::Path(path);
+        assert_eq!(guido::image_metadata::get_intrinsic_size(&source), None);
+        let Some(mut app) = headless() else { return };
+        let (surface, ready) = surface(&mut app, vec![source], 20);
+        app.step();
+        app.wait_for_image_decodes();
+        app.step();
+        assert!(!ready.get_untracked());
+        assert_eq!(app.image_decodes_started(), 0);
+        assert!(is_backdrop(app.read_pixel(surface, 10, 10)));
+    }
+}
+
+#[test]
+fn a_corrupt_raster_payload_never_becomes_ready() {
+    let _serial = serial();
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("corrupt-payload.png");
+    let mut bytes = png([255, 0, 0]);
+    bytes.truncate(bytes.len() / 2);
+    std::fs::write(&path, bytes).unwrap();
+    let source = ImageSource::Path(path);
+    assert_eq!(
+        guido::image_metadata::get_intrinsic_size(&source),
+        Some((20.0, 20.0))
+    );
+    let Some(mut app) = headless() else { return };
+    let (surface, ready) = surface(&mut app, vec![source], 20);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(!ready.get_untracked());
+    assert_eq!(app.image_decodes_started(), 1);
+    assert!(is_backdrop(app.read_pixel(surface, 10, 10)));
+}
+
 /// Two images of one source share one decode, and both are drawn by it.
 fn two_images_of_one_source_decode_it_once(first: ImageSource, second: ImageSource, side: u32) {
     let _serial = serial();
