@@ -627,6 +627,20 @@ Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)
 - Ignore and let parent continue (`EventResponse::Ignored`)
 
+A positioned event is not offered to every child. A container whose children
+are ordered along an axis offers it to the ones that can be under the point —
+the window paint narrows to, by the same search (`window_of` on the `Tree`),
+grown by the children's reach so a transformed child is found where it draws —
+and to the children the pointer record still owes one. The record lives on the
+`Tree` and holds two sets of offers: those of the last positioned event to
+reach each container, so a widget the pointer just left sees the move that
+clears its hover however far the pointer went — or whatever else it passed over
+on the way back — and those of the press, until the release, so a drag reaches
+the widget it started on wherever it goes. Flutter keeps the same two —
+`MouseTracker`'s last hit set and `GestureBinding`'s hit path per pointer.
+Events without a position, and children in no order, are still offered to
+every child (#586 tracks the rest).
+
 A `Container` that scrolls does two things around that dispatch rather than
 one. Going down, a finger's press arms the watch that a drag needs — before a
 child takes the press, because the press is still the child's until the slop is

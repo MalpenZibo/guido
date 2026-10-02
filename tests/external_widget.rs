@@ -143,16 +143,13 @@ fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
     });
 
     let mut send = |at| {
-        tree.with_widget_mut(root, |w, id, t| {
-            w.event(
-                t,
-                id,
-                &Event::MouseMove {
-                    at,
-                    pointer: PointerKind::Mouse,
-                },
-            )
-        });
+        tree.dispatch(
+            root,
+            &Event::MouseMove {
+                at,
+                pointer: PointerKind::Mouse,
+            },
+        );
     };
 
     send(Some(Point::new(3.0, 4.0)));

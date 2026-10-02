@@ -140,6 +140,10 @@ pub struct StatsSnapshot {
     // the ones it could not narrow because nothing ordered them.
     pub window_children_total: u64,
     pub window_children_iterated: u64,
+    /// Children a windowed container held when a positioned event reached it,
+    /// and how many it offered the event to (#584).
+    pub event_window_children_total: u64,
+    pub event_window_children_offered: u64,
     pub window_declined_children: u64,
     pub window_declined_containers: u64,
     /// How many times these frames went to the allocator. Zero unless the
@@ -263,6 +267,9 @@ mod inner {
         window_children_iterated: u64,
         window_declined_children: u64,
         window_declined_containers: u64,
+        // Event window
+        event_window_children_total: u64,
+        event_window_children_offered: u64,
         // The heap: what the frames asked for, and where the allocator's
         // process-wide totals stood when the last frame was folded in.
         allocations: u64,
@@ -306,6 +313,8 @@ mod inner {
                 window_children_iterated: 0,
                 window_declined_children: 0,
                 window_declined_containers: 0,
+                event_window_children_total: 0,
+                event_window_children_offered: 0,
                 allocations: 0,
                 bytes_allocated: 0,
                 heap_mark: heap_now(),
@@ -444,6 +453,17 @@ mod inner {
         });
     }
 
+    /// Record a container that narrowed a positioned event to the children
+    /// that can be under it, plus those the pointer record still owes one.
+    #[inline]
+    pub fn record_event_window(total_children: u64, offered: u64) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            stats.event_window_children_total += total_children;
+            stats.event_window_children_offered += offered;
+        });
+    }
+
     /// Record a container that had a rect to narrow to and could not: its
     /// children are ordered along no axis, so every one of them is examined.
     ///
@@ -507,6 +527,8 @@ mod inner {
                 window_children_iterated: stats.window_children_iterated,
                 window_declined_children: stats.window_declined_children,
                 window_declined_containers: stats.window_declined_containers,
+                event_window_children_total: stats.event_window_children_total,
+                event_window_children_offered: stats.event_window_children_offered,
                 allocations: stats.allocations,
                 bytes_allocated: stats.bytes_allocated,
                 draw_calls: stats.draw_calls,
@@ -745,6 +767,10 @@ pub fn record_paint_window(_total_children: u64, _iterated: u64) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_paint_window_declined(_total_children: u64) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_event_window(_total_children: u64, _offered: u64) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

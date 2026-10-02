@@ -82,7 +82,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
             },
             Event::MouseLeave,
         ] {
-            tree.with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+            tree.dispatch(root, &event);
         }
     });
 
