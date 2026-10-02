@@ -755,6 +755,38 @@ mod tests {
         assert_eq!(effect_index_entries(), before + 1, "one reader, one list");
     }
 
+    /// A signal's list goes back to the pool when the signal goes, and when the
+    /// last effect reading it does — not only when a slot is reused.
+    #[test]
+    fn a_list_goes_back_when_its_signal_or_its_last_reader_goes() {
+        use crate::reactive::owner::{dispose_owner_now, with_owner};
+
+        let before = effect_index_entries();
+        let (signal, signal_scope) = with_owner(|| create_signal(0u32));
+        let read = move || {
+            signal.get();
+        };
+
+        let ((), reader) = with_owner(|| create_effect(read));
+        assert_eq!(effect_index_entries(), before + 1, "the control: one list");
+        dispose_owner_now(reader);
+        assert_eq!(
+            effect_index_entries(),
+            before,
+            "its only reader went, and the list with it"
+        );
+
+        let ((), reader) = with_owner(|| create_effect(read));
+        assert_eq!(effect_index_entries(), before + 1);
+        dispose_owner_now(signal_scope);
+        assert_eq!(
+            effect_index_entries(),
+            before,
+            "the signal went, and its list with it"
+        );
+        dispose_owner_now(reader);
+    }
+
     /// An effect's reads are registered when its run ends, so a signal it read
     /// and then disposed in the same run is subscribed to after it is gone. The
     /// next signal to take its slot must not inherit that: writing it would
