@@ -15,7 +15,12 @@ use crate::widgets::image::ImageSource;
 /// Returns `None` if the source cannot be read or parsed.
 pub fn get_intrinsic_size(source: &ImageSource) -> Option<(f32, f32)> {
     let (width, height) = match source {
-        ImageSource::Path(path) => image::image_dimensions(path).ok()?,
+        ImageSource::Path(path) => image::ImageReader::open(path)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?,
         // The header, not the image: a full decode here would put back on the
         // frame exactly what `image_decode` takes off it.
         ImageSource::Bytes(bytes) => image::ImageReader::new(std::io::Cursor::new(&bytes[..]))

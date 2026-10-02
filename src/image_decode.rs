@@ -766,7 +766,10 @@ fn send_job(image: &DecodedImage, extent: Extent) -> bool {
 fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
     let key = &image.0.key;
     let decoded = match key {
-        DecodeKey::Path(path) => image::open(path),
+        DecodeKey::Path(path) => image::ImageReader::open(path)
+            .and_then(image::ImageReader::with_guessed_format)
+            .map_err(image::ImageError::IoError)
+            .and_then(image::ImageReader::decode),
         DecodeKey::Bytes(bytes) => image::load_from_memory(bytes),
         DecodeKey::SvgPath(_) | DecodeKey::SvgBytes(_) => {
             return rasterize(image.0.svg.as_ref()?, extent?);
