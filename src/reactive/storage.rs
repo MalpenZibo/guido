@@ -164,7 +164,7 @@ pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
 /// This is the cheap path for `create_stored()`: no RefCell wrapping, and the
 /// caller skips runtime registration and dependency tracking. Saves per-signal:
 /// - 8 bytes (no RefCell borrow flag)
-/// - One `Vec::push` in runtime's `signal_subscribers`
+/// - One `Runtime::register_signal` call
 /// - `record_effect_read()` + `record_signal_read()` on every `.get()` call
 pub fn create_stored_value<T: 'static>(value: T) -> SignalId {
     alloc_slot(Rc::new(value))
