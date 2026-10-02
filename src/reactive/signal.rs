@@ -8,10 +8,9 @@ use super::runtime::{
     suspend_effect_tracking, with_runtime,
 };
 use super::storage::{
-    allocate_signal_slot, compare_and_set_signal_value, compare_and_update_signal_value,
-    create_signal_value, create_stored_value, get_signal_value, get_stored_value, has_signal,
-    store_derived_closure, try_call_derived, try_get_signal_value, with_signal_value,
-    with_stored_value,
+    call_derived, compare_and_set_signal_value, compare_and_update_signal_value,
+    create_derived_value, create_signal_value, create_stored_value, get_signal_value,
+    get_stored_value, has_signal, try_get_signal_value, with_signal_value, with_stored_value,
 };
 
 /// Implement Clone (via Copy), Copy, PartialEq (by SignalId), and Eq for a signal type.
@@ -41,7 +40,7 @@ pub(crate) enum SignalKind {
     Stored = 0,
     /// Reactive read-write value (`Rc<RefCell<T>>`, tracked).
     Mutable = 1,
-    /// Closure-backed derived signal (HashMap lookup).
+    /// Closure-backed derived signal (the closure is the slot's value).
     Derived = 2,
 }
 
@@ -59,7 +58,7 @@ fn tracked_get<T: Clone + 'static>(id: SignalId, kind: SignalKind) -> T {
         SignalKind::Derived => {
             check_reactive_scope();
             // The closure's own reads would otherwise report a second time
-            snapshot_zone(|| try_call_derived::<T>(id).expect("derived closure missing"))
+            snapshot_zone(|| call_derived::<T>(id))
         }
         SignalKind::Mutable => {
             check_reactive_scope();
@@ -85,7 +84,7 @@ fn tracked_with<T: Clone + 'static, R>(
         SignalKind::Stored => with_stored_value(id, f),
         SignalKind::Derived => {
             check_reactive_scope();
-            let val = snapshot_zone(|| try_call_derived::<T>(id).unwrap());
+            let val = snapshot_zone(|| call_derived::<T>(id));
             f(&val)
         }
         SignalKind::Mutable => {
@@ -159,9 +158,7 @@ pub struct Signal<T> {
 /// happened to be tracking. Two sister functions with different contracts is
 /// worse than either contract.
 fn untracked_derived<T: Clone + 'static>(id: SignalId) -> T {
-    snapshot_zone(|| {
-        suspend_widget_tracking(|| suspend_effect_tracking(|| try_call_derived::<T>(id).unwrap()))
-    })
+    snapshot_zone(|| suspend_widget_tracking(|| suspend_effect_tracking(|| call_derived::<T>(id))))
 }
 
 impl_signal_id_traits!(Signal);
@@ -649,9 +646,7 @@ pub fn create_stored<T: Clone + 'static>(value: T) -> Signal<T> {
 /// text(label); // Copy, reactive
 /// ```
 pub fn create_derived<T: Clone + 'static>(f: impl Fn() -> T + 'static) -> Signal<T> {
-    let id = allocate_signal_slot();
-    store_derived_closure::<T>(id, f);
-    with_runtime(|rt| rt.register_signal(id));
+    let id = create_derived_value(f);
     register_signal(id);
     Signal {
         id,

@@ -1,8 +1,10 @@
 //! Thread-local storage for signal values.
 //!
 //! Signal values are stored in a thread-local `RefCell`-protected vector,
-//! using `Rc<dyn Any>` to erase `RefCell<T>` for each signal. This eliminates
-//! all locking overhead since signals are only accessed from the main thread.
+//! using `Rc<dyn Any>` to erase what each slot holds — a `RefCell<T>` for a
+//! mutable signal, the value for a stored one, the closure for a derived one.
+//! This eliminates all locking overhead since signals are only accessed from
+//! the main thread.
 //!
 //! ## Thread Safety
 //!
@@ -19,8 +21,6 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
-
-use rustc_hash::FxHashMap;
 
 use super::owner::{OwnerId, under_scope};
 use super::runtime::SignalId;
@@ -41,9 +41,6 @@ pub(crate) struct SignalStorage {
     slots: Vec<Slot>,
     /// Vacant slot indices available for reuse.
     free_indices: Vec<u32>,
-    /// Derived closures keyed by SignalId. When a signal has a derived closure,
-    /// `.get()` calls the closure instead of reading from `slots`.
-    derived: FxHashMap<SignalId, Rc<dyn Any>>,
 }
 
 impl SignalStorage {
@@ -62,7 +59,6 @@ impl SignalStorage {
                 })
                 .collect(),
             free_indices: (0..self.slots.len() as u32).rev().collect(),
-            derived: FxHashMap::default(),
         }
     }
 }
@@ -164,17 +160,10 @@ pub fn create_signal_value<T: 'static>(value: T) -> SignalId {
 /// This is the cheap path for `create_stored()`: no RefCell wrapping, and the
 /// caller skips runtime registration and dependency tracking. Saves per-signal:
 /// - 8 bytes (no RefCell borrow flag)
-/// - One `Vec::push` in runtime's `signal_subscribers`
+/// - One `Runtime::register_signal` call
 /// - `record_effect_read()` + `record_signal_read()` on every `.get()` call
 pub fn create_stored_value<T: 'static>(value: T) -> SignalId {
     alloc_slot(Rc::new(value))
-}
-
-/// Allocate a signal ID slot without storing a value.
-/// Used by `create_derived` — the ID exists in the runtime/owner system,
-/// but reads go through the derived closure map instead.
-pub fn allocate_signal_slot() -> SignalId {
-    alloc_slot(Rc::new(()))
 }
 
 /// A derived signal's closure, and the scope it was written in.
@@ -185,48 +174,31 @@ pub fn allocate_signal_slot() -> SignalId {
 /// answer the row's declaration when layout asked and nothing when paint did
 /// (#335), so the closure carries where it was written and is run there.
 ///
-/// The scope is held inside the `Rc`'s allocation rather than beside it in the
-/// map: the entry stays one 16-byte handle, and the eight bytes go where an
-/// allocation already was.
+/// It is the slot's value, so a read finds the closure by index, as it would a
+/// stored value. The scope is held inside the `Rc`'s allocation rather than
+/// beside it: the slot stays one 16-byte handle, and the eight bytes go where
+/// an allocation already was.
 struct Derived<T> {
     scope: Option<OwnerId>,
     call: Box<dyn Fn() -> T>,
 }
 
-/// Store a derived closure for the given signal ID.
-pub fn store_derived_closure<T: Clone + 'static>(id: SignalId, closure: impl Fn() -> T + 'static) {
-    with_reactive(|reactive| {
-        let derived = Derived {
-            scope: reactive.current_owner.get(),
-            call: Box::new(closure),
-        };
-        reactive
-            .storage
-            .borrow_mut()
-            .derived
-            .insert(id, Rc::new(derived));
-    });
+/// Store a derived closure, with the scope it is written in, in a slot of its
+/// own and return its ID.
+pub fn create_derived_value<T: 'static>(closure: impl Fn() -> T + 'static) -> SignalId {
+    let scope = with_reactive(|reactive| reactive.current_owner.get());
+    alloc_slot(Rc::new(Derived {
+        scope,
+        call: Box::new(closure),
+    }))
 }
 
-/// Try to call a derived closure for the given signal ID.
-/// Returns `Some(value)` if a derived closure exists, `None` otherwise.
+/// Call a derived signal's closure, under the scope it was written in.
 ///
 /// Leptos-style: Rc::clone the closure handle and release the storage borrow
 /// before calling the closure (which will read other signals from storage).
-pub fn try_call_derived<T: Clone + 'static>(id: SignalId) -> Option<T> {
-    // Phase 1: briefly borrow storage to Rc::clone the closure handle
-    let closure_rc: Option<Rc<dyn Any>> =
-        with_reactive(|reactive| reactive.storage.borrow().derived.get(&id).map(Rc::clone));
-
-    // Phase 2: storage borrow released — call the closure
-    closure_rc.map(|rc| {
-        let derived = rc.downcast_ref::<Derived<T>>().unwrap_or_else(|| {
-            panic!(
-                "Derived signal {} type mismatch: closure return type does not match {}",
-                id,
-                std::any::type_name::<T>()
-            )
-        });
+pub fn call_derived<T: 'static>(id: SignalId) -> T {
+    with_stored_ref(id, |derived: &Derived<T>| {
         under_scope(derived.scope, || (derived.call)())
     })
 }
@@ -246,7 +218,6 @@ pub fn dispose_signal(id: SignalId) {
             return; // Stale id: slot already recycled, nothing to dispose
         };
         if slot.value.take().is_some() {
-            storage.derived.remove(&id);
             storage.free_indices.push(id.index() as u32);
         }
     });

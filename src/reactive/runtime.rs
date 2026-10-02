@@ -268,6 +268,89 @@ struct EffectSlot {
     missed: bool,
 }
 
+/// Which effects read each signal.
+///
+/// Most signals are read by no effect at all, so a signal holds a four-byte
+/// handle here and nothing else until one does: `0` for none, otherwise one
+/// more than the index of its list in a pool. A hash map would cost no handle
+/// either, but an effect's run takes its subscriptions out and puts them back,
+/// and on that path a handle is an index where a map is a hash.
+///
+/// A list emptied by an effect's run keeps its handle and its allocation, so
+/// the run that refills it allocates nothing — and so does one emptied because
+/// its effect stopped reading the signal, until the signal goes. It goes back
+/// to the pool when its signal is disposed, or when disposing an effect leaves
+/// it empty.
+#[derive(Default)]
+struct EffectSubscribers {
+    /// By `SignalId::index`; as long as the highest index ever subscribed to.
+    handles: Vec<u32>,
+    lists: Vec<Vec<EffectId>>,
+    /// Pool indices whose lists belong to no signal.
+    free: Vec<u32>,
+}
+
+impl EffectSubscribers {
+    fn handle(&self, signal_id: SignalId) -> Option<usize> {
+        match self.handles.get(signal_id.index()) {
+            Some(&handle) if handle != 0 => Some(handle as usize - 1),
+            _ => None,
+        }
+    }
+
+    fn get(&self, signal_id: SignalId) -> Option<&Vec<EffectId>> {
+        self.handle(signal_id).map(|list| &self.lists[list])
+    }
+
+    fn get_mut(&mut self, signal_id: SignalId) -> Option<&mut Vec<EffectId>> {
+        self.handle(signal_id).map(|list| &mut self.lists[list])
+    }
+
+    /// The signal's list, given one from the pool if it has none.
+    fn get_or_insert(&mut self, signal_id: SignalId) -> &mut Vec<EffectId> {
+        let list = match self.handle(signal_id) {
+            Some(list) => list,
+            None => {
+                let list = self.free.pop().unwrap_or_else(|| {
+                    self.lists.push(Vec::new());
+                    self.lists.len() as u32 - 1
+                });
+                if signal_id.index() >= self.handles.len() {
+                    self.handles.resize(signal_id.index() + 1, 0);
+                }
+                self.handles[signal_id.index()] = list + 1;
+                list as usize
+            }
+        };
+        &mut self.lists[list]
+    }
+
+    /// Take the signal's list, and give its place in the pool back.
+    fn remove(&mut self, signal_id: SignalId) -> Option<Vec<EffectId>> {
+        let list = self.handle(signal_id)?;
+        self.handles[signal_id.index()] = 0;
+        self.free.push(list as u32);
+        Some(std::mem::take(&mut self.lists[list]))
+    }
+
+    /// Take `effect_id` out of the signal's list, and give the list back to the
+    /// pool if that leaves it empty.
+    fn unsubscribe(&mut self, signal_id: SignalId, effect_id: EffectId) {
+        if let Some(subs) = self.get_mut(signal_id) {
+            vec_remove(subs, &effect_id);
+            if subs.is_empty() {
+                self.remove(signal_id);
+            }
+        }
+    }
+
+    /// How many signals hold a list.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.lists.len() - self.free.len()
+    }
+}
+
 #[derive(Default)]
 pub struct Runtime {
     /// Pending effects to run, in notification order. Deduplicated —
@@ -277,9 +360,9 @@ pub struct Runtime {
     effects: Vec<EffectSlot>,
     /// Vacant effect slot indices available for reuse.
     free_effect_indices: Vec<u32>,
-    /// Per-signal subscribers (which effects track it), indexed by
-    /// `SignalId::index`. Vec with dedup — most signals have 1–5 subscribers.
-    signal_subscribers: Vec<Vec<EffectId>>,
+    /// Per-signal subscribers (which effects track it). Each list is a Vec
+    /// with dedup — most signals have 1–5 subscribers.
+    signal_subscribers: EffectSubscribers,
 }
 
 impl Runtime {
@@ -293,13 +376,11 @@ impl Runtime {
 
     /// Register a signal for subscriber tracking (called when signal is created)
     pub fn register_signal(&mut self, id: SignalId) {
-        // Ensure we have space for subscribers
-        while self.signal_subscribers.len() <= id.index() {
-            self.signal_subscribers.push(Vec::new());
-        }
         // A signal index only recycles after the previous occupant was
-        // disposed, so any leftover subscribers at this index are stale.
-        self.signal_subscribers[id.index()].clear();
+        // disposed, but an effect registers its reads when its run ends: one
+        // that read a signal and then disposed it subscribed to the slot after
+        // the disposal had cleared it. That subscription is stale.
+        self.signal_subscribers.remove(id);
     }
 
     /// Remove all effect subscriptions for a signal being disposed, both from
@@ -307,10 +388,10 @@ impl Runtime {
     /// Without this, an effect could stay subscribed to a recycled slot index
     /// and get spuriously re-run by an unrelated future signal.
     pub fn dispose_signal_subscriptions(&mut self, id: SignalId) {
-        let Some(subs) = self.signal_subscribers.get_mut(id.index()) else {
+        let Some(subs) = self.signal_subscribers.remove(id) else {
             return;
         };
-        for effect_id in std::mem::take(subs) {
+        for effect_id in subs {
             if let Some(slot) = self.effect_slot_mut(effect_id) {
                 vec_remove(&mut slot.dependencies, &id);
             }
@@ -355,12 +436,15 @@ impl Runtime {
     /// Queue all effects subscribed to a signal. Does NOT run them — the
     /// caller decides when to flush (immediately, or at batch end).
     fn enqueue_subscribers(&mut self, signal_id: SignalId) {
-        let Some(subs) = self.signal_subscribers.get(signal_id.index()) else {
+        let Some(subs) = self.signal_subscribers.get(signal_id) else {
             return;
         };
-        for i in 0..subs.len() {
-            let effect_id = self.signal_subscribers[signal_id.index()][i];
-            self.enqueue(effect_id);
+        // `enqueue`'s body, over the field: the method would borrow the whole
+        // runtime while `subs` borrows the index.
+        for &effect_id in subs {
+            if !self.pending_effects.contains(&effect_id) {
+                self.pending_effects.push_back(effect_id);
+            }
         }
     }
 
@@ -397,7 +481,16 @@ impl Runtime {
     /// A paused effect does not run either: it keeps its dependencies, and is
     /// marked as having missed the run.
     fn begin_effect(&mut self, effect_id: EffectId) -> Option<EffectRun> {
-        let slot = self.effect_slot_mut(effect_id)?;
+        // `effect_slot_mut`'s lookup, over the field, so the slot's dependency
+        // list can be walked while the index is changed.
+        let Self {
+            effects,
+            signal_subscribers,
+            ..
+        } = self;
+        let slot = effects
+            .get_mut(effect_id.index())
+            .filter(|slot| slot.generation == effect_id.generation)?;
         if slot.state != EffectState::Idle {
             return None;
         }
@@ -409,13 +502,15 @@ impl Runtime {
         let scope = slot.scope;
         slot.state = EffectState::Running;
 
-        // Clear old dependencies; they are re-established from this run's reads
-        let old_deps = std::mem::take(&mut slot.dependencies);
-        for signal_id in old_deps {
-            if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
+        // Clear old dependencies; they are re-established from this run's
+        // reads. Every list is emptied in place — the signals' stay with their
+        // signals — so putting the same subscriptions back allocates nothing.
+        for &signal_id in &slot.dependencies {
+            if let Some(subs) = signal_subscribers.get_mut(signal_id) {
                 vec_remove(subs, &effect_id);
             }
         }
+        slot.dependencies.clear();
         Some((callback, scope))
     }
 
@@ -437,11 +532,9 @@ impl Runtime {
                 slot.callback = Some(callback);
                 slot.state = EffectState::Idle;
                 for signal_id in reads {
-                    if signal_id.index() < self.signal_subscribers.len() {
-                        vec_insert(&mut self.signal_subscribers[signal_id.index()], effect_id);
-                        if let Some(slot) = self.effect_slot_mut(effect_id) {
-                            vec_insert(&mut slot.dependencies, signal_id);
-                        }
+                    vec_insert(self.signal_subscribers.get_or_insert(signal_id), effect_id);
+                    if let Some(slot) = self.effect_slot_mut(effect_id) {
+                        vec_insert(&mut slot.dependencies, signal_id);
                     }
                 }
             }
@@ -485,9 +578,7 @@ impl Runtime {
                 slot.state = EffectState::Vacant;
                 let deps = std::mem::take(&mut slot.dependencies);
                 for signal_id in deps {
-                    if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
-                        vec_remove(subs, &effect_id);
-                    }
+                    self.signal_subscribers.unsubscribe(signal_id, effect_id);
                 }
                 if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
                     self.pending_effects.remove(pos);
@@ -501,9 +592,7 @@ impl Runtime {
                 slot.state = EffectState::DisposedWhileRunning;
                 let deps = std::mem::take(&mut slot.dependencies);
                 for signal_id in deps {
-                    if let Some(subs) = self.signal_subscribers.get_mut(signal_id.index()) {
-                        vec_remove(subs, &effect_id);
-                    }
+                    self.signal_subscribers.unsubscribe(signal_id, effect_id);
                 }
                 if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
                     self.pending_effects.remove(pos);
@@ -645,6 +734,83 @@ mod tests {
     use crate::reactive::{create_effect, create_signal};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    /// How many signals the effect index holds a list for.
+    fn effect_index_entries() -> usize {
+        with_runtime(|rt| rt.signal_subscribers.len())
+    }
+
+    /// A signal no effect reads costs the effect index no list: the thousand
+    /// made here add none, and the one an effect reads adds exactly one.
+    #[test]
+    fn only_a_signal_an_effect_reads_has_a_list() {
+        let before = effect_index_entries();
+        let signals: Vec<_> = (0..1000).map(|_| create_signal(0u32)).collect();
+        assert_eq!(effect_index_entries(), before, "nothing has read them");
+
+        let last = *signals.last().unwrap();
+        create_effect(move || {
+            last.get();
+        });
+        assert_eq!(effect_index_entries(), before + 1, "one reader, one list");
+    }
+
+    /// A signal's list goes back to the pool when the signal goes, and when the
+    /// last effect reading it does — not only when a slot is reused.
+    #[test]
+    fn a_list_goes_back_when_its_signal_or_its_last_reader_goes() {
+        use crate::reactive::owner::{dispose_owner_now, with_owner};
+
+        let before = effect_index_entries();
+        let (signal, signal_scope) = with_owner(|| create_signal(0u32));
+        let read = move || {
+            signal.get();
+        };
+
+        let ((), reader) = with_owner(|| create_effect(read));
+        assert_eq!(effect_index_entries(), before + 1, "the control: one list");
+        dispose_owner_now(reader);
+        assert_eq!(
+            effect_index_entries(),
+            before,
+            "its only reader went, and the list with it"
+        );
+
+        let ((), reader) = with_owner(|| create_effect(read));
+        assert_eq!(effect_index_entries(), before + 1);
+        dispose_owner_now(signal_scope);
+        assert_eq!(
+            effect_index_entries(),
+            before,
+            "the signal went, and its list with it"
+        );
+        dispose_owner_now(reader);
+    }
+
+    /// An effect's reads are registered when its run ends, so a signal it read
+    /// and then disposed in the same run is subscribed to after it is gone. The
+    /// next signal to take its slot must not inherit that: writing it would
+    /// re-run an effect that never read it.
+    #[test]
+    fn a_signal_disposed_by_the_run_that_read_it_leaves_its_slot_unsubscribed() {
+        use crate::reactive::owner::{dispose_owner_now, with_owner};
+
+        let (doomed, scope) = with_owner(|| create_signal(0u32));
+        let runs = Rc::new(Cell::new(0));
+        let counter = runs.clone();
+        create_effect(move || {
+            counter.set(counter.get() + 1);
+            if counter.get() == 1 {
+                doomed.get();
+                dispose_owner_now(scope);
+            }
+        });
+        assert_eq!(runs.get(), 1);
+
+        let successor = create_signal(0u32);
+        successor.set(1);
+        assert_eq!(runs.get(), 1, "the effect never read the successor");
+    }
 
     /// A panic caught inside batch() must not leave the batch depth stuck > 0 —
     /// that would silently stop every effect in the app from ever flushing.

@@ -116,6 +116,13 @@ name = "frame_allocations_are_counted"
 harness = false
 required-features = ["render-stats"]
 
+# What a reactive primitive keeps on the heap, against the same process-wide
+# counter, so it runs without libtest for the same reason.
+[[test]]
+name = "reactive_memory"
+harness = false
+required-features = ["render-stats"]
+
 [[example]]
 name = "status_bar"
 path = "examples/status_bar.rs"
