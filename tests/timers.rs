@@ -200,3 +200,47 @@ fn timers_due_in_one_pass_run_in_deadline_order() {
     app.step_at(t0 + 200 * MS);
     assert_eq!(*order.borrow(), ["at 50", "first at 100", "second at 100"]);
 }
+
+#[test]
+fn old_handles_leave_the_next_applications_timers_alone() {
+    let Some(app) = headless() else { return };
+    let mut old = vec![set_timeout(100 * MS, || {}), set_interval(100 * MS, || {})];
+    drop(app);
+
+    for _ in 0..3 {
+        let mut app = headless().expect("the first application had an adapter");
+        let timeouts = Rc::new(Cell::new(0));
+        let intervals = Rc::new(Cell::new(0));
+        let count = timeouts.clone();
+        let timeout = set_timeout(100 * MS, move || count.set(count.get() + 1));
+        let count = intervals.clone();
+        let interval = set_interval(100 * MS, move || count.set(count.get() + 1));
+
+        for handle in &old {
+            assert!(
+                !handle.is_pending(),
+                "a handle from a finished application is pending"
+            );
+            handle.cancel();
+        }
+        assert!(timeout.is_pending());
+        assert!(interval.is_pending());
+
+        let t0 = Instant::now();
+        app.step_at(t0);
+        app.step_at(t0 + 99 * MS);
+        assert_eq!(timeouts.get(), 0);
+        assert_eq!(intervals.get(), 0);
+        app.step_at(t0 + 100 * MS);
+        assert_eq!(timeouts.get(), 1);
+        assert_eq!(intervals.get(), 1);
+        app.step_at(t0 + 200 * MS);
+        assert_eq!(timeouts.get(), 1);
+        assert_eq!(intervals.get(), 2);
+        assert!(!timeout.is_pending());
+        assert!(interval.is_pending());
+
+        old.extend([timeout, interval]);
+        drop(app);
+    }
+}

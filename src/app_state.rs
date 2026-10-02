@@ -208,6 +208,7 @@ pub(crate) fn reset() {
         // `take` rather than a value per line: the struct derives `Default`,
         // so what a field starts an `App` with and what it is given back here
         // are the same expression, and neither can drift from the other.
+        // Timer ids alone survive so kept handles cannot alias the next app.
         //
         // What holds an application closure goes first. A queued surface
         // command carries a widget factory, a lock request carries a
@@ -216,7 +217,8 @@ pub(crate) fn reset() {
         // queues those land in are emptied below, after everything that can
         // still push into them.
         surface_commands.clear();
-        timers.take();
+        let successor = timers.borrow().successor();
+        drop(timers.replace(successor));
         lock_request.clear();
         paste_requests.clear();
         paste_reads.take();
