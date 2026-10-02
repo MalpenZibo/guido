@@ -625,3 +625,26 @@ fn a_leave_clears_the_hover_after_another_surface_had_the_pointer() {
         "the leave reached the row the other surface's event had no business with"
     );
 }
+
+#[test]
+fn a_list_below_a_list_is_not_withheld_by_the_one_above() {
+    let Some(mut app) = headless() else { return };
+    let log = Rc::new(RefCell::new(Log::default()));
+    let rows = log.clone();
+    // Two lists stacked: a point on the lower one is outside the upper one's
+    // clip, which withholds it from what it holds — and from nothing else.
+    let (id, mut at) = surface(&mut app, move || {
+        container()
+            .layout(Flex::column())
+            .child(list(std::iter::empty()).height(300.0))
+            .child(list(logged_rows(rows.clone(), ROWS)).height(300.0))
+    });
+
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 350.0)]);
+
+    assert_eq!(
+        log.borrow().hover,
+        [(2, true)],
+        "the lower list's row 2 is under the pointer"
+    );
+}
