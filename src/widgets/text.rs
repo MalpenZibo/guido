@@ -1,7 +1,7 @@
 use crate::default_font_family;
 use crate::layout::{Constraints, Size};
 use crate::reactive::signal::{RwSignal, create_signal};
-use crate::reactive::{IntoSignal, Prop, Signal};
+use crate::reactive::{IntoSignal, Prop};
 use crate::renderer::{LineFit, PaintContext, measure_text_full};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -94,7 +94,7 @@ pub enum TextAlign {
 /// labels is a function that returns one — see
 /// [`text_style`](crate::widgets::text_style).
 pub struct Text {
-    content: Signal<String>,
+    content: Prop<String>,
     /// What this text declares about itself. Boxed and absent by default: a
     /// text that says nothing pays a null check, not a struct.
     style: Option<Box<TextStyle>>,
@@ -139,7 +139,7 @@ pub struct Text {
 
 impl Text {
     pub fn new<M>(content: impl IntoSignal<String, M>) -> Self {
-        let content = content.into_signal();
+        let content = content.into_prop();
         // Don't read content during widget creation - this would register layout dependencies
         // with the wrong widget (the parent container that's currently being laid out).
         // The cached_text will be populated during the first layout via refresh().
@@ -312,7 +312,7 @@ impl Text {
         let declared_color;
         let overflow = {
             let style = self.resolved_text_style(tree, id);
-            self.cached_text = self.content.get();
+            self.cached_text = self.content.get().unwrap_or_default();
             self.cached_font_size = style.font_size(id);
             // Only where a colour motion was declared. Reading it here
             // subscribes this text's *layout* to the colour, and a text that
@@ -588,6 +588,28 @@ mod tests {
             unwrapped.width > wrapped.width,
             "an unwrapped line has to run past the width a wrapped one fits in: \
              {wrapped:?} then {unwrapped:?}"
+        );
+    }
+
+    /// A text given a closure follows it: a write re-measures it.
+    ///
+    /// The content is held as a `Prop`, so a literal costs no signal; this is
+    /// the other half, that a closure still lands as one and is read under the
+    /// text's own layout scope.
+    #[test]
+    fn a_text_follows_its_content() {
+        let words = create_signal(String::from("short"));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new(move || words.get()).nowrap()));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let before = measured(&mut tree, root, 800.0);
+        words.set(String::from("a good deal longer than it was"));
+        let after = measured(&mut tree, root, 800.0);
+
+        assert!(
+            after.width > before.width,
+            "the text did not follow its content: {before:?} then {after:?}"
         );
     }
 

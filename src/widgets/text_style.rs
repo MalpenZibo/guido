@@ -819,9 +819,9 @@ mod a_constant_text_property_is_a_constant {
     /// And a generic family, which is the commonest of all, costs what
     /// declaring no family costs.
     ///
-    /// Against a bare `text`, not against zero: a text widget claims a slot
-    /// for its own content before any style is declared on it, and that is not
-    /// what this is about.
+    /// Against a bare `text` rather than zero, so this says what the family
+    /// costs whatever the text itself does — which for a literal is nothing
+    /// now (`a_container_and_a_literal_text_claim_no_slot`).
     #[test]
     fn a_generic_family_costs_what_declaring_none_costs() {
         drop(text("x").font_family(FontFamily::Monospace));

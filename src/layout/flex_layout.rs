@@ -34,7 +34,7 @@
 
 use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
-    reactive::{IntoSignal, Prop, Signal},
+    reactive::{IntoSignal, Prop},
     tree::{LayoutCtx, Tree, WidgetId},
 };
 
@@ -44,7 +44,7 @@ const MIN_VISIBLE_SIZE: f32 = 0.5;
 
 /// Flex layout for rows and columns
 pub struct Flex {
-    direction: Signal<Axis>,
+    direction: Prop<Axis>,
     spacing: Prop<f32>,
     main_alignment: Prop<MainAlignment>,
     cross_alignment: Prop<CrossAlignment>,
@@ -61,7 +61,7 @@ impl Flex {
     /// - `cross_alignment`: `Stretch` (CSS `align-items: stretch`)
     pub fn new<M>(direction: impl IntoSignal<Axis, M>) -> Self {
         Self {
-            direction: direction.into_signal(),
+            direction: direction.into_prop(),
             spacing: Prop::Unset,
             main_alignment: Prop::Unset,
             cross_alignment: Prop::Unset,
@@ -429,7 +429,8 @@ impl Layout for Flex {
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size {
-        let direction = self.direction.get();
+        // Never unset — `new` always gives one — so the default is a formality.
+        let direction = self.direction.get_or(Axis::Vertical);
         self.layout_axis(ctx, children, constraints, origin, direction)
     }
 }
@@ -456,9 +457,9 @@ mod tests {
 
     /// A row becomes a column on a write, with the same widgets in the tree.
     ///
-    /// The direction has always been held as `Signal<Axis>` and read through it
-    /// on every pass — only `Flex::new`'s signature stood between here and a
-    /// layout that answers to one. Asserted on the children's origins rather
+    /// The direction is read on every pass, and a closure lands as a signal —
+    /// only a constant is held as a value, which keeps `container()` from
+    /// claiming a slot. Asserted on the children's origins rather
     /// than on the container's size, because two boxes of the same size in a
     /// square make the row and the column the same size and only the placement
     /// tells them apart.
