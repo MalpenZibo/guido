@@ -1097,6 +1097,33 @@ impl Tree {
             .map_or(0.0, |idx| self.dense[idx].children_outset)
     }
 
+    /// The children of a widget, ordered along `axis`, whose laid-out span —
+    /// grown by `reach` — can overlap `near..far` on that axis.
+    ///
+    /// Paint asks it with the rect it can see, and event dispatch with the
+    /// point under the pointer, so the two narrow by the one rule: a child paint
+    /// would draw is a child an event can reach. One either side for the
+    /// boundary: the predicates compare edges with `<=` and `<`, so a child
+    /// whose edge lands exactly on `near` or `far` can fall either way under
+    /// float rounding. What a child's own transform does to where it draws is
+    /// `reach`, measured rather than guessed at one child's width.
+    pub(crate) fn window_of(
+        &self,
+        children: &[WidgetId],
+        axis: crate::layout::Axis,
+        (near, far): (f32, f32),
+        reach: f32,
+    ) -> std::ops::Range<usize> {
+        let (near, far) = (near - reach, far + reach);
+        let span = |cid: WidgetId| self.get_bounds(cid).map(|b| b.span(axis));
+        let first = children.partition_point(|&cid| span(cid).is_some_and(|(_, f)| f <= near));
+        // From `first`, so `last` cannot come out below it however degenerate
+        // the span is, and the range is well formed by construction.
+        let last = first
+            + children[first..].partition_point(|&cid| span(cid).is_some_and(|(n, _)| n < far));
+        first.saturating_sub(1)..(last + 1).min(children.len())
+    }
+
     /// The widest reach among this widget's children.
     pub(crate) fn children_reach(&self, id: WidgetId) -> f32 {
         self.get_dense_index(id)
