@@ -861,19 +861,34 @@ mod tests {
                 .collect::<Vec<OwnerId>>()
         });
 
+        let children = || {
+            with_reactive(|reactive| {
+                let arena = reactive.owners.borrow();
+                let parent = arena.get(parent_id).expect("parent still live");
+                let mut children = parent
+                    .held
+                    .as_deref()
+                    .expect("it held children")
+                    .children
+                    .clone();
+                children.sort_by_key(|id| id.index);
+                children
+            })
+        };
+
+        // The one disposed goes, and its live siblings stay: a sibling pruned
+        // in its place would never be disposed with the parent.
+        dispose_owner_now(child_ids[1]);
+        assert_eq!(
+            children(),
+            [child_ids[0], child_ids[2], child_ids[3]],
+            "the disposed child, and only it, is pruned"
+        );
+
         for child in &child_ids {
             dispose_owner_now(*child);
         }
-
-        with_reactive(|reactive| {
-            let arena = reactive.owners.borrow();
-            let parent = arena.get(parent_id).expect("parent still live");
-            let children = &parent.held.as_deref().expect("it held children").children;
-            assert!(
-                children.is_empty(),
-                "disposed children not pruned: {children:?}"
-            );
-        });
+        assert!(children().is_empty(), "disposed children not pruned");
 
         dispose_owner_now(parent_id);
     }
