@@ -73,40 +73,38 @@ gesture has to be guessed from a gap between samples, and a slow scroll is made
 of gaps. A source that never terminates therefore never gets momentum, which is
 the honest answer rather than a guess.
 
-## Event Propagation
+## Event Routing
 
-Events propagate from children to parents (bubble up):
+No event is offered to every widget. Where each one goes is worked out
+centrally, the way Flutter routes its events, and a widget's `event` is only
+called for what was routed to it:
 
-1. Event received at root
-2. Hit test finds deepest widget under cursor
-3. Event sent to that widget first
-4. If not handled, bubbles to parent
-5. Continues until handled or reaches root
+| Event | Reaches |
+| --- | --- |
+| A pointer event with a position — move, press, release, wheel, a scroll's end, enter | The widgets that can be under the point, and those the pointer record still owes one |
+| A pointer event without one — the surface leave, or what a collapsed transform passes down | The widgets the pointer record owes one, and nothing else |
+| A key, and the surface gaining or losing the keyboard | The focused widget, then each of its ancestors; a key press nobody there took then goes to the containers that declared `on_key_down`, the innermost first |
+| A paste | The widget that asked for it |
 
-```rust,ignore
-fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
-    // Check children first (innermost)
-    for &child_id in self.children.iter().rev() {
-        // Get child bounds from Tree
-        let child_bounds = tree.get_bounds(child_id).unwrap_or_default();
-        if child_bounds.contains(event.position()) {
-            let response = tree.with_widget_mut(child_id, |child, cid, tree| {
-                child.event(tree, cid, event)
-            });
-            if response == Some(EventResponse::Handled) {
-                return EventResponse::Handled;
-            }
-        }
-    }
+*The widgets that can be under the point* are found the way paint finds what
+it can see: a container whose children are ordered along an axis searches them
+by their laid-out bounds, grown by how far any of them draws outside its box,
+so a transformed child is found where it is drawn. Children in no order are
+tested one by one against the same reach.
 
-    // Then handle locally
-    if self.handles_event(event) {
-        return EventResponse::Handled;
-    }
+*The pointer record* keeps two sets of offers, as Flutter's `MouseTracker` and
+`GestureBinding` do. The last event's offers make a widget the pointer just
+left see the move that takes its hover away, however far the pointer went. The
+press's offers, kept until the release, make a drag reach the widget it started
+on wherever it goes. A point a clipping container clips away reaches only the
+record, and without its position — except for the widget a press holds, which
+keeps it for its drag and its release.
 
-    EventResponse::Ignored
-}
-```
+Within a container the children are offered an event in the order they stand,
+and the first to answer `Handled` stops it; if none did, the container handles
+it itself. So the innermost widget hears an event first, and its ancestors
+after it — with one exception: a scroller answers its own scrollbar, and a
+content drag it has already won, before its children are asked.
 
 ## Hit Testing
 
@@ -304,10 +302,3 @@ loop {
 # }
 ```
 
-## Keyboard Events
-
-Currently not implemented. Future work includes:
-
-- Key press/release events
-- Focus management
-- Text input for text fields

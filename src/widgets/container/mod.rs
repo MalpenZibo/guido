@@ -1824,8 +1824,8 @@ impl Widget for Container {
         // A pointer event goes to the children that can be under its point —
         // the window paint narrows to — and to those the pointer record still
         // owes one; an event with no position, or a point this container clips
-        // away, to the owed alone (#584, #587). Anything else the pointer did
-        // not send goes to every child.
+        // away, to the owed alone (#584, #587). A key goes down the key route
+        // (#241).
         // Below a point this container clipped away nothing is under it: the
         // children it is owed to are told without it, and only a press keeps
         // it for its drag and its release.

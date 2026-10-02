@@ -658,6 +658,10 @@ The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).
 
+`tests/event_routes.rs` sends every kind of event over a long list and counts
+who it reached: an event that slipped back into a walk over every widget would
+reach the whole list.
+
 A `Container` that scrolls does two things around that dispatch rather than
 one. Going down, a finger's press arms the watch that a drag needs — before a
 child takes the press, because the press is still the child's until the slop is

@@ -1424,7 +1424,9 @@ impl Tree {
     /// Which of `parent`'s children `event` is offered to, in the order they
     /// stand.
     ///
-    /// An event the pointer did not send goes to every child. A pointer event
+    /// A key or a focus change goes to the children on the key route — see
+    /// `dispatch_key` — and a paste, handed straight to one widget, is never
+    /// routed through a container at all. A pointer event
     /// goes to the children that can be under `at` — those ordered along
     /// `sorted` narrowed to the window paint uses, those in no order tested
     /// against their reach — and to those the pointer record owes one. With no
@@ -2068,6 +2070,21 @@ impl Default for Tree {
 mod tests {
 
     use super::*;
+
+    /// A container leaving the tree stops listening for keys, and the others
+    /// go on listening.
+    #[test]
+    fn a_key_listener_leaving_the_tree_takes_only_itself_off_the_list() {
+        let mut tree = Tree::new();
+        let leaving = tree.register(Box::new(MockWidget::new()));
+        let staying = tree.register(Box::new(MockWidget::new()));
+        tree.listen_for_keys(leaving);
+        tree.listen_for_keys(staying);
+
+        tree.unregister(leaving);
+
+        assert_eq!(tree.key_listeners, [staying]);
+    }
 
     /// A surface closed while the pointer is on it hears no leave — the
     /// compositor's arrives for a surface that is gone — so its root leaving
