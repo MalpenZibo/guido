@@ -2719,6 +2719,58 @@ mod restart_tests {
     use crate::surface::drain_surface_commands;
     use crate::widget_ref::create_widget_ref;
 
+    #[test]
+    fn widget_drop_can_read_global_focus_and_the_next_app_starts_clean() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct ReadsFocusOnDrop {
+            inner: Box<dyn Widget>,
+            drops: Rc<Cell<usize>>,
+        }
+
+        impl Widget for ReadsFocusOnDrop {
+            fn layout(
+                &mut self,
+                ctx: &mut crate::tree::LayoutCtx,
+                constraints: crate::layout::Constraints,
+            ) -> crate::layout::Size {
+                self.inner.layout(ctx, constraints)
+            }
+
+            fn paint(&self, ctx: &mut crate::renderer::PaintContext) {
+                self.inner.paint(ctx);
+            }
+        }
+
+        impl Drop for ReadsFocusOnDrop {
+            fn drop(&mut self) {
+                assert_eq!(crate::reactive::focus::focused_widget(), None);
+                assert!(crate::reactive::focus::focus_path().is_empty());
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+
+        let _wakeup = crate::jobs::wakeup_test_lock();
+        let drops = Rc::new(Cell::new(0));
+        for expected_drops in 1..=2 {
+            let mut app = App::new();
+            app.root_owner_id = Some(create_root_owner());
+            assert_eq!(crate::reactive::focus::focused_widget(), None);
+            let widget = app.tree.register(Box::new(ReadsFocusOnDrop {
+                inner: Box::new(crate::widgets::container()),
+                drops: drops.clone(),
+            }));
+            crate::reactive::focus::request_focus(&app.tree, widget);
+            assert_eq!(crate::reactive::focus::focused_widget(), Some(widget));
+
+            drop(app);
+
+            assert_eq!(drops.get(), expected_drops);
+            assert!(!has_pending_jobs());
+        }
+    }
+
     /// The font the last `App` declared is state of the last `App`. It was the
     /// one cell `App::drop` never reset, and nothing noticed because the reset
     /// was a hand-written list of calls rather than a value.

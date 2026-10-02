@@ -88,7 +88,13 @@ impl<T: Clone + Send + 'static> GlobalSignal<T> {
                 // A re-entrant call got there first: it wins, and the signal
                 // built here is dropped with the scope that owns it. Two live
                 // signals under one name would be worse than one wasted slot.
-                Entry::Occupied(e) => RwSignal::from_id(e.get().0),
+                Entry::Occupied(e) if crate::reactive::storage::has_signal(e.get().0) => {
+                    RwSignal::from_id(e.get().0)
+                }
+                Entry::Occupied(mut e) => {
+                    e.insert((signal.id(), TypeId::of::<T>()));
+                    signal
+                }
                 Entry::Vacant(e) => {
                     e.insert((signal.id(), TypeId::of::<T>()));
                     signal
@@ -126,6 +132,68 @@ mod tests {
     fn every_read_of_one_global_is_the_same_signal() {
         create_root_owner();
         assert!(COUNT.get() == COUNT.get());
+    }
+
+    #[test]
+    fn a_global_recreates_after_its_root_is_disposed() {
+        let root = create_root_owner();
+        let stale = COUNT.get();
+        stale.set(3);
+        dispose_owner_now(root);
+
+        let fresh = COUNT.get();
+        assert!(fresh != stale);
+        assert_eq!(fresh.get_untracked(), 7);
+        assert!(fresh == COUNT.get());
+        fresh.set(9);
+        assert_eq!(COUNT.get().get_untracked(), 9);
+        assert!(stale.try_get_untracked().is_none());
+    }
+
+    #[test]
+    fn a_global_does_not_return_a_recycled_slot() {
+        let root = create_root_owner();
+        let stale = COUNT.get();
+        dispose_owner_now(root);
+        let replacement = create_signal(String::from("unrelated"));
+        assert_eq!(replacement.id().index(), stale.id().index());
+
+        let fresh = COUNT.get();
+        assert_eq!(fresh.get_untracked(), 7);
+        fresh.set(9);
+        assert_eq!(replacement.get_untracked(), "unrelated");
+        assert!(stale.try_get_untracked().is_none());
+    }
+
+    #[test]
+    fn a_reentrant_initializer_keeps_the_live_winner_after_disposal() {
+        use std::cell::Cell;
+
+        thread_local! {
+            static INITIALIZING: Cell<bool> = const { Cell::new(false) };
+        }
+        static REENTRANT: GlobalSignal<u32> = GlobalSignal::new(init);
+
+        fn init() -> u32 {
+            if !INITIALIZING.replace(true) {
+                REENTRANT.get().set(19);
+                INITIALIZING.set(false);
+            }
+            7
+        }
+
+        let root = create_root_owner();
+        let stale = REENTRANT.get();
+        assert_eq!(stale.get_untracked(), 19);
+        stale.set(23);
+        dispose_owner_now(root);
+
+        let fresh = REENTRANT.get();
+        assert!(fresh != stale);
+        assert_eq!(fresh.get_untracked(), 19);
+        assert!(fresh == REENTRANT.get());
+        fresh.set(29);
+        assert_eq!(REENTRANT.get().get_untracked(), 29);
     }
 
     /// A global whose signal died with the last `App` builds another rather
