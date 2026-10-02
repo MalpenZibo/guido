@@ -695,8 +695,7 @@ fn dispatch_events(
         // and each has its own moment.
         tree.set_event_instant(Some(*at));
         reactive::diagnostics::snapshot_zone(|| {
-            let response =
-                tree.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
+            let response = tree.dispatch(root, event);
 
             // The dispatch just asked every widget under the point, and the
             // innermost one that declares a cursor said so last.

@@ -825,8 +825,7 @@ mod tests {
                     Event::mouse_down(x, y, crate::widgets::widget::MouseButton::Left),
                     Event::mouse_up(x, y, crate::widgets::widget::MouseButton::Left),
                 ] {
-                    self.tree
-                        .with_widget_mut(root, |w, id, t| w.event(t, id, &event));
+                    self.tree.dispatch(root, &event);
                 }
             });
         }

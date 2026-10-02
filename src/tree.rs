@@ -1124,6 +1124,18 @@ impl Tree {
         first.saturating_sub(1)..(last + 1).min(children.len())
     }
 
+    /// Deliver `event` to the surface root `root`.
+    ///
+    /// The one way an event enters a tree: the loop's dispatch, and every test
+    /// that hands a root an event, go through here.
+    pub fn dispatch(
+        &mut self,
+        root: WidgetId,
+        event: &crate::widgets::Event,
+    ) -> Option<crate::widgets::EventResponse> {
+        self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event))
+    }
+
     /// The widest reach among this widget's children.
     pub(crate) fn children_reach(&self, id: WidgetId) -> f32 {
         self.get_dense_index(id)

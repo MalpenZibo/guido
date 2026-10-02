@@ -98,7 +98,7 @@ impl Harness {
         let root = self.root;
         guido::reactive::diagnostics::snapshot_zone(|| {
             self.tree
-                .with_widget_mut(root, |w, id, t| w.event(t, id, &event))
+                .dispatch(root, &event)
                 .expect("the root is registered")
         })
     }
