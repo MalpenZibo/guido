@@ -2071,6 +2071,21 @@ mod tests {
 
     use super::*;
 
+    /// A container leaving the tree stops listening for keys, and the others
+    /// go on listening.
+    #[test]
+    fn a_key_listener_leaving_the_tree_takes_only_itself_off_the_list() {
+        let mut tree = Tree::new();
+        let leaving = tree.register(Box::new(MockWidget::new()));
+        let staying = tree.register(Box::new(MockWidget::new()));
+        tree.listen_for_keys(leaving);
+        tree.listen_for_keys(staying);
+
+        tree.unregister(leaving);
+
+        assert_eq!(tree.key_listeners, [staying]);
+    }
+
     /// A surface closed while the pointer is on it hears no leave — the
     /// compositor's arrives for a surface that is gone — so its root leaving
     /// the tree is what takes its record with it: a popup closed by a click on
