@@ -180,10 +180,12 @@ type SignalList = SmallVec<[SignalId; 4]>;
 
 #[derive(Default)]
 pub(crate) struct SubscriberRegistry {
-    /// Forward index: signal index → subscribers. Direct Vec indexing
-    /// (signal slot indices are dense; disposal clears the entry, so a
-    /// recycled index always starts with an empty list).
-    signal_to_widgets: Vec<SubscriberList>,
+    /// Forward index: signal index → subscribers. Sparse, because most
+    /// signals no widget reads: a read that is already registered returns at
+    /// `active` and never gets here, so the map is consulted on a first
+    /// subscription, a write and a disposal. Disposal removes the entry, so a
+    /// recycled index starts with none.
+    signal_to_widgets: FxHashMap<usize, SubscriberList>,
     /// Reverse index: widget_id → subscribed signal IDs. For O(1) widget cleanup.
     widget_to_signals: FxHashMap<WidgetId, SignalList>,
     /// All live (signal index, subscriber) pairs. This is the hot-path
@@ -206,14 +208,6 @@ impl SubscriberRegistry {
     /// made while something is leaving.
     fn is_detached(&self, widget_id: WidgetId) -> bool {
         !self.detached.is_empty() && self.detached.contains(&widget_id)
-    }
-
-    /// Ensure the forward index has capacity for the given signal ID.
-    fn ensure_signal_capacity(&mut self, signal_id: SignalId) {
-        if signal_id.index() >= self.signal_to_widgets.len() {
-            self.signal_to_widgets
-                .resize_with(signal_id.index() + 1, SmallVec::new);
-        }
     }
 }
 
@@ -258,8 +252,10 @@ fn register_subscriber_in(
         return; // Already subscribed — the hot path
     }
 
-    reg.ensure_signal_capacity(signal_id);
-    reg.signal_to_widgets[signal_id.index()].push(sub);
+    reg.signal_to_widgets
+        .entry(signal_id.index())
+        .or_default()
+        .push(sub);
 
     // Update reverse index (deduped: the same widget/signal pair can
     // arrive with several job types, but only one entry is needed)
@@ -277,7 +273,7 @@ fn register_subscriber_in(
 pub fn notify_signal_change(signal_id: SignalId) {
     with_reactive(|reactive| {
         let reg = reactive.subscribers.borrow();
-        let Some(subs) = reg.signal_to_widgets.get(signal_id.index()) else {
+        let Some(subs) = reg.signal_to_widgets.get(&signal_id.index()) else {
             return;
         };
         for sub in subs {
@@ -300,9 +296,8 @@ pub fn notify_signal_change(signal_id: SignalId) {
 pub fn clear_signal_subscribers(signal_id: SignalId) {
     with_reactive(|reactive| {
         let mut reg = reactive.subscribers.borrow_mut();
-        if signal_id.index() < reg.signal_to_widgets.len() {
+        if let Some(subs) = reg.signal_to_widgets.remove(&signal_id.index()) {
             // Remove this signal from the reverse index of each subscriber
-            let subs = std::mem::take(&mut reg.signal_to_widgets[signal_id.index()]);
             for sub in &subs {
                 reg.active.remove(&(signal_id.index(), *sub));
                 if let Some(signals) = reg.widget_to_signals.get_mut(&sub.widget_id) {
@@ -380,7 +375,7 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
         // Use reverse index: only touch the signals this widget actually subscribes to
         if let Some(signal_ids) = reg.widget_to_signals.remove(&widget_id) {
             for signal_id in signal_ids {
-                let Some(subs) = reg.signal_to_widgets.get_mut(signal_id.index()) else {
+                let Some(subs) = reg.signal_to_widgets.get_mut(&signal_id.index()) else {
                     continue;
                 };
                 // Collect the widget's exact entries first so `active` drops
@@ -392,6 +387,9 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
                     .copied()
                     .collect();
                 subs.retain(|s| s.widget_id != widget_id);
+                if subs.is_empty() {
+                    reg.signal_to_widgets.remove(&signal_id.index());
+                }
                 for sub in removed {
                     reg.active.remove(&(signal_id.index(), sub));
                 }
@@ -406,15 +404,7 @@ pub fn clear_widget_subscribers(widget_id: WidgetId) {
 /// Get the number of signals with active subscribers (for testing).
 #[cfg(test)]
 fn subscriber_count() -> usize {
-    with_reactive(|reactive| {
-        reactive
-            .subscribers
-            .borrow()
-            .signal_to_widgets
-            .iter()
-            .filter(|s| !s.is_empty())
-            .count()
-    })
+    with_reactive(|reactive| reactive.subscribers.borrow().signal_to_widgets.len())
 }
 
 #[cfg(test)]
@@ -452,7 +442,7 @@ mod tests {
             with_reactive(|reactive| {
                 let reg = reactive.subscribers.borrow();
                 reg.signal_to_widgets
-                    .get(sig as usize)
+                    .get(&(sig as usize))
                     .map(|s| s.iter().map(|e| e.widget_id).collect::<Vec<_>>())
                     .unwrap_or_default()
             })
@@ -460,6 +450,22 @@ mod tests {
 
         assert_eq!(subscribers(70), vec![leaf]);
         assert_eq!(subscribers(71), vec![parent]);
+    }
+
+    /// A signal no widget reads costs the widget index nothing: the thousand
+    /// made here add no entry, and the one read adds exactly one — not one for
+    /// every index below it.
+    #[test]
+    fn only_a_signal_a_widget_reads_has_an_entry() {
+        use crate::reactive::create_signal;
+
+        let before = subscriber_count();
+        let signals: Vec<_> = (0..1000).map(|_| create_signal(0u32)).collect();
+        assert_eq!(subscriber_count(), before, "nothing has read them");
+
+        let last = signals.last().unwrap();
+        with_signal_tracking(widget_id(600), JobType::Paint, || last.get());
+        assert_eq!(subscriber_count(), before + 1, "one read, one entry");
     }
 
     #[test]
@@ -473,7 +479,7 @@ mod tests {
         // Signal 42 should have no subscribers
         with_reactive(|reactive| {
             let reg = reactive.subscribers.borrow();
-            assert!(reg.signal_to_widgets.get(42).is_none_or(|s| s.is_empty()));
+            assert!(!reg.signal_to_widgets.contains_key(&42));
         });
     }
 
@@ -493,11 +499,11 @@ mod tests {
         with_reactive(|reactive| {
             let reg = reactive.subscribers.borrow();
             // Signal 10 should still have widget 201
-            let s10 = &reg.signal_to_widgets[10];
+            let s10 = &reg.signal_to_widgets[&10];
             assert!(s10.iter().all(|s| s.widget_id != wid));
             assert!(s10.iter().any(|s| s.widget_id == other));
             // Signal 11 should be empty (only widget 200 subscribed)
-            assert!(reg.signal_to_widgets[11].is_empty());
+            assert!(!reg.signal_to_widgets.contains_key(&11));
         });
     }
 
@@ -569,7 +575,7 @@ mod tests {
 
         with_reactive(|reactive| {
             let reg = reactive.subscribers.borrow();
-            let s = &reg.signal_to_widgets[sid.index()];
+            let s = &reg.signal_to_widgets[&sid.index()];
             assert!(s.contains(&Subscriber {
                 widget_id: wid,
                 job_type: JobType::Paint,
@@ -588,7 +594,7 @@ mod tests {
                 .subscribers
                 .borrow()
                 .signal_to_widgets
-                .get(sid.index())
+                .get(&sid.index())
                 .is_some_and(|subs| subs.iter().any(|s| s.widget_id == wid))
         })
     }
