@@ -99,6 +99,12 @@ container()
 `on_key_down` fires while the surface has keyboard focus — a layer surface
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
+A widget with the focus — a text input you clicked into — hears a key first,
+and the containers around it after. `on_key_down` hears what nothing focused
+took, so Escape still closes a menu while its search field has the focus, and
+it hears it with nothing focused at all. Where two containers both declare it,
+the inner one hears the key; where they stand side by side, the earlier one.
+
 ## Latched Modifiers
 
 The `Modifiers` a key event carries describe *that keystroke*, which is what a

@@ -350,6 +350,15 @@ impl PointerTargets {
             blind: SmallVec::new(),
         }
     }
+
+    /// The children at `indices`, in ascending order: a route through them.
+    fn only(indices: SmallVec<[usize; 4]>) -> Self {
+        Self {
+            window: 0..0,
+            owed: indices.into_iter().peekable(),
+            blind: SmallVec::new(),
+        }
+    }
 }
 
 impl Iterator for PointerTargets {
@@ -475,6 +484,12 @@ pub struct Tree {
     cursor_under_the_point: Prop<CursorIcon>,
     /// Who the pointer still owes an event to. See [`PointerRecord`].
     pointer: PointerRecord,
+    /// The containers that declared `on_key_down`: a key nobody on the focus
+    /// path took goes to them, without the tree being walked to find them.
+    key_listeners: Vec<WidgetId>,
+    /// The widgets a key or a focus change is being routed through: the focus
+    /// path, or the way down to the listeners. Empty outside such a dispatch.
+    key_route: SmallVec<[WidgetId; 16]>,
 }
 
 impl Tree {
@@ -493,6 +508,8 @@ impl Tree {
             drag_claimed_by_a_scroller: false,
             cursor_under_the_point: Prop::Unset,
             pointer: PointerRecord::default(),
+            key_listeners: Vec::new(),
+            key_route: SmallVec::new(),
         }
     }
 
@@ -717,6 +734,8 @@ impl Tree {
         // does not stop matching on its own: its ancestors would go on
         // answering "the focus is inside me" for a widget that is gone.
         crate::reactive::release_focus_if_within(id);
+
+        self.key_listeners.retain(|&listener| listener != id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1274,6 +1293,9 @@ impl Tree {
         event: &crate::widgets::Event,
     ) -> Option<crate::widgets::EventResponse> {
         use crate::widgets::Event;
+        if event.follows_the_focus() {
+            return self.dispatch_key(root, event);
+        }
         self.pointer.offering.clear();
         self.pointer.reached.clear();
         self.pointer.withholding = false;
@@ -1314,6 +1336,91 @@ impl Tree {
         response
     }
 
+    /// Route a key, or the surface gaining or losing the keyboard, the way
+    /// Flutter's `FocusManager` does: down to the focused widget, which has it
+    /// first, and up through its ancestors until one takes it. A key nobody on
+    /// that path took then goes down to the containers listening for keys —
+    /// the innermost first, as the walk over every widget used to have it —
+    /// which is what lets a menu close on Escape with nothing focused. Nothing
+    /// else is asked.
+    ///
+    /// Down from the root rather than to each widget directly, so a hidden or
+    /// disabled container still stops what is routed through it.
+    fn dispatch_key(
+        &mut self,
+        root: WidgetId,
+        event: &crate::widgets::Event,
+    ) -> Option<crate::widgets::EventResponse> {
+        use crate::widgets::{Event, EventResponse};
+        let focus = crate::reactive::focus::focus_path_untracked();
+
+        // Nobody routed to is the root ignoring it; `None` is a root that is
+        // not there.
+        self.get_dense_index(root)?;
+        let mut response = Some(EventResponse::Ignored);
+        if focus.root() == Some(root) {
+            self.key_route.clear();
+            self.key_route.extend_from_slice(focus.chain());
+            response = self.route_through(root, event);
+        }
+        // Only a press: the listeners are containers declaring `on_key_down`.
+        if response != Some(EventResponse::Handled) && matches!(event, Event::KeyDown { .. }) {
+            let mut route = std::mem::take(&mut self.key_route);
+            route.clear();
+            for &listener in &self.key_listeners {
+                if focus.contains(listener) {
+                    continue;
+                }
+                // Up to the root, or to where another listener's way down
+                // already runs; a walk that ends anywhere else is another
+                // surface's, and is taken back.
+                let mark = route.len();
+                let mut reached = false;
+                for id in self.ancestors(listener) {
+                    if route.contains(&id) {
+                        reached = true;
+                        break;
+                    }
+                    route.push(id);
+                    if id == root {
+                        reached = true;
+                        break;
+                    }
+                }
+                if !reached {
+                    route.truncate(mark);
+                }
+            }
+            self.key_route = route;
+            if !self.key_route.is_empty() {
+                response = self.route_through(root, event);
+            }
+        }
+        self.key_route.clear();
+        response
+    }
+
+    /// Hand `event` to `root`, to travel the key route set beside it.
+    fn route_through(
+        &mut self,
+        root: WidgetId,
+        event: &crate::widgets::Event,
+    ) -> Option<crate::widgets::EventResponse> {
+        self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event))
+    }
+
+    /// `id`, then its parent, and so on up to its surface root.
+    pub(crate) fn ancestors(&self, id: WidgetId) -> impl Iterator<Item = WidgetId> + '_ {
+        std::iter::successors(Some(id), |&id| self.get_parent(id))
+    }
+
+    /// Hear the keys nobody on the focus path takes. See [`Self::dispatch`].
+    pub(crate) fn listen_for_keys(&mut self, id: WidgetId) {
+        if !self.key_listeners.contains(&id) {
+            self.key_listeners.push(id);
+        }
+    }
+
     /// Which of `parent`'s children `event` is offered to, in the order they
     /// stand.
     ///
@@ -1337,7 +1444,22 @@ impl Tree {
         at: Option<crate::widgets::Point>,
         sorted: Option<crate::layout::Axis>,
     ) -> PointerTargets {
-        if !event.is_pointer() {
+        if event.follows_the_focus() {
+            // The route's ids under this container — usually one — and where
+            // each stands among its children.
+            let mut indices: SmallVec<[usize; 4]> = self
+                .key_route
+                .iter()
+                .filter(|&&id| self.get_parent(id) == Some(parent))
+                .filter_map(|id| children.iter().position(|child| child == id))
+                .collect();
+            indices.sort_unstable();
+            return PointerTargets::only(indices);
+        }
+        // A paste is handed straight to the widget that asked for it
+        // (`clipboard.rs`), which holds no children to pass it to: what is
+        // returned here is never used to route one.
+        if let crate::widgets::Event::Pasted(_) = event {
             return PointerTargets::every(children.len());
         }
         let withholding = self.pointer.withholding;

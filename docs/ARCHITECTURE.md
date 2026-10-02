@@ -648,8 +648,15 @@ the owed are told without it — so a row half under a header is not hovered or
 pressed through the header — except the children a press holds, which keep it
 for their drag and their release. So the row the pointer was over is told it
 left, a press is told it was given up, and a drag keeps reaching what it
-started on outside the scroller around it — and nothing else is asked. Keys and
-focus changes still go to every widget (#241 routes them).
+started on outside the scroller around it — and nothing else is asked.
+
+A key goes down the focus path — the focused widget has it first, then each
+ancestor up to the root — and, if nobody on it took it, down to the containers
+that declared `on_key_down`, the innermost first: Flutter's `FocusManager`
+dispatch, and its HardwareKeyboard handlers for what no focused widget wants.
+The surface gaining or losing the keyboard goes down the focus path. Both travel
+from the root through the containers on the way, so a hidden or disabled one
+still stops them. Nothing else of the tree is asked (#241).
 
 A `Container` that scrolls does two things around that dispatch rather than
 one. Going down, a finger's press arms the watch that a drag needs — before a
