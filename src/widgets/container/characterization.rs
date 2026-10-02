@@ -7002,9 +7002,10 @@ crate::widgets::container::animated_properties::animated_properties!(emit_proper
 /// these. Seven rather than six only because a border declares its width and
 /// its colour in the one call.
 ///
-/// The container's own slot is on the other side of the comparison rather than
-/// asserted away: a bare `container()` claims one, and that is the ~1.08 KB
-/// base the issue names as a non-goal.
+/// A bare `container()` is on the other side of the comparison rather than
+/// asserted to claim nothing, so this says what the properties cost whatever
+/// the container itself does — which is nothing now, and is
+/// `a_container_and_a_literal_text_claim_no_slot`.
 #[test]
 fn a_container_of_constants_costs_what_an_empty_one_costs() {
     use crate::reactive::storage::slot_count;
@@ -7037,6 +7038,34 @@ fn a_container_of_constants_costs_what_an_empty_one_costs() {
         "seven constant properties claimed {} slots between them",
         furnished - bare
     );
+}
+
+/// A container and a literal text create no signal.
+///
+/// Their constants — a container's `Flex::column()` direction, a text's string
+/// — are held where they are, as every other constant property has been since
+/// #450, rather than each taking a signal slot. A row of a list is a container
+/// with texts in it, and the slots were one per widget of it.
+///
+/// That they still react when what they are given is not a constant is
+/// `a_row_becomes_a_column_when_its_direction_says_so` beside `Flex`, and
+/// `a_text_follows_its_content` beside `Text`.
+#[test]
+fn a_container_and_a_literal_text_claim_no_slot() {
+    use crate::reactive::storage::slot_count;
+    use crate::widgets::text;
+
+    // Once through first, so a fresh runtime's own setup is behind the mark.
+    drop(container());
+    drop(text("x"));
+
+    let mark = slot_count();
+    drop(container());
+    assert_eq!(slot_count() - mark, 0, "a bare container claimed a slot");
+
+    let mark = slot_count();
+    drop(text("x"));
+    assert_eq!(slot_count() - mark, 0, "a literal text claimed a slot");
 }
 
 /// A gradient and a shadow live behind a pointer, and a container that
