@@ -241,6 +241,77 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
     });
 }
 
+/// A child a container offered a positioned event to through its window: the
+/// container, the child's place among its children, and the child.
+#[derive(Clone, Copy)]
+struct Offered {
+    parent: WidgetId,
+    index: u32,
+    child: WidgetId,
+}
+
+/// Which widgets the pointer still owes an event to, outside the window an
+/// event is offered through.
+///
+/// A container offers a positioned event to the children that can be under
+/// the point, and nothing else (#584). Two kinds of widget need more than that.
+/// One the pointer has just left has to see the move that takes its hover
+/// away, however far the pointer went. One a press landed on has to see the
+/// moves and the release, wherever they land, because that is what a drag is.
+/// Both were reached before by the walk over every child. Now they are
+/// remembered instead.
+///
+/// It is what Flutter keeps for the same two reasons: `MouseTracker` remembers
+/// what the last event hit, to send exits; `GestureBinding` keeps each
+/// pointer's hit path from down to up. The DOM keeps a hover chain and an
+/// implicit capture. Here the record is *offers* rather than hits, a superset
+/// that needs no widget to report anything.
+#[derive(Default)]
+struct PointerRecord {
+    /// Offered through a window during the event being dispatched.
+    offering: Vec<Offered>,
+    /// The containers that event reached with a position. What the record
+    /// owes in a container it did not reach — a scroller withholding a point
+    /// outside its clip, a sibling taking the event first — stays owed.
+    reached: Vec<WidgetId>,
+    /// Offered through a window during the last positioned event that
+    /// reached each container.
+    last: Vec<Offered>,
+    /// Offered through a window during the press, until the release.
+    pressed: Vec<Offered>,
+}
+
+/// The children a positioned event is offered to, in the order they stand: a
+/// window of them, and the few outside it the pointer record still owes one.
+pub(crate) struct PointerTargets {
+    window: std::ops::Range<usize>,
+    owed: std::iter::Peekable<smallvec::IntoIter<[usize; 4]>>,
+}
+
+impl PointerTargets {
+    /// Every child: a container too small to narrow, or an event with nowhere
+    /// to narrow to.
+    pub(crate) fn every(len: usize) -> Self {
+        Self {
+            window: 0..len,
+            owed: SmallVec::new().into_iter().peekable(),
+        }
+    }
+}
+
+impl Iterator for PointerTargets {
+    type Item = usize;
+
+    /// The two merged in order. The owed ones lie outside the window, so
+    /// nothing comes out twice.
+    fn next(&mut self) -> Option<usize> {
+        match self.owed.peek() {
+            Some(&owed) if self.window.is_empty() || owed < self.window.start => self.owed.next(),
+            _ => self.window.next(),
+        }
+    }
+}
+
 pub struct Tree {
     /// Dense array of nodes (widgets + metadata)
     dense: Vec<Slot>,
@@ -347,6 +418,8 @@ pub struct Tree {
     ///
     /// Cleared before every event, like the two claims above it.
     cursor_under_the_point: Prop<CursorIcon>,
+    /// Who the pointer still owes an event to. See [`PointerRecord`].
+    pointer: PointerRecord,
 }
 
 impl Tree {
@@ -364,6 +437,7 @@ impl Tree {
             focus_claimed_the_press: false,
             drag_claimed_by_a_scroller: false,
             cursor_under_the_point: Prop::Unset,
+            pointer: PointerRecord::default(),
         }
     }
 
@@ -1124,16 +1198,119 @@ impl Tree {
         first.saturating_sub(1)..(last + 1).min(children.len())
     }
 
-    /// Deliver `event` to the surface root `root`.
+    /// Deliver `event` to the surface root `root`, keeping the pointer record.
     ///
     /// The one way an event enters a tree: the loop's dispatch, and every test
-    /// that hands a root an event, go through here.
+    /// that hands a root an event, go through here. What the containers below
+    /// offered a positioned event through their windows is what the next event
+    /// is owed as well, so a widget the pointer left sees it go; and what they
+    /// offered a press is owed every event until the release, so a drag
+    /// reaches the widget it started on wherever it goes.
     pub fn dispatch(
         &mut self,
         root: WidgetId,
         event: &crate::widgets::Event,
     ) -> Option<crate::widgets::EventResponse> {
-        self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event))
+        use crate::widgets::Event;
+        self.pointer.offering.clear();
+        self.pointer.reached.clear();
+        let response = self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
+        let record = &mut self.pointer;
+        if event.coords().is_some() {
+            let PointerRecord {
+                offering,
+                last,
+                reached,
+                ..
+            } = record;
+            last.retain(|entry| !reached.contains(&entry.parent));
+            last.append(offering);
+        }
+        match event {
+            Event::MouseDown { .. } => record.pressed.clone_from(&record.last),
+            Event::MouseUp { .. } => record.pressed.clear(),
+            Event::MouseLeave => {
+                record.pressed.clear();
+                record.last.clear();
+            }
+            _ => {}
+        }
+        response
+    }
+
+    /// Which of `parent`'s children a positioned event at `at` is offered to,
+    /// in the order they stand: those that can be under the point, and those
+    /// the pointer record still owes one. `None` for a container too small to
+    /// be worth narrowing, whose children are all offered and none recorded.
+    ///
+    /// The window's offers are kept for the next event. The children it is
+    /// owed are not: having had it, they are owed nothing more unless the
+    /// press holds them.
+    pub(crate) fn pointer_targets(
+        &mut self,
+        parent: WidgetId,
+        children: &[WidgetId],
+        axis: crate::layout::Axis,
+        at: crate::widgets::Point,
+    ) -> Option<PointerTargets> {
+        // Below this, walking every child costs less than narrowing them, and
+        // a row's handful of cells recorded on every move would make the record
+        // grow with the depth of the tree rather than with its lists.
+        const NARROWED_ABOVE: usize = 16;
+        if children.len() <= NARROWED_ABOVE {
+            return None;
+        }
+        let along = at.along(axis);
+        let window = self.window_of(children, axis, (along, along), self.children_reach(parent));
+
+        let mut owed: SmallVec<[usize; 4]> = SmallVec::new();
+        let PointerRecord {
+            offering,
+            last,
+            pressed,
+            reached,
+        } = &mut self.pointer;
+        reached.push(parent);
+        for entry in last.iter_mut().chain(pressed.iter_mut()) {
+            if entry.parent != parent {
+                continue;
+            }
+            // A reconcile can have moved the child since it was offered; the
+            // id is what is owed, and the index only the quick way to it. The
+            // index is put right once, so a drag over a list that changed
+            // looks again once rather than on every move.
+            let index = match children.get(entry.index as usize) {
+                Some(&child) if child == entry.child => Some(entry.index as usize),
+                _ => children.iter().position(|&child| child == entry.child),
+            };
+            match index {
+                Some(index) => {
+                    entry.index = index as u32;
+                    if !window.contains(&index) {
+                        owed.push(index);
+                    }
+                }
+                // Gone from the container: nothing is owed to it here.
+                None => entry.index = u32::MAX,
+            }
+        }
+        pressed.retain(|entry| entry.index != u32::MAX);
+        owed.sort_unstable();
+        owed.dedup();
+
+        offering.extend(window.clone().map(|index| Offered {
+            parent,
+            index: index as u32,
+            child: children[index],
+        }));
+        crate::render_stats::record_event_window(
+            children.len() as u64,
+            (window.len() + owed.len()) as u64,
+        );
+        Some(PointerTargets {
+            window,
+            owed: owed.into_iter().peekable(),
+        })
     }
 
     /// The widest reach among this widget's children.

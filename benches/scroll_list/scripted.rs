@@ -92,6 +92,8 @@ pub struct Counts {
     pub damage_full: u64,
     pub window_children_total: u64,
     pub window_children_iterated: u64,
+    pub event_window_children_total: u64,
+    pub event_window_children_offered: u64,
     /// A container that had a rect to narrow to and could not, and the children
     /// it therefore examined in full. `render_stats` calls this the number
     /// worth watching, and a list that scrolls is where it would show.
@@ -125,6 +127,8 @@ impl Counts {
         self.damage_full += snapshot.damage_full;
         self.window_children_total += snapshot.window_children_total;
         self.window_children_iterated += snapshot.window_children_iterated;
+        self.event_window_children_total += snapshot.event_window_children_total;
+        self.event_window_children_offered += snapshot.event_window_children_offered;
         self.window_declined_containers += snapshot.window_declined_containers;
         self.window_declined_children += snapshot.window_declined_children;
         let (calls, drawn) = (&mut self.draw_calls, &snapshot.draw_calls);
@@ -409,6 +413,8 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("paint.children_culled", counts.paint_children_culled),
         ("paint.window_offered", counts.window_children_total),
         ("paint.window_iterated", counts.window_children_iterated),
+        ("event.window_children", counts.event_window_children_total),
+        ("event.window_offered", counts.event_window_children_offered),
         ("paint.window_declined", counts.window_declined_containers),
         ("paint.declined_children", counts.window_declined_children),
         ("flatten.nodes_cached", counts.flatten_nodes_cached),
