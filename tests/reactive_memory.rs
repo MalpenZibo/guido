@@ -40,6 +40,9 @@ fn main() {
     a_signal_nothing_subscribes_to_keeps_no_subscriber_list();
     an_effect_rerun_allocates_nothing(source);
     a_derived_signal_is_its_closure_and_its_slot(source);
+    an_empty_scope_allocates_nothing_it_does_not_hold();
+    an_effect_keeps_no_more_than_it_reads();
+    an_effect_that_makes_a_signal_each_run_keeps_its_scope(source);
 }
 
 /// A signal nobody reads costs its slot and its value, and no subscriber
@@ -88,4 +91,55 @@ fn a_derived_signal_is_its_closure_and_its_slot(source: RwSignal<u32>) {
         "a derived signal is its closure and its slot"
     );
     assert_eq!(derived.get_untracked(), source.get_untracked() + 1);
+}
+
+/// A scope that holds nothing keeps its slot in the arena and nothing else.
+/// Most scopes are empty — every effect has one, and most runs make nothing —
+/// and an empty one kept 168 bytes, most of them four empty lists inline in its
+/// arena slot.
+fn an_empty_scope_allocates_nothing_it_does_not_hold() {
+    let each = retained_per_primitive(|| {
+        with_owner(|| ());
+    });
+    println!("empty scope: {each:.1} B each");
+    assert!(
+        each <= 64.0,
+        "an empty scope keeps {each:.1} B, more than 64"
+    );
+}
+
+/// An effect reading one signal: its slot, its callback, its scope and one
+/// subscription. Its scope holds nothing, so it costs what an empty one does.
+fn an_effect_keeps_no_more_than_it_reads() {
+    let source = create_signal(0u32);
+    let each = retained_per_primitive(|| {
+        create_effect(move || {
+            source.get();
+        })
+    });
+    println!("create_effect: {each:.1} B each");
+    assert!(each <= 200.0, "an effect keeps {each:.1} B, more than 200");
+}
+
+/// An effect whose every run makes a signal: emptying its scope before the
+/// next run keeps what held the last run's signal, so a run allocates the new
+/// signal's value and nothing for the scope it is filed in.
+fn an_effect_that_makes_a_signal_each_run_keeps_its_scope(source: RwSignal<u32>) {
+    create_effect(move || {
+        source.get();
+        create_signal(0u32);
+    });
+    source.set(1000);
+    source.set(1001);
+
+    let region = Region::start();
+    for value in 0..100 {
+        source.set(value);
+    }
+    let allocations = region.allocations();
+    println!("100 runs making a signal each: {allocations} allocations");
+    assert_eq!(
+        allocations, 100,
+        "a run allocated more than the one signal it made"
+    );
 }

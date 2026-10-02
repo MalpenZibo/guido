@@ -91,36 +91,43 @@ struct Owner {
     /// The owner this one was created under, if any. Used to prune this
     /// owner from the parent's `children` list on disposal.
     parent: Option<OwnerId>,
+    /// What the scope holds, allocated the first time it holds anything: most
+    /// scopes never do — every effect has one, and most runs make nothing — and
+    /// four empty lists inline made the arena slot 120 bytes rather than 24.
+    held: Option<Box<Held>>,
+}
+
+/// What one scope holds.
+#[derive(Default)]
+struct Held {
     signals: Vec<SignalId>,
     effects: Vec<EffectId>,
     cleanups: Vec<Box<dyn FnOnce()>>,
     children: Vec<OwnerId>,
     /// Values declared for this scope and everything below it, keyed by type.
     ///
-    /// Behind an `Option<Box<..>>` because declaring anything is the exception:
-    /// a scope is allocated per surface, per popup and per row of a dynamic
-    /// list, and almost none of them declare. Eight bytes rather than
-    /// twenty-four keeps the arena — walked on every signal and effect
-    /// registration — the size it was.
+    /// Inline: the scope's own box is what keeps a scope that declares nothing
+    /// from paying for the list, and a second one would be a second hop on
+    /// every step of a context lookup's walk up the scopes.
     ///
     /// `Rc` rather than `Box` on the value so a lookup can clone the handle and
     /// drop the arena borrow before the value reaches a caller's closure: that
     /// closure reads signals, and a signal read borrows the arena again.
-    contexts: Option<Box<Declarations>>,
+    contexts: Declarations,
 }
 
 impl Owner {
     fn new(parent: Option<OwnerId>) -> Self {
-        Self {
-            parent,
-            signals: Vec::new(),
-            effects: Vec::new(),
-            cleanups: Vec::new(),
-            children: Vec::new(),
-            contexts: None,
-        }
+        Self { parent, held: None }
     }
 
+    /// What the scope holds, allocated if this is the first thing it will.
+    fn held(&mut self) -> &mut Held {
+        self.held.get_or_insert_default()
+    }
+}
+
+impl Held {
     /// Whether the scope holds nothing — what most effect runs leave behind,
     /// which then costs no more than this check.
     fn is_empty(&self) -> bool {
@@ -128,7 +135,7 @@ impl Owner {
             && self.effects.is_empty()
             && self.cleanups.is_empty()
             && self.children.is_empty()
-            && self.contexts.is_none()
+            && self.contexts.is_empty()
     }
 }
 
@@ -224,8 +231,10 @@ impl OwnerArena {
                 continue;
             };
             slot.paused = paused;
-            effects.extend_from_slice(&owner.effects);
-            stack.extend_from_slice(&owner.children);
+            if let Some(held) = &owner.held {
+                effects.extend_from_slice(&held.effects);
+                stack.extend_from_slice(&held.children);
+            }
         }
         effects
     }
@@ -352,7 +361,7 @@ pub(crate) fn child_scope() -> OwnerId {
         if let Some(parent_id) = parent_id
             && let Some(parent_owner) = owners.get_mut(parent_id)
         {
-            parent_owner.children.push(id);
+            parent_owner.held().children.push(id);
         }
 
         id
@@ -372,7 +381,7 @@ pub(crate) fn with_scope_declarations<R>(f: impl FnOnce(&mut Declarations) -> R)
         // gone, which is the same answer as none at all — and the caller has a
         // better sentence for it than an `expect` here would.
         let owner = owners.get_mut(id)?;
-        Some(f(owner.contexts.get_or_insert_default()))
+        Some(f(&mut owner.held().contexts))
     })
 }
 
@@ -393,9 +402,9 @@ pub(crate) fn nearest_declaration(type_id: TypeId) -> Option<Rc<dyn Any>> {
         while let Some(id) = scope {
             let owner = owners.get(id)?;
             let declared = owner
-                .contexts
-                .as_deref()
-                .and_then(|declarations| declarations.iter().find(|(d, _)| *d == type_id));
+                .held
+                .as_ref()
+                .and_then(|held| held.contexts.iter().find(|(d, _)| *d == type_id));
             if let Some((_, value)) = declared {
                 return Some(Rc::clone(value));
             }
@@ -457,16 +466,17 @@ pub fn dispose_owner_now(id: OwnerId) {
         let owner = arena.take(id)?;
         if let Some(parent_id) = owner.parent
             && let Some(parent) = arena.get_mut(parent_id)
-            && let Some(pos) = parent.children.iter().position(|c| *c == id)
+            && let Some(held) = parent.held.as_mut()
+            && let Some(pos) = held.children.iter().position(|c| *c == id)
         {
             // Sibling disposal order is unspecified, so swap_remove is fine.
-            parent.children.swap_remove(pos);
+            held.children.swap_remove(pos);
         }
         Some(owner)
     });
 
-    if let Some(owner) = owner {
-        release(owner);
+    if let Some(mut held) = owner.and_then(|owner| owner.held) {
+        release(&mut held);
     }
 }
 
@@ -476,42 +486,60 @@ pub fn dispose_owner_now(id: OwnerId) {
 /// What an effect does before each run: what the last run made goes, in the
 /// order [`dispose_owner_now`] disposes it, and the next run fills the same
 /// scope again.
+///
+/// The scope keeps what held it — the box and the lists, emptied — so a run
+/// that makes something, as the last one did, allocates nothing to file it.
 pub(crate) fn empty_owner(id: OwnerId) {
     let held = with_reactive(|reactive| {
         let mut arena = reactive.owners.borrow_mut();
-        let owner = arena.get_mut(id).filter(|owner| !owner.is_empty())?;
-        let parent = owner.parent;
-        Some(std::mem::replace(owner, Owner::new(parent)))
+        let held = arena.get_mut(id)?.held.as_deref_mut()?;
+        (!held.is_empty()).then(|| std::mem::take(held))
     });
-    if let Some(held) = held {
-        release(held);
-    }
+    let Some(mut held) = held else {
+        return;
+    };
+    release(&mut held);
+    // Put the emptied lists back, unless the scope went while its contents
+    // were released, or something was filed in it meanwhile.
+    with_reactive(|reactive| {
+        let mut arena = reactive.owners.borrow_mut();
+        if let Some(kept) = arena
+            .get_mut(id)
+            .and_then(|owner| owner.held.as_deref_mut())
+            && kept.is_empty()
+        {
+            *kept = held;
+        }
+    });
 }
 
-/// Dispose everything `owner` holds, taken out of the arena first (its
-/// `parent` is not read): its children depth-first, then its cleanups
-/// last-first, then its effects, then its signals.
-fn release(owner: Owner) {
-    for child_id in owner.children {
+/// Dispose everything `held` holds, taken out of the arena first: its
+/// children depth-first, then its cleanups last-first, then its effects, then
+/// its signals, and its declarations dropped. The lists are left empty with
+/// their allocations.
+fn release(held: &mut Held) {
+    for child_id in held.children.drain(..) {
         dispose_owner_now(child_id);
     }
 
-    for cleanup in owner.cleanups.into_iter().rev() {
+    for cleanup in held.cleanups.drain(..).rev() {
         // Teardown code reads for the current value; the scope is going away
         crate::reactive::diagnostics::snapshot_zone(cleanup);
     }
 
-    for effect_id in owner.effects {
+    for effect_id in held.effects.drain(..) {
         with_runtime(|rt| rt.dispose_effect(effect_id));
     }
 
     // Dispose signals (clear widget and effect subscriptions first to
     // prevent stale notifications from a future occupant of the slot)
-    for signal_id in owner.signals {
+    for signal_id in held.signals.drain(..) {
         clear_signal_subscribers(signal_id);
         with_runtime(|rt| rt.dispose_signal_subscriptions(signal_id));
         dispose_signal(signal_id);
     }
+
+    held.contexts.clear();
 }
 
 /// Hold back every effect owned by `id` and the scopes below it, until
@@ -577,7 +605,7 @@ pub(crate) fn current_owner_is_paused() -> bool {
 /// });
 /// ```
 pub fn on_cleanup(f: impl FnOnce() + 'static) {
-    with_current_owner(|owner| owner.cleanups.push(Box::new(f)));
+    with_current_owner(|owner| owner.held().cleanups.push(Box::new(f)));
 }
 
 /// Register a signal with the current owner.
@@ -585,7 +613,7 @@ pub fn on_cleanup(f: impl FnOnce() + 'static) {
 /// This is called internally by `create_signal` to register newly created
 /// signals for automatic cleanup.
 pub(crate) fn register_signal(id: SignalId) {
-    with_current_owner(|owner| owner.signals.push(id));
+    with_current_owner(|owner| owner.held().signals.push(id));
 }
 
 /// Register an effect with the current owner.
@@ -593,7 +621,7 @@ pub(crate) fn register_signal(id: SignalId) {
 /// This is called internally by `create_effect` to register newly created
 /// effects for automatic cleanup.
 pub(crate) fn register_effect(id: EffectId) {
-    with_current_owner(|owner| owner.effects.push(id));
+    with_current_owner(|owner| owner.held().effects.push(id));
 }
 
 /// Check if an effect is owned by any owner.
@@ -769,6 +797,60 @@ mod tests {
         assert!(disposed.get());
     }
 
+    /// Emptying a scope keeps what held its contents: the box and the lists in
+    /// it, at the same addresses, so a scope refilled with what it held before
+    /// — an effect making a signal on every run — allocates nothing for it.
+    #[test]
+    fn emptying_a_scope_keeps_what_held_its_contents() {
+        use crate::reactive::create_signal;
+
+        let held_at = |id: OwnerId| {
+            with_reactive(|reactive| {
+                let arena = reactive.owners.borrow();
+                let held = arena.get(id)?.held.as_deref()?;
+                Some((std::ptr::from_ref(held), held.signals.as_ptr()))
+            })
+        };
+
+        let ((), scope) = with_owner(|| {
+            create_signal(0u32);
+        });
+        let before = held_at(scope).expect("a scope that made a signal holds it");
+
+        empty_owner(scope);
+        assert!(with_reactive(|reactive| {
+            let arena = reactive.owners.borrow();
+            arena
+                .get(scope)
+                .unwrap()
+                .held
+                .as_deref()
+                .unwrap()
+                .is_empty()
+        }));
+        under_owner(scope, || create_signal(1u32));
+
+        assert_eq!(held_at(scope), Some(before), "the scope allocated again");
+        dispose_owner_now(scope);
+    }
+
+    /// What a run declared goes with the rest of what it made: the next run
+    /// starts with nothing declared, as it starts with nothing made.
+    #[test]
+    fn emptying_a_scope_drops_what_it_declared() {
+        let ((), scope) = with_owner(|| {
+            with_scope_declarations(|declared| {
+                declared.push((TypeId::of::<u8>(), Rc::new(7u8)));
+            });
+        });
+        let declared = || under_owner(scope, || nearest_declaration(TypeId::of::<u8>()));
+        assert!(declared().is_some(), "the control: the scope declared it");
+
+        empty_owner(scope);
+        assert!(declared().is_none(), "emptied, it declares nothing");
+        dispose_owner_now(scope);
+    }
+
     /// Disposing a child owner must remove it from the parent's children
     /// list; otherwise long-lived parents grow without bound.
     #[test]
@@ -779,19 +861,34 @@ mod tests {
                 .collect::<Vec<OwnerId>>()
         });
 
+        let children = || {
+            with_reactive(|reactive| {
+                let arena = reactive.owners.borrow();
+                let parent = arena.get(parent_id).expect("parent still live");
+                let mut children = parent
+                    .held
+                    .as_deref()
+                    .expect("it held children")
+                    .children
+                    .clone();
+                children.sort_by_key(|id| id.index);
+                children
+            })
+        };
+
+        // The one disposed goes, and its live siblings stay: a sibling pruned
+        // in its place would never be disposed with the parent.
+        dispose_owner_now(child_ids[1]);
+        assert_eq!(
+            children(),
+            [child_ids[0], child_ids[2], child_ids[3]],
+            "the disposed child, and only it, is pruned"
+        );
+
         for child in &child_ids {
             dispose_owner_now(*child);
         }
-
-        with_reactive(|reactive| {
-            let mut arena = reactive.owners.borrow_mut();
-            let parent = arena.get_mut(parent_id).expect("parent still live");
-            assert!(
-                parent.children.is_empty(),
-                "disposed children not pruned: {:?}",
-                parent.children
-            );
-        });
+        assert!(children().is_empty(), "disposed children not pruned");
 
         dispose_owner_now(parent_id);
     }
