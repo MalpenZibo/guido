@@ -42,6 +42,14 @@ dynamic-children segment rather than the whole of it.
 asked about its exit, `begin_exit`, `is_exiting` and `cancel_exit` — has a
 default.
 
+`event` is only called with what was routed to your widget: a pointer event
+when the widget can be under its point or the pointer still owes it one, a key
+when it holds the focus or is on the way to what does. It is not offered every
+event, so there is no need to check whether one was meant for it — and no way
+to hear the keyboard from a widget nothing has focused, other than a
+container's `on_key_down`. [Event Routing](../architecture/events.md#event-routing)
+says where each kind goes.
+
 One of those defaults is worth knowing about if your widget draws outside the
 box it was given. A parent narrows its children to the visible region before
 painting them, and it does that by their laid-out bounds — so a widget that

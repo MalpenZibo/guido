@@ -193,13 +193,18 @@ container()
 
 ## Event Flow
 
-Events flow from the platform through the widget tree:
+Events flow from the platform through the widget tree, and each one goes only
+where it can matter:
 
 1. Platform receives input (mouse, keyboard)
-2. Event dispatched to root widget
-3. Root checks if event hits its bounds
-4. If yes, passes to children (innermost first)
-5. Widget handles event or ignores it
+2. Event dispatched to the surface's root widget
+3. A pointer event is passed down to the widgets that can be under its point,
+   and to those it still owes one — the widget the pointer just left, the one
+   a press landed on. A key is passed down to the focused widget and, if it
+   does not take it, to the containers listening for keys
+4. Each widget handles the event or ignores it; the innermost hears it first
+
+[Event Routing](../architecture/events.md#event-routing) has the whole of it.
 
 ```rust
 # extern crate guido;
