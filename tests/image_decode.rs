@@ -1172,3 +1172,66 @@ fn a_new_svg_does_not_borrow_another_sources_raster() {
         "and is drawn once its own lands, got {pixel:?}"
     );
 }
+
+/// Raw pixels the application has let go are let go by the cache too, under
+/// the budget as well as over it, by the frame after the one that replaced
+/// them: that one still holds the old draw command in its paint cache.
+///
+/// The texture cache keys raw pixels by their buffer, so without this the key
+/// alone would keep a replaced buffer alive until its texture was evicted.
+#[test]
+fn replaced_raw_pixels_are_not_kept_by_the_cache() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let red = one_pixel_rgba([255, 0, 0]);
+    let ImageSource::Rgba { pixels, .. } = &red else {
+        unreachable!()
+    };
+    let replaced = Arc::downgrade(pixels);
+    let source = create_signal(red);
+    let surface = swappable(&mut app, source.into(), 40);
+    app.step();
+
+    source.set(one_pixel_rgba([0, 255, 0]));
+    app.step();
+    source.set(one_pixel_rgba([255, 255, 255]));
+    app.step();
+
+    let pixel = app.read_pixel(surface, 10, 10);
+    assert_eq!(pixel, [255, 255, 255, 255], "the last one is drawn");
+    assert!(
+        replaced.upgrade().is_none(),
+        "nothing holds the first buffer"
+    );
+    assert_eq!(
+        app.image_textures(),
+        2,
+        "nor its texture: the second's and the last's are left"
+    );
+}
+
+/// Raw pixels handed over again in a new buffer, equal to the last, keep
+/// their texture: the cache moves its key to the new buffer once nothing else
+/// holds the old one, rather than sweeping a texture that is still drawn.
+///
+/// `set_always`, because `set` drops a value equal to the one it holds and
+/// the image would never see the new buffer.
+#[test]
+fn equal_raw_pixels_in_a_new_buffer_keep_their_texture() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let source = create_signal(one_pixel_rgba([255, 0, 0]));
+    let surface = swappable(&mut app, source.into(), 40);
+    app.step();
+
+    for frame in 0..4 {
+        source.set_always(one_pixel_rgba([255, 0, 0]));
+        app.step();
+        assert!(is_red(app.read_pixel(surface, 10, 10)), "frame {frame}");
+        assert_eq!(
+            app.image_textures(),
+            1,
+            "frame {frame}: the texture drawn is the one kept"
+        );
+    }
+}

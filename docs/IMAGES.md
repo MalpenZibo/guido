@@ -310,7 +310,7 @@ The image texture renderer includes LRU caching:
   settled whether two sources are one; an SVG by its entry and the raster
   size it was drawn at
 - `ImageSource::Rgba` cached by its pixels, sampled for the hash and compared
-  in full for equality
+  in full for equality, and dropped once nothing but the cache holds them
 - A byte budget, 100 MB by default, growing past it only while what was
   drawn in the last second exceeds it
 - Past the budget, eviction of least-recently-used entries

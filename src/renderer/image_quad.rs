@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
@@ -122,6 +123,13 @@ impl SourceKey {
             })),
             _ => decoded.cloned().map(Self::Decoded),
         }
+    }
+
+    /// Whether nothing but this key holds the source, so no image can draw it
+    /// again. Only raw pixels can be orphaned: a decode entry outlives every
+    /// texture of it.
+    fn orphaned(&self) -> bool {
+        matches!(self, Self::Rgba(key) if Arc::strong_count(&key.pixels.0) == 1)
     }
 }
 
@@ -287,6 +295,15 @@ impl ImageQuadRenderer {
         // Before the budget is looked at: a page empties when the last frame's
         // quads let go of what was evicted from it, which is not this call.
         self.atlas.drop_empty_pages();
+        // Under the budget too: the key holds the pixels, and would keep a
+        // buffer the application let go for as long as its texture stayed.
+        self.texture_cache.retain(|key, texture| {
+            let orphaned = key.source.orphaned();
+            if orphaned {
+                self.cached_bytes -= texture.bytes();
+            }
+            !orphaned
+        });
         if self.cached_bytes <= budget {
             return;
         }
@@ -364,8 +381,18 @@ impl ImageQuadRenderer {
             extent,
         };
 
-        let texture = match self.texture_cache.get(&key) {
-            Some(cached) => Some(cached.clone()),
+        let texture = match self.texture_cache.get_key_value(&key) {
+            Some((cached_key, cached)) => {
+                let cached = cached.clone();
+                // Equal pixels in a new buffer, and nothing else holds the old
+                // one: keyed by the new one from now on, so the next lookup is
+                // settled by the pointer and `trim` keeps a texture still drawn.
+                if cached_key.source.orphaned() {
+                    self.texture_cache.remove(&key);
+                    self.texture_cache.insert(key.clone(), cached.clone());
+                }
+                Some(cached)
+            }
             None => self.load_texture(device, queue, source, key.clone(), decoded),
         };
         let svg = extent.and(decoded);
