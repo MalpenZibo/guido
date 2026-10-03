@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/MalpenZibo/guido/compare/v0.11.1...v0.12.0) - 2026-10-03
+
+### Other
+
+- A named family that is installed is measured in itself ([#605](https://github.com/MalpenZibo/guido/pull/605))
+- Disposed services ignore late commands ([#602](https://github.com/MalpenZibo/guido/pull/602))
+- Disposed globals return their replacement signal ([#600](https://github.com/MalpenZibo/guido/pull/600))
+- Raster files use their headers for format detection ([#595](https://github.com/MalpenZibo/guido/pull/595))
+- Every event has a route, and a test says none reaches a widget outside it ([#598](https://github.com/MalpenZibo/guido/pull/598))
+- A container and a literal text create no signal ([#594](https://github.com/MalpenZibo/guido/pull/594))
+- A scope allocates what it holds the first time it holds anything ([#592](https://github.com/MalpenZibo/guido/pull/592))
+- A derived signal keeps its closure in its own slot ([#597](https://github.com/MalpenZibo/guido/pull/597))
+- Signals nothing subscribes to cost no subscriber bookkeeping ([#590](https://github.com/MalpenZibo/guido/pull/590))
+- A key goes down the focus path, then to the containers listening for keys ([#596](https://github.com/MalpenZibo/guido/pull/596))
+- A pointer event with nowhere to narrow to reaches what the pointer record owes ([#593](https://github.com/MalpenZibo/guido/pull/593))
+- Timer handles stay stale after application restart ([#585](https://github.com/MalpenZibo/guido/pull/585))
+- A positioned event visits the children that can be under it ([#588](https://github.com/MalpenZibo/guido/pull/588))
+
 ## [0.11.1](https://github.com/MalpenZibo/guido/compare/v0.11.0...v0.11.1) - 2026-10-01
 
 ### Other
