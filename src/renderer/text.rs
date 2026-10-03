@@ -178,11 +178,14 @@ pub(crate) struct ResolvedFont {
 
 /// Resolve a declared family and weight to the face that draws them.
 ///
-/// **The family** is the one that draws a space in the declared family at 400,
+/// **The family** is a named one as declared, when the font database has it.
+/// Otherwise it is the one that draws a space in the declared family at 400,
 /// found by shaping one, because that is how cosmic-text finds it: a generic
 /// family names one font (sans-serif is Open Sans), and where that font is not
 /// installed the text is drawn in a fallback no query of the font database
-/// returns.
+/// returns. An installed name is not probed, because a family need not have a
+/// space: an icon font such as Symbols Nerd Font draws it in a fallback, and
+/// the icons would be measured in that (#604).
 ///
 /// Naming that family is what keeps a weight inside it. Handed a generic family
 /// whose font is missing, cosmic-text draws a weight the fallback does not
@@ -209,31 +212,20 @@ fn resolve_font(
     if let Some(resolved) = known {
         return resolved;
     }
-    let mut probe = Buffer::new(font_system, Metrics::new(16.0, 16.0));
-    probe.set_text(
-        " ",
-        &Attrs::new()
-            .family(family.to_cosmic())
-            .weight(FontWeight::NORMAL.to_cosmic()),
-        Shaping::Advanced,
-        None,
-    );
-    probe.shape_until_scroll(font_system, false);
-    let drawing_family = probe
-        .layout_runs()
-        .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id))
-        .and_then(|id| font_system.db().face(id))
-        .and_then(|face| face.families.first())
-        .map(|(name, _)| FontFamily::name(name));
-    let nearest = drawing_family.and_then(|drawing| {
+    let nearest_face = |font_system: &FontSystem, of: FontFamily| {
         let db = font_system.db();
         let id = db.query(&glyphon::fontdb::Query {
-            families: &[drawing.to_cosmic()],
+            families: &[of.to_cosmic()],
             weight: weight.to_cosmic(),
             ..Default::default()
         })?;
         Some((id, FontWeight(db.face(id)?.weight.0)))
-    });
+    };
+    let drawing_family = match family {
+        FontFamily::Name(_) if nearest_face(font_system, family).is_some() => Some(family),
+        _ => drawing_family_of_a_space(font_system, family),
+    };
+    let nearest = drawing_family.and_then(|drawing| nearest_face(font_system, drawing));
     let line_ratio = nearest
         .and_then(|(id, weight)| font_system.get_font(id, weight.to_cosmic()))
         .and_then(|font| {
@@ -251,6 +243,30 @@ fn resolve_font(
             .insert((family, weight), resolved)
     });
     resolved
+}
+
+/// The family cosmic-text draws a space in `family` at 400 with — the family
+/// itself, or the fallback a missing font is drawn in.
+fn drawing_family_of_a_space(
+    font_system: &mut FontSystem,
+    family: FontFamily,
+) -> Option<FontFamily> {
+    let mut probe = Buffer::new(font_system, Metrics::new(16.0, 16.0));
+    probe.set_text(
+        " ",
+        &Attrs::new()
+            .family(family.to_cosmic())
+            .weight(FontWeight::NORMAL.to_cosmic()),
+        Shaping::Advanced,
+        None,
+    );
+    probe.shape_until_scroll(font_system, false);
+    probe
+        .layout_runs()
+        .find_map(|run| run.glyphs.first().map(|glyph| glyph.font_id))
+        .and_then(|id| font_system.db().face(id))
+        .and_then(|face| face.families.first())
+        .map(|(name, _)| FontFamily::name(name))
 }
 
 /// A face's line height over its size, from its metrics in font units: ascent,
@@ -1538,5 +1554,65 @@ fn a_weight_s_line_height_is_its_own_face_s() {
     assert!(
         (bold - 1.3642578).abs() < 1e-4,
         "{bold} is the regular face's line, not the bold one's 1.364"
+    );
+}
+
+/// A named family that is installed is measured in itself, even when it has
+/// no space for the probe to draw — an icon font such as Symbols Nerd Font
+/// (#604). Probed, the space falls back to DejaVu Sans Mono, and the digits
+/// would be measured in DejaVu's narrow ones while drawn in the wide ones.
+#[cfg(test)]
+#[test]
+fn a_named_family_without_a_space_is_measured_in_itself() {
+    const FALLBACK: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const NO_SPACE: &[u8] = include_bytes!("../../tests/assets/GuidoNoSpace.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    for font in [FALLBACK, NO_SPACE] {
+        db.load_font_data(font.to_vec());
+    }
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let buffer = shape(
+        &mut font_system,
+        "2356",
+        14.0,
+        FontFamily::name("Guido No Space"),
+        FontWeight::NORMAL,
+        LineHeight::Normal,
+        TextAlign::Start,
+        (None, None),
+        None,
+        1.0,
+    );
+    let width: f32 = buffer.layout_runs().map(|run| run.line_w).sum();
+    assert!(
+        (width - 4.0 * 1.5 * 14.0).abs() < 0.01,
+        "four digits 1.5 em wide at 14 px were laid out {width} px wide"
+    );
+    let line = buffer.metrics().line_height;
+    assert_eq!(
+        line, 14.0,
+        "a line of the family's own 1.0, not DejaVu's 1.164"
+    );
+}
+
+/// A name that is not installed is still probed: the text is drawn in the
+/// fallback a space finds, so its line is that face's and not the ratio kept
+/// for a font system with no face at all.
+#[cfg(test)]
+#[test]
+fn a_named_family_that_is_not_installed_is_measured_in_its_fallback() {
+    const FALLBACK: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(FALLBACK.to_vec());
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let ratio = resolve_font(
+        &mut font_system,
+        FontFamily::name("Not Installed Anywhere"),
+        FontWeight::NORMAL,
+    )
+    .line_ratio;
+    assert!(
+        (ratio - 1.1640625).abs() < 1e-4,
+        "{ratio} is not DejaVu Sans Mono's 1.164"
     );
 }
