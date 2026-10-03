@@ -4,8 +4,8 @@
 //! (rotation, scale, translate). Textures are cached for performance.
 
 use std::cell::Cell;
-use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
@@ -20,7 +20,7 @@ use super::flatten::FlattenedCommand;
 use super::image_atlas::{AtlasEntry, ImageAtlas};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
-use crate::image_decode::{DecodeKey, DecodedImage, Extent, hash_sampled};
+use crate::image_decode::{DecodeKey, DecodedImage, Extent, SampledBytes};
 use crate::render_stats::Pipeline;
 use crate::widgets::Color;
 use crate::widgets::Rect;
@@ -91,10 +91,53 @@ impl Drop for CachedTexture {
 }
 
 /// Cache key for image textures: the source, and which of its rasters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CacheKey {
-    source_hash: u64,
+    source: SourceKey,
     extent: Extent,
+}
+
+/// Which source a texture is of.
+///
+/// A source that decodes is its decode entry: `DecodeKey` settled whether two
+/// sources are one when the entry was made, so finding its texture reads none
+/// of its bytes. Raw pixels have no entry and are their own buffer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum SourceKey {
+    Decoded(DecodedImage),
+    Rgba(RgbaKey),
+}
+
+impl SourceKey {
+    /// `None` for a source that decodes and has no entry to name it by.
+    fn of(source: &ImageSource, decoded: Option<&DecodedImage>) -> Option<Self> {
+        match source {
+            ImageSource::Rgba {
+                width,
+                height,
+                pixels,
+            } => Some(Self::Rgba(RgbaKey {
+                width: *width,
+                height: *height,
+                pixels: SampledBytes(pixels.clone()),
+            })),
+            _ => decoded.cloned().map(Self::Decoded),
+        }
+    }
+
+    /// Whether nothing but this key holds the source, so no image can draw it
+    /// again. Only raw pixels can be orphaned: a decode entry outlives every
+    /// texture of it.
+    fn orphaned(&self) -> bool {
+        matches!(self, Self::Rgba(key) if Arc::strong_count(&key.pixels.0) == 1)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RgbaKey {
+    width: u32,
+    height: u32,
+    pixels: SampledBytes,
 }
 
 /// The pixel size to rasterize an SVG of `intrinsic` size at.
@@ -174,9 +217,9 @@ pub struct ImageQuadRenderer {
     atlas: ImageAtlas,
     // Texture cache
     texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
-    /// The size of the raster each SVG source was last drawn from, by source
-    /// hash: what is drawn, stretched, while a new size is on its way.
-    last_svg_raster: FxHashMap<u64, Extent>,
+    /// The size of the raster each SVG source was last drawn from: what is
+    /// drawn, stretched, while a new size is on its way.
+    last_svg_raster: FxHashMap<DecodedImage, Extent>,
     /// When the frame being prepared started: what a texture drawn in it is
     /// stamped with.
     frame_started: Instant,
@@ -252,6 +295,15 @@ impl ImageQuadRenderer {
         // Before the budget is looked at: a page empties when the last frame's
         // quads let go of what was evicted from it, which is not this call.
         self.atlas.drop_empty_pages();
+        // Under the budget too: the key holds the pixels, and would keep a
+        // buffer the application let go for as long as its texture stayed.
+        self.texture_cache.retain(|key, texture| {
+            let orphaned = key.source.orphaned();
+            if orphaned {
+                self.cached_bytes -= texture.bytes();
+            }
+            !orphaned
+        });
         if self.cached_bytes <= budget {
             return;
         }
@@ -263,7 +315,7 @@ impl ImageQuadRenderer {
                     .saturating_duration_since(texture.last_used.get())
                     > KEEP_UNUSED
             })
-            .map(|(key, texture)| (texture.last_used.get(), *key))
+            .map(|(key, texture)| (texture.last_used.get(), key.clone()))
             .collect();
         idle.sort_unstable_by_key(|(last_used, _)| *last_used);
         for (_, key) in idle {
@@ -272,8 +324,10 @@ impl ImageQuadRenderer {
             }
             if let Some(texture) = self.texture_cache.remove(&key) {
                 self.cached_bytes -= texture.bytes();
-                if self.last_svg_raster.get(&key.source_hash) == Some(&key.extent) {
-                    self.last_svg_raster.remove(&key.source_hash);
+                if let SourceKey::Decoded(decoded) = &key.source
+                    && self.last_svg_raster.get(decoded) == Some(&key.extent)
+                {
+                    self.last_svg_raster.remove(decoded);
                 }
             }
         }
@@ -297,43 +351,6 @@ impl ImageQuadRenderer {
     #[cfg(feature = "testing")]
     pub(crate) fn atlas_pages(&self) -> usize {
         self.atlas.pages()
-    }
-
-    /// Hash an image source for cache lookup.
-    fn hash_source(source: &ImageSource) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
-
-        match source {
-            ImageSource::Path(path) => {
-                "path".hash(&mut hasher);
-                path.hash(&mut hasher);
-            }
-            ImageSource::Bytes(bytes) => {
-                "bytes".hash(&mut hasher);
-                hash_sampled(bytes, &mut hasher);
-            }
-            ImageSource::Rgba {
-                width,
-                height,
-                pixels,
-            } => {
-                "rgba".hash(&mut hasher);
-                width.hash(&mut hasher);
-                height.hash(&mut hasher);
-                hash_sampled(pixels, &mut hasher);
-            }
-            ImageSource::SvgPath(path) => {
-                "svg_path".hash(&mut hasher);
-                path.hash(&mut hasher);
-            }
-            ImageSource::SvgBytes(bytes) => {
-                "svg_bytes".hash(&mut hasher);
-                hash_sampled(bytes, &mut hasher);
-            }
-        }
-
-        hasher.finish()
     }
 
     /// Get or create a cached texture for the given source.
@@ -360,26 +377,43 @@ impl ImageQuadRenderer {
             None => None,
         };
         let key = CacheKey {
-            source_hash: Self::hash_source(source),
+            source: SourceKey::of(source, decoded)?,
             extent,
         };
 
-        let texture = match self.texture_cache.get(&key) {
-            Some(cached) => Some(cached.clone()),
-            None => self.load_texture(device, queue, source, key, decoded),
+        let texture = match self.texture_cache.get_key_value(&key) {
+            Some((cached_key, cached)) => {
+                let cached = cached.clone();
+                // Equal pixels in a new buffer, and nothing else holds the old
+                // one: keyed by the new one from now on, so the next lookup is
+                // settled by the pointer and `trim` keeps a texture still drawn.
+                if cached_key.source.orphaned() {
+                    self.texture_cache.remove(&key);
+                    self.texture_cache.insert(key.clone(), cached.clone());
+                }
+                Some(cached)
+            }
+            None => self.load_texture(device, queue, source, key.clone(), decoded),
         };
+        let svg = extent.and(decoded);
         let texture = match texture {
             Some(texture) => {
-                if extent.is_some() {
-                    self.last_svg_raster.insert(key.source_hash, extent);
+                if let Some(svg) = svg
+                    && self.last_svg_raster.get(svg) != Some(&extent)
+                {
+                    self.last_svg_raster.insert(svg.clone(), extent);
                 }
                 texture
             }
             None => {
-                let last = self
-                    .last_svg_raster
-                    .get(&key.source_hash)
-                    .and_then(|&extent| self.texture_cache.get(&CacheKey { extent, ..key }));
+                let last = svg
+                    .and_then(|svg| self.last_svg_raster.get(svg))
+                    .and_then(|&extent| {
+                        self.texture_cache.get(&CacheKey {
+                            source: key.source.clone(),
+                            extent,
+                        })
+                    });
                 match (last, decoded) {
                     (Some(last), _) => last.clone(),
                     (None, Some(decoded)) if extent.is_some() => {

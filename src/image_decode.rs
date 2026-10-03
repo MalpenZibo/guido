@@ -261,6 +261,15 @@ impl PartialEq for DecodedImage {
     }
 }
 
+impl Eq for DecodedImage {}
+
+/// By the entry, as equality is: a handle hashes without reading its source.
+impl Hash for DecodedImage {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
+    }
+}
+
 /// Where the decode of one source has got to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DecodeState {
@@ -275,63 +284,51 @@ pub(crate) enum DecodeState {
 }
 
 /// What an entry is found by: the source, for the kinds that decode.
-///
-/// Bytes hash a sample rather than every byte, because a paint looks its entry
-/// up and a paint must not read a 9 MB buffer end to end. Equality then
-/// settles what a sample cannot, and the same `Arc` settles it at once.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DecodeKey {
     Path(PathBuf),
-    Bytes(Arc<[u8]>),
+    Bytes(SampledBytes),
     SvgPath(PathBuf),
-    SvgBytes(Arc<[u8]>),
+    SvgBytes(SampledBytes),
+}
+
+/// Bytes as a key: hashed by a sample rather than every byte, because a paint
+/// looks its key up and a paint must not read a 9 MB buffer end to end.
+/// Equality then settles what a sample cannot, and the same `Arc` settles it
+/// at once.
+#[derive(Clone, Debug)]
+pub(crate) struct SampledBytes(pub(crate) Arc<[u8]>);
+
+impl std::ops::Deref for SampledBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl PartialEq for SampledBytes {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.0[..] == other.0[..]
+    }
+}
+
+impl Eq for SampledBytes {}
+
+impl Hash for SampledBytes {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_sampled(&self.0, state);
+    }
 }
 
 impl DecodeKey {
     pub(crate) fn of(source: &ImageSource) -> Option<Self> {
         match source {
             ImageSource::Path(path) => Some(Self::Path(path.clone())),
-            ImageSource::Bytes(bytes) => Some(Self::Bytes(bytes.clone())),
+            ImageSource::Bytes(bytes) => Some(Self::Bytes(SampledBytes(bytes.clone()))),
             ImageSource::SvgPath(path) => Some(Self::SvgPath(path.clone())),
-            ImageSource::SvgBytes(bytes) => Some(Self::SvgBytes(bytes.clone())),
+            ImageSource::SvgBytes(bytes) => Some(Self::SvgBytes(SampledBytes(bytes.clone()))),
             ImageSource::Rgba { .. } => None,
-        }
-    }
-}
-
-impl PartialEq for DecodeKey {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Path(a), Self::Path(b)) | (Self::SvgPath(a), Self::SvgPath(b)) => a == b,
-            (Self::Bytes(a), Self::Bytes(b)) | (Self::SvgBytes(a), Self::SvgBytes(b)) => {
-                Arc::ptr_eq(a, b) || a[..] == b[..]
-            }
-            _ => false,
-        }
-    }
-}
-
-impl Eq for DecodeKey {}
-
-impl Hash for DecodeKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            Self::Path(path) => {
-                0u8.hash(state);
-                path.hash(state);
-            }
-            Self::Bytes(bytes) => {
-                1u8.hash(state);
-                hash_sampled(bytes, state);
-            }
-            Self::SvgPath(path) => {
-                2u8.hash(state);
-                path.hash(state);
-            }
-            Self::SvgBytes(bytes) => {
-                3u8.hash(state);
-                hash_sampled(bytes, state);
-            }
         }
     }
 }
@@ -342,10 +339,9 @@ const HASH_SAMPLE_SIZE: usize = 256;
 /// Hash a buffer by its length and three samples of it — the start, the
 /// middle and the end — or whole when it is small.
 ///
-/// A lookup's cost, not an identity: whoever keys on this settles collisions
-/// with equality or accepts them, and the renderer's texture cache has
-/// accepted them since it was written.
-pub(crate) fn hash_sampled(bytes: &[u8], hasher: &mut impl Hasher) {
+/// A lookup's cost, not an identity: [`SampledBytes`] settles collisions with
+/// equality.
+fn hash_sampled(bytes: &[u8], hasher: &mut impl Hasher) {
     bytes.len().hash(hasher);
     if bytes.len() < 1024 {
         bytes.hash(hasher);
