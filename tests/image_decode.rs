@@ -978,3 +978,197 @@ fn a_decoded_image_is_premultiplied_like_raw_pixels() {
          the scaled edge left the line from the tile to the disc"
     );
 }
+
+/// Two sources that differ in exactly one byte, and how far into the buffers
+/// it is: the sources below are only a test of identity when that byte lies
+/// outside the start, the middle and the end the texture cache once hashed.
+fn assert_differ_off_the_samples(first: &[u8], second: &[u8]) {
+    assert_eq!(first.len(), second.len());
+    assert!(first.len() >= 1024, "a buffer this small is hashed whole");
+    let differ: Vec<usize> = (0..first.len())
+        .filter(|&i| first[i] != second[i])
+        .collect();
+    let (mid, len) = (first.len() / 2, first.len());
+    assert!(
+        !differ.is_empty()
+            && differ
+                .iter()
+                .all(|&i| i >= 256 && !(mid - 128..mid + 128).contains(&i) && i < len - 256),
+        "the sources must differ, and only off the sampled bytes: {differ:?} of {len}"
+    );
+}
+
+fn is_green(pixel: [u8; 4]) -> bool {
+    pixel[1] > 200 && pixel[0] < 50 && pixel[2] < 50
+}
+
+/// 40×40 opaque black but for one pixel, at (10, 10).
+fn one_pixel_rgba(rgb: [u8; 3]) -> ImageSource {
+    let mut pixels = [0, 0, 0, 255].repeat(40 * 40);
+    let at = (10 * 40 + 10) * 4;
+    pixels[at..at + 3].copy_from_slice(&rgb);
+    ImageSource::Rgba {
+        width: 40,
+        height: 40,
+        pixels: pixels.into(),
+    }
+}
+
+/// An `side`-unit black document with one unit at (10, 10) in `fill`, padded
+/// so that unit sits off the sampled bytes, which the comments fill instead.
+#[cfg(feature = "svg")]
+fn one_pixel_svg(fill: &str, side: u32) -> ImageSource {
+    let (before, after) = ("a".repeat(300), "z".repeat(1500));
+    ImageSource::SvgBytes(
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{side}" height="{side}"><!--{before}--><rect width="{side}" height="{side}" fill="#000"/><rect x="10" y="10" width="1" height="1" fill="{fill}"/><!--{after}--></svg>"##
+        )
+        .into_bytes()
+        .into(),
+    )
+}
+
+/// A surface showing one image `side` across, whose source is `source`.
+fn swappable(app: &mut Headless, source: Signal<ImageSource>, side: u32) -> SurfaceId {
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(side)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || {
+            container()
+                .width(side as f32)
+                .height(side as f32)
+                .child(image(source).content_fit(ContentFit::Fill))
+        },
+    );
+    app.configure(surface, side, side, 1.0);
+    surface
+}
+
+fn bytes(source: &ImageSource) -> &[u8] {
+    match source {
+        ImageSource::Rgba { pixels, .. } => pixels,
+        ImageSource::SvgBytes(bytes) | ImageSource::Bytes(bytes) => bytes,
+        _ => unreachable!("only in-memory sources here"),
+    }
+}
+
+/// Two images side by side, `red` and then `green`, each 40 across: each is
+/// drawn as itself, and from a texture of its own.
+fn two_sources_are_two_images(red: ImageSource, green: ImageSource) {
+    assert_differ_off_the_samples(bytes(&red), bytes(&green));
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let (surface, _) = surface(&mut app, vec![red, green], 40);
+
+    app.step();
+
+    let (left, right) = (
+        app.read_pixel(surface, 10, 10),
+        app.read_pixel(surface, 50, 10),
+    );
+    assert!(
+        is_red(left),
+        "the first image draws its own red, got {left:?}"
+    );
+    assert!(
+        is_green(right),
+        "the second image draws its own green, got {right:?}"
+    );
+    assert_eq!(app.image_textures(), 2, "one texture each");
+}
+
+/// Two raw buffers equal in every byte the cache hashed are still two images
+/// (#606).
+///
+/// Red before: the texture cache keyed a source by a hash of its start, middle
+/// and end, so the second image was drawn from the first's texture.
+#[test]
+fn raw_pixels_alike_where_sampled_are_two_images() {
+    two_sources_are_two_images(one_pixel_rgba([255, 0, 0]), one_pixel_rgba([0, 255, 0]));
+}
+
+/// The same of two documents, rasterized inside the frame (#606).
+#[cfg(feature = "svg")]
+#[test]
+fn svgs_alike_where_sampled_are_two_images() {
+    two_sources_are_two_images(one_pixel_svg("#f00", 40), one_pixel_svg("#0f0", 40));
+}
+
+/// Equal pixels in two allocations are still one texture: identity is the
+/// contents, not the buffer.
+#[test]
+fn raw_pixels_equal_in_two_buffers_share_a_texture() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let (first, second) = (one_pixel_rgba([255, 0, 0]), one_pixel_rgba([255, 0, 0]));
+    assert!(!std::ptr::eq(bytes(&first), bytes(&second)));
+    let (surface, _) = surface(&mut app, vec![first, second], 40);
+
+    app.step();
+
+    for x in [10, 50] {
+        assert!(is_red(app.read_pixel(surface, x, 10)), "drawn at x = {x}");
+    }
+    assert_eq!(app.image_textures(), 1, "one texture for both");
+}
+
+/// An image whose source is replaced by one alike where sampled draws the new
+/// one (#606).
+#[test]
+fn a_replaced_source_alike_where_sampled_is_drawn_as_itself() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let source = create_signal(one_pixel_rgba([255, 0, 0]));
+    let surface = swappable(&mut app, source.into(), 40);
+    app.step();
+    assert!(is_red(app.read_pixel(surface, 10, 10)));
+
+    source.set(one_pixel_rgba([0, 255, 0]));
+    app.step();
+
+    let pixel = app.read_pixel(surface, 10, 10);
+    assert!(is_green(pixel), "the new source is drawn, got {pixel:?}");
+}
+
+/// A new document whose raster is on the worker draws nothing rather than
+/// another document's raster, however alike the two are where sampled (#606).
+///
+/// Red before: the new document's texture key was the old one's, so the old
+/// raster was found and drawn as if it were the new one's.
+#[cfg(feature = "svg")]
+#[test]
+fn a_new_svg_does_not_borrow_another_sources_raster() {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let (red, green) = (one_pixel_svg("#f00", LARGE), one_pixel_svg("#0f0", LARGE));
+    assert_differ_off_the_samples(bytes(&red), bytes(&green));
+    let source = create_signal(red);
+    let surface = swappable(&mut app, source.into(), LARGE);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    assert!(
+        is_red(app.read_pixel(surface, 10, 10)),
+        "the first is drawn"
+    );
+
+    let hold = app.hold_image_decodes();
+    source.set(green);
+    app.step();
+    let pixel = app.read_pixel(surface, 10, 10);
+    assert!(
+        !is_red(pixel),
+        "the new document is not drawn from the old one's raster, got {pixel:?}"
+    );
+
+    hold.release();
+    app.wait_for_image_decodes();
+    app.step();
+    let pixel = app.read_pixel(surface, 10, 10);
+    assert!(
+        is_green(pixel),
+        "and is drawn once its own lands, got {pixel:?}"
+    );
+}

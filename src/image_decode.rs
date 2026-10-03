@@ -339,10 +339,9 @@ const HASH_SAMPLE_SIZE: usize = 256;
 /// Hash a buffer by its length and three samples of it — the start, the
 /// middle and the end — or whole when it is small.
 ///
-/// A lookup's cost, not an identity: whoever keys on this settles collisions
-/// with equality or accepts them, and the renderer's texture cache has
-/// accepted them since it was written.
-pub(crate) fn hash_sampled(bytes: &[u8], hasher: &mut impl Hasher) {
+/// A lookup's cost, not an identity: [`SampledBytes`] settles collisions with
+/// equality.
+fn hash_sampled(bytes: &[u8], hasher: &mut impl Hasher) {
     bytes.len().hash(hasher);
     if bytes.len() < 1024 {
         bytes.hash(hasher);
