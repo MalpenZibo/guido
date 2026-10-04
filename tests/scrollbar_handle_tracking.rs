@@ -262,6 +262,28 @@ impl H {
             ScrollSource::Wheel,
         ));
     }
+
+    fn flick(&mut self, mut at: Instant) -> Instant {
+        let (dx, dy) = if self.horizontal {
+            (10.0, 0.0)
+        } else {
+            (0.0, 10.0)
+        };
+        for _ in 0..6 {
+            self.dispatch_at(Event::scroll(100.0, 40.0, dx, dy, ScrollSource::Finger), at);
+            at += Duration::from_millis(8);
+        }
+        self.dispatch_at(Event::scroll_end(100.0, 40.0), at);
+        at
+    }
+
+    fn bar_point(&self, along: f32) -> (f32, f32) {
+        if self.horizontal {
+            (along, H_VIEWPORT - TRACK_START - BAR_WIDTH / 2.0)
+        } else {
+            (VIEWPORT - TRACK_START - BAR_WIDTH / 2.0, along)
+        }
+    }
 }
 
 fn near(actual: f32, expected: f32) -> bool {
@@ -868,4 +890,124 @@ fn a_right_release_does_not_end_a_left_drag() {
          button still down: a release of a button that never started this drag \
          ended it"
     );
+}
+
+/// A grabbed handle stays put; the previous glide used to move the content underneath it.
+#[test]
+fn grabbing_a_coasting_handle_stops_it_without_breaking_the_drag() {
+    for horizontal in [false, true] {
+        for already_coasting in [false, true] {
+            let mut h = if horizontal {
+                H::horizontal()
+            } else {
+                H::vertical()
+            };
+            let mut at = h.flick(Instant::now());
+            assert!(near(h.scrolled_by(), 60.0));
+            if already_coasting {
+                at += Duration::from_millis(16);
+                h.frame(at);
+                assert!(h.scrolled_by() > 70.0);
+            }
+            let handle = if horizontal { H_HANDLE } else { V_HANDLE };
+            let content = if horizontal { H_CONTENT } else { V_CONTENT };
+            let along = h.handle_pos() + handle / 2.0;
+            let (x, y) = h.bar_point(along);
+            h.dispatch_at(Event::mouse_down(x, y, MouseButton::Left), at);
+            let held = h.scrolled_by();
+            for _ in 0..4 {
+                at += Duration::from_millis(16);
+                h.frame(at);
+                assert!(
+                    near(h.scrolled_by(), held),
+                    "held handle drifted on horizontal={horizontal}"
+                );
+            }
+            let (x, y) = h.bar_point(along + 20.0);
+            h.dispatch_at(Event::mouse_move(x, y), at);
+            let expected = held + 20.0 * (content - VIEWPORT) / (TRACK_LENGTH - handle);
+            assert!(
+                near(h.scrolled_by(), expected),
+                "drag lost its press baseline"
+            );
+            h.dispatch_at(Event::mouse_up(x, y, MouseButton::Left), at);
+            for _ in 0..8 {
+                at += Duration::from_millis(16);
+                h.frame(at);
+                assert!(
+                    near(h.scrolled_by(), expected),
+                    "release revived old momentum"
+                );
+            }
+            at = h.flick(at);
+            let next = h.scrolled_by();
+            h.frame(at + Duration::from_millis(16));
+            assert!(h.scrolled_by() > next + 10.0, "new flick did not coast");
+        }
+    }
+}
+
+/// A track selection stays put; the previous glide used to move it on the next frame.
+#[test]
+fn selecting_a_coasting_track_keeps_the_selected_position() {
+    for horizontal in [false, true] {
+        let mut h = if horizontal {
+            H::horizontal()
+        } else {
+            H::vertical()
+        };
+        let mut at = h.flick(Instant::now());
+        let (x, y) = h.bar_point(120.0);
+        h.dispatch_at(Event::mouse_down(x, y, MouseButton::Left), at);
+        let handle = if horizontal { H_HANDLE } else { V_HANDLE };
+        let content = if horizontal { H_CONTENT } else { V_CONTENT };
+        let expected =
+            (120.0 - TRACK_START - handle / 2.0) / (TRACK_LENGTH - handle) * (content - VIEWPORT);
+        assert!(
+            near(h.scrolled_by(), expected),
+            "track did not select the requested position"
+        );
+        h.dispatch_at(Event::mouse_up(x, y, MouseButton::Left), at);
+        for _ in 0..12 {
+            at += Duration::from_millis(16);
+            h.frame(at);
+            assert!(
+                near(h.scrolled_by(), expected),
+                "track selection drifted on horizontal={horizontal}"
+            );
+        }
+    }
+}
+
+/// Rejected scrollbar presses must not cancel a glide when accepted presses do.
+#[test]
+fn presses_that_do_not_acquire_a_scrollbar_leave_the_flick_running() {
+    for horizontal in [false, true] {
+        for press in 0..3 {
+            let mut h = if horizontal {
+                H::horizontal()
+            } else {
+                H::vertical()
+            };
+            let at = h.flick(Instant::now());
+            let handle = if horizontal { H_HANDLE } else { V_HANDLE };
+            let along = h.handle_pos() + handle / 2.0;
+            let (x, y) = h.bar_point(along);
+            let event = match press {
+                0 => Event::mouse_down(x, y, MouseButton::Right),
+                1 => Event::mouse_down(250.0, 250.0, MouseButton::Left),
+                _ => Event::MouseDown {
+                    at: None,
+                    button: MouseButton::Left,
+                    pointer: PointerKind::Mouse,
+                },
+            };
+            h.dispatch_at(event, at);
+            h.frame(at + Duration::from_millis(16));
+            assert!(
+                h.scrolled_by() > 70.0,
+                "non-acquiring press {press} stopped horizontal={horizontal}"
+            );
+        }
+    }
 }

@@ -1311,6 +1311,43 @@ fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
     );
 }
 
+/// A handle grab stops the queued glide; later application frames used to move the content.
+#[test]
+fn a_scrollbar_grab_stops_the_glide_in_the_application() {
+    let Some(mut app) = headless() else { return };
+    let (surface, mut at) = scroller(&mut app, || {
+        scroll_over_an_edge().scroll(Scroll::vertical())
+    });
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    app.step_at(at);
+    assert_eq!(scrolled(&app, surface), 60.0);
+    app.event_at(
+        surface,
+        Event::mouse_down(95.0, 100.0, MouseButton::Left),
+        at,
+    );
+    app.step_at(at);
+    for _ in 0..4 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        assert_eq!(scrolled(&app, surface), 60.0, "held handle drifted");
+    }
+    app.event_at(surface, Event::mouse_up(95.0, 100.0, MouseButton::Left), at);
+    for _ in 0..4 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        assert_eq!(scrolled(&app, surface), 60.0, "release revived the glide");
+    }
+}
+
 /// A scroller as tall as its surface, over one pressable block taller than it.
 ///
 /// The block lights green while it is pressed and counts what it activates, so
