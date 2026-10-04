@@ -154,6 +154,7 @@ fn svg_extent(
     (width, height): (f32, f32),
     scale: f32,
     target: Option<(f32, f32)>,
+    limit: u32,
 ) -> Option<(u32, u32)> {
     let scale = (scale * 4.0).round() / 4.0;
     let scale = match target {
@@ -162,8 +163,28 @@ fn svg_extent(
         }
         _ => scale,
     };
+    let scale = scale.min(limit as f32 / width.max(height));
     let extent = ((width * scale).ceil(), (height * scale).ceil());
-    (extent.0 >= 1.0 && extent.1 >= 1.0).then_some((extent.0 as u32, extent.1 as u32))
+    (extent.0 >= 1.0 && extent.1 >= 1.0)
+        .then_some(((extent.0 as u32).min(limit), (extent.1 as u32).min(limit)))
+}
+
+/// Fit premultiplied pixels within the texture limit.
+fn resized_raster(width: u32, height: u32, rgba: &[u8], limit: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let source = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, rgba)?;
+    let longest = width.max(height) as u64;
+    if longest == 0 || limit == 0 {
+        return None;
+    }
+    let new_width = ((width as u64 * limit as u64 + longest / 2) / longest).max(1) as u32;
+    let new_height = ((height as u64 * limit as u64 + longest / 2) / longest).max(1) as u32;
+    let pixels = image::imageops::resize(
+        &source,
+        new_width,
+        new_height,
+        image::imageops::FilterType::Triangle,
+    );
+    Some((new_width, new_height, pixels.into_raw()))
 }
 
 /// A texture of its own, for an image too large for an atlas page.
@@ -217,6 +238,7 @@ pub struct ImageQuadRenderer {
     atlas: ImageAtlas,
     // Texture cache
     texture_cache: FxHashMap<CacheKey, Rc<CachedTexture>>,
+    texture_limit: u32,
     /// The size of the raster each SVG source was last drawn from: what is
     /// drawn, stretched, while a new size is on its way.
     last_svg_raster: FxHashMap<DecodedImage, Extent>,
@@ -262,6 +284,7 @@ impl ImageQuadRenderer {
             quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
             atlas: ImageAtlas::default(),
             texture_cache: FxHashMap::default(),
+            texture_limit: device.limits().max_texture_dimension_2d,
             last_svg_raster: FxHashMap::default(),
             frame_started: Instant::now(),
             cached_bytes: 0,
@@ -373,14 +396,18 @@ impl ImageQuadRenderer {
         decoded: Option<&DecodedImage>,
     ) -> Option<Rc<CachedTexture>> {
         let extent = match decoded.and_then(DecodedImage::svg_size) {
-            Some(size) => Some(svg_extent(size, render_scale, svg_target)?),
+            Some(size) => Some(svg_extent(
+                size,
+                render_scale,
+                svg_target,
+                self.texture_limit,
+            )?),
             None => None,
         };
         let key = CacheKey {
             source: SourceKey::of(source, decoded)?,
             extent,
         };
-
         let texture = match self.texture_cache.get_key_value(&key) {
             Some((cached_key, cached)) => {
                 let cached = cached.clone();
@@ -432,13 +459,13 @@ impl ImageQuadRenderer {
     ///
     /// A raster `Path` or `Bytes` source arrives already decoded and an SVG
     /// already rasterized — the worker in `image_decode` did that off the
-    /// frame — so this only uploads, and taking the pixels to upload them is
-    /// what drops them from the cache. A raster source whose pixels were
-    /// already taken has none left: this draws nothing and reports the texture
-    /// missing, which sends the source back to the worker. An SVG with none
-    /// of this size rasterizes them here if they are few, and asks the worker
-    /// for them if not. Decoding a raster image or rasterizing a large SVG
-    /// here instead is the stall that module exists to remove.
+    /// frame. Oversized rasters are resized here before upload. Taking the
+    /// pixels for upload drops them from the cache. A raster source whose
+    /// pixels were already taken has none left: this draws nothing and reports
+    /// the texture missing, which sends the source back to the worker. An SVG
+    /// with none of this size rasterizes them here if they are few, and asks
+    /// the worker for them if not. Decoding a raster image or rasterizing a
+    /// large SVG here instead is the stall that module exists to remove.
     fn load_texture(
         &mut self,
         device: &Device,
@@ -453,7 +480,13 @@ impl ImageQuadRenderer {
                     crate::image_decode::texture_missing(source);
                     return None;
                 };
-                self.upload_raster(device, queue, pixels.width, pixels.height, &pixels.rgba)?
+                match self.upload_raster(device, queue, pixels.width, pixels.height, &pixels.rgba) {
+                    Some(texture) => texture,
+                    None => {
+                        decoded?.upload_failed();
+                        return None;
+                    }
+                }
             }
             ImageSource::Rgba {
                 width,
@@ -512,11 +545,24 @@ impl ImageQuadRenderer {
             return None;
         }
 
+        let limit = self.texture_limit;
+        let resized;
+        let (upload_width, upload_height, rgba) = if width > limit || height > limit {
+            let Some((w, h, pixels)) = resized_raster(width, height, rgba, limit) else {
+                log::warn!("Failed to resize image {width}x{height} to texture limit {limit}");
+                return None;
+            };
+            log::warn!("Resized image {width}x{height} to {w}x{h} for texture limit {limit}");
+            resized = pixels;
+            (w, h, resized.as_slice())
+        } else {
+            (width, height, rgba)
+        };
         self.store(
             device,
             queue,
-            width,
-            height,
+            upload_width,
+            upload_height,
             rgba,
             (width as f32, height as f32),
         )
@@ -786,5 +832,162 @@ impl ImageQuadRenderer {
     /// Render the prepared image quads.
     pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedImageQuad]) {
         self.quad.draw(render_pass, quads, Pipeline::Images);
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn svg_raster_extents_fit_both_axes() {
+        for ((width, height), expected) in [
+            ((8193.0, 1.0), (8192, 1)),
+            ((1.0, 8193.0), (1, 8192)),
+            ((12000.0, 6000.0), (8192, 4096)),
+            ((6000.0, 12000.0), (4096, 8192)),
+        ] {
+            assert_eq!(svg_extent((width, height), 2.0, None, 8192), Some(expected));
+        }
+        assert_eq!(svg_extent((20.0, 10.0), 2.0, None, 8192), Some((40, 20)));
+        assert_eq!(
+            svg_extent((8193.0, 1.0), 2.0, Some((20.0, 20.0)), 8192),
+            Some((40, 1))
+        );
+        assert_eq!(svg_extent((0.0, 10.0), 2.0, None, 8192), None);
+        assert_eq!(svg_extent((10.0, 0.0), 2.0, None, 8192), None);
+        assert_eq!(svg_extent((20.0, 10.0), 0.0, None, 8192), None);
+    }
+
+    #[test]
+    fn raster_resize_preserves_aspect_ratio_and_premultiplied_color() {
+        for (width, height, expected) in [
+            (12, 6, (8, 4)),
+            (6, 12, (4, 8)),
+            (12, 1, (8, 1)),
+            (1, 12, (1, 8)),
+        ] {
+            let pixels = [128, 0, 0, 128].repeat((width * height) as usize);
+            let (w, h, resized) = resized_raster(width, height, &pixels, 8).unwrap();
+            assert_eq!((w, h), expected);
+            assert_eq!(resized.len(), (w * h * 4) as usize);
+            assert!(
+                resized
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|pixel| *pixel == [128, 0, 0, 128])
+            );
+        }
+    }
+
+    #[test]
+    fn raster_resize_rounds_nonintegral_dimensions_to_the_nearest_texel() {
+        for (width, height, limit, expected) in [
+            (9, 2, 8, (8, 2)),
+            (2, 9, 8, (2, 8)),
+            (9, 3, 8, (8, 3)),
+            (3, 9, 8, (3, 8)),
+            (5, 2, 3, (3, 1)),
+            (2, 5, 3, (1, 3)),
+            (6, 3, 3, (3, 2)),
+            (3, 6, 3, (2, 3)),
+        ] {
+            let pixels = [255; 4].repeat((width * height) as usize);
+            let (w, h, _) = resized_raster(width, height, &pixels, limit).unwrap();
+            assert_eq!((w, h), expected);
+        }
+    }
+
+    #[test]
+    fn raster_resize_keeps_distinct_nearly_unscaled_rows_and_columns() {
+        for (width, height, expected) in [(9, 2, (8, 2)), (2, 9, (2, 8))] {
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    pixels.extend_from_slice(
+                        if (height == 2 && y == 0) || (width == 2 && x == 0) {
+                            &[255, 0, 0, 255]
+                        } else {
+                            &[0, 0, 255, 255]
+                        },
+                    );
+                }
+            }
+            let (w, h, resized) = resized_raster(width, height, &pixels, 8).unwrap();
+            assert_eq!((w, h), expected);
+            for y in 0..h {
+                for x in 0..w {
+                    let offset = ((y * w + x) * 4) as usize;
+                    let expected = if (h == 2 && y == 0) || (w == 2 && x == 0) {
+                        [255, 0, 0, 255]
+                    } else {
+                        [0, 0, 255, 255]
+                    };
+                    assert_eq!(&resized[offset..offset + 4], &expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raster_shrinking_keeps_thin_lines_between_sample_centers() {
+        for (width, height) in [(40, 1), (1, 40)] {
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    pixels.extend_from_slice(if (x + y) % 5 == 0 {
+                        &[128, 0, 0, 128]
+                    } else {
+                        &[0, 0, 0, 0]
+                    });
+                }
+            }
+            let (_, _, resized) = resized_raster(width, height, &pixels, 8).unwrap();
+            // One translucent line in every five texels must still contribute.
+            for pixel in resized.as_chunks::<4>().0 {
+                assert!((16..=36).contains(&pixel[0]), "lost line: {pixel:?}");
+                assert_eq!(*pixel, [pixel[0], 0, 0, pixel[0]]);
+            }
+        }
+    }
+
+    #[test]
+    fn raster_resize_filters_both_axes_in_premultiplied_space() {
+        let pixels = [
+            128, 0, 0, 128, 0, 128, 0, 128, 0, 0, 128, 128, 128, 128, 128, 128, 0, 0, 0, 0, 64, 0,
+            0, 64, 0, 64, 0, 64, 0, 0, 64, 64,
+        ];
+        let (width, height, resized) = resized_raster(4, 2, &pixels, 2).unwrap();
+        assert_eq!((width, height), (2, 1));
+        // Horizontal weights are [3, 3, 1]/7 and [1, 3, 3]/7;
+        // both rows contribute equally before rounding to bytes.
+        assert_eq!(resized, [41, 32, 9, 82, 32, 50, 69, 96]);
+    }
+
+    #[test]
+    fn an_unresizable_raster_returns_no_pixels() {
+        assert!(resized_raster(12, 1, &[0; 4], 8).is_none());
+        assert!(resized_raster(12, 1, &[0; 48], 0).is_none());
+        assert!(resized_raster(0, 0, &[], 8).is_none());
+    }
+
+    #[test]
+    fn raster_uploads_below_the_limit_keep_their_texel_dimensions() {
+        let Some(gpu) = crate::or_skip(crate::renderer::GpuContext::try_new()) else {
+            return;
+        };
+        let mut renderer = ImageQuadRenderer::new(&gpu.device, TextureFormat::Rgba8Unorm);
+        let limit = gpu.device.limits().max_texture_dimension_2d;
+        for (width, height) in [(limit - 1, 1), (1, limit - 1)] {
+            let pixels = vec![255; (width * height * 4) as usize];
+            let texture = renderer
+                .upload_raster(&gpu.device, &gpu.queue, width, height, &pixels)
+                .unwrap();
+            let Backing::Own(texture) = &texture.backing else {
+                panic!("a near-limit image has its own texture");
+            };
+            assert_eq!((texture.width(), texture.height()), (width, height));
+        }
     }
 }

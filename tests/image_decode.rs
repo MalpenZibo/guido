@@ -46,6 +46,305 @@ fn png(rgb: [u8; 3]) -> Vec<u8> {
     encoded
 }
 
+fn sized_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = ::image::RgbaImage::from_pixel(width, height, ::image::Rgba([255, 0, 0, 255]));
+    let mut encoded = Cursor::new(Vec::new());
+    pixels
+        .write_to(&mut encoded, ::image::ImageFormat::Png)
+        .unwrap();
+    encoded.into_inner()
+}
+
+fn upload_limit_image(source: ImageSource, fit: ContentFit) {
+    let Some(mut app) = headless() else {
+        return;
+    };
+    let green = ImageSource::Rgba {
+        width: 1,
+        height: 1,
+        pixels: Arc::from([0, 255, 0, 255]),
+    };
+    let surface =
+        app.surface(
+            SurfaceConfig::new().height(21).background_color(BACKDROP),
+            move || {
+                container().layout(Flex::row()).children(
+                    [source, green]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, source)| {
+                            container()
+                                .width(21.0)
+                                .height(21.0)
+                                .overflow(Overflow::Hidden)
+                                .child(image(source).content_fit(if index == 0 {
+                                    fit
+                                } else {
+                                    ContentFit::Fill
+                                }))
+                        }),
+                )
+            },
+        );
+    app.configure(surface, 63, 21, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+    let started = app.image_decodes_started();
+    assert_eq!(
+        app.image_textures(),
+        2,
+        "the image and its neighbor uploaded"
+    );
+    for width in [64, 63, 64, 63] {
+        app.configure(surface, width, 21, 1.0);
+        app.step();
+        app.wait_for_image_decodes();
+        app.step();
+        assert!(
+            is_red(app.read_pixel(surface, 10, 0)),
+            "image was not drawn: {:?}",
+            app.read_pixel(surface, 10, 0)
+        );
+        let neighbor = app.read_pixel(surface, 31, 10);
+        assert!(
+            neighbor[1] > 200 && neighbor[0] < 50,
+            "neighbor changed: {neighbor:?}"
+        );
+        assert_eq!(app.image_decodes_started(), started, "redraw decoded again");
+        assert_eq!(app.image_textures(), 2, "redraw uploaded another texture");
+    }
+}
+
+fn limit_raster(width: u32, height: u32, encoded: bool) -> ImageSource {
+    if encoded {
+        ImageSource::Bytes(sized_png(width, height).into())
+    } else {
+        ImageSource::Rgba {
+            width,
+            height,
+            pixels: [255, 0, 0, 255].repeat((width * height) as usize).into(),
+        }
+    }
+}
+
+#[test]
+fn strongly_shrunk_rasters_keep_thin_translucent_lines() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    for encoded in [false, true] {
+        for (width, height) in [(limit * 5, 1), (1, limit * 5)] {
+            let Some(mut app) = headless() else { return };
+            let pixels: Vec<u8> = (0..width * height)
+                .flat_map(|x| if x % 5 == 0 { [255, 0, 0, 128] } else { [0; 4] })
+                .collect();
+            let source = if encoded {
+                let raster = ::image::RgbaImage::from_raw(width, height, pixels).unwrap();
+                let mut bytes = Cursor::new(Vec::new());
+                raster
+                    .write_to(&mut bytes, ::image::ImageFormat::Png)
+                    .unwrap();
+                ImageSource::Bytes(bytes.into_inner().into())
+            } else {
+                ImageSource::Rgba {
+                    width,
+                    height,
+                    pixels: pixels.into(),
+                }
+            };
+            let surface = app.surface(
+                SurfaceConfig::new().height(32).background_color(BACKDROP),
+                move || {
+                    container()
+                        .width(32.0)
+                        .height(32.0)
+                        .child(image(source).content_fit(ContentFit::Fill))
+                },
+            );
+            app.configure(surface, 32, 32, 1.0);
+            app.step();
+            app.wait_for_image_decodes();
+            app.step();
+            for extent in [33, 32, 33, 32] {
+                app.configure(surface, extent, 32, 1.0);
+                app.step();
+                app.wait_for_image_decodes();
+                app.step();
+                assert_eq!(app.read_pixel(surface, 16, 16), [26, 0, 229, 255]);
+                assert_eq!(app.image_textures(), 1);
+                assert_eq!(app.image_decodes_started(), u64::from(encoded));
+            }
+        }
+    }
+}
+
+#[test]
+fn nearly_unscaled_rasters_keep_distinct_rows_and_columns() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    for encoded in [false, true] {
+        for (width, height) in [(limit, 2), (limit + 1, 2), (2, limit), (2, limit + 1)] {
+            let Some(mut app) = headless() else { return };
+            let mut pixels = Vec::new();
+            for y in 0..height {
+                for x in 0..width {
+                    pixels.extend_from_slice(
+                        if (height == 2 && y == 0) || (width == 2 && x == 0) {
+                            &[255, 0, 0, 255]
+                        } else {
+                            &[0, 0, 255, 255]
+                        },
+                    );
+                }
+            }
+            let source = if encoded {
+                let pixels = ::image::RgbaImage::from_raw(width, height, pixels).unwrap();
+                let mut bytes = Cursor::new(Vec::new());
+                pixels
+                    .write_to(&mut bytes, ::image::ImageFormat::Png)
+                    .unwrap();
+                ImageSource::Bytes(bytes.into_inner().into())
+            } else {
+                ImageSource::Rgba {
+                    width,
+                    height,
+                    pixels: pixels.into(),
+                }
+            };
+            let (box_width, box_height) = if height == 2 { (21, 2) } else { (2, 21) };
+            let surface = app.surface(SurfaceConfig::new().height(box_height), move || {
+                container()
+                    .width(box_width as f32)
+                    .height(box_height as f32)
+                    .overflow(Overflow::Hidden)
+                    .child(image(source).content_fit(ContentFit::None))
+            });
+            app.configure(surface, box_width, box_height, 1.0);
+            app.step();
+            app.wait_for_image_decodes();
+            app.step();
+            let (red, blue) = if height == 2 {
+                ((10, 0), (10, 1))
+            } else {
+                ((0, 10), (1, 10))
+            };
+            assert_eq!(app.read_pixel(surface, red.0, red.1), [255, 0, 0, 255]);
+            assert_eq!(app.read_pixel(surface, blue.0, blue.1), [0, 0, 255, 255]);
+        }
+    }
+}
+
+/// Oversized width must not panic (#603).
+#[test]
+fn rasters_wider_than_the_texture_limit_draw_without_redecoding() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    for encoded in [false, true] {
+        upload_limit_image(limit_raster(limit + 1, 1, encoded), ContentFit::Fill);
+    }
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wide-upload-limit.png");
+    std::fs::write(&path, sized_png(limit + 1, 1)).unwrap();
+    upload_limit_image(ImageSource::Path(path), ContentFit::Fill);
+}
+
+/// Oversized height must not panic (#603).
+#[test]
+fn rasters_taller_than_the_texture_limit_draw_without_redecoding() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    for encoded in [false, true] {
+        upload_limit_image(limit_raster(1, limit + 1, encoded), ContentFit::Fill);
+    }
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tall-upload-limit.png");
+    std::fs::write(&path, sized_png(1, limit + 1)).unwrap();
+    upload_limit_image(ImageSource::Path(path), ContentFit::Fill);
+}
+
+/// Both axes allow the exact limit (#603).
+#[test]
+fn rasters_exactly_at_the_texture_limit_still_draw() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    for (width, height) in [(limit, 1), (1, limit)] {
+        for encoded in [false, true] {
+            upload_limit_image(limit_raster(width, height, encoded), ContentFit::Fill);
+        }
+    }
+}
+
+#[cfg(feature = "svg")]
+fn limit_svg(width: u32, height: u32) -> ImageSource {
+    ImageSource::SvgBytes(format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="{width}" height="{height}" fill="#f00"/></svg>"##
+    ).into_bytes().into())
+}
+
+/// Quality-scaled SVG width stays bounded (#603).
+#[cfg(feature = "svg")]
+#[test]
+fn svgs_wider_than_the_texture_limit_draw_at_intrinsic_size() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    upload_limit_image(limit_svg(limit + 1, 1), ContentFit::None);
+}
+
+/// Quality-scaled SVG height stays bounded (#603).
+#[cfg(feature = "svg")]
+#[test]
+fn svgs_taller_than_the_texture_limit_draw_at_intrinsic_size() {
+    let _serial = serial();
+    let limit = wgpu::Limits::default().max_texture_dimension_2d;
+    upload_limit_image(limit_svg(1, limit + 1), ContentFit::None);
+}
+
+/// Clamping keeps shared and fitted SVGs usable (#603).
+#[cfg(feature = "svg")]
+#[test]
+fn a_clamped_svg_can_be_shared_and_fitted_again() {
+    let _serial = serial();
+    for (width, height) in [(8193, 1), (1, 8193)] {
+        let Some(mut app) = headless() else { return };
+        let source = limit_svg(width, height);
+        let fit = create_signal(ContentFit::None);
+        let surface = app.surface(
+            SurfaceConfig::new().height(21).background_color(BACKDROP),
+            move || {
+                container().layout(Flex::row()).children([
+                    container()
+                        .width(21.0)
+                        .height(21.0)
+                        .overflow(Overflow::Hidden)
+                        .child(image(source.clone()).content_fit(fit)),
+                    container()
+                        .width(21.0)
+                        .height(21.0)
+                        .child(image(source).content_fit(ContentFit::Fill)),
+                ])
+            },
+        );
+        app.configure(surface, 42, 21, 1.0);
+        app.step();
+        app.wait_for_image_decodes();
+        app.step();
+        assert!(is_red(app.read_pixel(surface, 10, 0)));
+        assert!(is_red(app.read_pixel(surface, 31, 10)));
+        fit.set(ContentFit::Fill);
+        app.step();
+        app.wait_for_image_decodes();
+        app.step();
+        assert!(is_red(app.read_pixel(surface, 10, 10)));
+        assert!(is_red(app.read_pixel(surface, 31, 10)));
+        let started = app.image_decodes_started();
+        for width in [43, 42, 43, 42] {
+            app.configure(surface, width, 21, 1.0);
+            app.step();
+            assert_eq!(app.image_decodes_started(), started);
+            assert!(is_red(app.read_pixel(surface, 10, 10)));
+            assert!(is_red(app.read_pixel(surface, 31, 10)));
+        }
+    }
+}
+
 fn png_file(name: &str, rgb: [u8; 3]) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::write(&path, png(rgb)).expect("the PNG is written");
