@@ -700,6 +700,7 @@ impl Container {
         if handle_hit.contains(x, y) {
             // Start dragging handle
             let sd = self.scroll_mut();
+            sd.scroll_state.stop_momentum();
             sd.scroll_state.set_dragging(axis, true);
             let (pos, offset) = match axis {
                 ScrollbarAxis::Vertical => (y, sd.scroll_state.offset_y),
@@ -714,6 +715,7 @@ impl Container {
             return Some(EventResponse::Handled);
         } else if hit_area.contains(x, y) {
             // Click on track - jump to position
+            self.scroll_mut().scroll_state.stop_momentum();
             let sd = self.scroll_data();
             let track_rect =
                 sd.scroll_state
