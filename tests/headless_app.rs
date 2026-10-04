@@ -1311,6 +1311,7 @@ fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
     );
 }
 
+/// A handle grab stops the queued glide; later application frames used to move the content.
 #[test]
 fn a_scrollbar_grab_stops_the_glide_in_the_application() {
     let Some(mut app) = headless() else { return };

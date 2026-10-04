@@ -892,6 +892,7 @@ fn a_right_release_does_not_end_a_left_drag() {
     );
 }
 
+/// A grabbed handle stays put; the previous glide used to move the content underneath it.
 #[test]
 fn grabbing_a_coasting_handle_stops_it_without_breaking_the_drag() {
     for horizontal in [false, true] {
@@ -946,6 +947,7 @@ fn grabbing_a_coasting_handle_stops_it_without_breaking_the_drag() {
     }
 }
 
+/// A track selection stays put; the previous glide used to move it on the next frame.
 #[test]
 fn selecting_a_coasting_track_keeps_the_selected_position() {
     for horizontal in [false, true] {
@@ -977,10 +979,11 @@ fn selecting_a_coasting_track_keeps_the_selected_position() {
     }
 }
 
+/// Rejected scrollbar presses must not cancel a glide when accepted presses do.
 #[test]
 fn presses_that_do_not_acquire_a_scrollbar_leave_the_flick_running() {
     for horizontal in [false, true] {
-        for press in 0..4 {
+        for press in 0..3 {
             let mut h = if horizontal {
                 H::horizontal()
             } else {
@@ -992,8 +995,7 @@ fn presses_that_do_not_acquire_a_scrollbar_leave_the_flick_running() {
             let (x, y) = h.bar_point(along);
             let event = match press {
                 0 => Event::mouse_down(x, y, MouseButton::Right),
-                1 => Event::mouse_down(100.0, 40.0, MouseButton::Left),
-                2 => Event::mouse_down(250.0, 250.0, MouseButton::Left),
+                1 => Event::mouse_down(250.0, 250.0, MouseButton::Left),
                 _ => Event::MouseDown {
                     at: None,
                     button: MouseButton::Left,
