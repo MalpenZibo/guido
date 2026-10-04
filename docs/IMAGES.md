@@ -306,8 +306,11 @@ empty texels beside it.
 ## Texture Caching
 
 The image texture renderer includes LRU caching:
-- Raster images cached by source hash
-- SVGs cached by source hash + render scale
+- A source that decodes cached by its decode entry, which has already
+  settled whether two sources are one; an SVG by its entry and the raster
+  size it was drawn at
+- `ImageSource::Rgba` cached by its pixels, sampled for the hash and compared
+  in full for equality, and dropped once nothing but the cache holds them
 - A byte budget, 100 MB by default, growing past it only while what was
   drawn in the last second exceeds it
 - Past the budget, eviction of least-recently-used entries
