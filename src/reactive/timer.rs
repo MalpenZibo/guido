@@ -55,12 +55,12 @@ impl TimerHandle {
     /// Stop the timer. A timeout that has already run, a timer already
     /// cancelled, and one whose scope is gone are all left as they are.
     pub fn cancel(self) {
-        with_app_state(|app| {
-            app.timers
-                .borrow_mut()
-                .entries
-                .retain(|timer| timer.id != self.0);
+        let removed = with_app_state(|app| {
+            let mut timers = app.timers.borrow_mut();
+            let at = timers.entries.iter().position(|timer| timer.id == self.0)?;
+            Some(timers.entries.remove(at))
         });
+        drop(removed);
     }
 
     /// Whether it will still run: a timeout that has not run yet, or an
@@ -171,11 +171,21 @@ fn schedule(after: Duration, run: Run) -> TimerHandle {
     // up there until the scope went.
     if let Some(owner) = owner.filter(|_| first_of_its_scope) {
         on_cleanup(move || {
-            with_app_state(|app| {
+            let removed = with_app_state(|app| {
                 let mut timers = app.timers.borrow_mut();
                 timers.scopes.remove(&owner);
-                timers.entries.retain(|timer| timer.owner != Some(owner));
+                let mut removed = Vec::new();
+                timers.entries.retain_mut(|timer| {
+                    if timer.owner == Some(owner) {
+                        removed.extend(timer.run.take());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                removed
             });
+            drop(removed);
         });
     }
     TimerHandle(id)
@@ -269,6 +279,138 @@ pub(crate) fn run_due_timers(now: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reactive::guard::defer;
+    use crate::reactive::owner::{dispose_owner_now, with_owner};
+    use crate::reactive::{create_effect, create_signal};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    fn guarded_timer(
+        interval: bool,
+        cleanup: impl FnOnce() + 'static,
+        runs: Rc<Cell<usize>>,
+    ) -> TimerHandle {
+        let guard = defer(cleanup);
+        let callback = move || {
+            let _ = &guard;
+            runs.set(runs.get() + 1);
+        };
+        if interval {
+            set_interval(Duration::from_millis(10), callback)
+        } else {
+            set_timeout(Duration::from_millis(10), callback)
+        }
+    }
+
+    #[test]
+    fn cancellation_releases_captures_after_removing_the_timer() {
+        for interval in [false, true] {
+            let runs = Rc::new(Cell::new(0));
+            let cancelled = set_timeout(Duration::ZERO, || panic!("cancelled timer ran"));
+            let survivor = set_timeout(Duration::ZERO, || {});
+            let handle = Rc::new(Cell::new(None::<TimerHandle>));
+            let spawned = Rc::new(Cell::new(None::<TimerHandle>));
+            let seen_handle = handle.clone();
+            let new_handle = spawned.clone();
+            let timer = guarded_timer(
+                interval,
+                move || {
+                    assert!(!seen_handle.get().unwrap().is_pending());
+                    assert!(survivor.is_pending());
+                    cancelled.cancel();
+                    new_handle.set(Some(set_timeout(Duration::ZERO, || {})));
+                },
+                runs.clone(),
+            );
+            handle.set(Some(timer));
+            timer.cancel();
+            timer.cancel();
+            assert!(!timer.is_pending());
+            assert!(!cancelled.is_pending());
+            assert!(survivor.is_pending());
+            let spawned = spawned.get().unwrap();
+            assert!(spawned.is_pending());
+            run_due_timers(Instant::now() + Duration::from_secs(1));
+            assert!(!survivor.is_pending());
+            assert!(!spawned.is_pending());
+            assert_eq!(runs.get(), 0);
+        }
+    }
+
+    #[test]
+    fn scope_cleanup_preserves_reentrant_timer_changes() {
+        let survivor = set_timeout(Duration::ZERO, || {});
+        let cancelled = set_timeout(Duration::ZERO, || panic!("cancelled timer ran"));
+        let spawned = Rc::new(Cell::new(None::<TimerHandle>));
+        let runs = Rc::new(Cell::new(0));
+        let new_handle = spawned.clone();
+        let second_handle = Rc::new(Cell::new(None::<TimerHandle>));
+        let seen_second = second_handle.clone();
+        let (timers, scope) = with_owner(|| {
+            let first = guarded_timer(
+                false,
+                move || {
+                    cancelled.cancel();
+                    assert!(!seen_second.get().unwrap().is_pending());
+                    assert!(survivor.is_pending());
+                    new_handle.set(Some(set_timeout(Duration::ZERO, || {})));
+                },
+                runs.clone(),
+            );
+            let interval_runs = runs.clone();
+            let second = set_interval(Duration::from_millis(10), move || {
+                interval_runs.set(interval_runs.get() + 1);
+            });
+            second_handle.set(Some(second));
+            [first, second]
+        });
+        dispose_owner_now(scope);
+        assert!(timers.into_iter().all(|timer| !timer.is_pending()));
+        assert!(!cancelled.is_pending());
+        assert!(survivor.is_pending());
+        let spawned = spawned.get().unwrap();
+        assert!(spawned.is_pending());
+        run_due_timers(Instant::now() + Duration::from_secs(1));
+        assert!(!survivor.is_pending());
+        assert!(!spawned.is_pending());
+        assert_eq!(runs.get(), 0);
+    }
+
+    #[test]
+    fn debounce_cleanup_keeps_the_replacement_timeout() {
+        let query = create_signal(0);
+        let cancelled = set_timeout(Duration::ZERO, || panic!("cancelled timer ran"));
+        let handles = Rc::new(RefCell::new(Vec::new()));
+        let runs = Rc::new(RefCell::new(Vec::new()));
+        let recorded_handles = handles.clone();
+        let recorded_runs = runs.clone();
+        let ((), scope) = with_owner(|| {
+            create_effect(move || {
+                let value = query.get();
+                let guard = defer(move || cancelled.cancel());
+                let runs = recorded_runs.clone();
+                let timer = set_timeout(Duration::from_millis(10), move || {
+                    let _ = &guard;
+                    runs.borrow_mut().push(value);
+                });
+                recorded_handles.borrow_mut().push(timer);
+            });
+        });
+        query.set(1);
+        assert!(!handles.borrow()[0].is_pending());
+        assert!(handles.borrow()[1].is_pending());
+        assert!(!cancelled.is_pending());
+        let now = Instant::now();
+        run_due_timers(now);
+        run_due_timers(now + Duration::from_millis(10));
+        assert_eq!(*runs.borrow(), [1]);
+        query.set(2);
+        assert!(handles.borrow()[2].is_pending());
+        dispose_owner_now(scope);
+        assert!(!handles.borrow()[2].is_pending());
+        run_due_timers(now + Duration::from_secs(1));
+        assert_eq!(*runs.borrow(), [1]);
+    }
 
     /// The loop sleeps until the next armed timer, and a cancelled one stops
     /// being a reason to wake.
