@@ -16,8 +16,9 @@
 //!
 //! Every field is an `Option`, so a declaration says only what it means to
 //! say. What fills the rest is the widget's own default — white, 14 logical
-//! pixels, the registered family, normal weight, the font's own line height —
-//! not a neighbouring declaration: nothing is inherited from anywhere.
+//! pixels, the registered family, normal weight, the font's own line height
+//! and letter spacing — not a neighbouring declaration: nothing is inherited
+//! from anywhere.
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
@@ -237,6 +238,9 @@ pub struct TextStyle {
     pub font_weight: Prop<FontWeight>,
     /// How tall each line is.
     pub line_height: Prop<LineHeight>,
+    /// Extra advance after every glyph, in logical pixels — see
+    /// [`letter_spacing`](TextStyle::letter_spacing).
+    pub letter_spacing: Prop<f32>,
     /// Contour drawn around the glyphs, under the fill.
     pub stroke: Prop<TextStroke>,
     /// Soft shadow cast by the glyphs.
@@ -252,7 +256,7 @@ pub struct TextStyle {
 /// Container resolves its own properties in these two steps, and
 /// [`first_finite_override`] carries the rule they share.
 ///
-/// Only the two numeric properties have the distinction. A family and a weight
+/// Only the three numeric properties have the distinction. A family and a weight
 /// cannot fail to be numbers, so the nearest declaration is the whole answer for
 /// them. A stroke and a shadow *can* — they are made of numbers — and they keep
 /// the nearest declaration anyway, because no `AllFinite` impl reaches them: that
@@ -271,10 +275,12 @@ pub(crate) struct ResolvedTextStyle {
     /// Active overrides, nearest first.
     color_overrides: SmallVec<[Prop<Color>; 3]>,
     font_size_overrides: SmallVec<[Prop<f32>; 3]>,
+    letter_spacing_overrides: SmallVec<[Prop<f32>; 3]>,
     /// The widget's own declaration, which every override falls through to and
     /// where the door reports.
     color: Prop<Color>,
     font_size: Prop<f32>,
+    letter_spacing: Prop<f32>,
     font_family: Prop<FontFamily>,
     font_weight: Prop<FontWeight>,
     line_height: Prop<LineHeight>,
@@ -291,6 +297,9 @@ impl ResolvedTextStyle {
         if style.font_size.is_set() {
             self.font_size_overrides.push(style.font_size);
         }
+        if style.letter_spacing.is_set() {
+            self.letter_spacing_overrides.push(style.letter_spacing);
+        }
         self.take_unset(style);
     }
 
@@ -298,6 +307,7 @@ impl ResolvedTextStyle {
     pub(crate) fn push_own(&mut self, style: &TextStyle) {
         self.color = style.color;
         self.font_size = style.font_size;
+        self.letter_spacing = style.letter_spacing;
         self.take_unset(style);
     }
 
@@ -323,6 +333,15 @@ impl ResolvedTextStyle {
             .font_size
             .get_finite_or(DEFAULT_FONT_SIZE, id, "font_size");
         first_finite_override(&self.font_size_overrides, base)
+    }
+
+    /// The extra advance after every glyph, in logical pixels. Zero where
+    /// nothing declares one, and where nothing declared is a number.
+    pub(crate) fn letter_spacing(&self, id: WidgetId) -> f32 {
+        let base = self.letter_spacing.get_finite_or(0.0, id, "letter_spacing");
+        // Plus zero turns -0.0 into 0.0, so a spacing that crosses zero keys
+        // every cache downstream as the no spacing it shapes as.
+        first_finite_override(&self.letter_spacing_overrides, base) + 0.0
     }
 
     /// The family to shape the glyphs with.
@@ -678,6 +697,18 @@ macro_rules! declares_text_style {
                 self.font_family($crate::widgets::FontFamily::Monospace)
             }
 
+            /// Extra advance after every glyph, in logical pixels: `0.0`,
+            /// the default, is the font's own spacing, and a negative value
+            /// tightens it. See [`TextStyle::letter_spacing`]($crate::widgets::TextStyle::letter_spacing)
+            /// for what it is added to.
+            pub fn letter_spacing<M>(
+                mut self,
+                spacing: impl $crate::reactive::IntoSignal<f32, M>,
+            ) -> Self {
+                self.text_style_mut().letter_spacing = spacing.into_prop();
+                self
+            }
+
             /// Contour drawn around the glyphs, under the fill.
             pub fn text_stroke<M>(
                 mut self,
@@ -760,6 +791,21 @@ impl TextStyle {
     /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
     pub fn mono(self) -> Self {
         self.font_family(FontFamily::Monospace)
+    }
+
+    /// Extra advance after every glyph, in logical pixels: `0.0`, the
+    /// default, is the font's own spacing, and a negative value tightens it.
+    ///
+    /// A length and not a fraction of the size, so a design token of `1.5`
+    /// is a pixel and a half at any font size. What it is added to is
+    /// cosmic-text's: every glyph the shaper puts out, the last on a line
+    /// included — so a ligature takes one spacing for the letters it joins,
+    /// a combining mark the shaper cannot compose into its letter one of its
+    /// own, and a joined Arabic word is pulled apart between its letters. A
+    /// value that is not a number is `0.0`.
+    pub fn letter_spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
+        self.letter_spacing = spacing.into_prop();
+        self
     }
 
     /// Contour drawn around the glyphs, under the fill.

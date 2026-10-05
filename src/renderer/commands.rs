@@ -258,6 +258,8 @@ pub enum DrawCommand {
         font_weight: FontWeight,
         /// How tall each line is
         line_height: LineHeight,
+        /// Extra advance after every glyph, in logical pixels
+        letter_spacing: f32,
         /// Where each line sits across `rect`.
         align: TextAlign,
         /// The lines it is cut to, when it is cut. `None` draws it whole in
@@ -336,6 +338,8 @@ pub enum DrawCommand {
         font_weight: FontWeight,
         /// How tall each line is.
         line_height: LineHeight,
+        /// Extra advance after every glyph, in logical pixels.
+        letter_spacing: f32,
         /// Where each line sits across `rect` — the frost has to put its
         /// lines where the letters put theirs.
         align: TextAlign,

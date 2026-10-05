@@ -419,6 +419,7 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         align: TextAlign,
         fit: Option<LineFit>,
     ) {
@@ -436,6 +437,7 @@ impl<'a> PaintContext<'a> {
                 font_family,
                 font_weight,
                 line_height,
+                letter_spacing,
                 align,
                 fit,
             }));
@@ -463,12 +465,13 @@ impl<'a> PaintContext<'a> {
             FontFamily::default(),
             FontWeight::NORMAL,
             LineHeight::Normal,
+            0.0,
             None,
         );
     }
 
-    /// Draw text with custom font family, weight and line height, cut to the
-    /// lines `fit` allows when it is given.
+    /// Draw text with custom font family, weight, line height and letter
+    /// spacing, cut to the lines `fit` allows when it is given.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_styled(
         &mut self,
@@ -479,6 +482,7 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         fit: Option<LineFit>,
     ) {
         self.push_text(
@@ -489,6 +493,7 @@ impl<'a> PaintContext<'a> {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             TextAlign::Start,
             fit,
         );
@@ -504,6 +509,7 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         align: TextAlign,
         fit: Option<LineFit>,
     ) {
@@ -519,6 +525,7 @@ impl<'a> PaintContext<'a> {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             align,
             fit,
         }));
@@ -540,6 +547,7 @@ impl<'a> PaintContext<'a> {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         align: TextAlign,
         stroke: Option<TextStroke>,
         shadow: Option<TextShadow>,
@@ -564,6 +572,7 @@ impl<'a> PaintContext<'a> {
                     font_family,
                     font_weight,
                     line_height,
+                    letter_spacing,
                     align,
                     fit,
                 );
@@ -580,6 +589,7 @@ impl<'a> PaintContext<'a> {
                     font_family,
                     font_weight,
                     line_height,
+                    letter_spacing,
                     align,
                     fit,
                 );
@@ -594,6 +604,7 @@ impl<'a> PaintContext<'a> {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             align,
             fit,
         );

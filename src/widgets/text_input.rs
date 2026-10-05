@@ -409,6 +409,7 @@ pub struct TextInput<C = Plain> {
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
     cached_line_height: LineHeight,
+    cached_letter_spacing: f32,
     /// The height of one line of this style, which is the field's height.
     cached_line_box: f32,
 
@@ -577,6 +578,7 @@ impl<C: Content> TextInput<C> {
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
             cached_line_height: LineHeight::Normal,
+            cached_letter_spacing: 0.0,
             cached_line_box: 0.0,
             readonly: Prop::Unset,
             caret: Prop::Unset,
@@ -803,6 +805,7 @@ impl<C: Content> TextInput<C> {
         let font_size = self.cached_font_size;
         let font_family = &self.cached_font_family;
         let font_weight = self.cached_font_weight;
+        let letter_spacing = self.cached_letter_spacing;
 
         // Build cumulative position array (positions[i] = x of the boundary
         // before character i) by shaping the text ONCE. The previous
@@ -814,6 +817,7 @@ impl<C: Content> TextInput<C> {
             font_size,
             *font_family,
             font_weight,
+            letter_spacing,
         );
         self.cached_text_width = self
             .cached_glyph_positions
@@ -861,7 +865,15 @@ impl<C: Content> TextInput<C> {
     /// inside does — see `LayoutCtx::layout_child` — so a change to a declared
     /// metric re-lays-out this input and nothing else.
     fn refresh(&mut self, ctx: &mut LayoutCtx, id: WidgetId) -> f32 {
-        let (new_font_size, new_font_family, new_font_weight, new_line_height, overflow, new_color) = {
+        let (
+            new_font_size,
+            new_font_family,
+            new_font_weight,
+            new_line_height,
+            new_letter_spacing,
+            overflow,
+            new_color,
+        ) = {
             let style = self.resolved_text_style(ctx.tree_ref(), id);
 
             // Assigned here rather than returned, as the font metrics are:
@@ -875,6 +887,7 @@ impl<C: Content> TextInput<C> {
                 style.font_family(),
                 style.font_weight(),
                 style.line_height(),
+                style.letter_spacing(id),
                 crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
                 self.animates_text_color().then(|| style.color(id)),
             )
@@ -907,6 +920,10 @@ impl<C: Content> TextInput<C> {
         }
         if new_line_height.key() != self.cached_line_height.key() {
             self.cached_line_height = new_line_height;
+            self.measurements_dirty = true;
+        }
+        if new_letter_spacing.to_bits() != self.cached_letter_spacing.to_bits() {
+            self.cached_letter_spacing = new_letter_spacing;
             self.measurements_dirty = true;
         }
 
@@ -974,6 +991,7 @@ impl<C: Content> TextInput<C> {
                 relative_x,
                 self.cached_font_family,
                 self.cached_font_weight,
+                self.cached_letter_spacing,
             );
         }
 
@@ -1658,6 +1676,7 @@ impl<C: Content> Widget for TextInput<C> {
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
+            self.cached_letter_spacing,
             crate::widgets::TextAlign::Start,
             stroke,
             shadow,
@@ -2021,13 +2040,21 @@ mod tests {
     /// Put the caret at the end, which is where its x becomes a measurement of
     /// the displayed text rather than a constant zero.
     fn caret_to_end(tree: &mut Tree, id: WidgetId) {
+        key(tree, id, Key::End, false);
+    }
+
+    /// Press one key on the field, with or without shift.
+    fn key(tree: &mut Tree, id: WidgetId, key: Key, shift: bool) {
         tree.with_widget_mut(id, |w, wid, t| {
             w.event(
                 t,
                 wid,
                 &Event::KeyDown {
-                    key: Key::End,
-                    modifiers: crate::widgets::widget::Modifiers::default(),
+                    key,
+                    modifiers: crate::widgets::widget::Modifiers {
+                        shift,
+                        ..Default::default()
+                    },
                 },
             )
         });
@@ -2605,5 +2632,151 @@ mod tests {
 
         assert!(!blinking);
         assert_eq!(next_deadline(), None);
+    }
+
+    /// What a field measures its caret, its selection and its clicks against
+    /// once it is spaced — with the vendored font, so a glyph's advance is
+    /// DejaVu Sans Mono's 1233 of 2048 units and every boundary is a number
+    /// worked out by hand.
+    mod letter_spacing {
+        use super::*;
+        use crate::widgets::FontFamily;
+
+        const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+        /// One glyph's advance at the default 14 px.
+        const ADVANCE: f32 = 1233.0 / 2048.0 * 14.0;
+
+        fn dejavu() -> FontFamily {
+            // The measurer reads the registered fonts when this thread first
+            // builds it, so they are registered before anything is measured.
+            crate::load_font(FONT.to_vec());
+            FontFamily::name("DejaVu Sans Mono")
+        }
+
+        /// The x of the one rect a focused field with no selection draws.
+        fn caret_x(tree: &mut Tree, id: WidgetId) -> f32 {
+            let rects = drawn_rects(tree, id);
+            assert_eq!(rects.len(), 1, "the caret, and nothing else: {rects:?}");
+            rects[0].x
+        }
+
+        fn assert_near(actual: f32, expected: f32, what: &str) {
+            assert!(
+                (actual - expected).abs() < 0.01,
+                "{what}: got {actual}, expected {expected}"
+            );
+        }
+
+        #[test]
+        fn the_caret_stands_after_the_spacing_of_every_letter_before_it() {
+            let family = dejavu();
+            let (mut tree, _, id) = field_in_container(
+                text_input(create_signal("abcd".to_owned()))
+                    .font_family(family)
+                    .letter_spacing(3.0),
+            );
+            caret_to_end(&mut tree, id);
+            assert_near(caret_x(&mut tree, id), 4.0 * (ADVANCE + 3.0), "at the end");
+
+            key(&mut tree, id, Key::Left, false);
+            assert_near(caret_x(&mut tree, id), 3.0 * (ADVANCE + 3.0), "one back");
+        }
+
+        #[test]
+        fn a_selection_spans_the_spaced_letters() {
+            let family = dejavu();
+            let (mut tree, _, id) = field_in_container(
+                text_input(create_signal("abcd".to_owned()))
+                    .font_family(family)
+                    .letter_spacing(3.0),
+            );
+            caret_to_end(&mut tree, id);
+            key(&mut tree, id, Key::Left, true);
+            key(&mut tree, id, Key::Left, true);
+            let band = drawn_rects(&mut tree, id)[0];
+            assert_near(
+                band.x,
+                2.0 * (ADVANCE + 3.0),
+                "the band starts at boundary 2",
+            );
+            assert_near(
+                band.width,
+                2.0 * (ADVANCE + 3.0),
+                "and is two spaced letters wide",
+            );
+        }
+
+        /// A click lands on the nearest boundary of the spaced line: two
+        /// spaced letters in is boundary 2, where the unspaced one would put
+        /// it past the third letter.
+        #[test]
+        fn a_click_lands_on_the_boundary_of_the_spaced_line() {
+            let family = dejavu();
+            let (mut tree, _, id) = field_in_container(
+                text_input(create_signal("abcdefgh".to_owned()))
+                    .font_family(family)
+                    .letter_spacing(6.0),
+            );
+            let x = 2.0 * (ADVANCE + 6.0) + 1.0;
+            for event in [
+                Event::mouse_down(x, 8.0, crate::widgets::MouseButton::Left),
+                Event::mouse_up(x, 8.0, crate::widgets::MouseButton::Left),
+            ] {
+                tree.with_widget_mut(id, |w, wid, t| w.event(t, wid, &event));
+            }
+            assert_near(caret_x(&mut tree, id), 2.0 * (ADVANCE + 6.0), "the caret");
+        }
+
+        /// The spacing is a declared value, so a write re-measures the
+        /// positions the caret is placed from.
+        #[test]
+        fn a_fields_spacing_follows_its_signal() {
+            let family = dejavu();
+            let spacing = create_signal(0.0f32);
+            let (mut tree, root, id) = field_in_container(
+                text_input(create_signal("abcd".to_owned()))
+                    .font_family(family)
+                    .letter_spacing(spacing),
+            );
+            caret_to_end(&mut tree, id);
+            assert_near(caret_x(&mut tree, id), 4.0 * ADVANCE, "unspaced");
+
+            spacing.set(2.0);
+            relayout(&mut tree, root);
+            assert_near(caret_x(&mut tree, id), 4.0 * (ADVANCE + 2.0), "spaced");
+        }
+
+        /// A password field spaces the characters it draws, which are its
+        /// mask's: the caret follows them and every drawn text carries it.
+        #[test]
+        fn a_password_spaces_its_mask() {
+            let family = dejavu();
+            let password = crate::reactive::create_password();
+            password.set(Secret::from("abcd".to_owned()));
+            let (mut tree, _, id) = field_in_container(
+                password_input(password)
+                    .font_family(family)
+                    .letter_spacing(3.0),
+            );
+            caret_to_end(&mut tree, id);
+            assert_near(caret_x(&mut tree, id), 4.0 * (ADVANCE + 3.0), "the caret");
+
+            fn spacings(node: &crate::renderer::RenderNode, out: &mut Vec<(String, f32)>) {
+                for cmd in &node.commands {
+                    if let crate::renderer::DrawCommand::Text {
+                        text,
+                        letter_spacing,
+                        ..
+                    } = &**cmd
+                    {
+                        out.push((text.clone(), *letter_spacing));
+                    }
+                }
+                node.children.iter().for_each(|c| spacings(c, out));
+            }
+            let mut drawn = Vec::new();
+            spacings(&paint_once(&mut tree, id), &mut drawn);
+            assert_eq!(drawn, [("••••".to_owned(), 3.0)]);
+        }
     }
 }

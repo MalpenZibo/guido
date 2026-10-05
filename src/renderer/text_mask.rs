@@ -60,6 +60,8 @@ pub struct MaskSpec<'a> {
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
     pub line_height: LineHeight,
+    /// Extra advance after every glyph, in logical pixels.
+    pub letter_spacing: f32,
     /// The lines the text is cut to, when it is cut.
     pub fit: Option<super::text_measurer::LineFit>,
     /// Where each line sits across the buffer, as the letters over the frost
@@ -93,6 +95,7 @@ struct MaskKey {
     weight: u16,
     family: FontFamily,
     line_height: (u8, u32),
+    letter_spacing_bits: u32,
     align: TextAlign,
     width: u32,
     height: u32,
@@ -213,6 +216,7 @@ impl TextMaskRenderer {
             weight: weight.0,
             family: spec.font_family,
             line_height: spec.line_height.key(),
+            letter_spacing_bits: spec.letter_spacing.to_bits(),
             align: spec.align,
             width,
             height,
@@ -243,6 +247,7 @@ impl TextMaskRenderer {
             spec.font_family,
             spec.font_weight,
             spec.line_height,
+            spec.letter_spacing,
             spec.align,
             (Some(spec.buffer.0), Some(spec.buffer.1)),
             spec.fit,

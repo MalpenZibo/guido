@@ -85,12 +85,14 @@ struct MeasureCacheKey {
     font_size_bits: u32,
     font_weight: FontWeight,
     line_height: (u8, u32),
+    letter_spacing_bits: u32,
     max_width_bits: Option<u32>,
     /// The cut, when there is one.
     fit: Option<LineFitKey>,
 }
 
 impl MeasureCacheKey {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         text: &str,
         font_size: f32,
@@ -98,6 +100,7 @@ impl MeasureCacheKey {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         fit: Option<LineFit>,
     ) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
@@ -109,6 +112,7 @@ impl MeasureCacheKey {
             font_size_bits: font_size.to_bits(),
             font_weight,
             line_height: line_height.key(),
+            letter_spacing_bits: letter_spacing.to_bits(),
             max_width_bits: max_width.map(|w| w.to_bits()),
             fit: fit.map(|f| f.key()),
         }
@@ -155,9 +159,11 @@ impl TextMeasurer {
             FontFamily::default(),
             FontWeight::NORMAL,
             LineHeight::Normal,
+            0.0,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn measure_styled(
         &mut self,
         text: &str,
@@ -166,6 +172,7 @@ impl TextMeasurer {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
     ) -> Size {
         self.measure_full(
             text,
@@ -174,6 +181,7 @@ impl TextMeasurer {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             None,
         )
         .size
@@ -195,6 +203,7 @@ impl TextMeasurer {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         fit: Option<LineFit>,
     ) -> Measured {
         let max_width = fit.map_or(max_width, |f| f.width);
@@ -205,6 +214,7 @@ impl TextMeasurer {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             fit,
         );
 
@@ -221,6 +231,7 @@ impl TextMeasurer {
                 font_family,
                 font_weight,
                 line_height,
+                letter_spacing,
                 fit,
             );
 
@@ -271,6 +282,7 @@ impl TextMeasurer {
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
+        letter_spacing: f32,
         fit: Option<LineFit>,
     ) -> Buffer {
         super::text::shape(
@@ -280,6 +292,7 @@ impl TextMeasurer {
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             TextAlign::Start,
             (max_width, None),
             fit,
@@ -304,6 +317,7 @@ impl TextMeasurer {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        letter_spacing: f32,
     ) -> Vec<f32> {
         let char_count = text.chars().count();
         let mut positions = vec![0.0f32; char_count + 1];
@@ -326,6 +340,7 @@ impl TextMeasurer {
             font_family,
             font_weight,
             LineHeight::Normal,
+            letter_spacing,
             None,
         );
 
@@ -366,6 +381,7 @@ impl TextMeasurer {
             char_index,
             FontFamily::default(),
             FontWeight::NORMAL,
+            0.0,
         )
     }
 
@@ -377,6 +393,7 @@ impl TextMeasurer {
         char_index: usize,
         font_family: FontFamily,
         font_weight: FontWeight,
+        letter_spacing: f32,
     ) -> f32 {
         if char_index == 0 || text.is_empty() {
             return 0.0;
@@ -397,6 +414,7 @@ impl TextMeasurer {
             font_family,
             font_weight,
             LineHeight::Normal,
+            letter_spacing,
         )
         .width
     }
@@ -410,6 +428,7 @@ impl TextMeasurer {
             x,
             FontFamily::default(),
             FontWeight::NORMAL,
+            0.0,
         )
     }
 
@@ -421,6 +440,7 @@ impl TextMeasurer {
         x: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        letter_spacing: f32,
     ) -> usize {
         if text.is_empty() || x <= 0.0 {
             return 0;
@@ -435,6 +455,7 @@ impl TextMeasurer {
                 font_family,
                 font_weight,
                 LineHeight::Normal,
+                letter_spacing,
             )
             .width;
         if x >= total_width {
@@ -447,7 +468,14 @@ impl TextMeasurer {
 
         while left < right {
             let mid = (left + right) / 2;
-            let width = self.measure_to_char_styled(text, font_size, mid, font_family, font_weight);
+            let width = self.measure_to_char_styled(
+                text,
+                font_size,
+                mid,
+                font_family,
+                font_weight,
+                letter_spacing,
+            );
             if width < x {
                 left = mid + 1;
             } else {
@@ -457,10 +485,22 @@ impl TextMeasurer {
 
         // Check if click is closer to previous character
         if left > 0 {
-            let prev_width =
-                self.measure_to_char_styled(text, font_size, left - 1, font_family, font_weight);
-            let curr_width =
-                self.measure_to_char_styled(text, font_size, left, font_family, font_weight);
+            let prev_width = self.measure_to_char_styled(
+                text,
+                font_size,
+                left - 1,
+                font_family,
+                font_weight,
+                letter_spacing,
+            );
+            let curr_width = self.measure_to_char_styled(
+                text,
+                font_size,
+                left,
+                font_family,
+                font_weight,
+                letter_spacing,
+            );
             if (x - prev_width) < (curr_width - x) {
                 return left - 1;
             }
@@ -490,7 +530,8 @@ pub fn measure_text(text: &str, font_size: f32, max_width: Option<f32>) -> Size 
     with_measurer(|m| m.measure(text, font_size, max_width))
 }
 
-/// Measure text dimensions with specified font family, weight and line height
+/// Measure text dimensions with specified font family, weight, line height
+/// and letter spacing
 pub fn measure_text_styled(
     text: &str,
     font_size: f32,
@@ -498,6 +539,7 @@ pub fn measure_text_styled(
     font_family: FontFamily,
     font_weight: FontWeight,
     line_height: LineHeight,
+    letter_spacing: f32,
 ) -> Size {
     with_measurer(|m| {
         m.measure_styled(
@@ -507,12 +549,14 @@ pub fn measure_text_styled(
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
         )
     })
 }
 
 /// Measure text and report where its first line sits on the baseline, as the
 /// lines `fit` keeps when it is cut.
+#[allow(clippy::too_many_arguments)]
 pub fn measure_text_full(
     text: &str,
     font_size: f32,
@@ -520,6 +564,7 @@ pub fn measure_text_full(
     font_family: FontFamily,
     font_weight: FontWeight,
     line_height: LineHeight,
+    letter_spacing: f32,
     fit: Option<LineFit>,
 ) -> Measured {
     with_measurer(|m| {
@@ -530,6 +575,7 @@ pub fn measure_text_full(
             font_family,
             font_weight,
             line_height,
+            letter_spacing,
             fit,
         )
     })
@@ -537,6 +583,8 @@ pub fn measure_text_full(
 
 /// How tall one line of this style is, in logical pixels: the height an
 /// empty text measures, and so the line a text beside it is measured on.
+///
+/// No letter spacing: it widens a line and never makes one taller.
 pub(crate) fn measure_line_height(
     font_size: f32,
     font_family: FontFamily,
@@ -551,6 +599,7 @@ pub(crate) fn measure_line_height(
             font_family,
             font_weight,
             line_height,
+            0.0,
             None,
         )
         .size
@@ -570,9 +619,17 @@ pub fn measure_text_to_char_styled(
     char_index: usize,
     font_family: FontFamily,
     font_weight: FontWeight,
+    letter_spacing: f32,
 ) -> f32 {
     with_measurer(|m| {
-        m.measure_to_char_styled(text, font_size, char_index, font_family, font_weight)
+        m.measure_to_char_styled(
+            text,
+            font_size,
+            char_index,
+            font_family,
+            font_weight,
+            letter_spacing,
+        )
     })
 }
 
@@ -583,8 +640,11 @@ pub fn measure_char_positions_styled(
     font_size: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    letter_spacing: f32,
 ) -> Vec<f32> {
-    with_measurer(|m| m.char_positions_styled(text, font_size, font_family, font_weight))
+    with_measurer(|m| {
+        m.char_positions_styled(text, font_size, font_family, font_weight, letter_spacing)
+    })
 }
 
 /// Find the character index from an x-coordinate (for click-to-position)
@@ -599,8 +659,11 @@ pub fn char_index_from_x_styled(
     x: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    letter_spacing: f32,
 ) -> usize {
-    with_measurer(|m| m.char_from_x_styled(text, font_size, x, font_family, font_weight))
+    with_measurer(|m| {
+        m.char_from_x_styled(text, font_size, x, font_family, font_weight, letter_spacing)
+    })
 }
 
 #[cfg(test)]
@@ -631,6 +694,7 @@ mod baseline_tests {
                     FontFamily::default(),
                     FontWeight::NORMAL,
                     LineHeight::Normal,
+                    0.0,
                     None,
                 );
                 assert!(
@@ -661,6 +725,7 @@ mod baseline_tests {
                 FontFamily::default(),
                 FontWeight::NORMAL,
                 LineHeight::Normal,
+                0.0,
                 None,
             );
             assert!(
@@ -704,6 +769,7 @@ mod fit_tests {
                 family,
                 FontWeight::NORMAL,
                 LineHeight::Normal,
+                0.0,
                 fit,
             )
             .layout_runs()
@@ -717,6 +783,7 @@ mod fit_tests {
                 family,
                 FontWeight::NORMAL,
                 LineHeight::Normal,
+                0.0,
                 None,
             )
             .layout_runs()
@@ -770,6 +837,7 @@ mod fit_tests {
             FontFamily::default(),
             FontWeight::NORMAL,
             LineHeight::Normal,
+            0.0,
             Some(fit(90.0, 1, TextOverflow::Ellipsis, false)),
         );
         assert!(cut.size.width <= 90.0, "{:?}", cut.size);
@@ -849,9 +917,9 @@ mod line_height_tests {
 
     /// DejaVu Sans Mono's own line height over its size: hhea's ascent (1901)
     /// less its descent (-483) plus its line gap (0), over 2048 units per em.
-    const DEJAVU_RATIO: f32 = (1901.0 + 483.0) / 2048.0;
+    pub(super) const DEJAVU_RATIO: f32 = (1901.0 + 483.0) / 2048.0;
 
-    fn measurer() -> TextMeasurer {
+    pub(super) fn measurer() -> TextMeasurer {
         let mut db = cosmic_text::fontdb::Database::new();
         db.load_font_data(FONT.to_vec());
         TextMeasurer {
@@ -869,13 +937,14 @@ mod line_height_tests {
                 FontFamily::name("DejaVu Sans Mono"),
                 FontWeight::NORMAL,
                 line_height,
+                0.0,
                 None,
             )
             .size
             .height
     }
 
-    fn assert_near(actual: f32, expected: f32, what: &str) {
+    pub(super) fn assert_near(actual: f32, expected: f32, what: &str) {
         assert!(
             (actual - expected).abs() < 0.01,
             "{what}: measured {actual}, expected {expected}"
@@ -949,5 +1018,208 @@ mod line_height_tests {
                 &format!("{bad:?}"),
             );
         }
+    }
+}
+
+/// Letter spacing, measured with the vendored font alone: DejaVu Sans Mono
+/// advances every glyph it has by 1233 of its 2048 units, so what a line of it
+/// measures can be worked out by hand rather than asked of the shaper twice.
+#[cfg(test)]
+mod letter_spacing_tests {
+    use super::line_height_tests::{DEJAVU_RATIO as LINE, assert_near, measurer};
+    use super::*;
+
+    /// One glyph's advance over its size: hmtx's 1233 over 2048 units per em.
+    const ADVANCE: f32 = 1233.0 / 2048.0;
+
+    fn measure(
+        m: &mut TextMeasurer,
+        text: &str,
+        size: f32,
+        max_width: Option<f32>,
+        spacing: f32,
+    ) -> Size {
+        m.measure_styled(
+            text,
+            size,
+            max_width,
+            FontFamily::name("DejaVu Sans Mono"),
+            FontWeight::NORMAL,
+            LineHeight::Normal,
+            spacing,
+        )
+    }
+
+    /// Every glyph takes the spacing, the last one included — four letters
+    /// are four spacings wider, not three — and it is logical pixels, the
+    /// same width at every size though cosmic-text is handed it in em.
+    #[test]
+    fn a_spacing_is_added_after_every_glyph_at_every_size() {
+        let mut m = measurer();
+        for (size, spacing) in [
+            (20.0, 0.0),
+            (20.0, 3.0),
+            (20.0, -2.0),
+            (10.0, 1.5),
+            (14.0, 1.5),
+            (40.0, 1.5),
+        ] {
+            assert_near(
+                measure(&mut m, "abcd", size, None, spacing).width,
+                4.0 * (ADVANCE * size + spacing),
+                &format!("{spacing} px at {size} px"),
+            );
+        }
+    }
+
+    /// Nine glyphs are 108.4 px wide at 20 px, and 126.4 with two pixels
+    /// between them: a width in between holds the first on one line and
+    /// breaks the second onto two.
+    #[test]
+    fn a_spacing_moves_where_a_line_wraps() {
+        let mut m = measurer();
+        let width = 117.0;
+        assert!(9.0 * ADVANCE * 20.0 < width && width < 9.0 * (ADVANCE * 20.0 + 2.0));
+
+        let unspaced = measure(&mut m, "aaaa bbbb", 20.0, Some(width), 0.0);
+        assert_near(unspaced.height, LINE * 20.0, "unspaced, one line");
+        let spaced = measure(&mut m, "aaaa bbbb", 20.0, Some(width), 2.0);
+        assert_near(spaced.height, 2.0 * LINE * 20.0, "spaced, two lines");
+    }
+
+    /// Two measurements that differ only in spacing are two cache entries: a
+    /// key without it hands the second the first one's width.
+    #[test]
+    fn a_spacing_is_part_of_the_measurement_s_key() {
+        let mut m = measurer();
+        let plain = measure(&mut m, "abcd", 20.0, None, 0.0).width;
+        let spaced = measure(&mut m, "abcd", 20.0, None, 5.0).width;
+        assert_near(
+            spaced - plain,
+            20.0,
+            "the second measurement was the first one's",
+        );
+    }
+
+    /// A number that is not one is no spacing at all, rather than a width
+    /// nothing can lay out.
+    #[test]
+    fn a_spacing_that_is_not_a_number_is_none() {
+        let mut m = measurer();
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_near(
+                measure(&mut m, "abcd", 20.0, None, bad).width,
+                4.0 * ADVANCE * 20.0,
+                &format!("{bad}"),
+            );
+        }
+    }
+
+    /// The caret's table and a prefix's width agree, and both carry the
+    /// spacing of every glyph before the boundary.
+    #[test]
+    fn a_caret_stands_after_the_spacing_of_every_glyph_before_it() {
+        let mut m = measurer();
+        let family = FontFamily::name("DejaVu Sans Mono");
+        let cell = ADVANCE * 20.0 + 4.0;
+        let positions = m.char_positions_styled("abcde", 20.0, family, FontWeight::NORMAL, 4.0);
+        assert_eq!(positions.len(), 6);
+        for (i, x) in positions.iter().enumerate() {
+            assert_near(*x, i as f32 * cell, &format!("boundary {i}"));
+            let prefix =
+                m.measure_to_char_styled("abcde", 20.0, i, family, FontWeight::NORMAL, 4.0);
+            assert_near(prefix, i as f32 * cell, &format!("prefix of {i}"));
+        }
+    }
+
+    /// A click lands on the boundary nearest it in the spaced line: three
+    /// spaced cells in is boundary 3, where the unspaced line would put it
+    /// past the fifth glyph.
+    #[test]
+    fn a_click_finds_the_boundary_of_the_spaced_line() {
+        let mut m = measurer();
+        let family = FontFamily::name("DejaVu Sans Mono");
+        let x = 3.0 * (ADVANCE * 20.0 + 10.0);
+        assert_eq!(
+            m.char_from_x_styled("abcdefgh", 20.0, x, family, FontWeight::NORMAL, 10.0),
+            3
+        );
+        assert_eq!(
+            m.char_from_x_styled("abcdefgh", 20.0, x, family, FontWeight::NORMAL, 0.0),
+            5
+        );
+    }
+
+    /// What cosmic-text adds the spacing to, pinned rather than chosen: the
+    /// advance of every glyph it shapes. These are four clusters at 20 px
+    /// with 4 px of spacing, each as many spacings wider as it has glyphs —
+    /// which is not always as many as it has characters.
+    #[test]
+    fn a_spacing_is_added_per_glyph_and_not_per_character() {
+        let mut m = measurer();
+        let cell = ADVANCE * 20.0;
+        // (text, advances unspaced, glyphs, what it is)
+        for (text, advances, glyphs, what) in [
+            // x has no precomposed accented form, so the mark is a glyph of
+            // its own, zero wide, and takes a spacing of its own.
+            (
+                "x\u{301}",
+                1.0,
+                2.0,
+                "a mark after a base it cannot compose with",
+            ),
+            // e and the mark are composed into é before shaping: one glyph.
+            ("e\u{301}", 1.0, 1.0, "a mark the shaper composes"),
+            // Lam and alef are one ligature glyph: two letters, one spacing.
+            ("\u{644}\u{627}", 1.0, 1.0, "the lam-alef ligature"),
+            // Three joined Arabic letters, three glyphs, pulled apart between
+            // them: no cursive connection is kept across the gap.
+            (
+                "\u{633}\u{644}\u{645}",
+                3.0,
+                3.0,
+                "three joined Arabic letters",
+            ),
+        ] {
+            assert_near(
+                measure(&mut m, text, 20.0, None, 0.0).width,
+                advances * cell,
+                &format!("{what}, unspaced"),
+            );
+            assert_near(
+                measure(&mut m, text, 20.0, None, 4.0).width,
+                advances * cell + glyphs * 4.0,
+                what,
+            );
+        }
+    }
+
+    /// And a mark is placed from the pen the spacing moved, so it lands that
+    /// far right of the base it is attached to.
+    #[test]
+    fn a_combining_mark_lands_one_spacing_past_its_base() {
+        let mut m = measurer();
+        let mark_from_base = |m: &mut TextMeasurer, spacing| {
+            let buffer = m.shape(
+                "x\u{301}",
+                20.0,
+                None,
+                FontFamily::name("DejaVu Sans Mono"),
+                FontWeight::NORMAL,
+                LineHeight::Normal,
+                spacing,
+                None,
+            );
+            let run = buffer.layout_runs().next().expect("one line");
+            assert_eq!(run.glyphs.len(), 2, "a base and its mark");
+            let at = |g: &cosmic_text::LayoutGlyph| g.x + g.x_offset;
+            at(&run.glyphs[1]) - at(&run.glyphs[0])
+        };
+        let attached = mark_from_base(&mut m, 0.0);
+        assert_near(
+            mark_from_base(&mut m, 4.0),
+            attached + 4.0,
+            "the mark's place",
+        );
     }
 }

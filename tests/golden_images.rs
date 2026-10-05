@@ -2665,3 +2665,120 @@ fn line_height_follows_the_font_or_the_declaration() {
         view,
     );
 }
+
+/// Letter spacing through all three paths a text is drawn by, each label on a
+/// box that hugs it so the picture says the measurer and the glyphs agree: a
+/// spacing only one of them honoured would leave letters off the end of their
+/// box, or a box running on past them.
+///
+/// The top three are one word at no spacing, three pixels and a pixel and a
+/// half tighter, as glyphon draws them. Under them the clusters whose spacing
+/// is cosmic-text's to decide, at none and at six pixels: an `x` with an accent
+/// it has no composed form for, whose mark is a glyph of its own and lands a
+/// spacing right of its base; an `e` with one the shaper composes into `é`;
+/// the lam-alef ligature, two letters and one glyph; and three joined Arabic
+/// letters, pulled apart between them.
+///
+/// Then a frosted word over upright bars, upright and turned, whose frost is
+/// shaped apart from its letters and has to space them the same; and the word
+/// and the clusters on turned and scaled cards, which are drawn as quads.
+fn spaced_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    let hugged = |label: Text| container().background(INK).child(label);
+    let word = |spacing: f32| hugged(label("tracking", 18.0).letter_spacing(spacing));
+    let clusters = |spacing: f32| {
+        container()
+            .layout(Flex::row().spacing(12.0))
+            .child(hugged(
+                label("x\u{301}e\u{301}", 22.0).letter_spacing(spacing),
+            ))
+            // Centred in a box that is exactly its line, which is where a
+            // line starting at the start would also sit — but a right-to-left
+            // line under glyphon's 200-pixel floor starts at the floor's right
+            // edge, not its box's, and that is not what this picture is about.
+            .child(hugged(
+                label("\u{644}\u{627} \u{633}\u{644}\u{645}", 22.0)
+                    .letter_spacing(spacing)
+                    .align(TextAlign::Center),
+            ))
+    };
+
+    let upright = container()
+        .layout(
+            Flex::column()
+                .spacing(8.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+        .child(word(0.0))
+        .child(word(3.0))
+        .child(word(-1.5))
+        .child(clusters(0.0))
+        .child(clusters(6.0));
+
+    let frosted = |degrees: f32| {
+        frosted_over_bars(
+            70.0,
+            container().rotate(degrees).child(
+                label("Ag", 30.0)
+                    .letter_spacing(8.0)
+                    .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                    .backdrop_blur(8.0)
+                    .nowrap(),
+            ),
+        )
+    };
+
+    let card = |child: Container| {
+        container()
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .corners(6.0)
+            .padding(8.0)
+            .child(child)
+    };
+
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::column().spacing(20.0))
+        .child(upright)
+        .child(
+            container()
+                .layout(Flex::row().spacing(20.0))
+                .child(frosted(0.0))
+                .child(frosted(15.0)),
+        )
+        .child(
+            container()
+                .layout(Flex::row().spacing(30.0).center())
+                .padding([10.0, 0.0])
+                .child(card(word(3.0)).rotate(10.0))
+                .child(card(clusters(6.0)).scale(1.2)),
+        )
+}
+
+/// Letter spacing at scale 1, through glyphon, the frost's mask and the quad.
+#[test]
+fn letter_spacing_reaches_every_path() {
+    golden(
+        "letter_spacing_reaches_every_path",
+        (420.0, 350.0),
+        1.0,
+        BACKDROP,
+        spaced_labels(),
+    );
+}
+
+/// The same at scale 1.5, where the spacing is taken from logical pixels to
+/// physical ones by a factor that is not a whole number — and where a spacing
+/// handed to the shaper unscaled, or scaled twice, would come out a third off
+/// rather than coinciding.
+#[test]
+fn letter_spacing_reaches_every_path_at_scale_1_5x() {
+    golden(
+        "letter_spacing_reaches_every_path_at_scale_1_5x",
+        (420.0, 350.0),
+        1.5,
+        BACKDROP,
+        spaced_labels(),
+    );
+}
