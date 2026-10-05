@@ -3144,3 +3144,73 @@ fn a_justified_text_stays_inside_its_box_at_scale_1_5x() {
         justified_labels(),
     );
 }
+
+/// Resizing keeps intrinsic geometry and alpha (#603).
+#[test]
+fn oversized_rasters_keep_their_geometry_and_alpha() {
+    let horizontal = ImageSource::Rgba {
+        width: 8193,
+        height: 3,
+        pixels: [255, 0, 0, 128].repeat(8193 * 3).into(),
+    };
+    let vertical = ImageSource::Rgba {
+        width: 3,
+        height: 8193,
+        pixels: [0, 255, 0, 255].repeat(8193 * 3).into(),
+    };
+    let boxed = |source, fit| {
+        container()
+            .width(21.0)
+            .height(21.0)
+            .overflow(Overflow::Hidden)
+            .child(image(source).content_fit(fit))
+    };
+    golden(
+        "oversized_rasters_keep_their_geometry_and_alpha",
+        (63.0, 21.0),
+        1.0,
+        Color::rgb(0.0, 0.0, 1.0),
+        container().layout(Flex::row()).children([
+            boxed(horizontal.clone(), ContentFit::None),
+            boxed(vertical, ContentFit::None),
+            boxed(horizontal, ContentFit::Fill),
+        ]),
+    );
+}
+
+/// Strong shrinking retains thin translucent lines between sample centres.
+#[test]
+fn oversized_raw_rasters_keep_thin_translucent_lines() {
+    let pixels: Vec<u8> = (0..40960)
+        .flat_map(|x| if x % 5 == 0 { [255, 0, 0, 128] } else { [0; 4] })
+        .collect();
+    let horizontal = ImageSource::Rgba {
+        width: 40960,
+        height: 1,
+        pixels: pixels.clone().into(),
+    };
+    let vertical = ImageSource::Rgba {
+        width: 1,
+        height: 40960,
+        pixels: pixels.clone().into(),
+    };
+    let control = ImageSource::Rgba {
+        width: 1,
+        height: 1,
+        pixels: [255, 0, 0, 26].into(),
+    };
+    golden(
+        "oversized_raw_rasters_keep_thin_translucent_lines",
+        (96.0, 32.0),
+        1.0,
+        Color::rgb(0.0, 0.0, 1.0),
+        container()
+            .layout(Flex::row())
+            .children([horizontal, vertical, control].into_iter().map(|source| {
+                container()
+                    .width(32.0)
+                    .height(32.0)
+                    .child(image(source).content_fit(ContentFit::Fill))
+            })),
+    );
+}

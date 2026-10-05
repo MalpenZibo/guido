@@ -197,6 +197,12 @@ impl DecodedImage {
         self.report(ImageEvent::Waiting);
     }
 
+    /// Retire taken pixels when uploading them fails, without another decode.
+    pub(crate) fn upload_failed(&self) {
+        self.slots().by_extent.remove(&None);
+        self.report(ImageEvent::Failed);
+    }
+
     fn report(&self, event: fn(DecodeKey) -> ImageEvent) {
         let event = event(self.key().clone());
         with_app_state(|app| app.image_events.push(event));
@@ -279,7 +285,7 @@ pub(crate) enum DecodeState {
     /// An SVG is ready from its first raster on, though another of its sizes
     /// may still be on the way.
     Ready,
-    /// The header or the decode failed, and said why once, in the log.
+    /// The header, decode or upload failed; the cause is logged once.
     Failed,
 }
 
@@ -551,7 +557,7 @@ pub(crate) enum ImageEvent {
     Evicted(DecodeKey, Extent),
     /// The last image holding the entry let go of it.
     Released(DecodeKey),
-    /// The renderer asked for an SVG's raster and there was no worker to ask.
+    /// An upload or SVG raster failed, or no worker was available.
     Failed(DecodeKey),
     /// The renderer drew a raster of the SVG.
     Drawn(DecodeKey),
@@ -982,5 +988,40 @@ mod tests {
         };
         assert!(acquire(&rgba).is_none());
         assert!(is_ready(&rgba));
+    }
+
+    #[test]
+    fn an_upload_failure_is_not_sent_back_to_the_decoder() {
+        let source = ImageSource::Path("not-there/upload-failure.png".into());
+        let before = entries();
+        let held = acquire(&source).unwrap();
+        let entry =
+            with_app_state(|app| app.decoded_images.borrow().get(&held.key).cloned()).unwrap();
+        entry.state.set(DecodeState::Ready);
+        entry.pixels.slots().by_extent.insert(
+            None,
+            Slot::Filled(
+                1,
+                Pixels {
+                    width: 1,
+                    height: 1,
+                    rgba: vec![255; 4],
+                },
+            ),
+        );
+        assert!(entry.pixels.take().is_some());
+        assert!(entry.pixels.uploaded());
+        entry.pixels.upload_failed();
+        texture_missing(&source);
+        settle_image_events();
+        assert_eq!(entry.state.get_untracked(), DecodeState::Failed);
+        assert_eq!(started(), 0);
+        drop(held);
+        settle_image_events();
+        assert_eq!(
+            entries(),
+            before,
+            "a failed upload has no texture holding its entry"
+        );
     }
 }
