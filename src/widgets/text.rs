@@ -422,6 +422,23 @@ impl Widget for Text {
         // same shaping pass, so reporting it is free.
         ctx.tree().set_baseline(id, measured.baseline);
 
+        // A text no line of which broke, and that no limit cuts, is the same
+        // lines at any width it fits in, so paint is handed the width of those
+        // lines, unwrapped, instead of the width it was offered. Shaped there
+        // it breaks nowhere, as it was measured, and the paint offset places
+        // it in its box as it would have; but what it paints no longer names
+        // the offered width, so the caches keyed by it — glyphon's buffer, the
+        // quad's texture, the frost's mask — are found again while a parent's
+        // width animates.
+        if let Some(fit) = self.cached_fit.as_mut()
+            && fit.max_lines.is_none()
+            && fit.width.is_some()
+            && !measured.wraps
+        {
+            fit.width = Some(measured.size.width);
+            fit.wrap = false;
+        }
+
         // A justified text that wraps is as wide as the width it was offered,
         // because that is the width every line but a paragraph's last is
         // stretched across — Flutter's `TextWidthBasis.parent`, a CSS block.
@@ -853,6 +870,40 @@ mod tests {
                 overflow: TextOverflow::Clip,
                 wrap: true,
             }))
+        );
+    }
+
+    /// The text command a text paints after being laid out at `width`, as
+    /// its debug form — `DrawCommand` has no equality, and this says every
+    /// field a cache could key by.
+    fn painted_text(text: Text, width: f32) -> String {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(text));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, width);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+        node.commands
+            .iter()
+            .find(|cmd| matches!(&***cmd, DrawCommand::Text { .. }))
+            .map(|cmd| format!("{cmd:?}"))
+            .expect("a text command")
+    }
+
+    /// A text that fits on its line paints the same command whatever width it
+    /// was offered, so the glyphon buffer, the quad's texture and the frost's
+    /// mask — each keyed by what the command says — are found again while a
+    /// parent's width animates. One that wraps paints the width it broke in,
+    /// since that is where its lines break.
+    #[test]
+    fn a_text_that_fits_on_its_line_paints_the_same_at_any_offered_width() {
+        assert_eq!(
+            painted_text(Text::new("short"), 300.0),
+            painted_text(Text::new("short"), 320.0)
+        );
+        assert_ne!(
+            painted_text(Text::new(OVERLONG), 120.0),
+            painted_text(Text::new(OVERLONG), 130.0)
         );
     }
 

@@ -67,6 +67,9 @@ width (`line_width`), so each breaks and cuts its lines where the measurer did.
 A box can be narrower than that width, so the shaped lines are then moved into
 it by `paint_offset`: the alignment's fraction of the difference, taken from
 the first line's direction, as Flutter's `TextPainter` places its paragraph.
+A text none of whose lines broke is handed the width of its lines, unwrapped,
+rather than the width it was offered — the same lines, and a draw command that
+does not change while a parent's width animates, so its caches keep hitting.
 `text_cut_to_its_lines`,
 `a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on` and
 `right_to_left_label_starts_in_its_own_box` are the goldens that watch all
