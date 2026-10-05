@@ -2130,6 +2130,37 @@ mod tests {
         );
     }
 
+    /// A field is one line however long its value: it draws its text with a
+    /// fit of no width, which never wraps. Drawn without a fit, a text wraps
+    /// at its box, and a value wider than the field would break onto lines.
+    #[test]
+    fn a_field_draws_its_value_on_one_line() {
+        let (mut tree, _, id) = field_in_container(text_input(create_signal(
+            "a value far longer than any narrow field could hold".to_owned(),
+        )));
+        fn fits(
+            node: &crate::renderer::RenderNode,
+            out: &mut Vec<Option<crate::renderer::LineFit>>,
+        ) {
+            for cmd in &node.commands {
+                if let crate::renderer::DrawCommand::Text { fit, .. } = &**cmd {
+                    out.push(*fit);
+                }
+            }
+            node.children.iter().for_each(|c| fits(c, out));
+        }
+        let mut drawn = Vec::new();
+        fits(&paint_once(&mut tree, id), &mut drawn);
+        assert!(!drawn.is_empty(), "the field drew its value");
+        for fit in drawn {
+            assert_eq!(
+                fit,
+                Some(crate::renderer::LineFit::wrapping(None)),
+                "a field never wraps"
+            );
+        }
+    }
+
     /// Every text a subtree drew.
     fn drawn_strings(tree: &mut Tree, id: WidgetId) -> Vec<String> {
         fn collect(node: &crate::renderer::RenderNode, out: &mut Vec<String>) {
