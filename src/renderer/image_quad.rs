@@ -3,6 +3,7 @@
 //! This module renders images as textured quads with full transform support
 //! (rotation, scale, translate). Textures are cached for performance.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -185,6 +186,27 @@ fn resized_raster(width: u32, height: u32, rgba: &[u8], limit: u32) -> Option<(u
         image::imageops::FilterType::Triangle,
     );
     Some((new_width, new_height, pixels.into_raw()))
+}
+
+fn raster_upload_pixels(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+    limit: u32,
+) -> Option<(u32, u32, Cow<'_, [u8]>)> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if width > limit || height > limit {
+        let Some((w, h, pixels)) = resized_raster(width, height, rgba, limit) else {
+            log::warn!("Failed to resize image {width}x{height} to texture limit {limit}");
+            return None;
+        };
+        log::warn!("Resized image {width}x{height} to {w}x{h} for texture limit {limit}");
+        Some((w, h, Cow::Owned(pixels)))
+    } else {
+        Some((width, height, Cow::Borrowed(rgba)))
+    }
 }
 
 /// A texture of its own, for an image too large for an atlas page.
@@ -541,29 +563,14 @@ impl ImageQuadRenderer {
         height: u32,
         rgba: &[u8],
     ) -> Option<CachedTexture> {
-        if width == 0 || height == 0 {
-            return None;
-        }
-
-        let limit = self.texture_limit;
-        let resized;
-        let (upload_width, upload_height, rgba) = if width > limit || height > limit {
-            let Some((w, h, pixels)) = resized_raster(width, height, rgba, limit) else {
-                log::warn!("Failed to resize image {width}x{height} to texture limit {limit}");
-                return None;
-            };
-            log::warn!("Resized image {width}x{height} to {w}x{h} for texture limit {limit}");
-            resized = pixels;
-            (w, h, resized.as_slice())
-        } else {
-            (width, height, rgba)
-        };
+        let (upload_width, upload_height, rgba) =
+            raster_upload_pixels(width, height, rgba, self.texture_limit)?;
         self.store(
             device,
             queue,
             upload_width,
             upload_height,
-            rgba,
+            &rgba,
             (width as f32, height as f32),
         )
     }
@@ -838,6 +845,35 @@ impl ImageQuadRenderer {
 #[cfg(test)]
 mod limit_tests {
     use super::*;
+
+    #[test]
+    fn supported_raster_uploads_borrow_the_original_pixels() {
+        for (width, height) in [(7, 1), (1, 7), (8, 1), (1, 8), (8, 8)] {
+            let pixels = vec![255; (width * height * 4) as usize];
+            let (w, h, upload) = raster_upload_pixels(width, height, &pixels, 8).unwrap();
+            assert_eq!((w, h), (width, height));
+            assert!(
+                matches!(upload, Cow::Borrowed(_)),
+                "copied {width}x{height}"
+            );
+            assert_eq!(upload.as_ptr(), pixels.as_ptr());
+        }
+    }
+
+    #[test]
+    fn oversized_raster_uploads_own_only_the_resized_pixels() {
+        for (width, height) in [(9, 1), (1, 9), (9, 9)] {
+            let pixels = vec![255; (width * height * 4) as usize];
+            let (w, h, upload) = raster_upload_pixels(width, height, &pixels, 8).unwrap();
+            assert_eq!((w, h), (width.min(8), height.min(8)));
+            assert!(matches!(upload, Cow::Owned(_)));
+            assert_eq!(upload.as_ref(), vec![255; (w * h * 4) as usize]);
+        }
+        assert!(raster_upload_pixels(0, 1, &[], 8).is_none());
+        assert!(raster_upload_pixels(1, 0, &[], 8).is_none());
+        assert!(raster_upload_pixels(9, 1, &[0; 4], 8).is_none());
+        assert!(raster_upload_pixels(1, 1, &[0; 4], 0).is_none());
+    }
 
     #[test]
     fn svg_raster_extents_fit_both_axes() {
