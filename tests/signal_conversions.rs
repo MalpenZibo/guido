@@ -197,3 +197,22 @@ fn a_number_is_a_line_height_factor_in_every_form() {
     let _ = text_input(create_signal(String::new())).line_height(n);
     let _ = text("x").when_hovered(|s| s.line_height(n));
 }
+
+/// A letter spacing is logical pixels, in every form a property takes, on
+/// every widget that draws glyphs and on the override a state supplies.
+#[test]
+fn a_letter_spacing_takes_every_form() {
+    let n = create_signal(1.5f32);
+    let read: Signal<f32> = n.read_only();
+    let doubled = create_memo(move || n.get() * 2.0);
+    let _ = text("x")
+        .letter_spacing(1.5f32)
+        .letter_spacing(1.5)
+        .letter_spacing(move || n.get())
+        .letter_spacing(read)
+        .letter_spacing(n)
+        .letter_spacing(doubled);
+    let _ = text_input(create_signal(String::new())).letter_spacing(n);
+    let _ = password_input(create_password()).letter_spacing(n);
+    let _ = text("x").when_hovered(|s| s.letter_spacing(n));
+}

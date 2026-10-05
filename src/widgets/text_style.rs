@@ -237,6 +237,9 @@ pub struct TextStyle {
     pub font_weight: Prop<FontWeight>,
     /// How tall each line is.
     pub line_height: Prop<LineHeight>,
+    /// Extra advance after every glyph, in logical pixels — see
+    /// [`letter_spacing`](TextStyle::letter_spacing).
+    pub letter_spacing: Prop<f32>,
     /// Contour drawn around the glyphs, under the fill.
     pub stroke: Prop<TextStroke>,
     /// Soft shadow cast by the glyphs.
@@ -678,6 +681,18 @@ macro_rules! declares_text_style {
                 self.font_family($crate::widgets::FontFamily::Monospace)
             }
 
+            /// Extra advance after every glyph, in logical pixels: `0.0`,
+            /// the default, is the font's own spacing, and a negative value
+            /// tightens it. See [`TextStyle::letter_spacing`]($crate::widgets::TextStyle::letter_spacing)
+            /// for what it is added to.
+            pub fn letter_spacing<M>(
+                mut self,
+                spacing: impl $crate::reactive::IntoSignal<f32, M>,
+            ) -> Self {
+                self.text_style_mut().letter_spacing = spacing.into_prop();
+                self
+            }
+
             /// Contour drawn around the glyphs, under the fill.
             pub fn text_stroke<M>(
                 mut self,
@@ -760,6 +775,21 @@ impl TextStyle {
     /// Shorthand for [`font_family`](Self::font_family) at the monospace family.
     pub fn mono(self) -> Self {
         self.font_family(FontFamily::Monospace)
+    }
+
+    /// Extra advance after every glyph, in logical pixels: `0.0`, the
+    /// default, is the font's own spacing, and a negative value tightens it.
+    ///
+    /// A length and not a fraction of the size, so a design token of `1.5`
+    /// is a pixel and a half at any font size. What it is added to is
+    /// cosmic-text's: every glyph the shaper puts out, the last on a line
+    /// included — so a ligature takes one spacing for the letters it joins,
+    /// a combining mark the shaper cannot compose into its letter one of its
+    /// own, and a joined Arabic word is pulled apart between its letters. A
+    /// value that is not a number is `0.0`.
+    pub fn letter_spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
+        self.letter_spacing = spacing.into_prop();
+        self
     }
 
     /// Contour drawn around the glyphs, under the fill.
