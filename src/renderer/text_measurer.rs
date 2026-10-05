@@ -140,6 +140,10 @@ pub struct Measured {
     pub size: Size,
     /// Distance from the top edge to the baseline of the first line.
     pub baseline: f32,
+    /// Whether a paragraph broke onto more than one line, which is when a
+    /// justified text has lines to stretch: cosmic-text stretches every line
+    /// but a paragraph's last.
+    pub wraps: bool,
 }
 
 pub struct TextMeasurer {
@@ -266,6 +270,10 @@ impl TextMeasurer {
                 // Empty text still sits on a line, so a lone label in a
                 // baseline row does not jump when its content clears.
                 baseline: baseline.unwrap_or(font_size),
+                wraps: buffer
+                    .lines
+                    .iter()
+                    .any(|line| line.layout_opt().is_some_and(|lines| lines.len() > 1)),
             }
         };
 

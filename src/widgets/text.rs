@@ -58,7 +58,9 @@ pub enum TextOverflow {
 ///
 /// The box is the one layout gave the text: as wide as its widest line unless
 /// something stretched it, so a wrapped label centres every line against the
-/// longest of them, and a stretched one centres against the stretch.
+/// longest of them, and a stretched one centres against the stretch. A
+/// justified text that wraps is the exception: its box is the width it was
+/// offered, which is the width its lines are stretched across.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum TextAlign {
     /// Where the text's direction begins: the left for Latin, the right for
@@ -71,7 +73,9 @@ pub enum TextAlign {
     End,
     /// Every line but a paragraph's last stretched to the full width, the
     /// extra room shared between its spaces. A last line starts where `Start`
-    /// would put it.
+    /// would put it. A justified text that wraps is as wide as the width it
+    /// was offered, since that is the width its lines are stretched across;
+    /// one that fits on its line hugs it.
     Justified,
 }
 
@@ -230,8 +234,10 @@ impl Text {
     ///     .align(TextAlign::Center);
     /// ```
     ///
-    /// Only the glyphs move — the box is measured the same either way — so a
-    /// write here repaints the text and re-measures nothing.
+    /// Only the glyphs move — the box is measured the same either way — except
+    /// for a justified text that wraps, which takes the whole width it was
+    /// offered to stretch its lines across. So a write here lays the text out
+    /// again.
     pub fn align<M>(mut self, align: impl IntoSignal<TextAlign, M>) -> Self {
         self.align = align.into_prop();
         self
@@ -416,9 +422,17 @@ impl Widget for Text {
         // same shaping pass, so reporting it is free.
         ctx.tree().set_baseline(id, measured.baseline);
 
-        let width = measured
-            .size
-            .width
+        // A justified text that wraps is as wide as the width it was offered,
+        // because that is the width every line but a paragraph's last is
+        // stretched across — Flutter's `TextWidthBasis.parent`, a CSS block.
+        // Hugging its widest line instead would leave the stretched lines
+        // running past the box. Everything else hugs its widest line.
+        let justified = self.align.get_or(TextAlign::Start) == TextAlign::Justified;
+        let natural = match offered {
+            Some(offered) if justified && measured.wraps => offered,
+            _ => measured.size.width,
+        };
+        let width = natural
             .max(constraints.min_width)
             .min(constraints.max_width);
         self.cached_overflows = width < measured.size.width;
@@ -730,6 +744,25 @@ mod tests {
         assert!(cut.width <= 120.0, "{cut:?}");
     }
 
+    /// A justified text that wraps is as wide as the width it was offered,
+    /// because that is the width its lines are stretched across; one that
+    /// fits on a line has nothing to stretch, and hugs it like any other.
+    #[test]
+    fn a_wrapping_justified_text_takes_the_width_it_was_offered() {
+        let wrapped = laid_out(Text::new(OVERLONG).align(TextAlign::Justified), 120.0);
+        assert!(wrapped.height > LINE * 1.5, "it has to wrap: {wrapped:?}");
+        assert_eq!(wrapped.width, 120.0, "{wrapped:?}");
+
+        let start = laid_out(Text::new(OVERLONG), 120.0);
+        assert!(
+            start.width < 120.0,
+            "a start text hugs its widest line: {start:?}"
+        );
+
+        let one_line = laid_out(Text::new("short").align(TextAlign::Justified), 400.0);
+        assert_eq!(one_line, laid_out(Text::new("short"), 400.0));
+    }
+
     /// The limit is a declared value, so it answers to a write — and lifting
     /// it gives the text back the lines it needs.
     #[test]
@@ -839,15 +872,15 @@ mod tests {
             .collect()
     }
 
-    /// Alignment is a declared value, so it answers to a write — and it moves
-    /// glyphs inside a box it does not resize, so the write repaints the text
-    /// and wakes no layout.
+    /// Alignment is a declared value, so it answers to a write — and a
+    /// justified text that wraps is as wide as the width it was offered, so
+    /// the write lays the text out again rather than only repainting it.
     ///
     /// Frosted and shadowed, so the claim covers every command the text draws:
     /// a frost aligned differently from the letters over it is a frost beside
     /// them, and a shadow is copies of the glyphs that have to move with them.
     #[test]
-    fn alignment_answers_to_a_signal_with_a_repaint() {
+    fn alignment_answers_to_a_signal() {
         let align = create_signal(TextAlign::Start);
         let mut tree = Tree::new();
         let root = tree.register(Box::new(
@@ -866,8 +899,9 @@ mod tests {
         align.set(TextAlign::Center);
         let woken = jobs::queued_job_types(root);
         assert!(
-            woken.contains(&JobType::Paint) && !woken.contains(&JobType::Layout),
-            "an alignment repaints and re-measures nothing: {woken:?}"
+            woken.contains(&JobType::Layout),
+            "an alignment lays the text out again, since a justified one that \
+             wraps takes the width it was offered: {woken:?}"
         );
         let after = painted_alignments(&mut tree, root);
         assert!(

@@ -3070,3 +3070,77 @@ fn a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on_at_scale_1_5x() {
         wrapped_labels(),
     );
 }
+
+/// Justified texts that wrap, in boxes that hug them, with every glyph inside
+/// its box.
+///
+/// Every path shapes a text in the width it was laid out in, and cosmic-text
+/// stretches each line but a paragraph's last across that width. A box that
+/// hugged the widest line was narrower than that, so the stretched lines ran
+/// past it — a paint offset moves a line, it cannot take back the room put
+/// between its words. A justified text that wraps is now as wide as the width
+/// it was offered, as Flutter's `TextWidthBasis.parent` and a CSS block have
+/// it. Upright, frosted over bars, and on a scaled card, which is drawn as a
+/// quad; and one that fits on its line, which still hugs it.
+fn justified_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const WORDS: &str = "one two three four five six seven eight";
+    let justified = |size: f32| label(WORDS, size).align(TextAlign::Justified);
+    let column = |width: f32| {
+        container().width(width).layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let hugged = |text: Text| container().background(INK).child(text);
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(
+            column(150.0)
+                .child(hugged(justified(16.0)))
+                .child(hugged(label("fits", 16.0).align(TextAlign::Justified))),
+        )
+        .child(
+            column(160.0)
+                .child(frosted_over_bars(
+                    96.0,
+                    column(150.0).child(
+                        justified(18.0)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(8.0),
+                    ),
+                ))
+                .child(
+                    column(150.0)
+                        .padding([8.0, 10.0])
+                        .child(hugged(justified(14.0)).scale(1.15)),
+                ),
+        )
+}
+
+/// Wrapped justified texts in hugging boxes, at scale 1.
+#[test]
+fn a_justified_text_stays_inside_its_box() {
+    golden(
+        "a_justified_text_stays_inside_its_box",
+        (400.0, 260.0),
+        1.0,
+        BACKDROP,
+        justified_labels(),
+    );
+}
+
+/// The same at scale 1.5.
+#[test]
+fn a_justified_text_stays_inside_its_box_at_scale_1_5x() {
+    golden(
+        "a_justified_text_stays_inside_its_box_at_scale_1_5x",
+        (400.0, 260.0),
+        1.5,
+        BACKDROP,
+        justified_labels(),
+    );
+}

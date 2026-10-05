@@ -415,7 +415,9 @@ container()
 - `TextAlign::Center` — each line centred
 - `TextAlign::End` — where the text's direction ends
 - `TextAlign::Justified` — every line but a paragraph's last stretched to the
-  full width
+  full width. A justified text that wraps is as wide as the width its
+  container offered, since that is what its lines are stretched across, as a
+  justified paragraph is in CSS; one that fits on its line hugs it
 
 A text whose box fits its only line looks the same whichever alignment it has:
 there is no room for the line to move into. To centre a short label in a wider
@@ -426,8 +428,8 @@ A line wider than its box — an unwrapped text in a narrow container — starts
 at the start and runs off the end, whatever its alignment, as it does in CSS.
 
 `align` takes a signal like the other text properties. A change moves the
-glyphs inside the box without resizing it, so it repaints the text and
-re-measures nothing.
+glyphs inside the box, and lays the text out again, since a justified text
+that wraps is wider than one aligned any other way.
 
 ### Limiting Lines
 
