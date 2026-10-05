@@ -33,22 +33,24 @@ pub(crate) fn shapeable_size(font_size: f32) -> f32 {
 
 use std::hash::{Hash, Hasher};
 
-/// How a text is cut to the lines it may take, decided by layout and carried to
-/// every path that shapes it.
+/// How a text was laid out: the width its lines were broken in, and the cut,
+/// when there is one. Decided by layout and carried to every path that shapes
+/// the text.
 ///
 /// Carried rather than re-derived, because the measurer and the three draw
-/// paths each shape the text for themselves, and a text that one of them cuts
-/// at another width or line is measured one line high and drawn two. The width
-/// is the one it was laid out in, not the box it came back as: a wrapped text
-/// is measured at the width it was offered, and shaped anywhere narrower it
-/// breaks its lines somewhere else.
+/// paths each shape the text for themselves, and a text that one of them lays
+/// out at another width is measured on one set of lines and drawn on another —
+/// four lines high and drawn on two (#622), or cut one line high and drawn two.
+/// The width is the one it was laid out in, not the box it came back as: a
+/// wrapped text is measured at the width it was offered, and shaped anywhere
+/// narrower it breaks its lines somewhere else.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineFit {
     /// The width the lines are laid out in, in logical pixels, or `None` for
     /// as wide as they run.
     pub width: Option<f32>,
-    /// The most lines drawn; at least one.
-    pub max_lines: u32,
+    /// The most lines drawn, at least one; `None` for every line the text has.
+    pub max_lines: Option<u32>,
     /// What marks the cut.
     pub overflow: TextOverflow,
     /// Whether the text wraps at `width` or runs on as one line per paragraph.
@@ -56,7 +58,7 @@ pub struct LineFit {
 }
 
 /// A [`LineFit`] as something a cache can key by: the width by its bits.
-pub(crate) type LineFitKey = (Option<u32>, u32, TextOverflow, bool);
+pub(crate) type LineFitKey = (Option<u32>, Option<u32>, TextOverflow, bool);
 
 impl LineFit {
     /// The fit as something a cache can key by.
@@ -192,8 +194,8 @@ impl TextMeasurer {
     /// Both come out of the same shaping pass and share one cache entry — a
     /// baseline is not worth re-shaping for.
     ///
-    /// A text cut by `fit` is measured as the lines it keeps, at the width the
-    /// fit carries rather than `max_width`.
+    /// A text laid out by `fit` is measured at the width the fit carries
+    /// rather than `max_width`, and as the lines it keeps when it is cut.
     #[allow(clippy::too_many_arguments)]
     pub fn measure_full(
         &mut self,
@@ -742,7 +744,7 @@ mod fit_tests {
     fn fit(width: f32, max_lines: u32, overflow: TextOverflow, wrap: bool) -> LineFit {
         LineFit {
             width: Some(width),
-            max_lines,
+            max_lines: Some(max_lines),
             overflow,
             wrap,
         }

@@ -147,8 +147,9 @@ pub(super) fn shape(
         .filter(|h| h.is_finite() && *h > 0.0)
         .unwrap_or(font.line_ratio * px);
     let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
-    let lines = fit.map(|fit| fit.max_lines.max(1) as usize);
-    match fit {
+    let cut = fit.filter(|fit| fit.max_lines.is_some());
+    let lines = cut.and_then(|fit| fit.max_lines).map(|n| n.max(1) as usize);
+    match cut {
         None => buffer.set_size(size.0, size.1),
         Some(fit) => {
             let width = match align {
@@ -171,7 +172,7 @@ pub(super) fn shape(
     }
     buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align(align));
     buffer.shape_until_scroll(font_system, true);
-    if let (Some(lines), Some(mark)) = (lines, fit.and_then(|fit| ellipsize(fit.overflow))) {
+    if let (Some(lines), Some(mark)) = (lines, cut.and_then(|fit| ellipsize(fit.overflow))) {
         cut_to_lines(font_system, &mut buffer, lines, mark);
     }
     buffer
@@ -1303,7 +1304,7 @@ mod an_aligned_cut_is_the_measured_cut {
     fn fit(overflow: TextOverflow) -> LineFit {
         LineFit {
             width: Some(OFFERED),
-            max_lines: 2,
+            max_lines: Some(2),
             overflow,
             wrap: true,
         }

@@ -130,8 +130,9 @@ pub struct Text {
     cached_line_height: LineHeight,
     cached_letter_spacing: f32,
     cached_wrap: bool,
-    /// The lines layout cut the text to, handed to paint so every path that
-    /// shapes it cuts in the same place.
+    /// How layout laid the text out — the width its lines broke in, and the
+    /// cut — handed to paint so every path that shapes it breaks and cuts its
+    /// lines in the same places.
     cached_fit: Option<LineFit>,
     /// Whether the last layout gave this text a box narrower than its line,
     /// which only an unwrapped text can be given.
@@ -378,32 +379,32 @@ impl Widget for Text {
             .is_finite()
             .then_some(constraints.max_width);
 
-        // A cut, when there is one. An unwrapped text's lines are cut by the
-        // box already, so a mark asked of it needs no limit: each line that
-        // runs past the box is marked, and none is dropped.
+        // How the text is laid out, carried to paint so every path that shapes
+        // it breaks its lines where the measurer did. A cut, when there is
+        // one: an unwrapped text's lines are cut by the box already, so a mark
+        // asked of it needs no limit — each line that runs past the box is
+        // marked, and none is dropped.
         let overflow = self.overflow.get_or(TextOverflow::Clip);
         let limit =
             self.max_lines.get().flatten().or_else(|| {
                 (!self.cached_wrap && overflow != TextOverflow::Clip).then_some(u32::MAX)
             });
-        self.cached_fit = limit.map(|lines| LineFit {
-            // An unwrapped line that nothing marks is the same line at any
-            // width, and a width in its fit would only miss the caches.
+        self.cached_fit = Some(LineFit {
+            // An unwrapped text is laid out with no width, so it runs on one
+            // line per paragraph and whatever contains it does the clipping —
+            // unless a mark is asked of it, which needs the width to mark at.
             width: offered.filter(|_| self.cached_wrap || overflow != TextOverflow::Clip),
-            max_lines: lines.max(1),
+            max_lines: limit.map(|lines| lines.max(1)),
             overflow,
             wrap: self.cached_wrap,
         });
 
-        // An unwrapped text is measured with no maximum, so it runs on one line
-        // and whatever contains it does the clipping.
-        let max_width = offered.filter(|_| self.cached_wrap);
-
-        // Measure text (TextMeasurer caches results internally)
+        // Measured at the fit's width, which is the one the draw paths shape
+        // in. TextMeasurer caches results internally.
         let measured = measure_text_full(
             &self.cached_text,
             self.cached_font_size,
-            max_width,
+            None,
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
@@ -790,9 +791,36 @@ mod tests {
             fit,
             Some(Some(crate::renderer::LineFit {
                 width: Some(90.0),
-                max_lines: 1,
+                max_lines: Some(1),
                 overflow: TextOverflow::Ellipsis,
                 wrap: false,
+            }))
+        );
+    }
+
+    /// A text no limit cuts carries the width it was laid out in too, so a
+    /// wrapped one is drawn on the lines it was measured on rather than on
+    /// whatever lines its box would make (#622).
+    #[test]
+    fn paint_carries_the_width_an_uncut_text_was_laid_out_in() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(Text::new(OVERLONG)));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        measured(&mut tree, root, 120.0);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+
+        let fit = node.commands.iter().find_map(|cmd| match &**cmd {
+            DrawCommand::Text { fit, .. } => Some(*fit),
+            _ => None,
+        });
+        assert_eq!(
+            fit,
+            Some(Some(crate::renderer::LineFit {
+                width: Some(120.0),
+                max_lines: None,
+                overflow: TextOverflow::Clip,
+                wrap: true,
             }))
         );
     }
