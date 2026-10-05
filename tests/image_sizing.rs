@@ -33,7 +33,9 @@ fn size_of(widget: impl Widget + 'static, constraints: Constraints) -> Size {
         .expect("root is registered")
 }
 
-/// The size the image itself takes inside a box of exactly `w` x `h`.
+/// The size the image itself takes inside a box of exactly `w` x `h`, under a
+/// parent with room for every box asked about here — a box the parent cut
+/// would be a box of some other size.
 fn in_box(fit: ContentFit, w: f32, h: f32) -> Size {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(
@@ -43,7 +45,7 @@ fn in_box(fit: ContentFit, w: f32, h: f32) -> Size {
             .child(image(source()).content_fit(fit)),
     ));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.layout_widget(root, Constraints::new(0.0, 0.0, 1000.0, 1000.0));
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, 2000.0, 2000.0));
     let child = tree.get_children(root)[0];
     tree.cached_size(child).expect("the image was laid out")
 }

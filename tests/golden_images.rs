@@ -937,6 +937,9 @@ fn clipped_images() {
             .corners(corners)
             .overflow(Overflow::Hidden)
             .rotate(degrees)
+            // A box only lays content out larger than itself along an axis it
+            // scrolls, so the overflow the clip cuts is the content's own.
+            .scroll(Scroll::both().visibility(ScrollbarVisibility::Hidden))
             .child(
                 box_of(90.0, 90.0)
                     .child(image(checkerboard(90, 15)).content_fit(ContentFit::Cover)),
@@ -1379,13 +1382,20 @@ fn clipped_text() {
             .background(Color::rgb(0.18, 0.20, 0.28))
             .overflow(Overflow::Hidden)
             .rotate(degrees)
-            .layout(Flex::column().main_alignment(MainAlignment::Center))
-            // Each line is about twice the width of the clip, so every one of
-            // them runs out on both sides. A text that fits its clip proves
-            // nothing about where the clip's edge is.
-            .child(nowrap_line("MMMMMMMM"))
-            .child(nowrap_line("WWWWWWWW"))
-            .child(nowrap_line("MMMMMMMM"))
+            // A box only lays content out larger than itself along an axis it
+            // scrolls, so the overflow the clip cuts is the content's own.
+            .scroll(Scroll::horizontal().visibility(ScrollbarVisibility::Hidden))
+            .child(
+                container()
+                    .height(96.0)
+                    .layout(Flex::column().main_alignment(MainAlignment::Center))
+                    // Each line is about twice the width of the clip, so every
+                    // one of them runs out on both sides. A text that fits its
+                    // clip proves nothing about where the clip's edge is.
+                    .child(nowrap_line("MMMMMMMM"))
+                    .child(nowrap_line("WWWWWWWW"))
+                    .child(nowrap_line("MMMMMMMM")),
+            )
     };
 
     fn nowrap_line(content: &'static str) -> Container {
@@ -1661,14 +1671,18 @@ fn frosted_text_is_cut_by_its_scroller() {
                     .corners(corners)
                     .overflow(Overflow::Hidden)
                     .rotate(degrees)
-                    .layout(Flex::row().center())
+                    // A box only lays content out larger than itself along an axis it
+                    // scrolls, so the overflow the clip cuts is the content's own.
+                    .scroll(Scroll::horizontal().visibility(ScrollbarVisibility::Hidden))
                     .child(
-                        container()
-                            .width(150.0)
-                            .layout(Flex::column().spacing(2.0))
-                            .child(frosted())
-                            .child(frosted())
-                            .child(frosted()),
+                        container().height(84.0).layout(Flex::row().center()).child(
+                            container()
+                                .width(150.0)
+                                .layout(Flex::column().spacing(2.0))
+                                .child(frosted())
+                                .child(frosted())
+                                .child(frosted()),
+                        ),
                     ),
             )
             .into_any()
@@ -2780,5 +2794,57 @@ fn letter_spacing_reaches_every_path_at_scale_1_5x() {
         1.5,
         BACKDROP,
         spaced_labels(),
+    );
+}
+
+/// Four 64px cells, each holding a box whose declared size is not the size it
+/// ends up, with a 16px marker centred in it. The first is the control,
+/// declared at 64. The second is declared 128 and cut by the cell; the third
+/// is the same with 8px of padding; the fourth is declared 16 and raised to 64
+/// by its own `at_least`.
+///
+/// Every marker sits in the middle of its cell, on both axes. A box that laid
+/// its children out in the length it declared rather than the size it was
+/// given put the second and third markers at (56, 56) — on the cell's far
+/// corner — and the fourth at (0, 0).
+#[test]
+fn a_cut_box_centres_its_children_in_what_is_left() {
+    let marker = || swatch(16.0, 16.0, Color::WHITE);
+    let cell = |inner: Container| {
+        container()
+            .width(64.0)
+            .height(64.0)
+            .child(inner.layout(Flex::row().center()).child(marker()))
+    };
+    let blue = Color::rgb(0.30, 0.55, 0.95);
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(12.0)
+        .layout(Flex::row().spacing(12.0))
+        .child(cell(container().width(64.0).height(64.0).background(blue)))
+        .child(cell(
+            container().width(128.0).height(128.0).background(blue),
+        ))
+        .child(cell(
+            container()
+                .width(128.0)
+                .height(128.0)
+                .padding(8.0)
+                .background(blue),
+        ))
+        .child(cell(
+            container()
+                .width(Length::exact(16.0).at_least(64.0))
+                .height(Length::exact(16.0).at_least(64.0))
+                .background(blue),
+        ));
+
+    golden(
+        "a_cut_box_centres_its_children_in_what_is_left",
+        (316.0, 88.0),
+        1.0,
+        BACKDROP,
+        view,
     );
 }

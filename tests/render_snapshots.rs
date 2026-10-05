@@ -551,7 +551,10 @@ fn overflow_and_clipping() {
                     box_of(200.0, 40.0)
                         .overflow(Overflow::Hidden)
                         .corners(8.0)
-                        .child(swatch(400.0, 30.0, Color::GREEN)),
+                        // A box only lays content out larger than itself along an axis it
+                        // scrolls, so the overflow the clip cuts is the content's own.
+                        .scroll(Scroll::horizontal().visibility(ScrollbarVisibility::Hidden))
+                        .child(swatch(200.0, 30.0, Color::GREEN)),
                 ),
         )
         .child(

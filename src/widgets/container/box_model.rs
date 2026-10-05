@@ -130,6 +130,11 @@ impl Container {
     /// Everything outside the running-animation case falls through to the same
     /// answer, cap included: what children are offered must not depend on
     /// whether an animation happens to be attached.
+    ///
+    /// An exact length — declared or in flight — is offered through
+    /// [`exact_within`], which is what [`resolve_axis`](Self::resolve_axis)
+    /// reports it as. Offering the uncut length centres children in a box the
+    /// container is not, and measures a scroll viewport the parent refused.
     fn animated_extent(
         &self,
         ctx: &mut LayoutCtx,
@@ -137,17 +142,18 @@ impl Container {
         length: &Length,
         available: f32,
     ) -> f32 {
-        if let Some(anim) = anim
-            && !anim.is_initial()
-            && length.exact_size().is_some()
-        {
-            return anim.displayed_in(ctx);
+        match length.exact_size() {
+            Some(exact) => {
+                let exact = match anim {
+                    Some(anim) if !anim.is_initial() => anim.displayed_in(ctx),
+                    _ => exact,
+                };
+                exact_within(length, exact, available)
+            }
+            // No maximum is `INFINITY`, so the `min` is the whole of the
+            // answer and an unbounded `available` stays unbounded.
+            None => length.clamp_max(available),
         }
-        // No maximum is `INFINITY`, so the `min` is the whole of the answer
-        // and an unbounded `available` stays unbounded.
-        length
-            .exact_size()
-            .unwrap_or_else(|| length.clamp_max(available))
     }
 
     /// What the children are offered, where the first one starts, and the
@@ -334,19 +340,25 @@ impl Container {
             }
         };
 
-        // min/max apply on top of everything above, fill included.
-        size = length.clamp(size);
-        if !allow_shrink && anim.is_none() && !has_exact {
-            size = size.max(content);
+        if has_exact {
+            return exact_within(length, size, parent_max);
         }
 
-        // An explicit length answers to the parent's maximum but not to its
-        // minimum: that is what keeps `.width(60)` at 60 inside a stretching
-        // parent.
-        if has_exact {
-            size.min(parent_max)
-        } else {
-            size.max(parent_min).min(parent_max)
+        // min/max apply on top of everything above, fill included.
+        size = length.clamp(size);
+        if !allow_shrink && anim.is_none() {
+            size = size.max(content);
         }
+        size.max(parent_min).min(parent_max)
     }
+}
+
+/// What an exact length — declared or in flight — comes to inside its parent:
+/// held within its own bounds, then cut to the parent's maximum.
+///
+/// Never raised to the parent's minimum: that is what keeps `.width(60)` at 60
+/// inside a stretching parent. One definition, because the children are
+/// offered this and the parent is told it, and the two must not disagree.
+fn exact_within(length: &Length, size: f32, parent_max: f32) -> f32 {
+    length.clamp(size).min(parent_max)
 }
