@@ -845,6 +845,15 @@ impl Headless {
         }
     }
 
+    /// A surface's whole last frame, RGBA row by row in physical pixels — for
+    /// comparing two frames rather than sampling points of one.
+    pub fn read_frame(&self, id: SurfaceId) -> Vec<u8> {
+        match self.target(id) {
+            RenderTarget::Offscreen(offscreen) => offscreen.read_pixels(),
+            RenderTarget::Swapchain(_) => panic!("a headless surface has no swapchain"),
+        }
+    }
+
     /// Hold this application's image decodes until the hold is released or
     /// dropped, so a frame can be stepped while a raster source is still
     /// pending — which otherwise depends on how fast the worker is.

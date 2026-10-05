@@ -292,12 +292,34 @@ pub struct OffscreenTarget {
 #[cfg(any(test, feature = "testing"))]
 impl OffscreenTarget {
     /// The colour at one pixel, in the texture's own format.
+    pub fn read_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+        self.read_back(|data, bytes_per_row| {
+            let at = (y * bytes_per_row + x * 4) as usize;
+            [data[at], data[at + 1], data[at + 2], data[at + 3]]
+        })
+    }
+
+    /// Every pixel, row by row and tightly packed, in the texture's own
+    /// format — for a test that compares whole frames rather than points.
+    pub fn read_pixels(&self) -> Vec<u8> {
+        let row = (self.texture.width() * 4) as usize;
+        self.read_back(|data, bytes_per_row| {
+            let mut out = Vec::with_capacity(row * self.texture.height() as usize);
+            for padded in data.chunks(bytes_per_row as usize) {
+                out.extend_from_slice(&padded[..row]);
+            }
+            out
+        })
+    }
+
+    /// Copy the texture out and hand `read` the mapped bytes and their row
+    /// stride.
     ///
     /// Reading a target back is the whole reason to draw into one, so it lives
     /// here rather than beside whoever asks: the row padding wgpu requires and
     /// the map-then-poll order are the sort of thing that is written correctly
     /// once and copied wrongly after.
-    pub fn read_pixel(&self, x: u32, y: u32) -> [u8; 4] {
+    fn read_back<R>(&self, read: impl FnOnce(&[u8], u32) -> R) -> R {
         let (width, height) = (self.texture.width(), self.texture.height());
         let bytes_per_row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -333,8 +355,7 @@ impl OffscreenTarget {
             .slice(..)
             .get_mapped_range()
             .expect("the readback buffer was just mapped whole");
-        let at = (y * bytes_per_row + x * 4) as usize;
-        [data[at], data[at + 1], data[at + 2], data[at + 3]]
+        read(&data, bytes_per_row)
     }
 }
 
