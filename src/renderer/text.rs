@@ -1563,10 +1563,7 @@ mod an_aligned_cut_is_the_measured_cut {
 #[cfg(test)]
 #[test]
 fn normal_is_the_line_height_of_the_face_that_draws_the_text() {
-    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
-    let mut db = glyphon::fontdb::Database::new();
-    db.load_font_data(FONT.to_vec());
-    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let mut font_system = vendored_font_system();
     let ratio =
         resolve_font(&mut font_system, FontFamily::SansSerif, FontWeight::NORMAL).line_ratio;
     assert!(

@@ -103,7 +103,7 @@ Text rendering with:
 - Font size, color, weight styling
 - Text wrapping or `nowrap()` mode
 - Line alignment within the text's own box (`TextAlign`)
-- A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape` in `renderer/text.rs`, so every path cuts on the same line and aligns across the same box
+- A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape` in `renderer/text.rs`, in the width the text was laid out in, so every path breaks and cuts on the same lines; `paint_offset` places those lines in the text's box
 
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
