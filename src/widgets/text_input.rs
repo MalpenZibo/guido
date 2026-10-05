@@ -814,6 +814,7 @@ impl<C: Content> TextInput<C> {
             font_size,
             *font_family,
             font_weight,
+            0.0,
         );
         self.cached_text_width = self
             .cached_glyph_positions
@@ -974,6 +975,7 @@ impl<C: Content> TextInput<C> {
                 relative_x,
                 self.cached_font_family,
                 self.cached_font_weight,
+                0.0,
             );
         }
 

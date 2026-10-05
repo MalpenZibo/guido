@@ -68,6 +68,7 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
         entry.font_family,
         entry.font_weight,
         entry.line_height,
+        0.0,
         entry.align,
         {
             let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
@@ -108,6 +109,13 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 /// the next one, so a line whose glyphs are taller than the line box neither
 /// loses the last line kept nor lets the first one cut back in. That height is
 /// the whole of an unmarked cut; a marked one is finished by [`cut_to_lines`].
+///
+/// The letter spacing is resolved here too, for the same reason: logical
+/// pixels, taken to physical ones by `scale` like an absolute line height, and
+/// handed to cosmic-text as the fraction of the size it asks for. What it is
+/// added to is cosmic-text's decision — the advance of every glyph it puts
+/// out — and the measurer, glyphon, the quad and the mask all take it from
+/// this one call. A number that is not one is no spacing.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn shape(
     font_system: &mut FontSystem,
@@ -116,6 +124,7 @@ pub(super) fn shape(
     font_family: FontFamily,
     font_weight: FontWeight,
     line_height: LineHeight,
+    letter_spacing: f32,
     align: TextAlign,
     size: (Option<f32>, Option<f32>),
     fit: Option<LineFit>,
@@ -152,14 +161,14 @@ pub(super) fn shape(
             }
         }
     }
-    buffer.set_text(
-        text,
-        &Attrs::new()
-            .family(font.family.to_cosmic())
-            .weight(weight.to_cosmic()),
-        Shaping::Advanced,
-        cosmic_align(align),
-    );
+    let mut attrs = Attrs::new()
+        .family(font.family.to_cosmic())
+        .weight(weight.to_cosmic());
+    let spacing = letter_spacing * scale;
+    if spacing.is_finite() && spacing != 0.0 {
+        attrs = attrs.letter_spacing(spacing / px);
+    }
+    buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align(align));
     buffer.shape_until_scroll(font_system, true);
     if let (Some(lines), Some(mark)) = (lines, fit.and_then(|fit| ellipsize(fit.overflow))) {
         cut_to_lines(font_system, &mut buffer, lines, mark);
@@ -1296,6 +1305,7 @@ mod an_aligned_cut_is_the_measured_cut {
             family,
             FontWeight::NORMAL,
             LineHeight::Normal,
+            0.0,
             align,
             (width, Some(1000.0)),
             Some(fit),
@@ -1322,6 +1332,7 @@ mod an_aligned_cut_is_the_measured_cut {
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
             LineHeight::Normal,
+            0.0,
             TextAlign::Start,
             (None, None),
             None,
@@ -1429,6 +1440,7 @@ fn an_absolute_line_height_is_scaled_with_the_text() {
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
             LineHeight::Absolute(20.0),
+            0.0,
             TextAlign::Start,
             (None, None),
             None,
@@ -1470,6 +1482,7 @@ fn a_missing_weight_is_the_nearest_one_of_the_same_family() {
             FontFamily::SansSerif,
             weight,
             LineHeight::Normal,
+            0.0,
             TextAlign::Start,
             (None, None),
             None,
@@ -1521,6 +1534,7 @@ fn a_variable_face_is_shaped_at_the_weight_asked_of_it() {
         FontFamily::name("Guido Variable"),
         FontWeight::BOLD,
         LineHeight::Normal,
+        0.0,
         TextAlign::Start,
         (None, None),
         None,
@@ -1578,6 +1592,7 @@ fn a_named_family_without_a_space_is_measured_in_itself() {
         FontFamily::name("Guido No Space"),
         FontWeight::NORMAL,
         LineHeight::Normal,
+        0.0,
         TextAlign::Start,
         (None, None),
         None,

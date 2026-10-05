@@ -264,6 +264,7 @@ impl TextQuadRenderer {
             entry.font_family,
             entry.font_weight,
             entry.line_height,
+            0.0,
             entry.align,
             (Some(buffer_width), Some(buffer_height)),
             entry.fit,

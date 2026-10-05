@@ -404,6 +404,7 @@ impl Widget for Text {
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
+            0.0,
             self.cached_fit,
         );
 

@@ -243,6 +243,7 @@ impl TextMaskRenderer {
             spec.font_family,
             spec.font_weight,
             spec.line_height,
+            0.0,
             spec.align,
             (Some(spec.buffer.0), Some(spec.buffer.1)),
             spec.fit,
