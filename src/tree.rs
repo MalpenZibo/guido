@@ -1363,7 +1363,8 @@ impl Tree {
             self.key_route.extend_from_slice(focus.chain());
             response = self.route_through(root, event);
         }
-        // Only a press: the listeners are containers declaring `on_key_down`.
+        // Only a key-down, repeats included: the listeners are containers
+        // declaring `on_key_down`.
         if response != Some(EventResponse::Handled) && matches!(event, Event::KeyDown { .. }) {
             let mut route = std::mem::take(&mut self.key_route);
             route.clear();
