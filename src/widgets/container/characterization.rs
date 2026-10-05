@@ -448,6 +448,143 @@ fn a_size_animation_does_not_change_how_content_wraps() {
     );
 }
 
+/// Lay `subject` out as a centred row around one 20px box, and say how big it
+/// came out and where the box landed.
+fn centred_box(subject: Container, constraints: Constraints) -> (Size, (f32, f32)) {
+    let mut h = H::new(
+        subject
+            .layout(Flex::row().center())
+            .child(box_of(20.0, 20.0)),
+    );
+    let size = h.layout(constraints);
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    (size, (child.x, child.y))
+}
+
+/// Children are offered the box the container will report, not the length it
+/// declared before its own bounds and the parent's maximum cut it.
+///
+/// A 200px box under a 100px maximum is 100px wide, and centred its child at
+/// 90 — the middle of the box it was not. Each case is set against a box
+/// declared at the size it ends up, which has to place the child where it does.
+#[test]
+fn an_exact_length_that_is_cut_centres_its_children_in_what_is_left() {
+    let loose = |side: f32| Constraints::new(0.0, 0.0, side, side);
+    let cases = [
+        (
+            "under the parent's maximum",
+            container().width(200.0).height(200.0),
+            container().width(100.0).height(100.0),
+            loose(100.0),
+        ),
+        (
+            "padded, under the parent's maximum",
+            container().width(200.0).height(200.0).padding(10.0),
+            container().width(100.0).height(100.0).padding(10.0),
+            loose(100.0),
+        ),
+        (
+            "under its own maximum",
+            container()
+                .width(Length::exact(200.0).at_most(100.0))
+                .height(Length::exact(200.0).at_most(100.0)),
+            container().width(100.0).height(100.0),
+            loose(500.0),
+        ),
+        (
+            "over its own minimum",
+            container()
+                .width(Length::exact(50.0).at_least(100.0))
+                .height(Length::exact(50.0).at_least(100.0)),
+            container().width(100.0).height(100.0),
+            loose(500.0),
+        ),
+    ];
+
+    for (case, subject, control, constraints) in cases {
+        let (size, origin) = centred_box(subject, constraints);
+        let (control_size, control_origin) = centred_box(control, constraints);
+        assert_eq!(size, Size::new(100.0, 100.0), "{case}: the box is cut");
+        assert_eq!(size, control_size, "{case}: as big as the control");
+        assert_eq!(
+            origin,
+            (40.0, 40.0),
+            "{case}: the child is centred in the box on both axes"
+        );
+        assert_eq!(origin, control_origin, "{case}: where the control puts it");
+    }
+}
+
+/// The other half of the rule: an explicit length still ignores the parent's
+/// *minimum*, for its children as much as for itself.
+#[test]
+fn an_exact_length_under_a_larger_parent_minimum_centres_in_its_own_size() {
+    let (size, origin) = centred_box(
+        container().width(60.0).height(60.0),
+        Constraints::new(150.0, 150.0, 500.0, 500.0),
+    );
+    assert_eq!(size, Size::new(60.0, 60.0));
+    assert_eq!(origin, (20.0, 20.0), "centred in 60, not in 150");
+}
+
+fn linear_100ms() -> Transition {
+    Transition::new(100.0, TimingFunction::Linear)
+}
+
+/// Lay `h` out under `parent` with `target` at 100, send it to 300, and stop
+/// halfway through `linear_100ms` — so a length that follows it is 200 on its
+/// way.
+fn halfway_to_300(h: &mut H, target: RwSignal<f32>, parent: f32) {
+    h.fit(parent, parent);
+    let t0 = std::time::Instant::now();
+    target.set(300.0);
+    frame_at(h, t0, parent, parent);
+    frame_at(h, t0 + std::time::Duration::from_millis(50), parent, parent);
+}
+
+/// A box whose exact width and height are halfway from 100 to 300 — 200 on
+/// its way — laid out under `parent`, as a centred row around one 20px box:
+/// how big it came out and where the box landed.
+///
+/// One tree per test, because the job queue is keyed by root and a second
+/// tree in the same test would be handed what the first left queued.
+fn centred_box_in_flight(parent: f32) -> (Size, (f32, f32)) {
+    let target = create_signal(100.0f32);
+    let mut h = H::new(
+        container()
+            .width(target.transition(linear_100ms()))
+            .height(target.transition(linear_100ms()))
+            .layout(Flex::row().center())
+            .child(box_of(20.0, 20.0)),
+    );
+    halfway_to_300(&mut h, target, parent);
+
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    (h.tree.cached_size(h.root).unwrap(), (child.x, child.y))
+}
+
+/// The same while a size animation is in flight: a 100px maximum cuts the
+/// 200 on its way to 100, and the children follow the box it is, not the one
+/// it would be.
+#[test]
+fn an_exact_length_in_flight_past_the_parent_maximum_centres_in_what_is_left() {
+    assert_eq!(
+        centred_box_in_flight(100.0),
+        (Size::new(100.0, 100.0), (40.0, 40.0)),
+        "the box is cut, and the child is centred in it on both axes"
+    );
+}
+
+/// Its control: a 500px parent cuts nothing, which is what says the animation
+/// really is halfway.
+#[test]
+fn an_exact_length_in_flight_under_a_larger_parent_centres_in_its_own_size() {
+    assert_eq!(
+        centred_box_in_flight(500.0),
+        (Size::new(200.0, 200.0), (90.0, 90.0))
+    );
+}
+
 #[test]
 fn an_invisible_container_measures_zero() {
     let mut h = H::new(container().visible(false).child(box_of(40.0, 20.0)));
@@ -800,6 +937,122 @@ fn a_vertical_scroller_offers_children_unbounded_height() {
         900.0,
         "the content keeps its natural height"
     );
+}
+
+/// What a vertical scroller around 150px of content does with a wheel notch of
+/// 50: whether it drew a scrollbar, how far the content moved, and how wide the
+/// content was offered.
+fn wheeled(subject: Container, scroll: Scroll, parent: f32) -> (bool, f32, f32) {
+    let mut h = H::new(
+        subject
+            .scroll(scroll)
+            .child(container().width(fill()).height(150.0)),
+    );
+    h.fit(parent, parent);
+    reach_of_a_notch(&mut h)
+}
+
+fn reach_of_a_notch(h: &mut H) -> (bool, f32, f32) {
+    let before = h.paint();
+    let scrollbar = before.children.len() > 1;
+    let content = &before.children[0];
+    let (top, width) = (content.local_transform.ty(), content.bounds.width);
+
+    h.send(Event::scroll(
+        20.0,
+        20.0,
+        0.0,
+        50.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+    let after = h.paint().children[0].local_transform.ty();
+    (scrollbar, top - after, width)
+}
+
+/// The viewport a scroller measures its content against is the box it reports.
+///
+/// Declared 200 tall under a 100px maximum, a scroller is 100 tall and showed
+/// 150px of content with no scrollbar, and the wheel could not reach the last
+/// 50 of it: the viewport was the 200 the parent had refused. Each case is set
+/// against a scroller declared at the size it ends up.
+#[test]
+fn an_exact_length_that_is_cut_scrolls_what_it_cannot_show() {
+    let plain = Scroll::vertical;
+    let gutter = || Scroll::vertical().reserve_gutter(true);
+    let cases = [
+        (
+            "under the parent's maximum",
+            container().width(200.0).height(200.0),
+            container().width(100.0).height(100.0),
+            plain as fn() -> Scroll,
+            100.0,
+        ),
+        (
+            "padded, under the parent's maximum",
+            container().width(220.0).height(220.0).padding(10.0),
+            container().width(120.0).height(120.0).padding(10.0),
+            plain,
+            120.0,
+        ),
+        (
+            "with a reserved gutter, under the parent's maximum",
+            container().width(200.0).height(200.0),
+            container().width(100.0).height(100.0),
+            gutter,
+            100.0,
+        ),
+        (
+            "under its own maximum",
+            container()
+                .width(Length::exact(200.0).at_most(100.0))
+                .height(Length::exact(200.0).at_most(100.0)),
+            container().width(100.0).height(100.0),
+            plain,
+            500.0,
+        ),
+    ];
+
+    for (case, subject, control, scroll, parent) in cases {
+        let (scrollbar, travel, width) = wheeled(subject, scroll(), parent);
+        let (_, control_travel, control_width) = wheeled(control, scroll(), parent);
+        assert!(scrollbar, "{case}: 150 in a 100 viewport needs a scrollbar");
+        assert_eq!(travel, 50.0, "{case}: the wheel reaches the last 50px");
+        assert_eq!(travel, control_travel, "{case}: as the control scrolls");
+        assert_eq!(width, control_width, "{case}: and is offered its width");
+    }
+}
+
+/// A 100-wide scroller whose exact height is halfway from 100 to 300 — 200 on
+/// its way — laid out under `parent`, and what a wheel notch does to it.
+fn wheeled_in_flight(parent: f32) -> (bool, f32, f32) {
+    let target = create_signal(100.0f32);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(target.transition(linear_100ms()))
+            .scroll(Scroll::vertical())
+            .child(container().width(fill()).height(150.0)),
+    );
+    halfway_to_300(&mut h, target, parent);
+    reach_of_a_notch(&mut h)
+}
+
+/// The same while the height is in flight: a 100px maximum cuts the 200 on its
+/// way to 100, so there is still 50 to scroll.
+#[test]
+fn an_exact_length_in_flight_past_the_parent_maximum_scrolls_what_it_cannot_show() {
+    let (scrollbar, travel, _) = wheeled_in_flight(100.0);
+    assert!(scrollbar, "150 in a 100 viewport needs a scrollbar");
+    assert_eq!(travel, 50.0, "the wheel reaches the last 50px");
+}
+
+/// Its control: under a 500px parent the box really is 200, and there is
+/// nothing to scroll.
+#[test]
+fn an_exact_length_in_flight_under_a_larger_parent_has_nothing_to_scroll() {
+    let (scrollbar, travel, _) = wheeled_in_flight(500.0);
+    assert!(!scrollbar, "150 fits in 200");
+    assert_eq!(travel, 0.0);
 }
 
 // ---------------------------------------------------------------------------
