@@ -295,6 +295,7 @@ impl TextMeasurer {
             letter_spacing,
             TextAlign::Start,
             (max_width, None),
+            None,
             fit,
             1.0,
         )

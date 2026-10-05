@@ -269,6 +269,7 @@ impl TextQuadRenderer {
             entry.letter_spacing,
             entry.align,
             (Some(buffer_width), Some(buffer_height)),
+            Some(entry.rect.width * effective_scale),
             entry.fit,
             effective_scale,
         );

@@ -30,6 +30,9 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
     width.to_bits().hash(&mut hasher);
     height.to_bits().hash(&mut hasher);
+    // The box a right-to-left line starts against, when it is not the buffer.
+    let edge = entry.rect.width * scale_factor;
+    (edge < width).then_some(edge.to_bits()).hash(&mut hasher);
     entry.fit.map(|fit| fit.key()).hash(&mut hasher);
     hasher.finish()
 }
@@ -75,6 +78,7 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
             let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
             (Some(width), Some(height))
         },
+        Some(entry.rect.width * scale_factor),
         entry.fit,
         scale_factor,
     )
@@ -117,6 +121,16 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 /// added to is cosmic-text's decision — the advance of every glyph it puts
 /// out — and the measurer, glyphon, the quad and the mask all take it from
 /// this one call. A number that is not one is no spacing.
+///
+/// `start_edge` is the width of the box a right-to-left line starts against,
+/// which a start-aligned text's buffer is wider than: upright, by
+/// [`shaping_buffer`]'s floor, and transformed, by the quad's margin.
+/// cosmic-text starts such a line at the buffer's right edge, past the box.
+/// When no line wrapped in the buffer, the lines are laid out again across the
+/// box itself and unwrapped, which breaks them where they already broke and
+/// starts a right-to-left one at the box's right edge. A left-to-right line
+/// starts at zero either way, so a text without a right-to-left line is left
+/// as it was shaped.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn shape(
     font_system: &mut FontSystem,
@@ -128,6 +142,7 @@ pub(super) fn shape(
     letter_spacing: f32,
     align: TextAlign,
     size: (Option<f32>, Option<f32>),
+    start_edge: Option<f32>,
     fit: Option<LineFit>,
     scale: f32,
 ) -> Buffer {
@@ -171,6 +186,18 @@ pub(super) fn shape(
     }
     buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align(align));
     buffer.shape_until_scroll(font_system, true);
+    if let (None, Some(edge), Some(width)) = (fit, start_edge, size.0)
+        && edge < width
+        && buffer.layout_runs().any(|run| run.rtl)
+        && buffer
+            .lines
+            .iter()
+            .all(|line| line.layout_opt().is_none_or(|lines| lines.len() <= 1))
+    {
+        buffer.set_wrap(Wrap::None);
+        buffer.set_size(Some(edge), size.1);
+        buffer.shape_until_scroll(font_system, true);
+    }
     if let (Some(lines), Some(mark)) = (lines, fit.and_then(|fit| ellipsize(fit.overflow))) {
         cut_to_lines(font_system, &mut buffer, lines, mark);
     }
@@ -1327,6 +1354,7 @@ mod an_aligned_cut_is_the_measured_cut {
             0.0,
             align,
             (width, Some(1000.0)),
+            None,
             Some(fit),
             scale,
         );
@@ -1354,6 +1382,7 @@ mod an_aligned_cut_is_the_measured_cut {
             0.0,
             TextAlign::Start,
             (None, None),
+            None,
             None,
             1.0,
         );
@@ -1463,6 +1492,7 @@ fn an_absolute_line_height_is_scaled_with_the_text() {
             TextAlign::Start,
             (None, None),
             None,
+            None,
             scale,
         )
         .metrics()
@@ -1504,6 +1534,7 @@ fn a_missing_weight_is_the_nearest_one_of_the_same_family() {
             0.0,
             TextAlign::Start,
             (None, None),
+            None,
             None,
             1.0,
         );
@@ -1556,6 +1587,7 @@ fn a_variable_face_is_shaped_at_the_weight_asked_of_it() {
         0.0,
         TextAlign::Start,
         (None, None),
+        None,
         None,
         1.0,
     );
@@ -1614,6 +1646,7 @@ fn a_named_family_without_a_space_is_measured_in_itself() {
         0.0,
         TextAlign::Start,
         (None, None),
+        None,
         None,
         1.0,
     );

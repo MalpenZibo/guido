@@ -73,6 +73,9 @@ pub struct MaskSpec<'a> {
     /// path will draw the glyphs and there are two of them — see the module
     /// documentation.
     pub buffer: (f32, f32),
+    /// The width of the box a right-to-left line starts against, in texels —
+    /// see [`shape`](super::text::shape).
+    pub start_edge: f32,
     /// Mask size in texels: the frame the composite reads it over.
     pub size: (u32, u32),
     /// Where the glyph origin sits inside that frame, in texels — the slack the
@@ -102,6 +105,8 @@ struct MaskKey {
     /// Rounded, and in the key because it decides where the lines break: two
     /// masks alike in every other field can still be shaped differently.
     buffer: (u32, u32),
+    /// Where a right-to-left line starts, rounded like the buffer.
+    start_edge: u32,
     /// The glyph origin inside the frame, in quarter texels. Quantised because
     /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
@@ -221,6 +226,7 @@ impl TextMaskRenderer {
             width,
             height,
             buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),
+            start_edge: spec.start_edge as u32,
             offset: (
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
@@ -250,6 +256,7 @@ impl TextMaskRenderer {
             spec.letter_spacing,
             spec.align,
             (Some(spec.buffer.0), Some(spec.buffer.1)),
+            Some(spec.start_edge),
             spec.fit,
             spec.density,
         );

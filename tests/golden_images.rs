@@ -2693,9 +2693,8 @@ fn spaced_labels() -> Container {
                 label("x\u{301}e\u{301}", 22.0).letter_spacing(spacing),
             ))
             // Centred in a box that is exactly its line, which is where a
-            // line starting at the start would also sit — but a right-to-left
-            // line under glyphon's 200-pixel floor starts at the floor's right
-            // edge, not its box's, and that is not what this picture is about.
+            // line starting at the start also sits; where a right-to-left
+            // line starts is `right_to_left_label_starts_in_its_own_box`'s.
             .child(hugged(
                 label("\u{644}\u{627} \u{633}\u{644}\u{645}", 22.0)
                     .letter_spacing(spacing)
@@ -2780,5 +2779,81 @@ fn letter_spacing_reaches_every_path_at_scale_1_5x() {
         1.5,
         BACKDROP,
         spaced_labels(),
+    );
+}
+
+/// Right-to-left labels that start where they should: at the start edge of
+/// their own box, which for a right-to-left line is its right edge.
+///
+/// Every path shapes a start-aligned text in a buffer wider than its box —
+/// glyphon's is never narrower than 200 pixels, the quad's is the box widened
+/// by its margin — and cosmic-text starts a right-to-left line at the buffer's
+/// right edge, past the box (#617). Each label here is narrower than 200:
+/// hugged by its box, then in a box 150 wide that it does not fill, where it
+/// has to sit against the right edge and not the left. Then frosted over bars,
+/// upright and turned, whose frost is shaped apart from its letters and has to
+/// start where they do; and hugged on a scaled card, which is drawn as a quad.
+fn right_to_left_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645}";
+    let hugged = || container().background(INK).child(label(ARABIC, 22.0));
+    let frosted = |degrees: f32| {
+        frosted_over_bars(
+            50.0,
+            container().rotate(degrees).child(
+                label(ARABIC, 30.0)
+                    .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                    .backdrop_blur(8.0)
+                    .nowrap(),
+            ),
+        )
+    };
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(
+            Flex::column()
+                .spacing(12.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+        .child(hugged())
+        .child(
+            container()
+                .width(150.0)
+                .background(INK)
+                .layout(Flex::column())
+                .child(label(ARABIC, 22.0)),
+        )
+        .child(
+            container()
+                .layout(Flex::row().spacing(20.0))
+                .child(frosted(0.0))
+                .child(frosted(15.0)),
+        )
+        .child(container().padding([6.0, 12.0]).child(hugged().scale(1.4)))
+}
+
+/// Right-to-left labels under the shaping floor, at scale 1.
+#[test]
+fn right_to_left_label_starts_in_its_own_box() {
+    golden(
+        "right_to_left_label_starts_in_its_own_box",
+        (380.0, 240.0),
+        1.0,
+        BACKDROP,
+        right_to_left_labels(),
+    );
+}
+
+/// The same at scale 1.5, where the box the line starts against is taken to
+/// physical pixels by a factor that is not a whole number.
+#[test]
+fn right_to_left_label_starts_in_its_own_box_at_scale_1_5x() {
+    golden(
+        "right_to_left_label_starts_in_its_own_box_at_scale_1_5x",
+        (380.0, 240.0),
+        1.5,
+        BACKDROP,
+        right_to_left_labels(),
     );
 }
