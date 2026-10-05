@@ -43,7 +43,7 @@ fn in_box(fit: ContentFit, w: f32, h: f32) -> Size {
             .child(image(source()).content_fit(fit)),
     ));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
-    tree.layout_widget(root, Constraints::new(0.0, 0.0, 1000.0, 1000.0));
+    tree.layout_widget(root, Constraints::new(0.0, 0.0, w, h));
     let child = tree.get_children(root)[0];
     tree.cached_size(child).expect("the image was laid out")
 }

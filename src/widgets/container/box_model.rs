@@ -141,12 +141,13 @@ impl Container {
             && !anim.is_initial()
             && length.exact_size().is_some()
         {
-            return anim.displayed_in(ctx);
+            return length.clamp(anim.displayed_in(ctx)).min(available);
         }
         // No maximum is `INFINITY`, so the `min` is the whole of the answer
         // and an unbounded `available` stays unbounded.
         length
             .exact_size()
+            .map(|exact| length.clamp(exact).min(available))
             .unwrap_or_else(|| length.clamp_max(available))
     }
 

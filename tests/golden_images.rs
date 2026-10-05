@@ -73,6 +73,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 mod common;
+#[path = "common/overflow_layout.rs"]
+mod overflow_layout;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
@@ -544,6 +546,31 @@ fn render_with_own_renderer(
 
 const BACKDROP: Color = Color::rgb(0.08, 0.08, 0.10);
 
+/// A rejected exact length must not move the centered child off its real box.
+#[test]
+fn exact_children_use_the_constrained_box() {
+    let name = "exact_children_use_the_constrained_box";
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let view = |extent| {
+        container()
+            .width(extent)
+            .height(extent)
+            .background(Color::BLUE)
+            .padding(10.0)
+            .layout(Flex::row().center())
+            .child(container().width(20.0).height(20.0).background(Color::RED))
+    };
+    let expected = render_with_own_renderer(ctx, view(100.0), (100.0, 100.0), 1.0, BACKDROP);
+    let actual = render_with_own_renderer(ctx, view(200.0), (100.0, 100.0), 1.0, BACKDROP);
+    assert!(
+        actual.data == expected.data,
+        "parent-clamped and matching exact boxes must draw identically"
+    );
+    assert_golden(name, adapter, actual);
+}
+
 fn box_of(w: f32, h: f32) -> Container {
     container().width(w).height(h)
 }
@@ -939,6 +966,11 @@ fn clipped_images() {
             .rotate(degrees)
             .child(
                 box_of(90.0, 90.0)
+                    .layout(overflow_layout::OverflowLayout {
+                        width: 90.0,
+                        height: Some(90.0),
+                        flex: Flex::column(),
+                    })
                     .child(image(checkerboard(90, 15)).content_fit(ContentFit::Cover)),
             )
     };
@@ -1391,6 +1423,11 @@ fn clipped_text() {
     fn nowrap_line(content: &'static str) -> Container {
         container()
             .width(220.0)
+            .layout(overflow_layout::OverflowLayout {
+                width: 220.0,
+                height: None,
+                flex: Flex::column(),
+            })
             .child(label(content, 26.0).nowrap())
     }
 
@@ -1665,7 +1702,11 @@ fn frosted_text_is_cut_by_its_scroller() {
                     .child(
                         container()
                             .width(150.0)
-                            .layout(Flex::column().spacing(2.0))
+                            .layout(overflow_layout::OverflowLayout {
+                                width: 150.0,
+                                height: None,
+                                flex: Flex::column().spacing(2.0),
+                            })
                             .child(frosted())
                             .child(frosted())
                             .child(frosted()),

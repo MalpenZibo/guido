@@ -1703,6 +1703,93 @@ fn a_linear_animation_is_halfway_at_half_its_duration() {
     );
 }
 
+/// The displayed length is bounded before it becomes the children's space.
+#[test]
+fn exact_size_animation_offers_children_the_final_clamped_extent() {
+    let width = create_signal(200.0f32);
+    let height = create_signal(200.0f32);
+    let mut h = H::new(
+        container()
+            .width(width.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .height(height.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .padding(10.0)
+            .child(container().width(fill()).height(fill())),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 100.0, 100.0);
+    width.set(50.0);
+    height.set(50.0);
+    frame_at(&mut h, t0, 100.0, 100.0);
+    for (ms, expected) in [(25, 80.0), (75, 67.5), (100, 30.0)] {
+        frame_at(&mut h, after(t0, ms), 100.0, 100.0);
+        let child = h.children()[0];
+        let bounds = h.tree.get_bounds(child).unwrap();
+        assert_eq!((bounds.width, bounds.height), (expected, expected));
+        let parent = h.tree.cached_size(h.root).unwrap();
+        assert_eq!(
+            (parent.width, parent.height),
+            (expected + 20.0, expected + 20.0)
+        );
+    }
+}
+
+fn assert_animated_own_bound(declared: crate::layout::Length, samples: [(u64, f32); 2]) {
+    let length = create_signal(crate::layout::Length::exact(200.0));
+    let mut h = H::new(
+        container()
+            .width(length.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .height(length.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .padding(10.0)
+            .child(container().width(fill()).height(fill())),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    length.set(declared);
+    frame_at(&mut h, t0, 400.0, 400.0);
+    for (ms, expected) in samples {
+        frame_at(&mut h, after(t0, ms), 400.0, 400.0);
+        let child = h.tree.get_bounds(h.children()[0]).unwrap();
+        let parent = h.tree.cached_size(h.root).unwrap();
+        assert_eq!((parent.width, parent.height), (expected, expected));
+        assert_eq!(
+            (child.width, child.height),
+            (expected - 20.0, expected - 20.0)
+        );
+    }
+}
+
+#[test]
+fn animated_exact_lengths_obey_their_own_minimum() {
+    assert_animated_own_bound(
+        crate::layout::Length::exact(300.0).at_least(250.0),
+        [(25, 250.0), (100, 300.0)],
+    );
+}
+
+#[test]
+fn animated_exact_lengths_obey_their_own_maximum() {
+    assert_animated_own_bound(
+        crate::layout::Length::exact(50.0).at_most(100.0),
+        [(25, 100.0), (100, 50.0)],
+    );
+}
+
+#[test]
+fn exact_children_ignore_parent_minimum_on_both_axes() {
+    let mut h = H::new(
+        container()
+            .width(60.0)
+            .height(60.0)
+            .child(container().width(fill()).height(fill())),
+    );
+    assert_eq!(
+        h.layout(Constraints::new(200.0, 200.0, 400.0, 400.0)),
+        Size::new(60.0, 60.0)
+    );
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!((child.width, child.height), (60.0, 60.0));
+}
+
 /// The radius of the ripple drawn by this frame, if one is drawn.
 fn painted_ripple_radius(h: &mut H) -> Option<f32> {
     h.paint()

@@ -34,6 +34,8 @@
 use std::fmt::Write as _;
 
 mod common;
+#[path = "common/overflow_layout.rs"]
+mod overflow_layout;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
@@ -66,6 +68,21 @@ fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
 fn n(v: f32) -> String {
     let r = (v * 100.0).round() / 100.0;
     if r == 0.0 { "0".into() } else { format!("{r}") }
+}
+
+#[test]
+fn exact_children_use_the_constrained_box() {
+    let view = |extent| {
+        container()
+            .width(extent)
+            .height(extent)
+            .padding(10.0)
+            .layout(Flex::row().center())
+            .child(container().width(20.0).height(20.0).background(Color::RED))
+    };
+    let actual = render(view(200.0), 100.0, 100.0);
+    assert_eq!(actual, render(view(100.0), 100.0, 100.0));
+    assert_snapshot("exact_children_use_the_constrained_box", actual);
 }
 
 fn rect(r: &Rect) -> String {
@@ -549,6 +566,11 @@ fn overflow_and_clipping() {
                 .background(Color::rgb(0.2, 0.2, 0.3))
                 .child(
                     box_of(200.0, 40.0)
+                        .layout(overflow_layout::OverflowLayout {
+                            width: 200.0,
+                            height: None,
+                            flex: Flex::column(),
+                        })
                         .overflow(Overflow::Hidden)
                         .corners(8.0)
                         .child(swatch(400.0, 30.0, Color::GREEN)),
