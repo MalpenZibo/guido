@@ -305,8 +305,9 @@ impl TextMeasurer {
     ///
     /// Returns `char_count + 1` positions: `positions[i]` is the x offset of
     /// the boundary before character `i`, and the last entry is the total
-    /// width. Characters swallowed into a ligature/cluster snap to the
-    /// cluster start. Assumes single-line LTR text (the text-input model).
+    /// width. A cluster's boundary is the x of its first glyph, and
+    /// characters swallowed into a ligature/cluster snap to it. Assumes
+    /// single-line LTR text (the text-input model).
     ///
     /// Text inputs previously rebuilt their cursor-position table by
     /// measuring every prefix of the text — O(n) shaping passes of O(n)
@@ -319,18 +320,9 @@ impl TextMeasurer {
         font_weight: FontWeight,
         letter_spacing: f32,
     ) -> Vec<f32> {
-        let char_count = text.chars().count();
-        let mut positions = vec![0.0f32; char_count + 1];
         if text.is_empty() {
-            return positions;
+            return vec![0.0];
         }
-
-        // Map byte offsets to character indices for glyph lookup
-        let mut char_index_at_byte = vec![usize::MAX; text.len() + 1];
-        for (char_idx, (byte_idx, _)) in text.char_indices().enumerate() {
-            char_index_at_byte[byte_idx] = char_idx;
-        }
-        char_index_at_byte[text.len()] = char_count;
 
         // Widths only, which no line height changes.
         let buffer = self.shape(
@@ -344,30 +336,31 @@ impl TextMeasurer {
             None,
         );
 
+        // The x each cluster starts at, by byte. A letter and a mark the font
+        // cannot compose are two glyphs with one start, and the mark's pen is
+        // past the letter: the first one counts.
+        let mut starts = vec![None; text.len()];
         let mut total_width = 0.0f32;
-        let mut any_glyphs = false;
         for run in buffer.layout_runs() {
             for glyph in run.glyphs {
-                if let Some(&char_idx) = char_index_at_byte.get(glyph.start)
-                    && char_idx != usize::MAX
-                {
-                    positions[char_idx] = glyph.x;
-                    any_glyphs = true;
+                if let Some(start) = starts.get_mut(glyph.start) {
+                    start.get_or_insert(glyph.x);
                 }
             }
             total_width = total_width.max(run.line_w);
         }
-        positions[char_count] = total_width;
 
-        // Forward-fill boundaries that got no glyph (cluster continuations):
-        // they sit at the position of the cluster they belong to.
-        if any_glyphs {
-            for i in 1..char_count {
-                if positions[i] == 0.0 && positions[i - 1] > 0.0 {
-                    positions[i] = positions[i - 1];
-                }
-            }
-        }
+        // A character no glyph starts at is inside a cluster, and its
+        // boundary sits where that cluster starts.
+        let mut x = 0.0;
+        let mut positions: Vec<f32> = text
+            .char_indices()
+            .map(|(byte, _)| {
+                x = starts[byte].unwrap_or(x);
+                x
+            })
+            .collect();
+        positions.push(total_width);
 
         positions
     }
@@ -1221,5 +1214,35 @@ mod letter_spacing_tests {
             attached + 4.0,
             "the mark's place",
         );
+    }
+
+    /// x and U+0301 are two glyphs with one cluster start, the mark's pen
+    /// past the base's: the boundary before the cluster is the base's x, and
+    /// the one inside it snaps to the same place. Spaced, the mark takes a
+    /// spacing of its own and the boundaries still start at 0.
+    #[test]
+    fn a_boundary_takes_the_first_glyph_of_its_cluster() {
+        let mut m = measurer();
+        let family = FontFamily::name("DejaVu Sans Mono");
+        let cell = ADVANCE * 20.0;
+        for (text, spacing, expected) in [
+            ("x\u{301}", 0.0, vec![0.0, 0.0, cell]),
+            ("x\u{301}", 4.0, vec![0.0, 0.0, cell + 8.0]),
+            (
+                "ax\u{301}b",
+                0.0,
+                vec![0.0, cell, cell, 2.0 * cell, 3.0 * cell],
+            ),
+        ] {
+            let got = m.char_positions_styled(text, 20.0, family, FontWeight::NORMAL, spacing);
+            assert_eq!(got.len(), expected.len(), "{text:?}: {got:?}");
+            for (i, (x, want)) in got.iter().zip(&expected).enumerate() {
+                assert_near(
+                    *x,
+                    *want,
+                    &format!("{text:?} at {spacing} px, boundary {i}"),
+                );
+            }
+        }
     }
 }
