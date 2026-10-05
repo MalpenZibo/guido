@@ -3052,3 +3052,47 @@ fn a_press_held_on_a_surface_that_closes_does_not_hold_the_next_one() {
         "the press on the second surface is hit-tested where it lands"
     );
 }
+
+/// A press inside a chord is not hit-tested, so it says nothing about what is
+/// under the pointer — and must not take away the cursor the last move asked
+/// for (#625).
+#[test]
+fn a_right_press_during_a_drag_keeps_the_cursor_under_the_pointer() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .layout(Flex::row())
+            .child(container().width(100.0).height(20.0).on_mouse_up(|_, _| {}))
+            // Clear of the window the press at x=10 was offered, which is the
+            // container under it and one either side.
+            .children((0..2).map(|_| container().width(100.0).height(20.0)))
+            .child(
+                container()
+                    .width(100.0)
+                    .height(20.0)
+                    .cursor(CursorIcon::Pointer),
+            )
+    });
+    app.configure(surface, 500, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    pointer_enters(&mut app, surface);
+
+    for event in [
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        Event::mouse_move(350.0, 10.0),
+        Event::mouse_down(350.0, 10.0, MouseButton::Right),
+    ] {
+        at += Duration::from_millis(16);
+        app.event_at(surface, event, at);
+        app.step_at(at);
+    }
+
+    assert_eq!(
+        app.cursors_asked().last(),
+        Some(&CursorIcon::Pointer),
+        "the press went along the drag's route, and the cursor stays what the \
+         move over the fourth container asked for: {:?}",
+        app.cursors_asked()
+    );
+}

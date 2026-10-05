@@ -1448,6 +1448,13 @@ impl Tree {
         std::iter::successors(Some(id), |&id| self.get_parent(id))
     }
 
+    /// Whether the last pointer event was offered to what is under its point.
+    /// A press or release inside a chord goes along the press route alone, so
+    /// it has nothing to say about the cursor there.
+    pub(crate) fn asked_under_the_point(&self) -> bool {
+        !self.pointer.chorded
+    }
+
     /// Hear the keys nobody on the focus path takes. See [`Self::dispatch`].
     pub(crate) fn listen_for_keys(&mut self, id: WidgetId) {
         if !self.key_listeners.contains(&id) {
