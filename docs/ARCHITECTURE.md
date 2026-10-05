@@ -658,6 +658,11 @@ The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).
 
+A held key travels the same way, once per repeat, as a key-down whose `repeat`
+is set (#613). Both of its producers — sctk's calloop timer and `wl_keyboard`'s
+repeated key state — reach `emit_key_repeat`, and a widget is not told which,
+as winit, SDL and the DOM do not tell theirs.
+
 `tests/event_routes.rs` sends every kind of event over a long list and counts
 who it reached: an event that slipped back into a walk over every widget would
 reach the whole list.
