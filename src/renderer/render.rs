@@ -863,6 +863,7 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             } else {
                 super::text_quad::shaping_buffer(*rect, density, *align)
             },
+            box_width: rect.width * density,
             size: (width as u32, height as u32),
             offset: (slack * density, slack * density),
             density,

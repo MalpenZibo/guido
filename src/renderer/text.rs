@@ -60,6 +60,34 @@ pub(super) fn shaping_buffer(rect: Rect, scale: f32, align: TextAlign) -> (f32, 
     (width * scale, rect.height.max(50.0) * scale)
 }
 
+/// How far right a shaped text is drawn of its box's left edge, in the same
+/// pixels as the buffer and the box.
+///
+/// A text is shaped in the width it was laid out in, which its box can come
+/// back narrower than — a box hugs its widest line — and cosmic-text places
+/// each line across the width it was shaped in. So a line that starts at the
+/// right, a right-to-left one, or one aligned to the centre or the end, would
+/// sit against the wrong edge. This moves the whole buffer by the alignment's
+/// fraction of the difference, as Flutter's `TextPainter` does with its paint
+/// offset: nothing for a line that starts at the left, all of it for one that
+/// starts at the right, half for a centred one. The direction is the first
+/// line's, as Flutter takes the paragraph's.
+///
+/// One function for glyphon, the transformed quad and the frost's mask, because
+/// a frost has to sit exactly under the letters it is cut for.
+pub(super) fn paint_offset(buffer: &Buffer, box_width: f32, align: TextAlign) -> f32 {
+    let Some(shaped_in) = buffer.size().0 else {
+        return 0.0;
+    };
+    let rtl = buffer.layout_runs().next().is_some_and(|run| run.rtl);
+    let fraction = match (align, rtl) {
+        (TextAlign::Center, _) => 0.5,
+        (TextAlign::Start | TextAlign::Justified, false) | (TextAlign::End, true) => 0.0,
+        (TextAlign::Start | TextAlign::Justified, true) | (TextAlign::End, false) => 1.0,
+    };
+    fraction * (box_width - shaped_in)
+}
+
 /// Shape an untransformed text into a fresh buffer, as glyphon will draw it.
 fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f32) -> Buffer {
     shape(
@@ -671,7 +699,8 @@ impl TextRenderState {
                     entry.transform.transform_point(entry.rect.x, entry.rect.y);
 
                 // Scale positions for HiDPI rendering
-                let scaled_left = screen_x * scale_factor;
+                let scaled_left = screen_x * scale_factor
+                    + paint_offset(buffer, entry.rect.width * scale_factor, entry.align);
                 let scaled_top = screen_y * scale_factor;
 
                 // Use clip rect if provided, otherwise use full screen

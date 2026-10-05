@@ -103,6 +103,9 @@ struct TextCacheKey {
     color: [u8; 4],
     tex_width: u32,
     tex_height: u32,
+    /// The box's own width, which the texture's is only rounded from: it is
+    /// what a line starting at the right is drawn against.
+    box_width_bits: u32,
     /// The cut, which decides what is drawn at all.
     fit: Option<super::text_measurer::LineFitKey>,
 }
@@ -247,6 +250,7 @@ impl TextQuadRenderer {
             ],
             tex_width,
             tex_height,
+            box_width_bits: entry.rect.width.to_bits(),
             fit: entry.fit.map(|fit| fit.key()),
         };
 
@@ -303,7 +307,12 @@ impl TextQuadRenderer {
         // Create text area
         let text_area = TextArea {
             buffer: &buffer,
-            left: padding,
+            left: padding
+                + super::text::paint_offset(
+                    &buffer,
+                    entry.rect.width * effective_scale,
+                    entry.align,
+                ),
             top: padding,
             scale: 1.0,
             bounds: TextBounds {

@@ -73,6 +73,10 @@ pub struct MaskSpec<'a> {
     /// path will draw the glyphs and there are two of them — see the module
     /// documentation.
     pub buffer: (f32, f32),
+    /// The width of the text's box, in texels: what the glyphs are placed
+    /// across, by [`paint_offset`](super::text::paint_offset), as the letters
+    /// over the frost are.
+    pub box_width: f32,
     /// Mask size in texels: the frame the composite reads it over.
     pub size: (u32, u32),
     /// Where the glyph origin sits inside that frame, in texels — the slack the
@@ -102,6 +106,9 @@ struct MaskKey {
     /// Rounded, and in the key because it decides where the lines break: two
     /// masks alike in every other field can still be shaped differently.
     buffer: (u32, u32),
+    /// By its bits, because it places the glyphs and a mask has to sit exactly
+    /// under them.
+    box_width_bits: u32,
     /// The glyph origin inside the frame, in quarter texels. Quantised because
     /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
@@ -221,6 +228,7 @@ impl TextMaskRenderer {
             width,
             height,
             buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),
+            box_width_bits: spec.box_width.to_bits(),
             offset: (
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
@@ -274,7 +282,7 @@ impl TextMaskRenderer {
 
         let area = TextArea {
             buffer: &buffer,
-            left: spec.offset.0,
+            left: spec.offset.0 + super::text::paint_offset(&buffer, spec.box_width, spec.align),
             top: spec.offset.1,
             scale: 1.0,
             bounds: TextBounds {
