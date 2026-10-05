@@ -3,9 +3,18 @@
 //! The first button pressed decides the press route, and every later press,
 //! move and release follows it until the last button is up. A press or release
 //! of another button while one is held is still its own event, but it goes
-//! along that route and is not hit-tested again. Before this, any release
-//! dropped the route and any press replaced it, so a right-click in the middle
-//! of a left drag lost the drag's moves and its release.
+//! along that route and is not hit-tested again.
+//!
+//! Before this, any release dropped the route and any press replaced it. What
+//! still reached the pressed widget then was only what a container offers by
+//! position: the child under the pointer and one either side. So the drag was
+//! lost exactly when the other button's press or release came while the
+//! pointer was further than that from where the drag began — two siblings
+//! away in a row or column, or in another branch of the tree — and its moves
+//! and release kept coming from there. How fast the pointer moved does not
+//! matter; small steps lose it the same way one jump does. Beside a single
+//! sibling the press origin is always the neighbour the window offers, which is
+//! why a two-child row did not show it.
 //!
 //! The sequences are the ones the issue and its discussion reported; the
 //! controls are the routes that already worked and must keep working.
@@ -92,30 +101,98 @@ fn presses_and_releases(log: &Log) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn another_button_pressed_and_released_during_a_left_drag_does_not_end_it() {
-    for other in [MouseButton::Right, MouseButton::Middle] {
-        let first = log();
-        let mut h = row_with_a_listening_first(&first);
-
-        h.send(Event::mouse_down(10.0, 10.0, MouseButton::Left));
-        h.send(Event::mouse_down(10.0, 10.0, other));
-        h.send(Event::mouse_move(450.0, 10.0));
-        h.send(Event::mouse_up(450.0, 10.0, other));
-        h.send(Event::mouse_move(460.0, 10.0));
-        h.send(Event::mouse_up(460.0, 10.0, MouseButton::Left));
-
-        assert_eq!(
-            *first.borrow(),
-            ["down10", "move450", "move460", "up460"],
-            "a {other:?} press and release while Left was held dropped the \
-             left drag's route"
-        );
+/// The issue's six steps, done two ways: one jump to the fourth sibling, and
+/// the same path in 10px moves. On `main` both lost the drag, because the other
+/// button's release dropped the route while the pointer was two siblings away
+/// from the container the drag began on.
+fn the_issues_sequence(other: MouseButton, step: f32) -> Vec<Event> {
+    let mut events = vec![
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        Event::mouse_down(10.0, 10.0, other),
+    ];
+    let mut x = 10.0;
+    while x < 450.0 {
+        x = (x + step).min(450.0);
+        events.push(Event::mouse_move(x, 10.0));
     }
+    events.push(Event::mouse_up(450.0, 10.0, other));
+    events.push(Event::mouse_move(460.0, 10.0));
+    events.push(Event::mouse_up(460.0, 10.0, MouseButton::Left));
+    events
 }
 
 #[test]
-fn a_second_press_over_another_container_does_not_take_the_route() {
+fn a_drag_two_siblings_away_survives_another_buttons_click() {
+    for other in [MouseButton::Right, MouseButton::Middle] {
+        for step in [10.0, 440.0] {
+            let first = log();
+            let mut h = row_with_a_listening_first(&first);
+            let events = the_issues_sequence(other, step);
+            let moves = events
+                .iter()
+                .filter(|event| matches!(event, Event::MouseMove { .. }))
+                .count();
+            for event in events {
+                h.send(event);
+            }
+
+            let first = first.borrow();
+            assert_eq!(
+                (
+                    first.first().map(String::as_str),
+                    first
+                        .iter()
+                        .filter(|entry| entry.starts_with("move"))
+                        .count(),
+                    first.last().map(String::as_str),
+                ),
+                (Some("down10"), moves, Some("up460")),
+                "a {other:?} click while Left was held, two siblings away from \
+                 the drag's origin, in {step}px moves, lost the drag: {first:?}"
+            );
+        }
+    }
+}
+
+/// The maintainer's hand test on niri, which did not reproduce on `main`: a
+/// box beside one wide sibling. Wherever the pointer is on that row the box is
+/// the neighbour of the child under it, and a container offers the neighbours
+/// too, so the moves and the release reached it without any route at all. A
+/// control: it passes on `main` and must keep passing.
+#[test]
+fn a_drag_beside_its_only_sibling_survives_another_buttons_click() {
+    let first = log();
+    let row = container()
+        .layout(Flex::row())
+        .child(listening(&first).width(60.0))
+        .child(container().width(440.0).height(20.0));
+    let mut h = Harness::laid_out(row, 500.0, 20.0);
+
+    h.send(Event::mouse_down(14.0, 10.0, MouseButton::Left));
+    h.send(Event::mouse_down(14.0, 10.0, MouseButton::Right));
+    let mut x = 14.0;
+    for _ in 0..131 {
+        x += 3.0;
+        h.send(Event::mouse_move(x, 10.0));
+    }
+    h.send(Event::mouse_up(x, 10.0, MouseButton::Right));
+    for _ in 0..23 {
+        x += 3.0;
+        h.send(Event::mouse_move(x, 10.0));
+    }
+    h.send(Event::mouse_up(x, 10.0, MouseButton::Left));
+
+    let first = first.borrow();
+    assert_eq!(first.iter().filter(|e| e.starts_with("move")).count(), 154);
+    assert_eq!(first.last().map(String::as_str), Some("up476"));
+}
+
+/// The contributor's second case: the Right press lands four siblings from
+/// where Left went down. On `main` it was hit-tested there and replaced the
+/// route, so the first container lost the moves and the release that came
+/// from that far away, and the container under the press took the click.
+#[test]
+fn a_second_press_two_siblings_away_does_not_take_the_route() {
     let first = log();
     let other = log();
     let (clicked, down, up) = (other.clone(), other.clone(), other.clone());

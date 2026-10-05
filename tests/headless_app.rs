@@ -2982,11 +2982,13 @@ fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still()
     assert_eq!(app.cursors_asked(), [CursorIcon::Text, CursorIcon::Wait]);
 }
 
-/// The issue's sequence (#625), through the loop rather than a bare tree: a
-/// right-click pressed and released in the middle of a left drag leaves the
-/// drag's moves and its release where they were going.
+/// The issue's sequence (#625), through the loop rather than a bare tree, in
+/// 10px moves: a right-click pressed and released in the middle of a left drag
+/// leaves the drag's moves and its release where they were going. On `main`
+/// the click dropped the route while the pointer was two siblings away from
+/// the drag's origin, which no container offers by position.
 #[test]
-fn a_right_click_inside_a_left_drag_leaves_the_drag_alone() {
+fn a_right_click_two_siblings_from_a_left_drag_leaves_the_drag_alone() {
     let Some(mut app) = headless() else { return };
     let seen = Rc::new(RefCell::new(Vec::new()));
     let log = seen.clone();
@@ -3008,20 +3010,35 @@ fn a_right_click_inside_a_left_drag_leaves_the_drag_alone() {
     let mut at = Instant::now();
     app.step_at(at);
 
-    for event in [
+    let drag = (2..=45).map(|step| Event::mouse_move(step as f32 * 10.0, 10.0));
+    let events = [
         Event::mouse_down(10.0, 10.0, MouseButton::Left),
         Event::mouse_down(10.0, 10.0, MouseButton::Right),
-        Event::mouse_move(450.0, 10.0),
+    ]
+    .into_iter()
+    .chain(drag)
+    .chain([
         Event::mouse_up(450.0, 10.0, MouseButton::Right),
         Event::mouse_move(460.0, 10.0),
         Event::mouse_up(460.0, 10.0, MouseButton::Left),
-    ] {
+    ]);
+    for event in events {
         at += Duration::from_millis(16);
         app.event_at(surface, event, at);
         app.step_at(at);
     }
 
-    assert_eq!(*seen.borrow(), ["down10", "move450", "move460", "up460"]);
+    let seen = seen.borrow();
+    assert_eq!(
+        (
+            seen.iter()
+                .filter(|entry| entry.starts_with("move"))
+                .count(),
+            seen.last().map(String::as_str),
+        ),
+        (45, Some("up460")),
+        "every move and the release reach the drag's origin: {seen:?}"
+    );
 }
 
 /// A surface closed while a button is held is never sent the release, so the
