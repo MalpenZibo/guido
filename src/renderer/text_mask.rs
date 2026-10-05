@@ -15,13 +15,15 @@
 //! one rasterization serves a whole animation.
 //!
 //! Shaping mirrors whatever will draw the glyphs over the frost exactly — same
-//! metrics, same buffer — because two shapings that disagree break their lines
-//! in different places, and the frost then lands beside a letter that wrapped
-//! elsewhere. There are two to mirror, not one: [`text`](super::text) draws an
-//! untransformed text and [`text_quad`](super::text_quad) a transformed one,
-//! and their buffers are not the same size — a 72-point box at 30px shapes in
-//! 400 texels through one and 317 through the other. So the caller hands the
-//! buffer in rather than this module guessing which is about to be used.
+//! metrics, same width, same offset — because two shapings that disagree break
+//! their lines in different places, and the frost then lands beside a letter
+//! that wrapped elsewhere. Every path shapes in the width the text was laid out
+//! in and places it with the same offset, both from [`text`](super::text); what
+//! differs between [`text`](super::text), which draws an untransformed text,
+//! and [`text_quad`](super::text_quad), which draws a transformed one, is the
+//! height an uncut text is given — 50 logical pixels at least through one, the
+//! box and a margin through the other. So the caller hands the height in rather
+//! than this module guessing which is about to be used.
 //!
 //! Colour is deliberately absent from the cache key: the frost of a white label
 //! and a red one is the same hole.
@@ -67,12 +69,17 @@ pub struct MaskSpec<'a> {
     /// Where each line sits across the buffer, as the letters over the frost
     /// have it.
     pub align: TextAlign,
-    /// The buffer to shape in, in the same texels as everything else here.
+    /// The height to shape an uncut text in, in the same texels as everything
+    /// else here.
     ///
     /// Handed in rather than derived, because the rule belongs to whichever
     /// path will draw the glyphs and there are two of them — see the module
     /// documentation.
-    pub buffer: (f32, f32),
+    pub buffer_height: f32,
+    /// The width of the text's box, in texels: what the glyphs are placed
+    /// across, by [`paint_offset`](super::text::paint_offset), as the letters
+    /// over the frost are.
+    pub box_width: f32,
     /// Mask size in texels: the frame the composite reads it over.
     pub size: (u32, u32),
     /// Where the glyph origin sits inside that frame, in texels — the slack the
@@ -99,9 +106,13 @@ struct MaskKey {
     align: TextAlign,
     width: u32,
     height: u32,
-    /// Rounded, and in the key because it decides where the lines break: two
-    /// masks alike in every other field can still be shaped differently.
-    buffer: (u32, u32),
+    /// Truncated, and in the key because it decides which lines of an uncut
+    /// text are laid out: two masks alike in every other field can still be
+    /// shaped differently.
+    buffer_height: u32,
+    /// By its bits, because it places the glyphs and a mask has to sit exactly
+    /// under them.
+    box_width_bits: u32,
     /// The glyph origin inside the frame, in quarter texels. Quantised because
     /// it follows a stroke width, and a mask per unique float would never hit.
     offset: (i32, i32),
@@ -220,7 +231,8 @@ impl TextMaskRenderer {
             align: spec.align,
             width,
             height,
-            buffer: (spec.buffer.0 as u32, spec.buffer.1 as u32),
+            buffer_height: spec.buffer_height as u32,
+            box_width_bits: spec.box_width.to_bits(),
             offset: (
                 (spec.offset.0 * 4.0).round() as i32,
                 (spec.offset.1 * 4.0).round() as i32,
@@ -249,7 +261,7 @@ impl TextMaskRenderer {
             spec.line_height,
             spec.letter_spacing,
             spec.align,
-            (Some(spec.buffer.0), Some(spec.buffer.1)),
+            (Some(spec.box_width), Some(spec.buffer_height)),
             spec.fit,
             spec.density,
         );
@@ -274,7 +286,7 @@ impl TextMaskRenderer {
 
         let area = TextArea {
             buffer: &buffer,
-            left: spec.offset.0,
+            left: spec.offset.0 + super::text::paint_offset(&buffer, spec.box_width, spec.align),
             top: spec.offset.1,
             scale: 1.0,
             bounds: TextBounds {

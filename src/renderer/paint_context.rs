@@ -455,7 +455,7 @@ impl<'a> PaintContext<'a> {
     // Text Commands
     // -------------------------------------------------------------------------
 
-    /// Draw text with default font settings.
+    /// Draw text with default font settings, wrapped at `rect`'s width.
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
         self.draw_text_styled(
             text,
@@ -471,7 +471,13 @@ impl<'a> PaintContext<'a> {
     }
 
     /// Draw text with custom font family, weight, line height and letter
-    /// spacing, cut to the lines `fit` allows when it is given.
+    /// spacing, laid out as `fit` says.
+    ///
+    /// `fit` is the width the text was measured in and the cut, if any: every
+    /// path shapes the text in that width, so it is drawn on the lines it was
+    /// measured on. Measure and draw with the same one —
+    /// [`LineFit::wrapping`](super::LineFit::wrapping) for a text that wraps
+    /// at a width. Without a fit the text wraps at `rect`'s width.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_styled(
         &mut self,

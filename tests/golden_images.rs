@@ -1917,17 +1917,14 @@ fn frosted_text_follows_its_letters_at_scale_2x() {
 ///
 /// Nothing in this file wrapped before — every label is one line, and one line
 /// agrees with any shaping buffer, which is how the buffer rule came to be
-/// unwatched. It is the rule `TextRenderState` shapes every ordinary text with,
-/// its floors are in logical pixels and its scale is applied after them, and a
-/// mutation of either arithmetic passed the whole suite.
+/// unwatched. A text is shaped in the width it was laid out in, taken to
+/// physical pixels by the scale, and a mutation of that arithmetic passed the
+/// whole suite.
 ///
 /// At scale 2 rather than 1 because that is where the scale in it is legible:
-/// at scale 1 the multiply and the floor are indistinguishable from half a
-/// dozen wrong rules.
-///
-/// Both boxes are wider than 200 logical pixels because that is the floor, and
-/// under it a text does not wrap at its own box at all — it wraps at 200. That
-/// is the rule's own doing and worth seeing here rather than discovering it.
+/// at scale 1 the multiply is indistinguishable from half a dozen wrong rules.
+/// A box narrower than 200 logical pixels, which used to be a floor on the
+/// width, is `a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on`'s.
 #[test]
 fn text_wraps_where_the_box_ends_at_scale_2x() {
     let view = container()
@@ -1991,9 +1988,10 @@ fn frosted_over_bars(height: f32, frosted: impl Widget + 'static) -> Container {
 /// Texts aligned across their own boxes, each box painted behind its text so
 /// the picture says what the line was aligned against.
 ///
-/// Every box is narrower than the 200 logical pixels the renderer otherwise
-/// shapes in, which is the case that matters: a line centred in that floor
-/// rather than in its box sits visibly right of centre, and a line never
+/// Every box is narrower than 200 logical pixels, the width an upright text
+/// was once shaped in, and a hugging box is narrower than the width its text
+/// was laid out in too, which is the case that matters: a line centred in
+/// either rather than in its box sits visibly right of centre, and a line never
 /// aligned hangs from the left edge. The cells, top to bottom on the left:
 /// a wrapped text, whose box is its widest line; two paragraphs split by an
 /// explicit newline; a single line stretched wider than itself, centred and
@@ -2082,9 +2080,9 @@ fn text_aligns_within_its_own_box() {
     );
 }
 
-/// The same at a scale the buffer's width is not a whole multiple of, where a
-/// box shaped at exactly its own width is most likely to break a line the
-/// measurer did not.
+/// The same at a scale the widths are not a whole multiple of, where a line
+/// shaped anywhere but the width it was measured in is most likely to break
+/// where the measurer did not.
 #[test]
 fn text_aligns_within_its_own_box_at_scale_1_5x() {
     golden(
@@ -2707,9 +2705,8 @@ fn spaced_labels() -> Container {
                 label("x\u{301}e\u{301}", 22.0).letter_spacing(spacing),
             ))
             // Centred in a box that is exactly its line, which is where a
-            // line starting at the start would also sit — but a right-to-left
-            // line under glyphon's 200-pixel floor starts at the floor's right
-            // edge, not its box's, and that is not what this picture is about.
+            // line starting at the start also sits; where a right-to-left
+            // line starts is `right_to_left_label_starts_in_its_own_box`'s.
             .child(hugged(
                 label("\u{644}\u{627} \u{633}\u{644}\u{645}", 22.0)
                     .letter_spacing(spacing)
@@ -2846,5 +2843,304 @@ fn a_cut_box_centres_its_children_in_what_is_left() {
         1.0,
         BACKDROP,
         view,
+    );
+}
+
+/// Right-to-left labels that start where they should: at the start edge of
+/// their own box, which for a right-to-left line is its right edge.
+///
+/// Every path shapes a text in the width it was laid out in, which is wider than
+/// a box that does not fill its column, and cosmic-text starts a right-to-left
+/// line at the right edge of that width, past the box; a glyphon buffer was
+/// once never narrower than 200 pixels and the quad's was the box widened by a
+/// margin, which did the same (#617). Each label here is narrower than 200:
+/// hugged by its box, then in a box 150 wide that it does not fill, where it
+/// has to sit against the right edge and not the left. Then frosted over bars,
+/// upright and turned, whose frost is shaped apart from its letters and has to
+/// start where they do; and hugged on a scaled card, which is drawn as a quad.
+fn right_to_left_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645}";
+    let hugged = || container().background(INK).child(label(ARABIC, 22.0));
+    let frosted = |degrees: f32| {
+        frosted_over_bars(
+            50.0,
+            container().rotate(degrees).child(
+                label(ARABIC, 30.0)
+                    .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                    .backdrop_blur(8.0)
+                    .nowrap(),
+            ),
+        )
+    };
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(
+            Flex::column()
+                .spacing(12.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+        .child(hugged())
+        .child(
+            container()
+                .width(150.0)
+                .background(INK)
+                .layout(Flex::column())
+                .child(label(ARABIC, 22.0)),
+        )
+        .child(
+            container()
+                .layout(Flex::row().spacing(20.0))
+                .child(frosted(0.0))
+                .child(frosted(15.0)),
+        )
+        .child(container().padding([6.0, 12.0]).child(hugged().scale(1.4)))
+}
+
+/// Right-to-left labels narrower than the width they were laid out in, at
+/// scale 1.
+#[test]
+fn right_to_left_label_starts_in_its_own_box() {
+    golden(
+        "right_to_left_label_starts_in_its_own_box",
+        (380.0, 240.0),
+        1.0,
+        BACKDROP,
+        right_to_left_labels(),
+    );
+}
+
+/// The same at scale 1.5, where the box the line starts against is taken to
+/// physical pixels by a factor that is not a whole number.
+#[test]
+fn right_to_left_label_starts_in_its_own_box_at_scale_1_5x() {
+    golden(
+        "right_to_left_label_starts_in_its_own_box_at_scale_1_5x",
+        (380.0, 240.0),
+        1.5,
+        BACKDROP,
+        right_to_left_labels(),
+    );
+}
+
+/// Right-to-left labels cut by `max_lines`, which start at their own box's
+/// start edge too.
+///
+/// A cut text is laid out in the width its column offered, and its box comes
+/// back as wide as the line it kept. cosmic-text starts a right-to-left line
+/// at the right edge of the width it was laid out in, so without a paint offset
+/// the label is drawn at the column's edge and not at its box's (#621). Each
+/// label here hugs its box in a column far wider than it: one that fits on its
+/// line, one marked with an ellipsis where it was cut, and the same two
+/// frosted over bars and on a scaled card, the other two paths a text takes.
+fn cut_right_to_left_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645}";
+    const LONG: &str = "\u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                        \u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                        \u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645}";
+    let one_line = |content: &str| label(content, 22.0).max_lines(1);
+    let hugged = |text: Text| container().background(INK).child(text);
+    let column = |width: f32| {
+        container().width(width).layout(
+            Flex::column()
+                .spacing(8.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(16.0))
+        .child(
+            column(268.0)
+                .child(hugged(one_line(ARABIC)))
+                .child(
+                    container()
+                        .width(160.0)
+                        .child(hugged(one_line(LONG).overflow(TextOverflow::Ellipsis))),
+                )
+                .child(frosted_over_bars(
+                    44.0,
+                    column(160.0).child(
+                        one_line(ARABIC)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(8.0),
+                    ),
+                )),
+        )
+        .child(
+            column(150.0)
+                .padding([10.0, 12.0])
+                .child(hugged(one_line(ARABIC)).scale(1.3))
+                .child(
+                    container()
+                        .width(110.0)
+                        .child(hugged(one_line(LONG).overflow(TextOverflow::Ellipsis)).scale(1.2)),
+                ),
+        )
+}
+
+/// Cut right-to-left labels, at scale 1.
+#[test]
+fn a_cut_right_to_left_label_starts_in_its_own_box() {
+    golden(
+        "a_cut_right_to_left_label_starts_in_its_own_box",
+        (480.0, 170.0),
+        1.0,
+        BACKDROP,
+        cut_right_to_left_labels(),
+    );
+}
+
+/// The same at scale 1.5, where a cut line can come back a hair wider than the
+/// box it is drawn in.
+#[test]
+fn a_cut_right_to_left_label_starts_in_its_own_box_at_scale_1_5x() {
+    golden(
+        "a_cut_right_to_left_label_starts_in_its_own_box_at_scale_1_5x",
+        (480.0, 170.0),
+        1.5,
+        BACKDROP,
+        cut_right_to_left_labels(),
+    );
+}
+
+/// Wrapped texts in a column 120 wide, drawn on the lines they were measured
+/// on and inside the box they were measured into.
+///
+/// Layout breaks a wrapped text at the width it is offered; a renderer that
+/// shapes it again in any other width breaks it somewhere else. glyphon was
+/// given 200 pixels for a start-aligned text, so a paragraph measured on four
+/// lines was drawn on two that ran out of its box, and a right-to-left one
+/// started at the right edge of the 200 (#622). One paragraph each way, each
+/// hugged by its box so the background is the box, and the right-to-left one
+/// again on a scaled card, which is drawn as a quad.
+fn wrapped_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                          \u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                          \u{633}\u{644}\u{627}\u{645}";
+    let column = || {
+        container().width(120.0).layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let hugged = |content: &str| container().background(INK).child(label(content, 16.0));
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(
+            column()
+                .child(hugged("one two three four five six seven"))
+                .child(hugged(ARABIC)),
+        )
+        .child(
+            column()
+                .padding([12.0, 10.0])
+                .child(hugged(ARABIC).scale(1.2)),
+        )
+}
+
+/// Wrapped texts in a narrow column, at scale 1.
+#[test]
+fn a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on() {
+    golden(
+        "a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on",
+        (320.0, 200.0),
+        1.0,
+        BACKDROP,
+        wrapped_labels(),
+    );
+}
+
+/// The same at scale 1.5, where the width a line was measured in is taken to
+/// physical pixels by a factor that is not a whole number.
+#[test]
+fn a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on_at_scale_1_5x() {
+    golden(
+        "a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on_at_scale_1_5x",
+        (320.0, 200.0),
+        1.5,
+        BACKDROP,
+        wrapped_labels(),
+    );
+}
+
+/// Justified texts that wrap, in boxes that hug them, with every glyph inside
+/// its box.
+///
+/// Every path shapes a text in the width it was laid out in, and cosmic-text
+/// stretches each line but a paragraph's last across that width. A box that
+/// hugged the widest line was narrower than that, so the stretched lines ran
+/// past it — a paint offset moves a line, it cannot take back the room put
+/// between its words. A justified text that wraps is now as wide as the width
+/// it was offered, as Flutter's `TextWidthBasis.parent` and a CSS block have
+/// it. Upright, frosted over bars, and on a scaled card, which is drawn as a
+/// quad; and one that fits on its line, which still hugs it.
+fn justified_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const WORDS: &str = "one two three four five six seven eight";
+    let justified = |size: f32| label(WORDS, size).align(TextAlign::Justified);
+    let column = |width: f32| {
+        container().width(width).layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let hugged = |text: Text| container().background(INK).child(text);
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(
+            column(150.0)
+                .child(hugged(justified(16.0)))
+                .child(hugged(label("fits", 16.0).align(TextAlign::Justified))),
+        )
+        .child(
+            column(160.0)
+                .child(frosted_over_bars(
+                    96.0,
+                    column(150.0).child(
+                        justified(18.0)
+                            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+                            .backdrop_blur(8.0),
+                    ),
+                ))
+                .child(
+                    column(150.0)
+                        .padding([8.0, 10.0])
+                        .child(hugged(justified(14.0)).scale(1.15)),
+                ),
+        )
+}
+
+/// Wrapped justified texts in hugging boxes, at scale 1.
+#[test]
+fn a_justified_text_stays_inside_its_box() {
+    golden(
+        "a_justified_text_stays_inside_its_box",
+        (400.0, 260.0),
+        1.0,
+        BACKDROP,
+        justified_labels(),
+    );
+}
+
+/// The same at scale 1.5.
+#[test]
+fn a_justified_text_stays_inside_its_box_at_scale_1_5x() {
+    golden(
+        "a_justified_text_stays_inside_its_box_at_scale_1_5x",
+        (400.0, 260.0),
+        1.5,
+        BACKDROP,
+        justified_labels(),
     );
 }

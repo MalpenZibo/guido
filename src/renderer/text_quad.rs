@@ -29,29 +29,23 @@ use crate::widgets::{Rect, TextAlign};
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
 
-/// The buffer glyphon is given to shape a transformed text in, in texture
-/// pixels — `scale_factor * TEXT_SUPERSAMPLE` of them per logical pixel.
+/// The height a transformed text is shaped in when it is not cut, in texture
+/// pixels — `scale_factor * TEXT_SUPERSAMPLE` of them per logical pixel: the
+/// room its texture has, the box widened by [`TEXT_MARGIN`].
 ///
-/// Wider than the layout box by [`TEXT_MARGIN`], which is the slack the
-/// rasterizer wants and the reason this path cannot simply borrow
-/// [`text::shaping_buffer`](super::text::shaping_buffer): the two shape the
-/// same text in different buffers and break their lines in different places.
-/// A frosted text's coverage mask has to be shaped in whichever of the two will
-/// draw the glyphs over it — see [`text_mask`](super::text_mask).
-///
-/// An aligned text is shaped at exactly its box's width instead, since that is
-/// the width cosmic-text aligns its lines across; the texture keeps the margin
-/// either way — see [`texture_room`] — as room for the ink.
-pub(super) fn shaping_buffer(rect: Rect, effective_scale: f32, align: TextAlign) -> (f32, f32) {
-    let (width, height) = texture_room(rect, effective_scale);
-    match align {
-        TextAlign::Start => (width, height),
-        _ => (rect.width * effective_scale, height),
-    }
+/// Its width is no business of this path's. A text is shaped in the width it
+/// was laid out in, as every path shapes it — see
+/// [`text::line_width`](super::text::line_width) — and placed in its box by
+/// [`text::paint_offset`](super::text::paint_offset). The untransformed path's
+/// height is [`text::buffer_height`](super::text::buffer_height), and a frosted
+/// text's mask is shaped in whichever of the two draws its letters — see
+/// [`text_mask`](super::text_mask).
+pub(super) fn buffer_height(rect: Rect, effective_scale: f32) -> f32 {
+    texture_room(rect, effective_scale).1
 }
 
 /// The room a transformed text is rasterized into, before padding: its box
-/// widened by [`TEXT_MARGIN`], whatever its alignment.
+/// widened by [`TEXT_MARGIN`].
 fn texture_room(rect: Rect, effective_scale: f32) -> (f32, f32) {
     (
         rect.width * effective_scale * TEXT_MARGIN,
@@ -103,6 +97,9 @@ struct TextCacheKey {
     color: [u8; 4],
     tex_width: u32,
     tex_height: u32,
+    /// The box's own width, which the texture's is only rounded from: it is
+    /// what a line starting at the right is drawn against.
+    box_width_bits: u32,
     /// The cut, which decides what is drawn at all.
     fit: Option<super::text_measurer::LineFitKey>,
 }
@@ -247,6 +244,7 @@ impl TextQuadRenderer {
             ],
             tex_width,
             tex_height,
+            box_width_bits: entry.rect.width.to_bits(),
             fit: entry.fit.map(|fit| fit.key()),
         };
 
@@ -257,8 +255,7 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
-        let (buffer_width, buffer_height) =
-            shaping_buffer(entry.rect, effective_scale, entry.align);
+        let box_width = entry.rect.width * effective_scale;
         let buffer = super::text::shape(
             &mut self.font_system,
             &entry.text,
@@ -268,7 +265,10 @@ impl TextQuadRenderer {
             entry.line_height,
             entry.letter_spacing,
             entry.align,
-            (Some(buffer_width), Some(buffer_height)),
+            (
+                Some(box_width),
+                Some(buffer_height(entry.rect, effective_scale)),
+            ),
             entry.fit,
             effective_scale,
         );
@@ -303,7 +303,7 @@ impl TextQuadRenderer {
         // Create text area
         let text_area = TextArea {
             buffer: &buffer,
-            left: padding,
+            left: padding + super::text::paint_offset(&buffer, box_width, entry.align),
             top: padding,
             scale: 1.0,
             bounds: TextBounds {
@@ -530,9 +530,9 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
 }
 
 #[cfg(test)]
-mod shaping_buffer_tests {
-    use super::{TEXT_MARGIN, shaping_buffer};
-    use crate::widgets::{Rect, TextAlign};
+mod buffer_height_tests {
+    use super::{TEXT_MARGIN, buffer_height};
+    use crate::widgets::Rect;
 
     /// No floor on this path — a transformed text is rasterized into a texture
     /// of its own size — and the margin is a factor on the box, not a border
@@ -541,16 +541,10 @@ mod shaping_buffer_tests {
     #[test]
     fn the_margin_is_a_factor_on_the_box_and_the_scale_multiplies_both() {
         let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
-        assert_eq!(
-            shaping_buffer(rect, 1.0, TextAlign::Start),
-            (100.0 * TEXT_MARGIN, 40.0 * TEXT_MARGIN)
-        );
-        assert_eq!(
-            shaping_buffer(rect, 4.0, TextAlign::Start),
-            (400.0 * TEXT_MARGIN, 160.0 * TEXT_MARGIN)
-        );
-        // A tiny box stays tiny: nothing floors it up to 200 the way the
+        assert_eq!(buffer_height(rect, 1.0), 40.0 * TEXT_MARGIN);
+        assert_eq!(buffer_height(rect, 4.0), 160.0 * TEXT_MARGIN);
+        // A short box stays short: nothing floors it up to 50 the way the
         // untransformed path does.
-        assert!(shaping_buffer(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0, TextAlign::Start).0 < 20.0);
+        assert!(buffer_height(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0) < 10.0);
     }
 }
