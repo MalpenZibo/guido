@@ -2981,3 +2981,74 @@ fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still()
     app.step();
     assert_eq!(app.cursors_asked(), [CursorIcon::Text, CursorIcon::Wait]);
 }
+
+/// The issue's sequence (#625), through the loop rather than a bare tree: a
+/// right-click pressed and released in the middle of a left drag leaves the
+/// drag's moves and its release where they were going.
+#[test]
+fn a_right_click_inside_a_left_drag_leaves_the_drag_alone() {
+    let Some(mut app) = headless() else { return };
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let surface = app.surface(fixed_bar(), move || {
+        let (down, moved, up) = (log.clone(), log.clone(), log.clone());
+        container()
+            .layout(Flex::row())
+            .child(
+                container()
+                    .width(100.0)
+                    .height(20.0)
+                    .on_mouse_down(move |x, _| down.borrow_mut().push(format!("down{x}")))
+                    .on_pointer_move(move |x, _| moved.borrow_mut().push(format!("move{x}")))
+                    .on_mouse_up(move |x, _| up.borrow_mut().push(format!("up{x}"))),
+            )
+            .children((0..4).map(|_| container().width(100.0).height(20.0)))
+    });
+    app.configure(surface, 500, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    for event in [
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        Event::mouse_down(10.0, 10.0, MouseButton::Right),
+        Event::mouse_move(450.0, 10.0),
+        Event::mouse_up(450.0, 10.0, MouseButton::Right),
+        Event::mouse_move(460.0, 10.0),
+        Event::mouse_up(460.0, 10.0, MouseButton::Left),
+    ] {
+        at += Duration::from_millis(16);
+        app.event_at(surface, event, at);
+        app.step_at(at);
+    }
+
+    assert_eq!(*seen.borrow(), ["down10", "move450", "move460", "up460"]);
+}
+
+/// A surface closed while a button is held is never sent the release, so the
+/// button it held must not turn the next surface's press into part of a chord
+/// that no longer exists.
+#[test]
+fn a_press_held_on_a_surface_that_closes_does_not_hold_the_next_one() {
+    let Some(mut app) = headless() else { return };
+    let first = app.surface(fixed_bar(), measuring_24);
+    app.configure(first, 200, 50, 1.0);
+    let clicks = create_signal(0u32);
+    let second = app.surface(fixed_bar(), move || bar(clicks));
+    app.configure(second, 200, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    at += Duration::from_millis(16);
+    app.event_at(first, Event::mouse_down(10.0, 10.0, MouseButton::Left), at);
+    app.step_at(at);
+    surface_handle(first).close();
+    app.step_at(at);
+
+    app.click(second, 10.0, 10.0);
+    app.step();
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the press on the second surface is hit-tested where it lands"
+    );
+}

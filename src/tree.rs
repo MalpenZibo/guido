@@ -280,14 +280,31 @@ struct PointerRecord {
     /// What the last positioned event to reach each container offered by
     /// position. Sorted by container, so each finds its own with a search.
     last: Vec<Offered>,
-    /// What the press offered by position, until the release. Sorted the same.
+    /// What the first press of a chord offered by position, until the last
+    /// button is released. Sorted the same.
     pressed: Vec<Offered>,
+    /// The chord that holds `pressed`: the surface root its first press
+    /// entered at, and the buttons still down. One route per chord, as
+    /// Pointer Events, X11's active grab and Flutter's button bitmask have it
+    /// (#625). Tied to the root because a surface closed under the pointer is
+    /// never sent the release, and its buttons must not hold another
+    /// surface's next press.
+    chord: Option<(WidgetId, u8)>,
+    /// The event being dispatched is a press or release that neither opens nor
+    /// closes the chord. It travels the press route alone: it is not
+    /// hit-tested, and the hover record is neither told nor rewritten by it.
+    chorded: bool,
     /// A container above is offering a point it clipped away. Below it nothing
     /// is under that point: only the owed are told, and only the press keeps
     /// the point, which its drag and its release need.
     withholding: bool,
     /// The surface root the event being dispatched entered at.
     root: Option<WidgetId>,
+}
+
+/// The bit a button holds in a chord.
+fn button_bit(button: crate::widgets::MouseButton) -> u8 {
+    1 << button as u8
 }
 
 /// The key the record is sorted by.
@@ -1285,8 +1302,10 @@ impl Tree {
     /// that hands a root an event, go through here. What the containers below
     /// offered a positioned event through their windows is what the next event
     /// is owed as well, so a widget the pointer left sees it go; and what they
-    /// offered a press is owed every event until the release, so a drag
-    /// reaches the widget it started on wherever it goes.
+    /// offered the first press of a chord is owed every event until the last
+    /// button is up, so a drag reaches the widget it started on wherever it
+    /// goes. A press or release of another button in between goes along that
+    /// route alone, without a new hit test (#625).
     pub fn dispatch(
         &mut self,
         root: WidgetId,
@@ -1300,9 +1319,19 @@ impl Tree {
         self.pointer.reached.clear();
         self.pointer.withholding = false;
         self.pointer.root = Some(root);
+        let held = match self.pointer.chord {
+            Some((chord_root, held)) if chord_root == root => held,
+            _ => 0,
+        };
+        let (after, press_or_release) = match event {
+            Event::MouseDown { button, .. } => (held | button_bit(*button), true),
+            Event::MouseUp { button, .. } => (held & !button_bit(*button), true),
+            _ => (held, false),
+        };
+        self.pointer.chorded = press_or_release && held != 0 && after != 0;
         let response = self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
         let record = &mut self.pointer;
-        if event.coords().is_some() {
+        if event.coords().is_some() && !record.chorded {
             let PointerRecord {
                 offering,
                 last,
@@ -1320,18 +1349,22 @@ impl Tree {
             keep_what_the_root_reaches(last, root);
         }
         match event {
-            Event::MouseDown { .. } => {
+            Event::MouseDown { .. } if !record.chorded => {
                 record.pressed.clear();
                 record
                     .pressed
                     .extend(record.last.iter().filter(|entry| entry.root == root));
             }
-            Event::MouseUp { .. } => record.pressed.clear(),
+            Event::MouseUp { .. } if after == 0 => record.pressed.clear(),
             Event::MouseLeave => {
                 record.pressed.clear();
+                record.chord = None;
                 record.last.retain(|entry| entry.root != root);
             }
             _ => {}
+        }
+        if press_or_release {
+            record.chord = (after != 0).then_some((root, after));
         }
         response
     }
@@ -1466,7 +1499,8 @@ impl Tree {
             return PointerTargets::every(children.len());
         }
         let withholding = self.pointer.withholding;
-        let at = at.filter(|_| !withholding);
+        let chorded = self.pointer.chorded;
+        let at = at.filter(|_| !withholding && !chorded);
         let reach = self.children_reach(parent);
         let mut owed: SmallVec<[usize; 4]> = SmallVec::new();
         let mut blind: SmallVec<[usize; 4]> = SmallVec::new();
@@ -1506,6 +1540,9 @@ impl Tree {
 
         let key = parent.as_u64();
         for (held, list) in [(false, &mut record.last), (true, &mut record.pressed)] {
+            if chorded && !held {
+                continue;
+            }
             let start = list.partition_point(|entry| by_parent(entry) < key);
             let end = start + list[start..].partition_point(|entry| by_parent(entry) == key);
             for entry in &mut list[start..end] {
