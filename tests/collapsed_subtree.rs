@@ -385,6 +385,7 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
     h.send(Event::KeyDown {
         key: Key::Enter,
         modifiers: Modifiers::default(),
+        repeat: false,
     });
     assert_eq!(
         keys.get(),

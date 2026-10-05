@@ -117,8 +117,14 @@ impl Field {
     /// Press a key, a millisecond after the one before it.
     fn press(&mut self, key: Key, modifiers: Modifiers) -> EventResponse {
         self.now += Duration::from_millis(1);
-        self.harness
-            .send_at(Event::KeyDown { key, modifiers }, self.now)
+        self.harness.send_at(
+            Event::KeyDown {
+                key,
+                modifiers,
+                repeat: false,
+            },
+            self.now,
+        )
     }
 
     fn key(&mut self, key: Key) -> EventResponse {

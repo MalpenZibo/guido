@@ -678,12 +678,16 @@ pub enum Event {
         /// Where the pointer is, if it is anywhere
         at: Option<Point>,
     },
-    /// Key pressed
+    /// Key pressed, or held long enough to repeat
     KeyDown {
         /// The key that was pressed
         key: Key,
         /// Current modifier state
         modifiers: Modifiers,
+        /// Whether a held key produced this rather than a press. A repeat is
+        /// delivered like any key-down — text editing wants every one — and
+        /// something that acts once per press ignores the ones that say so.
+        repeat: bool,
     },
     /// Key released
     KeyUp {
@@ -865,17 +869,11 @@ impl Event {
             Event::ScrollEnd { .. } => Event::ScrollEnd { at },
             Event::MouseLeave => Event::MouseLeave,
             // Keyboard, focus and paste events never had one to replace.
-            Event::KeyDown { key, modifiers } => Event::KeyDown {
-                key: *key,
-                modifiers: *modifiers,
-            },
-            Event::KeyUp { key, modifiers } => Event::KeyUp {
-                key: *key,
-                modifiers: *modifiers,
-            },
-            Event::FocusIn => Event::FocusIn,
-            Event::FocusOut => Event::FocusOut,
-            Event::Pasted(text) => Event::Pasted(text.clone()),
+            Event::KeyDown { .. }
+            | Event::KeyUp { .. }
+            | Event::FocusIn
+            | Event::FocusOut
+            | Event::Pasted(_) => self.clone(),
         }
     }
 }

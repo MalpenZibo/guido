@@ -76,7 +76,14 @@ fn press(harness: &mut Harness, key: Key, modifiers: Modifiers) {
     // Each key a moment after the one before, as a real dispatch would stamp
     // it.
     let at = Instant::now() + Duration::from_millis(1);
-    harness.send_at(Event::KeyDown { key, modifiers }, at);
+    harness.send_at(
+        Event::KeyDown {
+            key,
+            modifiers,
+            repeat: false,
+        },
+        at,
+    );
     // A layout between keys, as the real loop runs one: it is where the field
     // reads its value back, and a read that copies is a copy.
     harness.lay_out(WIDTH, HEIGHT);

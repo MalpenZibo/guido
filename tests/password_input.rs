@@ -39,8 +39,14 @@ impl Field {
 
     fn press(&mut self, key: Key, modifiers: Modifiers) {
         self.now += Duration::from_millis(1);
-        self.harness
-            .send_at(Event::KeyDown { key, modifiers }, self.now);
+        self.harness.send_at(
+            Event::KeyDown {
+                key,
+                modifiers,
+                repeat: false,
+            },
+            self.now,
+        );
         self.harness.lay_out(WIDTH, HEIGHT);
     }
 

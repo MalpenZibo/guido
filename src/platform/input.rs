@@ -859,23 +859,8 @@ impl KeyboardHandler for WaylandState {
         self.input.keyboard_serial = serial;
         self.input.latest_input_serial = serial;
 
-        if let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) {
-            // Store raw_code → Key mapping so release_key can emit the correct Key
-            // (e.g., composed 'é' instead of raw 'e' after a compose sequence)
-            self.input.pressed_keys.insert(event.raw_code, key);
-
-            let at = self.input.at(event.time);
-            let key_event = Event::KeyDown {
-                key,
-                modifiers: self.input.modifiers,
-            };
-
-            // Route to the surface with keyboard focus
-            if let Some(id) = self.current_keyboard_surface
-                && let Some(surface_state) = self.surfaces.get_mut(&id)
-            {
-                surface_state.pending_events.push((at, key_event));
-            }
+        if let Some(delivered) = self.input.key_pressed(&event) {
+            self.deliver_key(delivered);
         }
     }
 
@@ -901,13 +886,7 @@ impl KeyboardHandler for WaylandState {
                 key,
                 modifiers: self.input.modifiers,
             };
-
-            // Route to the surface with keyboard focus
-            if let Some(id) = self.current_keyboard_surface
-                && let Some(surface_state) = self.surfaces.get_mut(&id)
-            {
-                surface_state.pending_events.push((at, key_event));
-            }
+            self.deliver_key((at, key_event));
         }
     }
 
@@ -947,33 +926,58 @@ impl KeyboardHandler for WaylandState {
 }
 
 impl WaylandState {
-    /// Deliver a repeated key as an ordinary press.
+    /// Deliver a held key.
     ///
     /// Two sources reach here: the toolkit's calloop timer, armed from the
     /// compositor's `repeat_info`, and the protocol's own repeated key state.
-    /// Neither is visible to widgets — a held key looks exactly like someone
-    /// pressing it very fast.
+    /// A widget is not told which — only that the key repeats.
     fn emit_key_repeat(&mut self, event: KeyEvent) {
-        let Some(key) = keysym_to_key(event.keysym, event.utf8.as_deref(), true) else {
-            return;
-        };
-        // A repeat's `time` is the original press advanced by the repeat gap
-        // rather than something the compositor observed — sctk's timer computes
-        // it. It is still in the compositor's clock and still increases, which
-        // is all the conversion needs, and a held key spaced by the compositor's
-        // own repeat rate is a truer account than the moment a timer fired here.
-        let at = self.input.at(event.time);
-        let key_event = Event::KeyDown {
-            key,
-            modifiers: self.input.modifiers,
-        };
+        if let Some(delivered) = self.input.key_repeated(&event) {
+            self.deliver_key(delivered);
+        }
+    }
 
-        // Route to the surface with keyboard focus
+    /// Queue a key event on the surface with keyboard focus.
+    fn deliver_key(&mut self, (at, event): (Instant, Event)) {
         if let Some(id) = self.current_keyboard_surface
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            surface_state.pending_events.push((at, key_event));
+            surface_state.pending_events.push((at, event));
         }
+    }
+}
+
+impl InputState {
+    /// The key-down a press delivers, and when — `None` for a key with
+    /// nothing to say yet, an open compose sequence.
+    ///
+    /// The key is kept against its raw code, so the release names the key the
+    /// press did — a composed 'é', not the raw 'e' — when it carries no text.
+    pub(super) fn key_pressed(&mut self, event: &KeyEvent) -> Option<(Instant, Event)> {
+        let key = keysym_to_key(event.keysym, event.utf8.as_deref(), true)?;
+        self.pressed_keys.insert(event.raw_code, key);
+        Some(self.key_down(key, event.time, false))
+    }
+
+    /// The key-down a held key delivers, and when.
+    ///
+    /// A repeat's `time` is the original press advanced by the repeat gap
+    /// rather than something the compositor observed — sctk's timer computes
+    /// it. It is still in the compositor's clock and still increases, which is
+    /// all the conversion needs, and a held key spaced by the compositor's own
+    /// repeat rate is a truer account than the moment a timer fired here.
+    pub(super) fn key_repeated(&mut self, event: &KeyEvent) -> Option<(Instant, Event)> {
+        let key = keysym_to_key(event.keysym, event.utf8.as_deref(), true)?;
+        Some(self.key_down(key, event.time, true))
+    }
+
+    fn key_down(&mut self, key: Key, time: u32, repeat: bool) -> (Instant, Event) {
+        let key_down = Event::KeyDown {
+            key,
+            modifiers: self.modifiers,
+            repeat,
+        };
+        (self.at(time), key_down)
     }
 }
 
@@ -1082,6 +1086,81 @@ mod tests {
     fn plain_typing_uses_the_composed_text() {
         let e = Keysym::new(0x65); // 'e', composed into 'é'
         assert_eq!(keysym_to_key(e, Some("é"), true), Some(Key::Char('é')));
+    }
+
+    /// A keyboard with nothing pressed. The loop handle is only carried, to
+    /// arm the toolkit's repeat timer when a keyboard arrives.
+    fn keyboard() -> InputState {
+        let event_loop = smithay_client_toolkit::reexports::calloop::EventLoop::try_new()
+            .expect("an event loop needs no compositor");
+        InputState::new(None, event_loop.handle())
+    }
+
+    fn enter(time: u32) -> KeyEvent {
+        KeyEvent {
+            time,
+            raw_code: 28,
+            keysym: Keysym::Return,
+            utf8: Some("\r".into()),
+        }
+    }
+
+    fn repeat_of(delivered: Option<(Instant, Event)>) -> bool {
+        match delivered {
+            Some((_, Event::KeyDown { repeat, .. })) => repeat,
+            other => panic!("expected a key-down, got {other:?}"),
+        }
+    }
+
+    /// What `press_key` delivers is a press, and what a held key delivers is a
+    /// repeat — whichever produced it. The toolkit's timer and the protocol's
+    /// repeated key state both reach `emit_key_repeat`, which delivers
+    /// `key_repeated`; a widget sees one flag for both, as winit, SDL and the
+    /// DOM give it.
+    #[test]
+    fn a_press_and_a_held_key_say_which_they_are() {
+        let mut input = keyboard();
+
+        assert!(!repeat_of(input.key_pressed(&enter(0))), "the press");
+        assert!(
+            repeat_of(input.key_repeated(&enter(600))),
+            "the first repeat"
+        );
+        assert!(repeat_of(input.key_repeated(&enter(625))), "the next");
+        assert!(!repeat_of(input.key_pressed(&enter(900))), "pressed again");
+    }
+
+    /// A repeat is the key that was pressed, under the modifiers held now, at
+    /// the time the compositor's clock gives it.
+    #[test]
+    fn a_repeat_carries_its_key_modifiers_and_time() {
+        let mut input = keyboard();
+        let (pressed, _) = input.key_pressed(&enter(1_000)).unwrap();
+        input.modifiers.shift = true;
+
+        let (at, event) = input.key_repeated(&enter(1_600)).unwrap();
+
+        assert_eq!(at - pressed, Duration::from_millis(600));
+        let Event::KeyDown { key, modifiers, .. } = event else {
+            panic!("{event:?}")
+        };
+        assert_eq!(key, Key::Enter);
+        assert!(modifiers.shift);
+    }
+
+    /// An open compose sequence has nothing to deliver, pressed or held.
+    #[test]
+    fn a_key_with_no_text_yet_delivers_nothing() {
+        let mut input = keyboard();
+        let composing = KeyEvent {
+            time: 0,
+            raw_code: 18,
+            keysym: Keysym::new(0x65),
+            utf8: None,
+        };
+
+        assert!(input.key_pressed(&composing).is_none());
+        assert!(input.key_repeated(&composing).is_none());
     }
 
     /// A timestamp equal to the anchor's is the anchor's instant, and one after

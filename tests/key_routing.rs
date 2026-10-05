@@ -43,6 +43,7 @@ fn key(app: &mut Headless, id: SurfaceId, at: &mut Instant, key: Key) {
         Event::KeyDown {
             key,
             modifiers: Modifiers::default(),
+            repeat: false,
         },
         *at,
     );
