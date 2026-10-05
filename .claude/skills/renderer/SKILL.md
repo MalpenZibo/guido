@@ -60,10 +60,17 @@ vendor a font under `tests/assets/` and name it in every scenario, so nothing
 there can reach a system font.
 
 Measurement and the three draw paths below each shape the text for
-themselves, and all four go through one `shape` in `text.rs`. A text
-cut by `max_lines` carries its `LineFit` — the width it was laid out in, the
-limit, the mark — on its draw command, so each path cuts on the line the
-measurer counted; `text_cut_to_its_lines` is the golden that watches all three.
+themselves, and all four go through one `shape` in `text.rs`. Every text
+carries its `LineFit` — the width it was laid out in, and the limit and mark
+when `max_lines` cuts it — on its draw command, and every path shapes in that
+width (`line_width`), so each breaks and cuts its lines where the measurer did.
+A box can be narrower than that width, so the shaped lines are then moved into
+it by `paint_offset`: the alignment's fraction of the difference, taken from
+the first line's direction, as Flutter's `TextPainter` places its paragraph.
+`text_cut_to_its_lines`,
+`a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on` and
+`right_to_left_label_starts_in_its_own_box` are the goldens that watch all
+three.
 
 Transformed text is a path of its own. Rotated or scaled text is not handed to
 glyphon — it is rasterised to a texture and drawn as a quad
