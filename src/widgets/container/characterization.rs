@@ -374,6 +374,36 @@ fn padding_shrinks_what_children_are_offered() {
     assert_eq!(h.tree.get_bounds(child).unwrap().width, 80.0);
 }
 
+/// The same rule against the box's own maximum rather than the parent's.
+/// Children are cut to what they are offered, so what overflows an
+/// `at_most(100)` box from inside is its padding: 70 a side is 140 with
+/// nothing in it. A box that may not shrink grows back to that; one that may
+/// — hidden overflow — keeps to its 100. The parent offers room for both, so
+/// only the box's own policy decides.
+#[test]
+fn padding_past_its_own_maximum_grows_a_visible_box_and_not_a_hidden_one() {
+    let padded = |overflow: Overflow| {
+        container()
+            .width(at_most(100.0))
+            .padding(70.0)
+            .overflow(overflow)
+    };
+
+    let mut visible = H::new(padded(Overflow::Visible));
+    assert_eq!(
+        visible.fit(500.0, 500.0).width,
+        140.0,
+        "a box that may not shrink grows back to its content"
+    );
+
+    let mut hidden = H::new(padded(Overflow::Hidden));
+    assert_eq!(
+        hidden.fit(500.0, 500.0).width,
+        100.0,
+        "a box that may shrink keeps to its own maximum"
+    );
+}
+
 /// Content larger than the container grows it back unless shrinking was
 /// explicitly allowed (hidden overflow, scrolling, an exact length, or a
 /// running size animation).
@@ -583,6 +613,29 @@ fn an_exact_length_in_flight_under_a_larger_parent_centres_in_its_own_size() {
         centred_box_in_flight(500.0),
         (Size::new(200.0, 200.0), (90.0, 90.0))
     );
+}
+
+/// At its first layout a size animation has not been placed yet — the layout
+/// places it, after the children are laid out — and what it holds is the value
+/// the setter saw at build. A signal written between the build and that layout
+/// has moved on, so the children are offered the declared length, not the
+/// animation's stale seed: centred in 200, not in the 100 it was built with.
+#[test]
+fn an_unplaced_size_animation_offers_the_declared_length() {
+    let side = create_signal(100.0f32);
+    let mut h = H::new(
+        container()
+            .width(side.transition(linear_100ms()))
+            .height(20.0)
+            .layout(Flex::row().center())
+            .child(box_of(20.0, 20.0)),
+    );
+    side.set(200.0);
+    h.fit(500.0, 500.0);
+
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!(h.tree.cached_size(h.root).unwrap().width, 200.0);
+    assert_eq!(child.x, 90.0, "centred in the declared 200");
 }
 
 #[test]
