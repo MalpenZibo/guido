@@ -718,6 +718,7 @@ fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
         Event::KeyDown {
             key: Key::Char('v'),
             modifiers: ctrl,
+            repeat: false,
         },
         Instant::now(),
     );

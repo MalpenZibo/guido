@@ -59,7 +59,7 @@ fn no_event_visits_a_row_outside_its_route() {
                         container()
                             .height(30.0)
                             .width(fill())
-                            .on_key_down(|_, _| {})
+                            .on_key_down(|_, _, _| {})
                             .child(text_input(typed)),
                     )
                     .child(container().scroll(Scroll::vertical()).height(570.0).child(
@@ -88,6 +88,7 @@ fn no_event_visits_a_row_outside_its_route() {
     let key = |key| Event::KeyDown {
         key,
         modifiers: Modifiers::default(),
+        repeat: false,
     };
     // The keys first, while the field has the focus: a press on the list
     // below is a press on nothing that takes the focus, and so does the

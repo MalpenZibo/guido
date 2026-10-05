@@ -36,6 +36,7 @@ fn fills(input: TextInput, select_all: bool) -> Vec<Color> {
     if select_all {
         harness.send(Event::KeyDown {
             key: Key::Char('a'),
+            repeat: false,
             modifiers: Modifiers {
                 ctrl: true,
                 ..Default::default()

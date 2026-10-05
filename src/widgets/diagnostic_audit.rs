@@ -79,6 +79,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
             Event::KeyDown {
                 key: Key::Char('a'),
                 modifiers: Modifiers::default(),
+                repeat: false,
             },
             Event::MouseLeave,
         ] {

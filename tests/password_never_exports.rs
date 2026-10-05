@@ -61,6 +61,7 @@ impl Field {
     fn key(&mut self, key: Key, ctrl: bool) {
         let event = Event::KeyDown {
             key,
+            repeat: false,
             modifiers: Modifiers {
                 ctrl,
                 ..Default::default()

@@ -118,7 +118,7 @@ fn main() {
                         )
                     }))
                     .child(label("Esc per chiudere").color(Color::rgb(0.5, 0.53, 0.6)))
-                    .on_key_down(|key, _| {
+                    .on_key_down(|key, _, _| {
                         if key == Key::Escape {
                             quit_app();
                         }

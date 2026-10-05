@@ -376,7 +376,7 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
             container()
                 .width(80.0)
                 .height(40.0)
-                .on_key_down(move |_, _| bump()),
+                .on_key_down(move |_, _, _| bump()),
         ),
         400.0,
         200.0,
@@ -385,6 +385,7 @@ fn a_key_still_reaches_a_descendant_of_a_collapsed_container() {
     h.send(Event::KeyDown {
         key: Key::Enter,
         modifiers: Modifiers::default(),
+        repeat: false,
     });
     assert_eq!(
         keys.get(),

@@ -87,7 +87,7 @@ container()
     .on_click(|| println!("left"))
     .on_right_click(|| println!("right"))
     .on_middle_click(|| println!("middle"))
-    .on_key_down(move |key, _mods| {
+    .on_key_down(move |key, _mods, _repeat| {
         if key == Key::Escape {
             close();
         }
@@ -104,6 +104,27 @@ and the containers around it after. `on_key_down` hears what nothing focused
 took, so Escape still closes a menu while its search field has the focus, and
 it hears it with nothing focused at all. Where two containers both declare it,
 the inner one hears the key; where they stand side by side, the earlier one.
+
+A held key arrives again at the compositor's repeat rate, and each repeat is
+an ordinary key-down whose third argument is `true`. Text editing wants every
+one; something that should happen once per press returns early on a repeat:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let activate = move || {};
+container().on_key_down(move |key, _mods, repeat| {
+    if key == Key::Enter && !repeat {
+        activate();
+    }
+})
+# ;
+# }
+```
+
+A widget of your own reads the same flag as the `repeat` field of
+`Event::KeyDown`.
 
 ## Latched Modifiers
 

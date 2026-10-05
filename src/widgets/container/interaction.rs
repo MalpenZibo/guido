@@ -430,11 +430,15 @@ impl Container {
                 }
             }
 
-            Event::KeyDown { key, modifiers } => {
+            Event::KeyDown {
+                key,
+                modifiers,
+                repeat,
+            } => {
                 if let Some(ref ix) = self.interaction
                     && let Some(ref callback) = ix.on_key_down
                 {
-                    callback(*key, *modifiers);
+                    callback(*key, *modifiers, *repeat);
                     return EventResponse::Handled;
                 }
             }

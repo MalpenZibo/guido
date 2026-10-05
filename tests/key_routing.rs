@@ -6,6 +6,10 @@
 //! the route is narrow, and that what the walk used to give a listener — a key
 //! with nothing focused, the innermost listener first, nothing through a hidden
 //! container — it still gives.
+//!
+//! And a held key arrives as presses that say they repeat (#613): every one
+//! is delivered, along either route, and a listener that wants presses alone
+//! tells them apart by the flag.
 
 #![cfg(feature = "testing")]
 
@@ -14,6 +18,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
+use guido::reactive::focus::{focused_widget, request_focus};
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
@@ -37,27 +42,26 @@ fn surface(app: &mut Headless, view: impl Fn() -> Container + 'static) -> (Surfa
 }
 
 fn key(app: &mut Headless, id: SurfaceId, at: &mut Instant, key: Key) {
+    send(app, id, at, key_down(key, false));
+}
+
+fn key_down(key: Key, repeat: bool) -> Event {
+    Event::KeyDown {
+        key,
+        modifiers: Modifiers::default(),
+        repeat,
+    }
+}
+
+fn send(app: &mut Headless, id: SurfaceId, at: &mut Instant, event: Event) {
     *at += Duration::from_millis(16);
-    app.event_at(
-        id,
-        Event::KeyDown {
-            key,
-            modifiers: Modifiers::default(),
-        },
-        *at,
-    );
+    app.event_at(id, event, *at);
     app.step_at(*at);
 }
 
 fn click(app: &mut Headless, id: SurfaceId, at: &mut Instant, x: f32, y: f32) {
-    for event in [
-        Event::mouse_down(x, y, MouseButton::Left),
-        Event::mouse_up(x, y, MouseButton::Left),
-    ] {
-        *at += Duration::from_millis(16);
-        app.event_at(id, event, *at);
-        app.step_at(*at);
-    }
+    send(app, id, at, Event::mouse_down(x, y, MouseButton::Left));
+    send(app, id, at, Event::mouse_up(x, y, MouseButton::Left));
 }
 
 /// A row that counts every event it is offered.
@@ -80,7 +84,7 @@ impl Widget for Counted {
 fn listener(name: &'static str, heard: Rc<RefCell<Vec<(&'static str, Key)>>>) -> Container {
     container()
         .width(fill())
-        .on_key_down(move |key, _| heard.borrow_mut().push((name, key)))
+        .on_key_down(move |key, _, _| heard.borrow_mut().push((name, key)))
 }
 
 #[test]
@@ -105,7 +109,7 @@ fn a_key_visits_the_focus_path_and_nothing_else() {
                 container()
                     .height(10.0)
                     .width(fill())
-                    .on_key_down(|_, _| {}),
+                    .on_key_down(|_, _, _| {}),
             )
             .child(container().scroll(Scroll::vertical()).height(560.0).child(
                 container().layout(Flex::column()).children(
@@ -241,4 +245,121 @@ fn a_listener_before_the_focused_field_no_longer_takes_its_typing() {
         "the focused field hears its keys first"
     );
     assert_eq!(*heard.borrow(), [("before", Key::Escape)]);
+}
+
+/// A widget that takes the focus when pressed and lets every key through.
+struct Inert;
+
+impl Widget for Inert {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        Size::new(200.0, 20.0)
+    }
+
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        if let Event::MouseDown { .. } = event {
+            request_focus(tree, id);
+            return EventResponse::Handled;
+        }
+        EventResponse::Ignored
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+}
+
+/// Which way a key the focused widget lets through reaches the listener.
+#[derive(Clone, Copy)]
+enum Route {
+    /// The listener is around the focused widget, so the key reaches it on
+    /// its way up the focus path.
+    Focused,
+    /// The listener is beside it, and hears what the focus path left.
+    Listener,
+}
+
+/// Enter, held for two repeats, released, and pressed again — played into a
+/// listener that counts the key-downs `count` accepts.
+fn replay(route: Route, count: fn(bool) -> bool) -> u32 {
+    let Some(mut app) = headless() else { return 0 };
+    let heard = Rc::new(Cell::new(0));
+    let log = heard.clone();
+    let listener = move || {
+        let log = log.clone();
+        container()
+            .width(fill())
+            .height(30.0)
+            .on_key_down(move |key, _, repeat| {
+                if key == Key::Enter && count(repeat) {
+                    log.set(log.get() + 1);
+                }
+            })
+    };
+    let (id, mut at) = surface(&mut app, move || match route {
+        Route::Focused => container().child(listener().child(Inert)),
+        Route::Listener => container()
+            .layout(Flex::column())
+            .child(container().height(30.0).width(fill()).child(Inert))
+            .child(listener()),
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    // Only the inert row takes the focus, so with it held the focused route
+    // really is the focus path, and the listener route really is past it.
+    assert!(
+        focused_widget().is_some(),
+        "the click focused the inert row"
+    );
+    for event in [
+        key_down(Key::Enter, false),
+        key_down(Key::Enter, true),
+        key_down(Key::Enter, true),
+        Event::KeyUp {
+            key: Key::Enter,
+            modifiers: Modifiers::default(),
+        },
+        key_down(Key::Enter, false),
+    ] {
+        send(&mut app, id, &mut at, event);
+    }
+    heard.get()
+}
+
+#[test]
+fn a_held_key_activates_once_per_press_on_the_focus_path() {
+    if headless().is_none() {
+        return;
+    }
+    assert_eq!(replay(Route::Focused, |repeat| !repeat), 2, "two presses");
+    assert_eq!(
+        replay(Route::Focused, |_| true),
+        4,
+        "two presses and two repeats, every one delivered"
+    );
+}
+
+#[test]
+fn a_held_key_activates_once_per_press_past_an_unhandling_focus() {
+    if headless().is_none() {
+        return;
+    }
+    assert_eq!(replay(Route::Listener, |repeat| !repeat), 2, "two presses");
+    assert_eq!(
+        replay(Route::Listener, |_| true),
+        4,
+        "two presses and two repeats, every one delivered"
+    );
+}
+
+/// Moving a key somewhere else — what a container does to every event it hands
+/// a child — leaves it the repeat it was.
+#[test]
+fn a_moved_key_down_keeps_its_repeat() {
+    for repeat in [false, true] {
+        for at in [Some(Point::new(1.0, 2.0)), None] {
+            let moved = key_down(Key::Enter, repeat).with_coords(at);
+            assert!(
+                matches!(moved, Event::KeyDown { repeat: r, .. } if r == repeat),
+                "{moved:?}"
+            );
+        }
+    }
 }
