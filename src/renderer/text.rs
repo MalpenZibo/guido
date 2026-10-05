@@ -54,14 +54,23 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
 /// A text laid out with no width runs on one line per paragraph, and is shaped
 /// so, without wrapping: across `box_width` when there is one, which is only
 /// where its lines are aligned, since nothing can break.
+///
+/// A text drawn with no fit at all — `PaintContext::draw_text` from a widget
+/// that measured it some other way — wraps at its box, which is all it says
+/// about where it was laid out.
 pub(super) fn line_width(
     fit: Option<LineFit>,
     box_width: Option<f32>,
     scale: f32,
 ) -> (Option<f32>, bool) {
-    match fit.and_then(|fit| fit.width.map(|width| (width, fit.wrap))) {
-        Some((width, wraps)) => (Some(width * scale), wraps),
-        None => (box_width, false),
+    match fit {
+        None => (box_width, true),
+        Some(LineFit {
+            width: Some(width),
+            wrap,
+            ..
+        }) => (Some(width * scale), wrap),
+        Some(_) => (box_width, false),
     }
 }
 
@@ -1184,10 +1193,17 @@ mod line_width_tests {
     /// shaped so: in its box, which can then only align it, never break it.
     #[test]
     fn a_text_laid_out_with_no_width_is_shaped_in_its_box_unwrapped() {
-        for fit in [None, laid_out_in(None, true), laid_out_in(None, false)] {
+        for fit in [laid_out_in(None, true), laid_out_in(None, false)] {
             assert_eq!(line_width(fit, Some(72.0), 2.0), (Some(72.0), false));
             assert_eq!(line_width(fit, None, 2.0), (None, false));
         }
+    }
+
+    /// A text drawn without a fit says nothing of where it was laid out but
+    /// its box, so it wraps there.
+    #[test]
+    fn no_fit_wraps_at_the_box() {
+        assert_eq!(line_width(None, Some(72.0), 2.0), (Some(72.0), true));
     }
 
     /// The height floor is in logical pixels and the scale is applied after it,
@@ -1322,6 +1338,26 @@ mod a_line_is_placed_in_its_own_box {
                 assert_ne!(a, b, "two alignments share a cached buffer");
             }
         }
+    }
+}
+
+/// A text drawn without a fit — `PaintContext::draw_text` from a widget
+/// outside the crate — wraps at the box it was drawn in, as it always has.
+#[cfg(test)]
+#[test]
+fn a_text_drawn_without_a_fit_wraps_at_its_box() {
+    let mut entry = test_entry(
+        Rect::new(0.0, 0.0, 80.0, 200.0),
+        crate::transform::Transform::default(),
+    );
+    entry.text = "one two three four five six seven".into();
+    entry.font_family = FontFamily::name("DejaVu Sans Mono");
+    for scale in [1.0, 1.5] {
+        let buffer = shape_entry(&mut vendored_font_system(), &entry, scale);
+        assert!(
+            buffer.layout_runs().count() > 1,
+            "at {scale}x a long text in an 80-pixel box ran on one line"
+        );
     }
 }
 

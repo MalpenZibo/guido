@@ -1680,7 +1680,8 @@ impl<C: Content> Widget for TextInput<C> {
             crate::widgets::TextAlign::Start,
             stroke,
             shadow,
-            None,
+            // One line, laid out with no width: a field scrolls, it never wraps.
+            Some(crate::renderer::LineFit::wrapping(None)),
         );
 
         // The caret, and the wake that keeps it blinking.

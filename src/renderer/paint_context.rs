@@ -455,8 +455,7 @@ impl<'a> PaintContext<'a> {
     // Text Commands
     // -------------------------------------------------------------------------
 
-    /// Draw text with default font settings, one line per paragraph — see
-    /// [`draw_text_styled`](Self::draw_text_styled) for a text that wraps.
+    /// Draw text with default font settings, wrapped at `rect`'s width.
     pub fn draw_text(&mut self, text: &str, rect: Rect, color: Color, font_size: f32) {
         self.draw_text_styled(
             text,
@@ -478,8 +477,7 @@ impl<'a> PaintContext<'a> {
     /// path shapes the text in that width, so it is drawn on the lines it was
     /// measured on. Measure and draw with the same one —
     /// [`LineFit::wrapping`](super::LineFit::wrapping) for a text that wraps
-    /// at a width. Without a fit the text runs on one line per paragraph,
-    /// placed in `rect`.
+    /// at a width. Without a fit the text wraps at `rect`'s width.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text_styled(
         &mut self,
