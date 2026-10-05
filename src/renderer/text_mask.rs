@@ -106,8 +106,9 @@ struct MaskKey {
     align: TextAlign,
     width: u32,
     height: u32,
-    /// Truncated, and in the key because it decides which lines are laid out:
-    /// two masks alike in every other field can still be shaped differently.
+    /// Truncated, and in the key because it decides which lines of an uncut
+    /// text are laid out: two masks alike in every other field can still be
+    /// shaped differently.
     buffer_height: u32,
     /// By its bits, because it places the glyphs and a mask has to sit exactly
     /// under them.

@@ -63,7 +63,7 @@ pub(crate) type LineFitKey = (Option<u32>, Option<u32>, TextOverflow, bool);
 impl LineFit {
     /// The fit of a text that wraps at `width`, when there is one, and is not
     /// cut: what a text measured or drawn without a fit of its own is given.
-    pub(crate) fn wrapping(width: Option<f32>) -> Self {
+    pub fn wrapping(width: Option<f32>) -> Self {
         Self {
             width,
             max_lines: None,
