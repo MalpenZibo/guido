@@ -1442,6 +1442,7 @@ mod tests {
             font_family: crate::widgets::FontFamily::default(),
             font_weight: crate::widgets::FontWeight::default(),
             line_height: Default::default(),
+            letter_spacing: 0.0,
             align: Default::default(),
             fit: None,
         }));

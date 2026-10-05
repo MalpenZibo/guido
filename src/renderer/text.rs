@@ -24,6 +24,7 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
     entry.line_height.key().hash(&mut hasher);
+    entry.letter_spacing.to_bits().hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
     entry.align.hash(&mut hasher);
     let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
@@ -68,7 +69,7 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
         entry.font_family,
         entry.font_weight,
         entry.line_height,
-        0.0,
+        entry.letter_spacing,
         entry.align,
         {
             let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
@@ -751,7 +752,7 @@ impl TextRenderState {
 ///
 /// Shared by every test module that needs one — `text_quad`'s sets its own
 /// `text` on top — rather than written out per module:
-/// `TextEntry` has nine public fields and no constructor, so a builder per
+/// `TextEntry` is all public fields and no constructor, so a builder per
 /// module is a field list per module to keep in step.
 #[cfg(test)]
 pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> TextEntry {
@@ -763,6 +764,7 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
         line_height: LineHeight::Normal,
+        letter_spacing: 0.0,
         align: Default::default(),
         fit: None,
         opacity: 1.0,
@@ -1252,6 +1254,23 @@ fn line_height_is_part_of_the_buffer_key() {
         text_buffer_key(&entry(LineHeight::Relative(2.0)), 1.0),
         text_buffer_key(&entry(LineHeight::Absolute(2.0)), 1.0),
         "a factor and a height of the same number are not the same line",
+    );
+}
+
+/// Two texts that differ only in letter spacing are two buffers: a key without
+/// it hands the second the first one's glyph positions, under a box measured
+/// for the second.
+#[cfg(test)]
+#[test]
+fn letter_spacing_is_part_of_the_buffer_key() {
+    use crate::transform::Transform;
+    let entry = |letter_spacing| TextEntry {
+        letter_spacing,
+        ..test_entry(Rect::new(0.0, 0.0, 120.0, 40.0), Transform::default())
+    };
+    assert_ne!(
+        text_buffer_key(&entry(0.0), 1.0),
+        text_buffer_key(&entry(2.0), 1.0),
     );
 }
 

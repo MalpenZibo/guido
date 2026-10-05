@@ -139,6 +139,8 @@ pub struct TextEntry {
     pub font_weight: FontWeight,
     /// How tall each line is
     pub line_height: LineHeight,
+    /// Extra advance after every glyph, in logical pixels
+    pub letter_spacing: f32,
     /// Where each line sits across `rect`. Anything but `Start` is shaped at
     /// exactly the box's width, since that is the width the lines are aligned
     /// in.

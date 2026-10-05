@@ -1660,6 +1660,7 @@ impl<C: Content> Widget for TextInput<C> {
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
+            0.0,
             crate::widgets::TextAlign::Start,
             stroke,
             shadow,
