@@ -2682,6 +2682,24 @@ mod tests {
             assert_near(caret_x(&mut tree, id), 3.0 * (ADVANCE + 3.0), "one back");
         }
 
+        /// A letter and a mark the font cannot compose are two glyphs of one
+        /// cluster, each taking a spacing: the caret before the cluster
+        /// stands before the letter, not after it.
+        #[test]
+        fn the_caret_before_a_marked_letter_stands_before_it() {
+            let family = dejavu();
+            let (mut tree, _, id) = field_in_container(
+                text_input(create_signal("x\u{301}".to_owned()))
+                    .font_family(family)
+                    .letter_spacing(3.0),
+            );
+            caret_to_end(&mut tree, id);
+            assert_near(caret_x(&mut tree, id), ADVANCE + 6.0, "at the end");
+
+            key(&mut tree, id, Key::Home, false);
+            assert_near(caret_x(&mut tree, id), 0.0, "at the start");
+        }
+
         #[test]
         fn a_selection_spans_the_spaced_letters() {
             let family = dejavu();
