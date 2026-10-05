@@ -128,6 +128,7 @@ pub struct Text {
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
     cached_line_height: LineHeight,
+    cached_letter_spacing: f32,
     cached_wrap: bool,
     /// The lines layout cut the text to, handed to paint so every path that
     /// shapes it cuts in the same place.
@@ -160,6 +161,7 @@ impl Text {
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
             cached_line_height: LineHeight::Normal,
+            cached_letter_spacing: 0.0,
             cached_wrap: true,
             cached_fit: None,
             cached_overflows: false,
@@ -322,6 +324,7 @@ impl Text {
             self.cached_font_family = style.font_family();
             self.cached_font_weight = style.font_weight();
             self.cached_line_height = style.line_height();
+            self.cached_letter_spacing = style.letter_spacing(id);
             self.cached_wrap = self.wrap.get_or(true);
             decoration_overflow(style.stroke(), style.shadow())
         };
@@ -404,7 +407,7 @@ impl Widget for Text {
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
-            0.0,
+            self.cached_letter_spacing,
             self.cached_fit,
         );
 
@@ -500,7 +503,7 @@ impl Widget for Text {
                 self.cached_font_family,
                 self.cached_font_weight,
                 self.cached_line_height,
-                0.0,
+                self.cached_letter_spacing,
                 align,
                 self.cached_fit,
             );
@@ -513,7 +516,7 @@ impl Widget for Text {
             self.cached_font_family,
             self.cached_font_weight,
             self.cached_line_height,
-            0.0,
+            self.cached_letter_spacing,
             align,
             if frosted { None } else { stroke },
             shadow,
@@ -1962,5 +1965,169 @@ mod tests {
             1,
             "five resolutions, and it should have said so once"
         );
+    }
+}
+
+/// `letter_spacing`, declared on a text: what it defaults to, the five ways it
+/// can be spelled, a state supplying it, and a number that is not one.
+///
+/// Asserted on the text's measured width and on the spacing its commands carry,
+/// so the measurement and the paint are both asked. The width is font-agnostic
+/// on purpose: `abcd` is four glyphs in any face, and four glyphs take four
+/// spacings whatever their own advances are.
+#[cfg(test)]
+mod letter_spacing_tests {
+    use super::*;
+    use crate::jobs;
+    use crate::reactive::{Signal, create_memo, create_signal};
+    use crate::renderer::{DrawCommand, RenderNode};
+    use crate::widgets::container;
+
+    /// A text inside a container, so a write reaches the text only if it
+    /// marked it: a container with unchanged constraints does not ask its
+    /// children again.
+    fn mounted(text: Text) -> (Tree, WidgetId, WidgetId) {
+        // A tree dropped earlier in the test can leave jobs for ids this one
+        // will reuse.
+        jobs::clear_pending_jobs();
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().child(text.nowrap())));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let id = tree.get_children(root)[0];
+        (tree, root, id)
+    }
+
+    /// The text's measured width, and the spacing every text and frost
+    /// command it painted carries — one entry per command.
+    fn frame(tree: &mut Tree, root: WidgetId, id: WidgetId) -> (f32, Vec<f32>) {
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 800.0, 600.0));
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node);
+        fn collect(node: &RenderNode, out: &mut Vec<f32>) {
+            for cmd in &node.commands {
+                match &**cmd {
+                    DrawCommand::Text { letter_spacing, .. }
+                    | DrawCommand::TextBackdropBlur { letter_spacing, .. } => {
+                        out.push(*letter_spacing)
+                    }
+                    _ => {}
+                }
+            }
+            node.children.iter().for_each(|c| collect(c, out));
+        }
+        let mut spacings = Vec::new();
+        collect(&node, &mut spacings);
+        let width = tree.cached_size(id).expect("the text was laid out").width;
+        (width, spacings)
+    }
+
+    fn assert_near(actual: f32, expected: f32, what: &str) {
+        assert!(
+            (actual - expected).abs() < 0.01,
+            "{what}: got {actual}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn a_text_declares_no_spacing_until_it_is_told_one() {
+        let (mut tree, root, id) = mounted(Text::new("abcd").backdrop_blur(6.0));
+        let (_, spacings) = frame(&mut tree, root, id);
+        assert_eq!(spacings, [0.0, 0.0], "the frost and the glyphs, unspaced");
+    }
+
+    /// The frost, the stroke under the fill and the fill all carry the one
+    /// spacing: each is shaped apart, and one shaped without it would sit
+    /// beside the letters rather than under them.
+    #[test]
+    fn every_command_a_text_paints_carries_its_spacing() {
+        let (mut tree, root, id) = mounted(
+            Text::new("abcd")
+                .letter_spacing(2.5)
+                .text_shadow(TextShadow::new(1.0, 1.0, 0.0, Color::BLACK))
+                .backdrop_blur(6.0),
+        );
+        let (_, spacings) = frame(&mut tree, root, id);
+        assert!(spacings.len() >= 3, "{spacings:?}");
+        assert!(spacings.iter().all(|s| *s == 2.5), "{spacings:?}");
+    }
+
+    /// Every spelling `IntoSignal` takes, each followed through a write: the
+    /// width grows by four spacings and the commands carry the new one.
+    #[test]
+    fn a_spacing_takes_every_spelling_and_follows_each() {
+        let n = create_signal(0.0f32);
+        let read: Signal<f32> = n.into();
+        let doubled = create_memo(move || n.get() * 2.0);
+        let spellings: [(&str, Text, f32); 4] = [
+            (
+                "a closure",
+                Text::new("abcd").letter_spacing(move || n.get()),
+                1.0,
+            ),
+            ("a signal", Text::new("abcd").letter_spacing(read), 1.0),
+            (
+                "a writable signal",
+                Text::new("abcd").letter_spacing(n),
+                1.0,
+            ),
+            ("a memo", Text::new("abcd").letter_spacing(doubled), 2.0),
+        ];
+        for (what, text, factor) in spellings {
+            n.set(0.0);
+            let (mut tree, root, id) = mounted(text);
+            let (plain, _) = frame(&mut tree, root, id);
+            n.set(3.0);
+            let (spaced, spacings) = frame(&mut tree, root, id);
+            assert_near(spaced - plain, 4.0 * 3.0 * factor, what);
+            assert_eq!(spacings, [3.0 * factor], "{what}");
+        }
+
+        let (mut tree, root, id) = mounted(Text::new("abcd"));
+        let (plain, _) = frame(&mut tree, root, id);
+        let (mut tree, root, id) = mounted(Text::new("abcd").letter_spacing(-1.0));
+        let (tight, spacings) = frame(&mut tree, root, id);
+        assert_near(plain - tight, 4.0, "a value");
+        assert_eq!(spacings, [-1.0]);
+    }
+
+    #[test]
+    fn a_state_supplies_a_spacing_and_takes_it_back() {
+        let hot = create_signal(true);
+        let (mut tree, root, id) = mounted(
+            Text::new("abcd")
+                .letter_spacing(1.0)
+                .state(hot, |s: TextStyle| s.letter_spacing(5.0)),
+        );
+        let (overridden, spacings) = frame(&mut tree, root, id);
+        assert_eq!(spacings, [5.0], "the override, while it is active");
+
+        hot.set(false);
+        let (declared, spacings) = frame(&mut tree, root, id);
+        assert_eq!(spacings, [1.0], "and the declaration once it is not");
+        assert_near(overridden - declared, 16.0, "and the measurement with it");
+    }
+
+    /// A declared spacing that is not a number is no spacing; an override that
+    /// is not one is passed over for the declaration underneath, as every
+    /// numeric text property is.
+    #[test]
+    fn a_spacing_that_is_not_a_number_is_none() {
+        let (mut tree, root, id) = mounted(Text::new("abcd"));
+        let (plain, _) = frame(&mut tree, root, id);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let (mut tree, root, id) = mounted(Text::new("abcd").letter_spacing(bad));
+            let (width, spacings) = frame(&mut tree, root, id);
+            assert_eq!(spacings, [0.0], "{bad}");
+            assert_near(width, plain, &format!("{bad} measures as none"));
+        }
+
+        let hot = create_signal(true);
+        let (mut tree, root, id) = mounted(
+            Text::new("abcd")
+                .letter_spacing(2.0)
+                .state(hot, |s: TextStyle| s.letter_spacing(f32::NAN)),
+        );
+        let (_, spacings) = frame(&mut tree, root, id);
+        assert_eq!(spacings, [2.0], "a bad override falls through");
     }
 }

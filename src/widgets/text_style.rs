@@ -255,7 +255,7 @@ pub struct TextStyle {
 /// Container resolves its own properties in these two steps, and
 /// [`first_finite_override`] carries the rule they share.
 ///
-/// Only the two numeric properties have the distinction. A family and a weight
+/// Only the three numeric properties have the distinction. A family and a weight
 /// cannot fail to be numbers, so the nearest declaration is the whole answer for
 /// them. A stroke and a shadow *can* — they are made of numbers — and they keep
 /// the nearest declaration anyway, because no `AllFinite` impl reaches them: that
@@ -274,10 +274,12 @@ pub(crate) struct ResolvedTextStyle {
     /// Active overrides, nearest first.
     color_overrides: SmallVec<[Prop<Color>; 3]>,
     font_size_overrides: SmallVec<[Prop<f32>; 3]>,
+    letter_spacing_overrides: SmallVec<[Prop<f32>; 3]>,
     /// The widget's own declaration, which every override falls through to and
     /// where the door reports.
     color: Prop<Color>,
     font_size: Prop<f32>,
+    letter_spacing: Prop<f32>,
     font_family: Prop<FontFamily>,
     font_weight: Prop<FontWeight>,
     line_height: Prop<LineHeight>,
@@ -294,6 +296,9 @@ impl ResolvedTextStyle {
         if style.font_size.is_set() {
             self.font_size_overrides.push(style.font_size);
         }
+        if style.letter_spacing.is_set() {
+            self.letter_spacing_overrides.push(style.letter_spacing);
+        }
         self.take_unset(style);
     }
 
@@ -301,6 +306,7 @@ impl ResolvedTextStyle {
     pub(crate) fn push_own(&mut self, style: &TextStyle) {
         self.color = style.color;
         self.font_size = style.font_size;
+        self.letter_spacing = style.letter_spacing;
         self.take_unset(style);
     }
 
@@ -326,6 +332,15 @@ impl ResolvedTextStyle {
             .font_size
             .get_finite_or(DEFAULT_FONT_SIZE, id, "font_size");
         first_finite_override(&self.font_size_overrides, base)
+    }
+
+    /// The extra advance after every glyph, in logical pixels. Zero where
+    /// nothing declares one, and where nothing declared is a number.
+    pub(crate) fn letter_spacing(&self, id: WidgetId) -> f32 {
+        let base = self.letter_spacing.get_finite_or(0.0, id, "letter_spacing");
+        // Plus zero turns -0.0 into 0.0, so a spacing that crosses zero keys
+        // every cache downstream as the no spacing it shapes as.
+        first_finite_override(&self.letter_spacing_overrides, base) + 0.0
     }
 
     /// The family to shape the glyphs with.
