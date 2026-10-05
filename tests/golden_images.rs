@@ -937,6 +937,9 @@ fn clipped_images() {
             .corners(corners)
             .overflow(Overflow::Hidden)
             .rotate(degrees)
+            // A box only lays content out larger than itself along an axis it
+            // scrolls, so the overflow the clip cuts is the content's own.
+            .scroll(Scroll::both().visibility(ScrollbarVisibility::Hidden))
             .child(
                 box_of(90.0, 90.0)
                     .child(image(checkerboard(90, 15)).content_fit(ContentFit::Cover)),
@@ -1379,13 +1382,20 @@ fn clipped_text() {
             .background(Color::rgb(0.18, 0.20, 0.28))
             .overflow(Overflow::Hidden)
             .rotate(degrees)
-            .layout(Flex::column().main_alignment(MainAlignment::Center))
-            // Each line is about twice the width of the clip, so every one of
-            // them runs out on both sides. A text that fits its clip proves
-            // nothing about where the clip's edge is.
-            .child(nowrap_line("MMMMMMMM"))
-            .child(nowrap_line("WWWWWWWW"))
-            .child(nowrap_line("MMMMMMMM"))
+            // A box only lays content out larger than itself along an axis it
+            // scrolls, so the overflow the clip cuts is the content's own.
+            .scroll(Scroll::horizontal().visibility(ScrollbarVisibility::Hidden))
+            .child(
+                container()
+                    .height(96.0)
+                    .layout(Flex::column().main_alignment(MainAlignment::Center))
+                    // Each line is about twice the width of the clip, so every
+                    // one of them runs out on both sides. A text that fits its
+                    // clip proves nothing about where the clip's edge is.
+                    .child(nowrap_line("MMMMMMMM"))
+                    .child(nowrap_line("WWWWWWWW"))
+                    .child(nowrap_line("MMMMMMMM")),
+            )
     };
 
     fn nowrap_line(content: &'static str) -> Container {
@@ -1661,14 +1671,18 @@ fn frosted_text_is_cut_by_its_scroller() {
                     .corners(corners)
                     .overflow(Overflow::Hidden)
                     .rotate(degrees)
-                    .layout(Flex::row().center())
+                    // A box only lays content out larger than itself along an axis it
+                    // scrolls, so the overflow the clip cuts is the content's own.
+                    .scroll(Scroll::horizontal().visibility(ScrollbarVisibility::Hidden))
                     .child(
-                        container()
-                            .width(150.0)
-                            .layout(Flex::column().spacing(2.0))
-                            .child(frosted())
-                            .child(frosted())
-                            .child(frosted()),
+                        container().height(84.0).layout(Flex::row().center()).child(
+                            container()
+                                .width(150.0)
+                                .layout(Flex::column().spacing(2.0))
+                                .child(frosted())
+                                .child(frosted())
+                                .child(frosted()),
+                        ),
                     ),
             )
             .into_any()
