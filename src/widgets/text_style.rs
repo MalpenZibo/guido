@@ -16,8 +16,9 @@
 //!
 //! Every field is an `Option`, so a declaration says only what it means to
 //! say. What fills the rest is the widget's own default — white, 14 logical
-//! pixels, the registered family, normal weight, the font's own line height —
-//! not a neighbouring declaration: nothing is inherited from anywhere.
+//! pixels, the registered family, normal weight, the font's own line height
+//! and letter spacing — not a neighbouring declaration: nothing is inherited
+//! from anywhere.
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and

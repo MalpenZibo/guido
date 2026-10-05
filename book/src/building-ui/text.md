@@ -31,7 +31,7 @@ text("Hello").font_size(24.0).color(theme.text)
 ```
 
 The methods — `color`, `font_size`, `font_family`, `font_weight`, `bold`,
-`mono`, `line_height`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
+`mono`, `line_height`, `letter_spacing`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
 glyphs, `Text` and `TextInput`, and are written from one list so the two always
 offer the same thing.
 
@@ -335,6 +335,51 @@ container().child(text("Body").font_size(14.0).line_height(LineHeight::Absolute(
 A `TextInput` is one line tall, so a field and a label with the same style
 have the same height.
 
+### Letter Spacing
+
+Extra room after every character, in logical pixels — the unit a design token
+such as a tracking of `1.5` is written in, so it is the same distance at any
+font size. `0.0` is the default and the font's own spacing; a negative value
+draws the letters tighter. Like every other style, it takes a signal as readily
+as a value, and a state can supply it:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let wide = create_signal(false);
+container().child(text("SECTION").font_size(11.0).letter_spacing(1.5));
+container().child(text("Display").font_size(40.0).letter_spacing(-1.0));
+container().child(
+    text("Hover me")
+        .letter_spacing(move || if wide.get() { 4.0 } else { 0.0 })
+        .when_hovered(|s| s.letter_spacing(2.0)),
+)
+# ;
+# }
+```
+
+The text is measured with the spacing, so the box it takes grows and shrinks
+with it, and a text that wraps wraps where the spaced line no longer fits. A
+`TextInput` puts its caret, its selection and its clicks where the spaced
+letters are, and a `PasswordInput` spaces the dots it draws.
+
+What the spacing is added to is decided by the shaper, cosmic-text: every
+glyph it puts out gets it, the last one on a line included. Most of the time a
+glyph is a character, but not always:
+
+- a ligature — Arabic lam and alef, drawn as one shape — takes one spacing for
+  the two letters;
+- an accent the font can combine with its letter, such as `e` and a combining
+  acute, becomes one glyph `é` and takes one; an accent it cannot combine is a
+  glyph of its own, takes a second, and is drawn that far to the right of its
+  letter;
+- joined Arabic letters are pulled apart, and the joins between them are not
+  stretched to cover the gap.
+
+A value that is not a number — a division by a zero somewhere upstream — is
+treated as no spacing at all.
+
 ### Text Wrapping
 
 By default, text wraps to fit the available width. Disable wrapping for single-line text:
@@ -609,6 +654,7 @@ impl Text {
     pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
     pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
+    pub fn letter_spacing<M>(self, spacing: impl IntoSignal<f32, M>) -> Self;  // logical pixels
     pub fn wrap<M>(self, wrap: impl IntoSignal<bool, M>) -> Self;
     pub fn nowrap(self) -> Self;    // Shorthand for wrap(false)
     pub fn align<M>(self, align: impl IntoSignal<TextAlign, M>) -> Self;

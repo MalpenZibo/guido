@@ -106,6 +106,24 @@ container().child(text_input(value))
 # }
 ```
 
+### Letter Spacing
+
+Logical pixels after every character, as on a [text](text.md#letter-spacing).
+The caret, the selection and a click all land where the spaced letters are, and
+a password field spaces the dots it draws:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
+# let password = create_password();
+container().child(text_input(value).letter_spacing(1.0));
+container().child(password_input(password).letter_spacing(4.0))
+# ;
+# }
+```
+
 ## Password Input
 
 A password gets its own field, bound to a `Password` rather than a

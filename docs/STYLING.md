@@ -264,7 +264,7 @@ text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
 `color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
-`line_height`, `text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
+`line_height`, `letter_spacing`, `text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
 widgets that draw glyphs — from one list, so the two cannot drift apart.
 `color` and `font_size` are declarations, so they carry how they move as well
 as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
@@ -284,7 +284,25 @@ where the family's own font is not installed. A bare number is
 `LineHeight::Relative`, a factor of the font size —
 `text("Notes").line_height(1.5)` — and `LineHeight::Absolute` is logical
 pixels. It is resolved in one place, `shape` in `src/renderer/text.rs`, which
-the measurer and all three draw paths call. `cursor_color`, `selection_color` and
+the measurer and all three draw paths call.
+
+`letter_spacing` is extra advance in logical pixels, independent of the font
+size — `text("LABEL").letter_spacing(1.5)` — and `0.0`, the default, is the
+font's own spacing; a negative value tightens it and a value that is not a
+number is `0.0`. It is resolved beside the line height, in `shape`, which takes
+it to physical pixels by the scale and hands it to cosmic-text as the fraction
+of the size `Attrs::letter_spacing` asks for. What it is added to is
+cosmic-text's decision, not ours: the advance of every glyph it shapes, the
+last on a line included. So a ligature takes one spacing for the letters it
+joins, a combining mark the shaper cannot compose into its base is a glyph of
+its own and takes one too — landing that far right of the base — and joined
+Arabic letters are pulled apart with no connection kept across the gap. The
+tests that pin this are in `src/renderer/text_measurer.rs`, and
+`letter_spacing_reaches_every_path` in `tests/golden_images.rs` draws it.
+A `TextInput` places its caret, its selection and its clicks from the same
+spaced shaping, and a `PasswordInput` spaces the mask characters it draws.
+
+`cursor_color`, `selection_color` and
 `placeholder_color` are `TextInput`'s own methods and nothing else's, because
 it is the only widget that draws a caret, a band or a placeholder.
 
