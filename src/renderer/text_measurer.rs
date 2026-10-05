@@ -61,6 +61,17 @@ pub struct LineFit {
 pub(crate) type LineFitKey = (Option<u32>, Option<u32>, TextOverflow, bool);
 
 impl LineFit {
+    /// The fit of a text that wraps at `width`, when there is one, and is not
+    /// cut: what a text measured or drawn without a fit of its own is given.
+    pub(crate) fn wrapping(width: Option<f32>) -> Self {
+        Self {
+            width,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            wrap: true,
+        }
+    }
+
     /// The fit as something a cache can key by.
     pub(crate) fn key(&self) -> LineFitKey {
         (
@@ -88,9 +99,8 @@ struct MeasureCacheKey {
     font_weight: FontWeight,
     line_height: (u8, u32),
     letter_spacing_bits: u32,
-    max_width_bits: Option<u32>,
-    /// The cut, when there is one.
-    fit: Option<LineFitKey>,
+    /// The width it was laid out in, and the cut, when there is one.
+    fit: LineFitKey,
 }
 
 impl MeasureCacheKey {
@@ -98,12 +108,11 @@ impl MeasureCacheKey {
     fn new(
         text: &str,
         font_size: f32,
-        max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
         line_height: LineHeight,
         letter_spacing: f32,
-        fit: Option<LineFit>,
+        fit: LineFit,
     ) -> Self {
         let mut hasher = rustc_hash::FxHasher::default();
         text.hash(&mut hasher);
@@ -115,8 +124,7 @@ impl MeasureCacheKey {
             font_weight,
             line_height: line_height.key(),
             letter_spacing_bits: letter_spacing.to_bits(),
-            max_width_bits: max_width.map(|w| w.to_bits()),
-            fit: fit.map(|f| f.key()),
+            fit: fit.key(),
         }
     }
 }
@@ -195,7 +203,8 @@ impl TextMeasurer {
     /// baseline is not worth re-shaping for.
     ///
     /// A text laid out by `fit` is measured at the width the fit carries
-    /// rather than `max_width`, and as the lines it keeps when it is cut.
+    /// rather than `max_width`, and as the lines it keeps when it is cut;
+    /// without one it wraps at `max_width`.
     #[allow(clippy::too_many_arguments)]
     pub fn measure_full(
         &mut self,
@@ -208,11 +217,10 @@ impl TextMeasurer {
         letter_spacing: f32,
         fit: Option<LineFit>,
     ) -> Measured {
-        let max_width = fit.map_or(max_width, |f| f.width);
+        let fit = fit.unwrap_or(LineFit::wrapping(max_width));
         let cache_key = MeasureCacheKey::new(
             text,
             font_size,
-            max_width,
             font_family,
             font_weight,
             line_height,
@@ -229,12 +237,12 @@ impl TextMeasurer {
             let buffer = self.shape(
                 text,
                 font_size,
-                max_width,
+                None,
                 font_family,
                 font_weight,
                 line_height,
                 letter_spacing,
-                fit,
+                Some(fit),
             );
 
             let mut width = 0.0f32;
@@ -287,6 +295,7 @@ impl TextMeasurer {
         letter_spacing: f32,
         fit: Option<LineFit>,
     ) -> Buffer {
+        let fit = fit.unwrap_or(LineFit::wrapping(max_width));
         super::text::shape(
             &mut self.font_system,
             text,
@@ -296,8 +305,8 @@ impl TextMeasurer {
             line_height,
             letter_spacing,
             TextAlign::Start,
-            (max_width, None),
-            fit,
+            (None, None),
+            Some(fit),
             1.0,
         )
     }

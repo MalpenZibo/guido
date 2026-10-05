@@ -27,37 +27,52 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     entry.letter_spacing.to_bits().hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
     entry.align.hash(&mut hasher);
-    let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
-    width.to_bits().hash(&mut hasher);
-    height.to_bits().hash(&mut hasher);
+    // Whether it wraps is the fit's, hashed below.
+    let (width, _) = line_width(
+        entry.fit,
+        Some(entry.rect.width * scale_factor),
+        scale_factor,
+    );
+    width.map(f32::to_bits).hash(&mut hasher);
+    buffer_height(entry.rect, scale_factor)
+        .to_bits()
+        .hash(&mut hasher);
     entry.fit.map(|fit| fit.key()).hash(&mut hasher);
     hasher.finish()
 }
 
-/// The buffer glyphon is given to shape a text of this layout box in, in
-/// physical pixels.
+/// The width a text's lines are laid out in, in physical pixels, and whether
+/// they wrap there.
 ///
-/// The floors are glyphon's: a buffer narrower than the text it holds wraps it,
-/// and a measured box can come back a hair narrower than the thing it measured.
+/// The width layout laid the text out in, which its fit carries: a text shaped
+/// in any other width breaks its lines somewhere else, so this is the one width
+/// the measurer and the three draw paths all shape in. Its box is no substitute
+/// — a box can come back a hair narrower than the line it measured, and a line
+/// shaped in it wraps one letter early. Where the box is narrower than this
+/// width, [`paint_offset`] puts the lines back in it.
 ///
-/// An aligned text has no width floor: cosmic-text aligns each line across the
-/// width it is shaped in, so a label narrower than the floor would be centred
-/// in the floor rather than in its own box. A wrapped text's box is its widest
-/// line as layout measured it, so that exact width breaks the lines where
-/// layout did — `text_aligns_within_its_own_box_at_scale_1_5x` is the golden
-/// that would see one break anywhere else.
+/// A text laid out with no width runs on one line per paragraph, and is shaped
+/// so, without wrapping: across `box_width` when there is one, which is only
+/// where its lines are aligned, since nothing can break.
+pub(super) fn line_width(
+    fit: Option<LineFit>,
+    box_width: Option<f32>,
+    scale: f32,
+) -> (Option<f32>, bool) {
+    match fit.and_then(|fit| fit.width.map(|width| (width, fit.wrap))) {
+        Some((width, wraps)) => (Some(width * scale), wraps),
+        None => (box_width, false),
+    }
+}
+
+/// The height glyphon is given to shape an uncut text of this layout box in, in
+/// physical pixels — the box's, and never under 50 logical pixels.
 ///
-/// It is a function and not four inline multiplications because a text's frost
-/// is shaped separately from the text — see [`text_mask`](super::text_mask) —
-/// and two shapings that disagree break their lines in different places, which
-/// puts frost beside a letter that wrapped somewhere else. The sibling for the
-/// transformed path is [`text_quad::shaping_buffer`](super::text_quad::shaping_buffer).
-pub(super) fn shaping_buffer(rect: Rect, scale: f32, align: TextAlign) -> (f32, f32) {
-    let width = match align {
-        TextAlign::Start => rect.width.max(200.0),
-        _ => rect.width,
-    };
-    (width * scale, rect.height.max(50.0) * scale)
+/// The transformed path's is
+/// [`text_quad::buffer_height`](super::text_quad::buffer_height), and a frost
+/// is shaped in whichever of the two draws its letters.
+pub(super) fn buffer_height(rect: Rect, scale: f32) -> f32 {
+    rect.height.max(50.0) * scale
 }
 
 /// How far right a shaped text is drawn of its box's left edge, in the same
@@ -99,18 +114,20 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
         entry.line_height,
         entry.letter_spacing,
         entry.align,
-        {
-            let (width, height) = shaping_buffer(entry.rect, scale_factor, entry.align);
-            (Some(width), Some(height))
-        },
+        (
+            Some(entry.rect.width * scale_factor),
+            Some(buffer_height(entry.rect, scale_factor)),
+        ),
         entry.fit,
         scale_factor,
     )
 }
 
-/// Shape `text` at `font_size` physical pixels: into a buffer of `size`, or,
-/// when the text is cut, to the lines `fit` allows at `scale` physical pixels
-/// per logical one.
+/// Shape `text` at `font_size` physical pixels, in the width `fit` says it was
+/// laid out in and, when it is cut, to the lines `fit` allows — at `scale`
+/// physical pixels per logical one. `frame` is the box's width and the height
+/// an uncut text is given, in physical pixels; the width is used only for a
+/// text laid out with none (see [`line_width`]).
 ///
 /// One function for every path that shapes — the measurer, glyphon's, the
 /// transformed quad's and the frost's mask — because a frost has to break and
@@ -118,13 +135,10 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 /// drawn on the lines it was measured on, and four copies of this are four
 /// places for an option to reach three of.
 ///
-/// A cut text is shaped at the width it was laid out in, so the line the
-/// ellipsis lands on is the line the measurer counted — unless it is aligned,
-/// when it is shaped at its box's width like every aligned text, since that
-/// is the width its lines are aligned across. The two cut it the same way: the
-/// box is as wide as the widest line kept, every line that broke did not fit
-/// the wider width and does not fit the box, and a marked line kept as many
-/// glyphs as fit the wider width, which all fit the box.
+/// Every text is shaped at the width it was laid out in, aligned or not and
+/// cut or not, so its lines break where the measurer broke them and the line
+/// an ellipsis lands on is the line the measurer counted. Where those lines
+/// sit inside a box narrower than that width is [`paint_offset`]'s to say.
 ///
 /// The line height is resolved here and nowhere else, so the measurer and the
 /// three draw paths cannot disagree about how tall a line is: `Normal` is the
@@ -155,7 +169,7 @@ pub(super) fn shape(
     line_height: LineHeight,
     letter_spacing: f32,
     align: TextAlign,
-    size: (Option<f32>, Option<f32>),
+    frame: (Option<f32>, Option<f32>),
     fit: Option<LineFit>,
     scale: f32,
 ) -> Buffer {
@@ -175,21 +189,15 @@ pub(super) fn shape(
         .filter(|h| h.is_finite() && *h > 0.0)
         .unwrap_or(font.line_ratio * px);
     let mut buffer = Buffer::new(font_system, Metrics::new(px, line_height));
-    let cut = fit.filter(|fit| fit.max_lines.is_some());
-    let lines = cut.and_then(|fit| fit.max_lines).map(|n| n.max(1) as usize);
-    match cut {
-        None => buffer.set_size(size.0, size.1),
-        Some(fit) => {
-            let width = match align {
-                TextAlign::Start => fit.width.map(|w| w * scale),
-                _ => size.0,
-            };
-            let cut = lines.map(|n| (n as f32 - 0.5) * line_height);
-            buffer.set_size(width, cut);
-            if !fit.wrap {
-                buffer.set_wrap(Wrap::None);
-            }
-        }
+    let lines = fit.and_then(|fit| fit.max_lines).map(|n| n.max(1) as usize);
+    let (width, wraps) = line_width(fit, frame.0, scale);
+    let height = match lines {
+        Some(n) => Some((n as f32 - 0.5) * line_height),
+        None => frame.1,
+    };
+    buffer.set_size(width, height);
+    if !wraps {
+        buffer.set_wrap(Wrap::None);
     }
     let mut attrs = Attrs::new()
         .family(font.family.to_cosmic())
@@ -200,7 +208,7 @@ pub(super) fn shape(
     }
     buffer.set_text(text, &attrs, Shaping::Advanced, cosmic_align(align));
     buffer.shape_until_scroll(font_system, true);
-    if let (Some(lines), Some(mark)) = (lines, cut.and_then(|fit| ellipsize(fit.overflow))) {
+    if let (Some(lines), Some(mark)) = (lines, fit.and_then(|fit| ellipsize(fit.overflow))) {
         cut_to_lines(font_system, &mut buffer, lines, mark);
     }
     buffer
@@ -803,6 +811,16 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
     }
 }
 
+/// A font system holding the vendored test font and nothing else, so the
+/// widths a test reads are the font's and not the machine's.
+#[cfg(test)]
+pub(super) fn vendored_font_system() -> FontSystem {
+    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(FONT.to_vec());
+    FontSystem::new_with_locale_and_db("en-US".into(), db)
+}
+
 /// The per-group scratch is grown once and then kept.
 ///
 /// Capacity and not an allocation count: counting allocations needs an
@@ -1125,101 +1143,125 @@ mod laid_out_tests {
 }
 
 #[cfg(test)]
-mod shaping_buffer_tests {
-    use super::shaping_buffer;
-    use crate::widgets::{Rect, TextAlign};
+mod line_width_tests {
+    use super::{buffer_height, line_width};
+    use crate::renderer::LineFit;
+    use crate::widgets::{Rect, TextOverflow};
 
-    /// The floors are in logical pixels and the scale is applied after them, so
-    /// a small box on a HiDPI screen gets the floor at that screen's density
+    fn laid_out_in(width: Option<f32>, wrap: bool) -> Option<LineFit> {
+        Some(LineFit {
+            width,
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            wrap,
+        })
+    }
+
+    /// A text is shaped in the width it was laid out in, scaled, and in
+    /// nothing else: not its box, which a measured line can be a hair wider
+    /// than, and not a floor.
+    #[test]
+    fn the_width_laid_out_in_is_the_width_shaped_in() {
+        let box_width = Some(48.0);
+        assert_eq!(
+            line_width(laid_out_in(Some(50.0), true), box_width, 1.0),
+            (Some(50.0), true)
+        );
+        assert_eq!(
+            line_width(laid_out_in(Some(50.0), true), box_width, 1.5),
+            (Some(75.0), true),
+            "scaled, and nothing floors it"
+        );
+        // An unwrapped text that a mark needs a width for keeps the width, to
+        // mark at, and does not wrap there.
+        assert_eq!(
+            line_width(laid_out_in(Some(90.0), false), box_width, 1.0),
+            (Some(90.0), false)
+        );
+    }
+
+    /// A text laid out with no width ran on one line per paragraph, and is
+    /// shaped so: in its box, which can then only align it, never break it.
+    #[test]
+    fn a_text_laid_out_with_no_width_is_shaped_in_its_box_unwrapped() {
+        for fit in [None, laid_out_in(None, true), laid_out_in(None, false)] {
+            assert_eq!(line_width(fit, Some(72.0), 2.0), (Some(72.0), false));
+            assert_eq!(line_width(fit, None, 2.0), (None, false));
+        }
+    }
+
+    /// The height floor is in logical pixels and the scale is applied after it,
+    /// so a short box on a HiDPI screen gets the floor at that screen's density
     /// rather than a floor that shrinks as the screen gets finer.
     #[test]
-    fn the_floor_is_logical_and_the_scale_comes_after_it() {
-        assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0, TextAlign::Start),
-            (200.0, 50.0)
-        );
-        assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0, TextAlign::Start),
-            (400.0, 100.0)
-        );
+    fn the_height_floor_is_logical_and_the_scale_comes_after_it() {
+        assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0), 50.0);
+        assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0), 100.0);
+        assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 80.0), 0.5), 40.0);
     }
 
-    /// Above the floors the buffer is the box, scaled — and scaled, not offset,
-    /// which is the whole of what makes it agree with a glyph drawn at that
-    /// scale.
+    /// The two paths give an uncut text different heights, which is why a
+    /// coverage mask has to pick one rather than assume. If this ever passes,
+    /// `text_mask` no longer has a choice to get wrong — and the comment saying
+    /// it does is stale. Their widths are one function's.
     #[test]
-    fn a_box_above_the_floor_is_carried_by_the_scale_alone() {
-        assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 1.0, TextAlign::Start),
-            (300.0, 80.0)
-        );
-        assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 2.0, TextAlign::Start),
-            (600.0, 160.0)
-        );
-        // The floor is logical, so a scale below 1 can carry the buffer under
-        // it: 80 clears the floor of 50 and then halves to 40.
-        assert_eq!(
-            shaping_buffer(Rect::new(0.0, 0.0, 300.0, 80.0), 0.5, TextAlign::Start),
-            (150.0, 40.0)
-        );
-    }
-
-    /// The two rules are not the same rule, which is why a coverage mask has to
-    /// pick one rather than assume. If this ever passes, `text_mask` no longer
-    /// has a choice to get wrong — and the comment saying it does is stale.
-    #[test]
-    fn the_transformed_shaper_asks_for_something_else() {
-        let rect = Rect::new(0.0, 0.0, 72.0, 80.0);
+    fn the_transformed_shaper_asks_for_another_height() {
+        let rect = Rect::new(0.0, 0.0, 72.0, 30.0);
         assert_ne!(
-            shaping_buffer(rect, 4.0, TextAlign::Start),
-            super::super::text_quad::shaping_buffer(rect, 4.0, TextAlign::Start),
-            "a 72-point box: 400 texels through this one and 317 through the other"
+            buffer_height(rect, 4.0),
+            super::super::text_quad::buffer_height(rect, 4.0),
+            "a 30-point box: 200 texels through this one and 132 through the other"
         );
     }
 }
 
-/// A line is aligned across the text's own box, whatever the renderer's floor.
+/// A line is placed in the text's own box, whatever width it was laid out in.
 ///
 /// Shaped with the vendored font alone, so the widths are the font's and not
-/// the machine's. The box is 120 wide — under the 200 the shaper is otherwise
-/// given — and the line is far shorter than that, so a line centred in the
-/// floor instead of the box starts 40 pixels late, and one never aligned at
-/// all starts at nought.
+/// the machine's. The text was laid out in 300 pixels and its box is 120, as a
+/// box that does not fill its column comes back — and the line is far shorter
+/// than either, so a line placed across the width it was shaped in instead of
+/// its box starts 90 pixels late when centred, and a right-to-left one starts
+/// past the box's right edge (#617, #621).
 #[cfg(test)]
-mod a_line_is_aligned_in_its_own_box {
-    use super::{shape_entry, test_entry, text_buffer_key};
+mod a_line_is_placed_in_its_own_box {
+    use super::{paint_offset, shape_entry, test_entry, text_buffer_key, vendored_font_system};
+    use crate::renderer::LineFit;
     use crate::transform::Transform;
-    use crate::widgets::{FontFamily, Rect, TextAlign};
-    use glyphon::FontSystem;
+    use crate::widgets::{FontFamily, Rect, TextAlign, TextOverflow};
 
-    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
     const BOX: f32 = 120.0;
+    const OFFERED: f32 = 300.0;
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645}";
 
-    fn entry(align: TextAlign) -> super::TextEntry {
+    fn entry(text: &str, align: TextAlign) -> super::TextEntry {
         let mut entry = test_entry(Rect::new(0.0, 0.0, BOX, 20.0), Transform::default());
-        entry.text = "hi".into();
+        entry.text = text.into();
         entry.font_family = FontFamily::name("DejaVu Sans Mono");
         entry.align = align;
+        entry.fit = Some(LineFit {
+            width: Some(OFFERED),
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            wrap: true,
+        });
         entry
     }
 
-    /// Where the first line's glyphs begin and how wide the line is, in
-    /// physical pixels.
-    fn first_line(align: TextAlign, scale: f32) -> (f32, f32) {
-        let mut db = glyphon::fontdb::Database::new();
-        db.load_font_data(FONT.to_vec());
-        let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
-        let buffer = shape_entry(&mut font_system, &entry(align), scale);
+    /// Where the first line's glyphs begin in the box, once placed, and how
+    /// wide the line is, in physical pixels.
+    fn first_line(entry: &super::TextEntry, scale: f32) -> (f32, f32) {
+        let buffer = shape_entry(&mut vendored_font_system(), entry, scale);
+        let offset = paint_offset(&buffer, entry.rect.width * scale, entry.align);
         let run = buffer.layout_runs().next().expect("a line");
         let start = run.glyphs.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
-        (start, run.line_w)
+        (start + offset, run.line_w)
     }
 
     #[test]
-    fn a_centred_line_is_centred_in_its_box_and_not_in_the_floor() {
-        for scale in [1.0, 2.0] {
-            let (start, width) = first_line(TextAlign::Center, scale);
+    fn a_centred_line_is_centred_in_its_box_and_not_in_the_width_it_was_laid_out_in() {
+        for scale in [1.0, 1.5, 2.0] {
+            let (start, width) = first_line(&entry("hi", TextAlign::Center), scale);
             let expected = (BOX * scale - width) / 2.0;
             assert!(
                 (start - expected).abs() < 0.5,
@@ -1232,7 +1274,7 @@ mod a_line_is_aligned_in_its_own_box {
 
     #[test]
     fn an_end_aligned_line_ends_where_its_box_does() {
-        let (start, width) = first_line(TextAlign::End, 1.0);
+        let (start, width) = first_line(&entry("hi", TextAlign::End), 1.0);
         assert!(
             (start + width - BOX).abs() < 0.5,
             "the line ends at {} in a box that ends at {BOX}",
@@ -1242,8 +1284,25 @@ mod a_line_is_aligned_in_its_own_box {
 
     #[test]
     fn a_start_aligned_line_starts_at_the_box() {
-        let (start, _) = first_line(TextAlign::Start, 1.0);
+        let (start, _) = first_line(&entry("hi", TextAlign::Start), 1.0);
         assert!(start.abs() < 0.5, "the line starts at {start}");
+    }
+
+    /// A right-to-left line starts at the start of its box, which is its
+    /// right edge — and ends at the left one when it is aligned to the end.
+    #[test]
+    fn a_right_to_left_line_starts_at_its_box_s_right_edge() {
+        for scale in [1.0, 1.5] {
+            let (start, width) = first_line(&entry(ARABIC, TextAlign::Start), scale);
+            assert!(
+                (start + width - BOX * scale).abs() < 0.5,
+                "at scale {scale} the line ends at {} in a box that ends at {}",
+                start + width,
+                BOX * scale
+            );
+            let (start, _) = first_line(&entry(ARABIC, TextAlign::End), scale);
+            assert!(start.abs() < 0.5, "at scale {scale} its end is at {start}");
+        }
     }
 
     /// Two texts that differ only in alignment are two different buffers, so
@@ -1256,11 +1315,84 @@ mod a_line_is_aligned_in_its_own_box {
             TextAlign::End,
             TextAlign::Justified,
         ]
-        .map(|align| text_buffer_key(&entry(align), 1.0))
+        .map(|align| text_buffer_key(&entry("hi", align), 1.0))
         .into();
         for (i, a) in keys.iter().enumerate() {
             for b in &keys[i + 1..] {
                 assert_ne!(a, b, "two alignments share a cached buffer");
+            }
+        }
+    }
+}
+
+/// A wrapped text is drawn on the lines it was measured on, in a box as narrow
+/// as its widest line (#622).
+///
+/// The measurer lays the text out in the width it was offered and the box
+/// comes back as its widest line; glyphon shapes it from the entry that box
+/// and that fit make. The two have to keep the same glyphs on the same lines.
+/// With the vendored font, so the widths are the font's.
+#[cfg(test)]
+mod a_wrapped_text_keeps_its_measured_lines {
+    use super::{shape_entry, test_entry, vendored_font_system};
+    use crate::renderer::LineFit;
+    use crate::transform::Transform;
+    use crate::widgets::{FontFamily, FontWeight, LineHeight, Rect, TextAlign, TextOverflow};
+
+    const OFFERED: f32 = 120.0;
+
+    fn lines(buffer: &glyphon::Buffer) -> Vec<Vec<u16>> {
+        buffer
+            .layout_runs()
+            .map(|run| run.glyphs.iter().map(|g| g.glyph_id).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_lines_drawn_are_the_lines_measured() {
+        let family = FontFamily::name("DejaVu Sans Mono");
+        let fit = LineFit {
+            width: Some(OFFERED),
+            max_lines: None,
+            overflow: TextOverflow::Clip,
+            wrap: true,
+        };
+        for text in [
+            "one two three four five six seven",
+            "\u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+             \u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645}",
+        ] {
+            let measured = super::shape(
+                &mut vendored_font_system(),
+                text,
+                16.0,
+                family,
+                FontWeight::NORMAL,
+                LineHeight::Normal,
+                0.0,
+                TextAlign::Start,
+                (None, None),
+                Some(fit),
+                1.0,
+            );
+            let widest = measured.layout_runs().map(|r| r.line_w).fold(0.0, f32::max);
+            let height: f32 = measured.layout_runs().map(|r| r.line_height).sum();
+            assert!(
+                measured.layout_runs().count() > 1,
+                "the text has to wrap at {OFFERED}, or this proves nothing"
+            );
+
+            let mut entry = test_entry(Rect::new(0.0, 0.0, widest, height), Transform::default());
+            entry.text = text.into();
+            entry.font_family = family;
+            entry.fit = Some(fit);
+            for scale in [1.0, 1.5] {
+                let drawn = shape_entry(&mut vendored_font_system(), &entry, scale);
+                assert_eq!(
+                    lines(&drawn),
+                    lines(&measured),
+                    "{text:?} at {scale}x is drawn on other lines than it was measured on"
+                );
             }
         }
     }
@@ -1307,28 +1439,21 @@ fn letter_spacing_is_part_of_the_buffer_key() {
 /// An aligned text that is cut is cut where it was measured, and its lines are
 /// aligned across its own box.
 ///
-/// The measurer shapes a cut text at the width it was laid out in; an aligned
-/// one is drawn at its box's width, which is its widest kept line — the width
-/// its lines are aligned across. The two must keep the same glyphs on the same
-/// lines, the mark included, or a label is measured on one set of lines and
-/// drawn on another. With the vendored font, so the widths are the font's.
+/// Every path shapes a cut text at the width it was laid out in, and an
+/// aligned one is then placed across its box, which is its widest kept line.
+/// The lines drawn must keep the same glyphs as the lines measured, the mark
+/// included, or a label is measured on one set of lines and drawn on another;
+/// and once placed they must be centred in the box, not in the wider width.
+/// With the vendored font, so the widths are the font's.
 #[cfg(test)]
 mod an_aligned_cut_is_the_measured_cut {
-    use super::shape;
+    use super::{paint_offset, shape, vendored_font_system};
     use crate::renderer::LineFit;
     use crate::widgets::{FontFamily, FontWeight, LineHeight, TextAlign, TextOverflow};
-    use glyphon::FontSystem;
 
-    const FONT: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
     const WORDS: &str = "one two three four five six seven eight nine ten eleven twelve";
     const OFFERED: f32 = 150.0;
     const SIZE: f32 = 16.0;
-
-    fn font_system() -> FontSystem {
-        let mut db = glyphon::fontdb::Database::new();
-        db.load_font_data(FONT.to_vec());
-        FontSystem::new_with_locale_and_db("en-US".into(), db)
-    }
 
     fn fit(overflow: TextOverflow) -> LineFit {
         LineFit {
@@ -1339,7 +1464,8 @@ mod an_aligned_cut_is_the_measured_cut {
         }
     }
 
-    /// Each line as its glyph ids, where it starts and how wide it is.
+    /// Each line as its glyph ids, where it starts in a box `width` wide once
+    /// placed, and how wide it is.
     fn lines(
         align: TextAlign,
         width: Option<f32>,
@@ -1348,7 +1474,7 @@ mod an_aligned_cut_is_the_measured_cut {
     ) -> Vec<(Vec<u16>, f32, f32)> {
         let family = FontFamily::name("DejaVu Sans Mono");
         let buffer = shape(
-            &mut font_system(),
+            &mut vendored_font_system(),
             WORDS,
             SIZE * scale,
             family,
@@ -1360,13 +1486,14 @@ mod an_aligned_cut_is_the_measured_cut {
             Some(fit),
             scale,
         );
+        let offset = width.map_or(0.0, |width| paint_offset(&buffer, width, align));
         buffer
             .layout_runs()
             .map(|run| {
                 let start = run.glyphs.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
                 (
                     run.glyphs.iter().map(|g| g.glyph_id).collect(),
-                    start,
+                    start + offset,
                     run.line_w,
                 )
             })
@@ -1375,7 +1502,7 @@ mod an_aligned_cut_is_the_measured_cut {
 
     fn ellipsis_glyph() -> u16 {
         let buffer = shape(
-            &mut font_system(),
+            &mut vendored_font_system(),
             "\u{2026}",
             SIZE,
             FontFamily::name("DejaVu Sans Mono"),

@@ -483,9 +483,7 @@ impl Widget for Text {
             )
         };
         // A line wider than its box starts at the start and runs off the end,
-        // as CSS has it. It also keeps an unwrapped text on one line: an
-        // aligned text is shaped at exactly its box's width, and cosmic-text
-        // would wrap a line that does not fit there.
+        // as CSS has it.
         let align = match self.align.get_or(TextAlign::Start) {
             _ if self.cached_overflows => TextAlign::Start,
             align => align,

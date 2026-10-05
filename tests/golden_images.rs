@@ -1917,17 +1917,14 @@ fn frosted_text_follows_its_letters_at_scale_2x() {
 ///
 /// Nothing in this file wrapped before — every label is one line, and one line
 /// agrees with any shaping buffer, which is how the buffer rule came to be
-/// unwatched. It is the rule `TextRenderState` shapes every ordinary text with,
-/// its floors are in logical pixels and its scale is applied after them, and a
-/// mutation of either arithmetic passed the whole suite.
+/// unwatched. A text is shaped in the width it was laid out in, taken to
+/// physical pixels by the scale, and a mutation of that arithmetic passed the
+/// whole suite.
 ///
 /// At scale 2 rather than 1 because that is where the scale in it is legible:
-/// at scale 1 the multiply and the floor are indistinguishable from half a
-/// dozen wrong rules.
-///
-/// Both boxes are wider than 200 logical pixels because that is the floor, and
-/// under it a text does not wrap at its own box at all — it wraps at 200. That
-/// is the rule's own doing and worth seeing here rather than discovering it.
+/// at scale 1 the multiply is indistinguishable from half a dozen wrong rules.
+/// A box narrower than 200 logical pixels, which used to be a floor on the
+/// width, is `a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on`'s.
 #[test]
 fn text_wraps_where_the_box_ends_at_scale_2x() {
     let view = container()
@@ -1991,9 +1988,10 @@ fn frosted_over_bars(height: f32, frosted: impl Widget + 'static) -> Container {
 /// Texts aligned across their own boxes, each box painted behind its text so
 /// the picture says what the line was aligned against.
 ///
-/// Every box is narrower than the 200 logical pixels the renderer otherwise
-/// shapes in, which is the case that matters: a line centred in that floor
-/// rather than in its box sits visibly right of centre, and a line never
+/// Every box is narrower than 200 logical pixels, the width an upright text
+/// was once shaped in, and a hugging box is narrower than the width its text
+/// was laid out in too, which is the case that matters: a line centred in
+/// either rather than in its box sits visibly right of centre, and a line never
 /// aligned hangs from the left edge. The cells, top to bottom on the left:
 /// a wrapped text, whose box is its widest line; two paragraphs split by an
 /// explicit newline; a single line stretched wider than itself, centred and
@@ -2082,9 +2080,9 @@ fn text_aligns_within_its_own_box() {
     );
 }
 
-/// The same at a scale the buffer's width is not a whole multiple of, where a
-/// box shaped at exactly its own width is most likely to break a line the
-/// measurer did not.
+/// The same at a scale the widths are not a whole multiple of, where a line
+/// shaped anywhere but the width it was measured in is most likely to break
+/// where the measurer did not.
 #[test]
 fn text_aligns_within_its_own_box_at_scale_1_5x() {
     golden(
@@ -2851,10 +2849,11 @@ fn a_cut_box_centres_its_children_in_what_is_left() {
 /// Right-to-left labels that start where they should: at the start edge of
 /// their own box, which for a right-to-left line is its right edge.
 ///
-/// Every path shapes a start-aligned text in a buffer wider than its box —
-/// glyphon's is never narrower than 200 pixels, the quad's is the box widened
-/// by its margin — and cosmic-text starts a right-to-left line at the buffer's
-/// right edge, past the box (#617). Each label here is narrower than 200:
+/// Every path shapes a text in the width it was laid out in, which is wider than
+/// a box that does not fill its column, and cosmic-text starts a right-to-left
+/// line at the right edge of that width, past the box; a glyphon buffer was
+/// once never narrower than 200 pixels and the quad's was the box widened by a
+/// margin, which did the same (#617). Each label here is narrower than 200:
 /// hugged by its box, then in a box 150 wide that it does not fill, where it
 /// has to sit against the right edge and not the left. Then frosted over bars,
 /// upright and turned, whose frost is shaped apart from its letters and has to
@@ -2899,7 +2898,8 @@ fn right_to_left_labels() -> Container {
         .child(container().padding([6.0, 12.0]).child(hugged().scale(1.4)))
 }
 
-/// Right-to-left labels under the shaping floor, at scale 1.
+/// Right-to-left labels narrower than the width they were laid out in, at
+/// scale 1.
 #[test]
 fn right_to_left_label_starts_in_its_own_box() {
     golden(
@@ -3004,5 +3004,69 @@ fn a_cut_right_to_left_label_starts_in_its_own_box_at_scale_1_5x() {
         1.5,
         BACKDROP,
         cut_right_to_left_labels(),
+    );
+}
+
+/// Wrapped texts in a column 120 wide, drawn on the lines they were measured
+/// on and inside the box they were measured into.
+///
+/// Layout breaks a wrapped text at the width it is offered; a renderer that
+/// shapes it again in any other width breaks it somewhere else. glyphon was
+/// given 200 pixels for a start-aligned text, so a paragraph measured on four
+/// lines was drawn on two that ran out of its box, and a right-to-left one
+/// started at the right edge of the 200 (#622). One paragraph each way, each
+/// hugged by its box so the background is the box, and the right-to-left one
+/// again on a scaled card, which is drawn as a quad.
+fn wrapped_labels() -> Container {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    const ARABIC: &str = "\u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                          \u{633}\u{644}\u{627}\u{645} \u{633}\u{644}\u{627}\u{645} \
+                          \u{633}\u{644}\u{627}\u{645}";
+    let column = || {
+        container().width(120.0).layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let hugged = |content: &str| container().background(INK).child(label(content, 16.0));
+    container()
+        .background(BACKDROP)
+        .padding(16.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(
+            column()
+                .child(hugged("one two three four five six seven"))
+                .child(hugged(ARABIC)),
+        )
+        .child(
+            column()
+                .padding([12.0, 10.0])
+                .child(hugged(ARABIC).scale(1.2)),
+        )
+}
+
+/// Wrapped texts in a narrow column, at scale 1.
+#[test]
+fn a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on() {
+    golden(
+        "a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on",
+        (320.0, 200.0),
+        1.0,
+        BACKDROP,
+        wrapped_labels(),
+    );
+}
+
+/// The same at scale 1.5, where the width a line was measured in is taken to
+/// physical pixels by a factor that is not a whole number.
+#[test]
+fn a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on_at_scale_1_5x() {
+    golden(
+        "a_wrapped_text_is_drawn_on_the_lines_it_was_measured_on_at_scale_1_5x",
+        (320.0, 200.0),
+        1.5,
+        BACKDROP,
+        wrapped_labels(),
     );
 }
