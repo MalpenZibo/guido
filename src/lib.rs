@@ -698,8 +698,10 @@ fn dispatch_events(
             let response = tree.dispatch(root, event);
 
             // The dispatch just asked every widget under the point, and the
-            // innermost one that declares a cursor said so last.
-            if event.coords().is_some() {
+            // innermost one that declares a cursor said so last — unless it
+            // was a press or release inside a chord, which asked only the
+            // press route (#625).
+            if event.coords().is_some() && tree.asked_under_the_point() {
                 reactive::cursor::point_at(tree.cursor_under_the_point());
             }
 

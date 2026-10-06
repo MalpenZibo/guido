@@ -2981,3 +2981,135 @@ fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still()
     app.step();
     assert_eq!(app.cursors_asked(), [CursorIcon::Text, CursorIcon::Wait]);
 }
+
+/// The issue's sequence (#625), through the loop rather than a bare tree, in
+/// 10px moves: a right-click pressed and released in the middle of a left drag
+/// leaves the drag's moves and its release where they were going. On `main`
+/// the click dropped the route while the pointer was two siblings away from
+/// the drag's origin, which no container offers by position.
+#[test]
+fn a_right_click_two_siblings_from_a_left_drag_leaves_the_drag_alone() {
+    let Some(mut app) = headless() else { return };
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let surface = app.surface(fixed_bar(), move || {
+        let (down, moved, up) = (log.clone(), log.clone(), log.clone());
+        container()
+            .layout(Flex::row())
+            .child(
+                container()
+                    .width(100.0)
+                    .height(20.0)
+                    .on_mouse_down(move |x, _| down.borrow_mut().push(format!("down{x}")))
+                    .on_pointer_move(move |x, _| moved.borrow_mut().push(format!("move{x}")))
+                    .on_mouse_up(move |x, _| up.borrow_mut().push(format!("up{x}"))),
+            )
+            .children((0..4).map(|_| container().width(100.0).height(20.0)))
+    });
+    app.configure(surface, 500, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    let drag = (2..=45).map(|step| Event::mouse_move(step as f32 * 10.0, 10.0));
+    let events = [
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        Event::mouse_down(10.0, 10.0, MouseButton::Right),
+    ]
+    .into_iter()
+    .chain(drag)
+    .chain([
+        Event::mouse_up(450.0, 10.0, MouseButton::Right),
+        Event::mouse_move(460.0, 10.0),
+        Event::mouse_up(460.0, 10.0, MouseButton::Left),
+    ]);
+    for event in events {
+        at += Duration::from_millis(16);
+        app.event_at(surface, event, at);
+        app.step_at(at);
+    }
+
+    let seen = seen.borrow();
+    assert_eq!(
+        (
+            seen.iter()
+                .filter(|entry| entry.starts_with("move"))
+                .count(),
+            seen.last().map(String::as_str),
+        ),
+        (45, Some("up460")),
+        "every move and the release reach the drag's origin: {seen:?}"
+    );
+}
+
+/// A surface closed while a button is held is never sent the release, so the
+/// button it held must not turn the next surface's press into part of a chord
+/// that no longer exists.
+#[test]
+fn a_press_held_on_a_surface_that_closes_does_not_hold_the_next_one() {
+    let Some(mut app) = headless() else { return };
+    let first = app.surface(fixed_bar(), measuring_24);
+    app.configure(first, 200, 50, 1.0);
+    let clicks = create_signal(0u32);
+    let second = app.surface(fixed_bar(), move || bar(clicks));
+    app.configure(second, 200, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    at += Duration::from_millis(16);
+    app.event_at(first, Event::mouse_down(10.0, 10.0, MouseButton::Left), at);
+    app.step_at(at);
+    surface_handle(first).close();
+    app.step_at(at);
+
+    app.click(second, 10.0, 10.0);
+    app.step();
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the press on the second surface is hit-tested where it lands"
+    );
+}
+
+/// A press inside a chord is not hit-tested, so it says nothing about what is
+/// under the pointer — and must not take away the cursor the last move asked
+/// for (#625).
+#[test]
+fn a_right_press_during_a_drag_keeps_the_cursor_under_the_pointer() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || {
+        container()
+            .layout(Flex::row())
+            .child(container().width(100.0).height(20.0).on_mouse_up(|_, _| {}))
+            // Clear of the window the press at x=10 was offered, which is the
+            // container under it and one either side.
+            .children((0..2).map(|_| container().width(100.0).height(20.0)))
+            .child(
+                container()
+                    .width(100.0)
+                    .height(20.0)
+                    .cursor(CursorIcon::Pointer),
+            )
+    });
+    app.configure(surface, 500, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    pointer_enters(&mut app, surface);
+
+    for event in [
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        Event::mouse_move(350.0, 10.0),
+        Event::mouse_down(350.0, 10.0, MouseButton::Right),
+    ] {
+        at += Duration::from_millis(16);
+        app.event_at(surface, event, at);
+        app.step_at(at);
+    }
+
+    assert_eq!(
+        app.cursors_asked().last(),
+        Some(&CursorIcon::Pointer),
+        "the press went along the drag's route, and the cursor stays what the \
+         move over the fourth container asked for: {:?}",
+        app.cursors_asked()
+    );
+}

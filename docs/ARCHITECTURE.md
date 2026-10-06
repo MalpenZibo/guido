@@ -638,6 +638,12 @@ clears its hover however far the pointer went — or whatever else it passed ove
 on the way back — and those of the press, until the release, so a drag reaches
 the widget it started on wherever it goes. Flutter keeps the same two —
 `MouseTracker`'s last hit set and `GestureBinding`'s hit path per pointer.
+There is one press route per chord: the first button down decides it, and it is
+dropped when the last button is up. A press or release of another button in
+between is still its own event, but it goes along that route alone, not
+hit-tested again and not offered to what the pointer is over — as Pointer
+Events release capture, and X11 ends an active grab, only once every button is
+released (#625).
 Children in no order are offered a positioned event where their reach covers
 the point, and recorded the same way.
 

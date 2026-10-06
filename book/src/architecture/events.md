@@ -96,9 +96,12 @@ tested one by one against the same reach.
 `GestureBinding` do. The last event's offers make a widget the pointer just
 left see the move that takes its hover away, however far the pointer went. The
 press's offers, kept until the release, make a drag reach the widget it started
-on wherever it goes. A point a clipping container clips away reaches only the
-record, and without its position — except for the widget a press holds, which
-keeps it for its drag and its release.
+on wherever it goes. A mouse has one press route however many of its buttons
+are down: the first button pressed decides it, it is kept until the last one is
+released, and a press or release of another button in between goes along that
+route rather than to whatever is under the pointer. A point a clipping
+container clips away reaches only the record, and without its position — except
+for the widget a press holds, which keeps it for its drag and its release.
 
 Within a container the children are offered an event in the order they stand,
 and the first to answer `Handled` stops it; if none did, the container handles
