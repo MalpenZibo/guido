@@ -38,7 +38,8 @@ sceptically — so being quietly wrong costs more there than in code.
 `tests/documentation_references.rs` is what keeps the prose honest, and it runs
 before you stop. It reads what is written between backticks — a name has to be
 one the crate has, and a path one the repository has — and skips fenced
-blocks; the book's code samples — which is most of the book — are compiled by
+blocks, except that a trait listed in one has to have the methods it shows; the
+book's code samples — which is most of the book — are compiled by
 `mdbook test` instead, and the same file checks that every fence says which of
 the two it is.
 
@@ -136,6 +137,7 @@ every run for months.
 | documented API | doc tests, and `cargo doc` with warnings denied |
 | the user documentation | `mdbook build book` in CI |
 | API names and file paths written in *prose* — this file, the skills, `docs/`, the book, the README | `tests/documentation_references.rs` |
+| a trait's methods as the documentation lists them in a fenced block, whatever its language | `tests/documentation_references.rs` — each method shown against the trait's declaration, every required one shown, and in `docs/` every one |
 | API names written in the book's *code samples* | `mdbook test` in CI — rustdoc over two fifths of the book's lines. 14% are `ignore`: `book/src/architecture/`, which describes internals, and elsewhere a sample built on the reader's own crates, a signature listing, or a line a chapter shows in order to call it wrong. Outside `book/src/architecture/` each one says which, on its first line |
 | the workflow this file, `/implement` and the templates describe | `tests/agent_workflow.rs` |
 | what gates a merge — the jobs a pull request has to get past | `tests/ci_gate_waits_on_every_job.rs` — every job in `.github/workflows/ci.yml` is in the `CI` job's `needs:` or on the opt-out list beside it |

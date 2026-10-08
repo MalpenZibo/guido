@@ -59,7 +59,7 @@ Pluggable layouts via the `Layout` trait:
 pub trait Layout {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),

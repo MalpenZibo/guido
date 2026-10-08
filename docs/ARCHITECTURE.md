@@ -115,7 +115,7 @@ Pluggable layouts via the `Layout` trait:
 pub trait Layout {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -508,15 +508,22 @@ pub trait Widget {
     /// own Paint scope, so what it reads belongs to it.
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
 
+    /// Whether it fills its parent's width or height, asked by `Flex` and
+    /// `ZStack` before they lay it out.
+    fn layout_hints(&self) -> LayoutHints { LayoutHints::default() }
+
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-
-    /// Check if a descendant has the given ID (for focus tracking)
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool { false }
+    /// Ignores what reaches it unless it says otherwise.
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        EventResponse::Ignored
+    }
 
     /// Register this widget's pending children with the tree.
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {}
+
+    /// Box it as an `AnyWidget`, for branches that return different widgets.
+    fn into_any(self) -> AnyWidget where Self: Sized + 'static { Box::new(self) }
 }
 ```
 

@@ -60,7 +60,8 @@ introduced in an earlier block gets a hidden `let` too — each sample is compil
 alone, and nothing carries between them.
 
 `tests/documentation_references.rs` checks that every fence carries an info
-string rustdoc knows, that every `ignore` says why, and that the share quoted
+string rustdoc knows, that every `ignore` says why, that a trait listed in a
+fence has the methods it shows, and that the share quoted
 below is the share the book actually has. It does not check that the sample is
 *good*.
 

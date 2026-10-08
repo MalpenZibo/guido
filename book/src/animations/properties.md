@@ -353,7 +353,7 @@ container()
 /// On everything a property setter accepts — a value, a signal, a closure.
 pub trait Animate<T, M>: IntoSignal<T, M> + Sized {
     fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T>;
-    fn timeline<M2>(self, keyframes: Keyframes<T>, plays: impl IntoSignal<u32, M2>) -> Animated<T>
+    fn timeline(self, keyframes: Keyframes<T>) -> Animated<T>
     where
         T: Animatable;
 }

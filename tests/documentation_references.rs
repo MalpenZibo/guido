@@ -9,15 +9,18 @@
 //!
 //! This is not a spell-checker for prose. It takes every identifier they
 //! write in backticks, and asserts the crate still has something by that name,
-//! and every one that reads as a path, and asserts the repository has it. It
-//! cannot tell whether the sentence around it is true — only that the thing it
-//! points at exists, which is the failure mode that actually happens.
+//! and every one that reads as a path, and asserts the repository has it; and
+//! every trait they list in a fenced block, and asserts the trait has the
+//! methods the listing shows. It cannot tell whether the sentence around it is
+//! true — only that the thing it points at exists, which is the failure mode
+//! that actually happens.
 //!
 //! When it fails, either the documentation is stale or what it names is not
 //! this crate's and belongs on a list below: `NOT_CRATE_SYMBOLS`, the words
 //! this documentation deliberately writes in backticks without the crate
 //! owning them, or `NOT_REPOSITORY_FILES`, the paths it writes that are not
-//! the repository's.
+//! the repository's, or `NOT_CRATE_TRAITS`, the traits it lists that a reader
+//! declares rather than the crate.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -980,4 +983,408 @@ fn doc_comment_body(line: &str) -> Option<&str> {
         .strip_prefix("///")
         .or_else(|| trimmed.strip_prefix("//!"))?;
     Some(body.strip_prefix(' ').unwrap_or(body))
+}
+
+/// Traits the documentation lists that are not this crate's — a reader's own,
+/// declared on a page that shows how one is written. By name.
+const NOT_CRATE_TRAITS: &[&str] = &[];
+
+/// One method as a trait declares it, or as a listing of the trait shows it.
+#[derive(Debug, PartialEq, Eq)]
+struct Method {
+    name: String,
+    /// Its qualifiers, generics, parameter types, return type and `where`
+    /// clause, without the parameters' names, the modules in front of a type
+    /// or a trailing comma: what a caller and an implementor have to agree
+    /// on, written one way.
+    signature: String,
+    /// Whether the trait gives it a body, so an implementor may leave it out.
+    provided: bool,
+}
+
+/// Leaves out the modules in front of a name — `crate::reactive::OwnerId` is
+/// the `OwnerId` a listing shows — and nothing else: a module is a lowercase
+/// segment, while `Self::Item` and `T::Item` say which type is meant.
+struct WithoutModules;
+
+impl syn::visit_mut::VisitMut for WithoutModules {
+    fn visit_path_mut(&mut self, path: &mut syn::Path) {
+        let last = path.segments.len().saturating_sub(1);
+        let modules = path
+            .segments
+            .iter()
+            .take(last)
+            .take_while(|segment| {
+                segment
+                    .ident
+                    .to_string()
+                    .starts_with(|c: char| c.is_lowercase() || c == '_')
+            })
+            .count();
+        if modules > 0 {
+            path.segments = path.segments.iter().skip(modules).cloned().collect();
+            path.leading_colon = None;
+        }
+        syn::visit_mut::visit_path_mut(self, path);
+    }
+}
+
+/// `items` written out the way `quote` writes them, joined by commas, so a
+/// trailing comma is not a difference.
+fn joined<T: quote::ToTokens>(items: impl IntoIterator<Item = T>) -> String {
+    items
+        .into_iter()
+        .map(|item| item.to_token_stream().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A method of a trait, as `syn` read it.
+fn method(item: &syn::TraitItemFn) -> Method {
+    use quote::ToTokens;
+    let mut sig = item.sig.clone();
+    syn::visit_mut::VisitMut::visit_signature_mut(&mut WithoutModules, &mut sig);
+    let mut signature = String::new();
+    for qualifier in [
+        sig.constness.map(|c| c.to_token_stream()),
+        sig.asyncness.map(|a| a.to_token_stream()),
+        sig.unsafety.map(|u| u.to_token_stream()),
+        sig.abi.as_ref().map(|a| a.to_token_stream()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        signature += &format!("{qualifier} ");
+    }
+    if !sig.generics.params.is_empty() {
+        signature += &format!("<{}>", joined(&sig.generics.params));
+    }
+    // A receiver is compared by the type it stands for — `&mut self` is
+    // `&mut Self` — so a `mut self`, which only makes the binding mutable,
+    // reads as `self`. Anything else is its type, without its pattern.
+    let parameters = sig.inputs.iter().map(|input| match input {
+        syn::FnArg::Receiver(receiver) => receiver.ty.to_token_stream(),
+        syn::FnArg::Typed(typed) => typed.ty.to_token_stream(),
+    });
+    signature += &format!("({})", joined(parameters));
+    if let syn::ReturnType::Type(_, returns) = &sig.output {
+        signature += &format!(" -> {}", returns.to_token_stream());
+    }
+    if let Some(clause) = &sig.generics.where_clause {
+        signature += &format!(" where {}", joined(&clause.predicates));
+    }
+    Method {
+        name: sig.ident.to_string(),
+        signature,
+        provided: item.default.is_some(),
+    }
+}
+
+/// Every trait declared in `file`, with its methods, in order — nested
+/// modules and function bodies included. A name declared twice is here twice.
+fn traits(file: &syn::File) -> Vec<(String, Vec<Method>)> {
+    struct Collect(Vec<(String, Vec<Method>)>);
+    impl<'ast> syn::visit::Visit<'ast> for Collect {
+        fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+            let methods = item
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::TraitItem::Fn(function) => Some(method(function)),
+                    _ => None,
+                })
+                .collect();
+            self.0.push((item.ident.to_string(), methods));
+            syn::visit::visit_item_trait(self, item);
+        }
+    }
+    let mut collect = Collect(Vec::new());
+    syn::visit::Visit::visit_file(&mut collect, file);
+    collect.0
+}
+
+/// The traits a fenced block lists, read as Rust: none when no line of it
+/// declares one, and an error when one does and the block is not Rust `syn`
+/// can read — a listing with an elision in it, for one, which has to be
+/// written so that it parses.
+///
+/// mdbook hides a line behind `#` in a Rust block — `book.toml` says so for
+/// Rust and nothing else, and an unlabelled block is Rust to it — so there a
+/// method written on one is not shown. Anywhere else such a line is on the
+/// page like any other.
+fn listed_traits(body: &[&str], hides_lines: bool) -> Result<Vec<(String, Vec<Method>)>, String> {
+    let visible: Vec<&str> = body
+        .iter()
+        .copied()
+        .filter(|line| {
+            let line = line.trim_start();
+            !hides_lines || (line != "#" && !line.starts_with("# "))
+        })
+        .collect();
+    let declares = visible.iter().any(|line| {
+        let line = line.trim_start();
+        let line = line.strip_prefix("pub ").unwrap_or(line);
+        line.starts_with("trait ") || line.starts_with("unsafe trait ")
+    });
+    if !declares {
+        return Ok(Vec::new());
+    }
+    let file = syn::parse_file(&visible.join("\n")).map_err(|error| error.to_string())?;
+    Ok(traits(&file))
+}
+
+/// Where a listing of `name` disagrees with the trait.
+///
+/// Each method it shows is one the trait has, with the same signature, and
+/// every method the trait requires is shown. A `reference` listing — one in
+/// the developer reference — shows every method the trait has, hidden from
+/// rustdoc or not, and gives a body to exactly the ones the trait does.
+fn disagreements(name: &str, listed: &[Method], actual: &[Method], reference: bool) -> Vec<String> {
+    let mut found = Vec::new();
+    for shown in listed {
+        let Some(method) = actual.iter().find(|method| method.name == shown.name) else {
+            found.push(format!("`{name}` has no method `{}`", shown.name));
+            continue;
+        };
+        if method.signature != shown.signature {
+            found.push(format!(
+                "`{name}::{}` is `{}`, shown as `{}`",
+                shown.name, method.signature, shown.signature
+            ));
+        }
+        if reference && method.provided != shown.provided {
+            let (has, as_) = if method.provided {
+                ("has a default", "with none")
+            } else {
+                ("has no default", "with one")
+            };
+            found.push(format!("`{name}::{}` {has}, shown {as_}", shown.name));
+        }
+    }
+    for method in actual {
+        let owed = reference || !method.provided;
+        if owed && !listed.iter().any(|shown| shown.name == method.name) {
+            found.push(format!("`{name}::{}` is not shown", method.name));
+        }
+    }
+    found
+}
+
+/// A trait the documentation lists has the methods it shows, as the trait
+/// declares them.
+///
+/// A listing sits in a fenced block, which the identifier check skips, and
+/// the book's are `ignore`d — a signature with no body does not compile — so
+/// nothing read them. The developer reference's `Widget` listing showed a
+/// method the trait had lost and lacked two it had gained, and its `Layout`
+/// took a `Tree` after the trait had come to take a `LayoutCtx`; the book
+/// taught a `timeline` argument that had moved to `Keyframes::played_by`.
+///
+/// Both sides are read with `syn`, which `guido-macros` already builds. Every
+/// fence is read, whatever its language: the book's skill puts a signature
+/// listing in a `text` one. A trait listed that the crate does not declare
+/// fails, unless it is on `NOT_CRATE_TRAITS`, because a renamed trait would
+/// otherwise pass. What is compared is in [`disagreements`]. The trait's own
+/// header — its generics and supertraits — is not: a listing may write
+/// `Animate<T, M>` for what the source bounds.
+#[test]
+fn every_trait_the_documentation_lists_has_the_methods_it_shows() {
+    let mut wrong = Vec::new();
+    let mut declared_in_source: std::collections::BTreeMap<String, Vec<Vec<Method>>> =
+        Default::default();
+    let mut files = Vec::new();
+    read_dir_files(&repo().join("src"), "rs", &mut files);
+    read_dir_files(&repo().join("guido-macros/src"), "rs", &mut files);
+    for path in &files {
+        let source = std::fs::read_to_string(path).expect("read the source");
+        match syn::parse_file(&source) {
+            Ok(file) => {
+                for (name, methods) in traits(&file) {
+                    declared_in_source.entry(name).or_default().push(methods);
+                }
+            }
+            Err(error) => wrong.push(format!(
+                "  {}: the source cannot be read: {error}",
+                path.strip_prefix(repo()).unwrap_or(path).display()
+            )),
+        }
+    }
+    let mut listings = 0usize;
+
+    for doc in agent_documentation().iter().chain(&user_documentation()) {
+        let text = std::fs::read_to_string(doc).expect("read documentation");
+        let name = doc.strip_prefix(repo()).unwrap_or(doc);
+        let reference = name.starts_with("docs");
+        let in_book = name.starts_with("book");
+        let name = name.display();
+        for (line, info, body) in fences(&text) {
+            let language = info.split([',', ' ', '\t']).next().unwrap_or_default();
+            let hides_lines = in_book && matches!(language, "" | "rust");
+            let mut say = |what: String| wrong.push(format!("  {name}:{line}: {what}"));
+            let listed = match listed_traits(&body, hides_lines) {
+                Ok(listed) => listed,
+                Err(why) => {
+                    say(format!(
+                        "a trait listing that is not Rust `syn` can read: {why}"
+                    ));
+                    continue;
+                }
+            };
+            for (declared, listed) in listed {
+                listings += 1;
+                if NOT_CRATE_TRAITS.contains(&declared.as_str()) {
+                    continue;
+                }
+                match declared_in_source.get(&declared).map(Vec::as_slice) {
+                    Some([actual]) => {
+                        for what in disagreements(&declared, &listed, actual, reference) {
+                            say(what);
+                        }
+                    }
+                    None | Some([]) => say(format!(
+                        "the crate declares no trait `{declared}`. If it is the reader's \
+                         own, it belongs in NOT_CRATE_TRAITS in this file"
+                    )),
+                    Some(_) => say(format!("more than one trait in the source is `{declared}`")),
+                }
+            }
+        }
+    }
+
+    assert!(
+        listings >= 5,
+        "found only {listings} trait listings: the scan is broken, not the documentation"
+    );
+    assert!(
+        wrong.is_empty(),
+        "{} place(s) where a trait listing in the documentation disagrees with \
+         the trait:\n{}\n\n({listings} listings checked)",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+/// The reading, on what a signature can say, and each comparison rule broken
+/// alone against one trait.
+#[test]
+fn a_trait_is_read_as_its_methods_and_their_types() {
+    let source: syn::File = syn::parse_quote! {
+        pub trait Shape<T: Clone + 'static>: Sized {
+            fn area(&self) -> f32;
+            #[doc(hidden)]
+            fn scope(&self) -> Option<crate::reactive::OwnerId> {
+                None
+            }
+            fn grow<M, F: Fn() -> u8,>(mut self, by: impl Into<f32>, _tree: &mut crate::tree::Tree, f: F) -> Self
+            where
+                T: Copy,
+            {
+                self
+            }
+            unsafe fn kind(&self) -> Self::Item;
+            extern "C" fn native(&self);
+        }
+    };
+    let declared = traits(&source);
+    let [(name, declared)] = declared.as_slice() else {
+        panic!("one trait, read as {declared:?}");
+    };
+    assert_eq!(name, "Shape");
+    let read: Vec<_> = declared
+        .iter()
+        .map(|m| (m.name.as_str(), m.provided))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            ("area", false),
+            ("scope", true),
+            ("grow", true),
+            ("kind", false),
+            ("native", false)
+        ]
+    );
+
+    let listing = |text: &str| -> Vec<Method> {
+        let listed = listed_traits(&text.lines().collect::<Vec<_>>(), false).expect(text);
+        let [(_, listed)] = <[_; 1]>::try_from(listed).expect("one trait");
+        listed
+    };
+    let compare =
+        |text: &str, reference: bool| disagreements("Shape", &listing(text), declared, reference);
+    let all = "trait Shape {\n\
+        fn area(&self) -> f32;\n\
+        fn scope(&self) -> Option<OwnerId> { None }\n\
+        fn grow<M, F: Fn() -> u8>(self, by: impl Into<f32>, tree: &mut Tree, f: F) -> Self \
+            where T: Copy { self }\n\
+        unsafe fn kind(&self) -> Self::Item;\n\
+        extern \"C\" fn native(&self);\n\
+    }";
+    assert_eq!(
+        compare(all, true),
+        Vec::<String>::new(),
+        "modules, parameter names, `mut self` and trailing commas are not differences"
+    );
+    let required = "trait Shape { fn area(&self) -> f32; unsafe fn kind(&self) -> Self::Item; \
+                    extern \"C\" fn native(&self); }";
+    assert_eq!(
+        compare(required, false),
+        Vec::<String>::new(),
+        "what an implementor writes"
+    );
+    let broken = [
+        (all.replace("&mut Tree", "&Tree"), "`Shape::grow` is"),
+        (all.replace("where T: Copy", ""), "`Shape::grow` is"),
+        (all.replace("unsafe fn", "fn"), "`Shape::kind` is"),
+        (all.replace("Self::Item", "Item"), "`Shape::kind` is"),
+        (all.replace("\"C\"", "\"system\""), "`Shape::native` is"),
+        (
+            all.replace("fn area(&self) -> f32;\n", ""),
+            "`Shape::area` is not shown",
+        ),
+        (
+            all.replace("fn area", "fn volume(&self) -> f32;\nfn area"),
+            "`Shape` has no method `volume`",
+        ),
+        (
+            all.replace("{ None }", ";"),
+            "`Shape::scope` has a default, shown with none",
+        ),
+        (
+            all.replace("-> f32;", "-> f32 { 0.0 }"),
+            "`Shape::area` has no default, shown with one",
+        ),
+    ];
+    for (text, expected) in &broken {
+        let found = compare(text, true);
+        assert!(
+            found.len() == 1 && found[0].starts_with(expected),
+            "expected only {expected:?}, found {found:?}"
+        );
+    }
+    assert!(
+        compare(&all.replace("{ None }", ";"), false).is_empty(),
+        "outside the reference, a body is the listing's choice"
+    );
+
+    let hidden = ["trait Shape {", "# fn area(&self) -> f32;", "}"];
+    let in_book = listed_traits(&hidden, true).expect("readable once the line is hidden");
+    assert_eq!(in_book[0].1.len(), 0, "the book hides the line");
+    assert!(
+        listed_traits(&hidden, false).is_err(),
+        "anywhere else the line is on the page, and it is not Rust"
+    );
+    assert!(
+        listed_traits(
+            &["pub trait Shape {", "    fn area(&self) -> f32", "}"],
+            false
+        )
+        .is_err(),
+        "a listing that is not Rust fails rather than passing"
+    );
+    assert_eq!(
+        listed_traits(&["A trait object is boxed:", "Box<dyn Widget>"], false),
+        Ok(Vec::new()),
+        "a block that declares no trait is not a listing"
+    );
 }
