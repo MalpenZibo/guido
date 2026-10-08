@@ -569,6 +569,11 @@ impl TextRenderState {
     /// Split out of [`prepare_layer`](Self::prepare_layer) because a frame may
     /// prepare several groups and the recycling has to happen once for all.
     pub fn begin_frame(&mut self, queue: &Queue, screen: (u32, u32)) {
+        // The last frame's glyphs stop being in use, so this frame's prepares
+        // may evict them. Here and not at the end of a prepare: every group of
+        // a frame prepares before any of them renders, and a glyph one group
+        // placed must not be evicted by the next.
+        self.atlas.trim();
         for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
             self.buffer_cache.entry(key).or_default().push(buffer);
         }
@@ -1839,4 +1844,85 @@ fn a_named_family_that_is_not_installed_is_measured_in_its_fallback() {
         (ratio - 1.1640625).abs() < 1e-4,
         "{ratio} is not DejaVu Sans Mono's 1.164"
     );
+}
+
+/// The glyph atlas holds what a frame draws, not what every frame drew.
+///
+/// glyphon marks every glyph a `prepare` touches as in use and evicts only
+/// glyphs that are not, and the only thing that clears the mark is
+/// `TextAtlas::trim`. Never trimmed, every glyph ever drawn stays in use: the
+/// atlas doubles until it reaches the device's limit, and then `prepare` fails
+/// and text stops being drawn at all. A text whose content keeps changing
+/// walks it there, and so does a font-size animation — glyphs are keyed by
+/// size.
+///
+/// glyphon will not say how big its atlas is; the device it allocates from
+/// will, which is what `GpuContext::texture_bytes` asks. Every frame here draws
+/// glyphs of one size, so a frame's glyphs fit where the last frame's were and
+/// a trimmed atlas has no reason to grow at all.
+#[cfg(test)]
+pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
+    use super::{TextRenderState, test_entry, vendored_font_system};
+    use crate::renderer::GpuContext;
+    use crate::renderer::types::TextEntry;
+    use crate::transform::Transform;
+    use crate::widgets::{FontFamily, Rect};
+
+    /// Pages of 32 characters the vendored font has, no two sharing one —
+    /// Latin Extended-A, Greek and Cyrillic: a text that changes every frame,
+    /// and every change a set of glyphs the atlas has not seen.
+    pub(in crate::renderer) fn pages() -> Vec<String> {
+        let characters: Vec<char> = (0x100..0x180)
+            .chain(0x391..0x3CA)
+            .chain(0x400..0x460)
+            .filter_map(char::from_u32)
+            .collect();
+        characters
+            .chunks(32)
+            .map(|page| page.iter().collect())
+            .collect()
+    }
+
+    /// `text` in the vendored font, large enough that a few pages of it fill
+    /// an atlas that does not forget.
+    pub(in crate::renderer) fn page(text: &str, transform: Transform) -> TextEntry {
+        let mut entry = test_entry(Rect::new(0.0, 0.0, 1200.0, 60.0), transform);
+        entry.text = text.into();
+        entry.font_family = FontFamily::name("DejaVu Sans Mono");
+        entry.font_size = 32.0;
+        entry
+    }
+
+    /// The texture memory a fresh renderer holds after drawing `frames`, one
+    /// frame each.
+    fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
+        let before = gpu.texture_bytes();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut state = TextRenderState::new(&gpu.device, &gpu.queue, format);
+        state.font_system = vendored_font_system();
+        let screen = (1200, 60);
+        for text in frames {
+            state.begin_frame(&gpu.queue, screen);
+            let texts = [page(text, Transform::IDENTITY)];
+            state.prepare_layer(0, &gpu.device, &gpu.queue, &texts, screen, 1.0);
+            state.end_frame();
+            gpu.queue.submit([]);
+        }
+        gpu.texture_bytes() - before
+    }
+
+    #[test]
+    fn a_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let pages = pages();
+        let one = atlas_after(&gpu, &pages[..1]);
+        let every = atlas_after(&gpu, &pages);
+        assert!(
+            every <= one,
+            "one frame's glyphs need {one} bytes of atlas; {} frames of new ones left {every}",
+            pages.len()
+        );
+    }
 }
