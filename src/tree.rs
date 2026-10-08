@@ -1080,7 +1080,7 @@ impl Tree {
         // reason. A reach that *grows* needs none of it: the mark that follows
         // builds a rect from the wider value, and it contains the narrower one.
         if after < before
-            && let Some((root, vacated)) = self.surface_relative_bounds_and_root(id)
+            && let Some((root, vacated)) = self.surface_relative_damage_and_root(id)
         {
             self.expand_damage_rect(root, vacated);
         }
@@ -1739,7 +1739,7 @@ impl Tree {
 
         // Accumulate damage for the actual dirty widget (before propagation),
         // attributed to the widget's surface root
-        let surface_root = self.surface_relative_bounds_and_root(widget_id);
+        let surface_root = self.surface_relative_damage_and_root(widget_id);
         if let Some((root, bounds)) = surface_root {
             self.expand_damage_rect(root, bounds);
         }
@@ -1850,19 +1850,20 @@ impl Tree {
     }
 
     // -------------------------------------------------------------------------
-    // Damage Region Tracking
+    // Surface-relative position
     // -------------------------------------------------------------------------
 
     /// Get the surface-relative bounds of a widget by walking up the parent chain
-    /// and summing origins.
+    /// and summing origins: where it was laid out and at what size, which is
+    /// what [`WidgetRef::rect`](crate::widget_ref::WidgetRef::rect) promises.
     pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
-        self.surface_relative_bounds_and_root(id)
+        self.surface_relative_layout_and_root(id)
             .map(|(_, bounds)| bounds)
     }
 
     /// Walk to the surface root, returning it together with the widget's
     /// surface-relative bounds (origins summed along the chain).
-    fn surface_relative_bounds_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
+    fn surface_relative_layout_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
         let mut x = 0.0f32;
@@ -1877,14 +1878,20 @@ impl Tree {
                 None => break,
             }
         }
-        // Widen by whatever this widget paints outside itself, so a shadow is
-        // re-composited along with the thing that cast it — and so is a widget
-        // its own transform has carried off its laid-out box.
-        let overflow = self.paint_overflow(id);
-        Some((
-            current,
-            Rect::new(x, y, size.width, size.height).outset(overflow),
-        ))
+        Some((current, Rect::new(x, y, size.width, size.height)))
+    }
+
+    // -------------------------------------------------------------------------
+    // Damage Region Tracking
+    // -------------------------------------------------------------------------
+
+    /// The same, widened by whatever the widget paints outside itself, so a
+    /// shadow is re-composited along with the thing that cast it — and so is a
+    /// widget its own transform has carried off its laid-out box. What damage
+    /// is measured from, and not what the widget's bounds are.
+    fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
+        let (root, laid_out) = self.surface_relative_layout_and_root(id)?;
+        Some((root, laid_out.outset(self.paint_overflow(id))))
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
@@ -1963,7 +1970,7 @@ impl Tree {
         };
         let previous_size = self.dense[idx].cached_size;
         if previous_size.is_some_and(|prev| prev != size)
-            && let Some((root, vacated)) = self.surface_relative_bounds_and_root(id)
+            && let Some((root, vacated)) = self.surface_relative_damage_and_root(id)
         {
             self.expand_damage_rect(root, vacated);
         }
@@ -2043,12 +2050,12 @@ impl Tree {
         if self.dense[idx].origin == (x, y) {
             return;
         }
-        if let Some((root, vacated)) = self.surface_relative_bounds_and_root(id) {
+        if let Some((root, vacated)) = self.surface_relative_damage_and_root(id) {
             self.expand_damage_rect(root, vacated);
         }
         let idx = self.get_dense_index(id).expect("checked above");
         self.dense[idx].origin = (x, y);
-        if let Some((root, occupied)) = self.surface_relative_bounds_and_root(id) {
+        if let Some((root, occupied)) = self.surface_relative_damage_and_root(id) {
             self.expand_damage_rect(root, occupied);
         }
     }
@@ -3059,6 +3066,26 @@ mod tests {
             0.0,
             "the frame that drops the shadow damages {without:?}, so the ring \
              it cast at {with_shadow:?} stays on screen"
+        );
+    }
+
+    /// A widget's bounds are where it was laid out, whatever it or its
+    /// children paint outside it: how far that reaches is damage's question,
+    /// and `WidgetRef::rect` reads these. A reach of 20 carries the child past
+    /// the root's edge, so the root's own overflow grows too.
+    #[test]
+    fn a_widgets_bounds_are_its_laid_out_box_whatever_is_painted_outside_it() {
+        let (mut tree, root, child) = inset_child();
+        tree.set_own_paint_reach(child, 20.0);
+        assert_eq!(
+            tree.get_surface_relative_bounds(child),
+            Some(Rect::new(10.0, 10.0, 50.0, 50.0)),
+            "its own shadow is not its bounds"
+        );
+        assert_eq!(
+            tree.get_surface_relative_bounds(root),
+            Some(Rect::new(0.0, 0.0, 200.0, 200.0)),
+            "and neither is its child's"
         );
     }
 }

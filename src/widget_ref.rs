@@ -52,7 +52,10 @@ pub struct WidgetRef {
 }
 
 impl WidgetRef {
-    /// The reactive signal holding this widget's surface-relative bounds (read-only).
+    /// The reactive signal holding this widget's surface-relative bounds (read-only):
+    /// the box it was laid out in, at its corner relative to the surface. Not
+    /// grown by a shadow or a transform it paints outside that box, and not
+    /// moved by a scrolled or transformed ancestor.
     pub fn rect(&self) -> Signal<Rect> {
         self.signal.read_only()
     }

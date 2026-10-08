@@ -2251,6 +2251,40 @@ fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
     );
 }
 
+/// `rect()` is where a widget was laid out and at what size, which is what the
+/// book promises: "the widget's layout size". How far it paints outside that
+/// box is the damage tracker's concern. It used to grow `rect()` by its shadow's
+/// reach, moving the corner and the size, so a popup anchored to the widget
+/// opened beside it.
+#[test]
+fn a_widget_ref_rect_is_the_box_it_was_laid_out_in_whatever_it_paints_outside_it() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding(10.0).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .background(Color::WHITE)
+                .shadow(Shadow::new(
+                    (0.0, 4.0),
+                    6.0,
+                    2.0,
+                    Color::rgba(0.0, 0.0, 0.0, 0.4),
+                ))
+                .widget_ref(card),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(10.0, 10.0, 60.0, 20.0),
+        "the card laid out 60 by 20 at the padding's corner"
+    );
+}
+
 /// A layout root is restarted under its own constraints, not the surface's.
 ///
 /// Partial layout re-enters the tree at a relayout boundary, which has no
