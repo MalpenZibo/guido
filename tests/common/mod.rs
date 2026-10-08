@@ -152,7 +152,7 @@ impl Harness {
         fn collect(node: &RenderNode, out: &mut Vec<String>) {
             for cmd in &node.commands {
                 if let DrawCommand::Text { text, .. } = &**cmd {
-                    out.push(text.clone());
+                    out.push(text.to_string());
                 }
             }
             for child in &node.children {

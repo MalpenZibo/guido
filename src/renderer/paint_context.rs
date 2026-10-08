@@ -491,8 +491,11 @@ impl<'a> PaintContext<'a> {
         letter_spacing: f32,
         fit: Option<LineFit>,
     ) {
+        if text.is_empty() {
+            return;
+        }
         self.push_text(
-            text,
+            &Rc::from(text),
             rect,
             color,
             font_size,
@@ -508,7 +511,7 @@ impl<'a> PaintContext<'a> {
     #[allow(clippy::too_many_arguments)]
     fn push_text(
         &mut self,
-        text: &str,
+        text: &Rc<str>,
         rect: Rect,
         color: Color,
         font_size: f32,
@@ -519,12 +522,8 @@ impl<'a> PaintContext<'a> {
         align: TextAlign,
         fit: Option<LineFit>,
     ) {
-        // Skip empty text
-        if text.is_empty() {
-            return;
-        }
         self.node.commands.push(Rc::new(DrawCommand::Text {
-            text: text.to_string(),
+            text: Rc::clone(text),
             rect,
             color,
             font_size,
@@ -562,6 +561,9 @@ impl<'a> PaintContext<'a> {
         if text.is_empty() {
             return;
         }
+        // One string for every copy: the shadow's samples, the stroke's, and
+        // the fill each draw the same text.
+        let text = &Rc::from(text);
 
         // Filtered like the stroke below it, and for the same reason the
         // container's shadow is: a fully transparent one still expands into a

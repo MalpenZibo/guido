@@ -157,8 +157,8 @@ impl Shadow {
 /// A text entry for rendering, containing all information needed to render text.
 #[derive(Debug, Clone)]
 pub struct TextEntry {
-    /// The text string to render
-    pub text: String,
+    /// The text string to render, shared with the draw command it came from
+    pub text: std::rc::Rc<str>,
     /// The bounding rectangle for the text in logical pixels
     pub rect: Rect,
     /// The text color
