@@ -439,6 +439,59 @@ pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
     (named, held != Some(named))
 }
 
+/// Where one surface stands with the compositor's `wl_surface.frame`
+/// callbacks, and what the loop decides from that: whether a frame now would
+/// only queue behind one not yet shown, and whether the surface still repaints
+/// in full regardless.
+///
+/// One definition for both platforms. The Wayland surface and the recorder
+/// that stands in for it each hold one and tell it the same things — a frame
+/// committed, a callback come back, a scale confirmed — so the decision the
+/// loop takes from it cannot drift between the compositor and the test.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct FramePacing {
+    /// A callback rode the last commit and has not come back.
+    callback_pending: bool,
+    /// A callback has come back at least once: the compositor has shown a
+    /// frame of this surface.
+    shown: bool,
+    /// The compositor has named a scale for this surface.
+    scale_confirmed: bool,
+}
+
+impl FramePacing {
+    /// A frame went out with a callback armed on its commit.
+    pub(crate) fn committed(&mut self) {
+        self.callback_pending = true;
+    }
+
+    /// The callback came back. Answers whether it is the first one.
+    pub(crate) fn callback_done(&mut self) -> bool {
+        self.callback_pending = false;
+        !std::mem::replace(&mut self.shown, true)
+    }
+
+    /// The compositor named a scale.
+    pub(crate) fn confirm_scale(&mut self) {
+        self.scale_confirmed = true;
+    }
+
+    /// Whether the compositor has named a scale yet.
+    pub(crate) fn scale_confirmed(self) -> bool {
+        self.scale_confirmed
+    }
+
+    /// Whether a callback is still in flight.
+    pub(crate) fn callback_pending(self) -> bool {
+        self.callback_pending
+    }
+
+    /// Whether this surface bypasses the pacing gate and repaints in full.
+    pub(crate) fn forced(self) -> bool {
+        !(self.shown && self.scale_confirmed)
+    }
+}
+
 impl SurfaceExtent {
     /// The initial protocol size (`Content` starts at 1px until the first
     /// measure lands).

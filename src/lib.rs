@@ -805,13 +805,9 @@ struct Frame {
     scale_factor: f32,
     width: u32,
     height: u32,
-    /// A `wl_surface.frame` callback is still in flight: the compositor has
-    /// not shown the previous frame yet.
-    frame_callback_pending: bool,
-    /// No first frame at a known scale yet. Such a surface bypasses the
-    /// pacing gate and repaints in full — it has nothing on screen to pace
-    /// against.
-    force_render_surface: bool,
+    /// Whether a callback is in flight, and whether the surface still
+    /// repaints in full.
+    pacing: surface::FramePacing,
 }
 
 /// Whether this frame would only queue behind one the compositor has not shown.
@@ -825,8 +821,8 @@ struct Frame {
 /// in the frame path that can be taken from a `Frame` and a `Geometry` alone,
 /// and so the one a test could reach first.
 fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
-    frame.frame_callback_pending
-        && !frame.force_render_surface
+    frame.pacing.callback_pending()
+        && !frame.pacing.forced()
         && !geometry.needs_resize
         && !geometry.scale_changed
 }
@@ -838,8 +834,11 @@ fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
 /// is. `supports_blur_region` is the one that is not here — a capability
 /// belongs to the connection, not to a window — and it lives on [`Platform`].
 ///
-/// One required method. `open_frame` has no default because a surface that
-/// cannot say what a frame is has nothing to show; every other request defaults
+/// Two required methods. `open_frame` has no default because a surface that
+/// cannot say what a frame is has nothing to show, and `pacing` has none
+/// because there is no honest guess at it: a surface believed to be waiting on
+/// the compositor never draws, and one believed never to be holds the loop
+/// awake on work that cannot run. Every other request defaults
 /// to doing nothing and knowing nothing, which is the honest answer for a surface
 /// that does not have that protocol. So a second implementation writes down
 /// what it wants to watch and stays silent about the rest.
@@ -853,6 +852,11 @@ pub(crate) trait Surface {
     /// to draw at yet. Takes the queued input with it, so calling it twice for
     /// one frame loses events.
     fn open_frame(&mut self) -> Option<Frame>;
+
+    /// Where this surface stands with its frame callbacks — what
+    /// [`open_frame`](Self::open_frame) reads its gate from, asked without
+    /// opening one. The loop reads it to decide how long it may sleep.
+    fn pacing(&self) -> surface::FramePacing;
 
     /// The size the compositor has confirmed, if it has confirmed one.
     ///
@@ -941,8 +945,10 @@ pub(crate) trait Surface {
         let _ = (x, y, width, height);
     }
 
-    /// Record that the callback asked for is now committed.
-    fn mark_frame_callback_pending(&mut self) {}
+    /// Record that the callback asked for is now committed — what
+    /// [`pacing`](Self::pacing) answers from next. No default, for the same
+    /// reason as that one's.
+    fn mark_frame_callback_pending(&mut self);
 
     /// Move this surface between the compositor's layers.
     fn set_layer(&mut self, layer: platform::Layer) {
@@ -1343,15 +1349,20 @@ impl Surface for WaylandSurface<'_> {
         // a pointer position from several frames ago among them — on the first
         // frame that renders.
         let events = surface.take_events();
-        let fully_initialized = surface.first_frame_presented && surface.scale_factor_received;
         Some(Frame {
             events,
             scale_factor: surface.scale_factor,
             width: surface.width,
             height: surface.height,
-            frame_callback_pending: surface.frame_callback_pending,
-            force_render_surface: !fully_initialized,
+            pacing: surface.pacing,
         })
+    }
+
+    fn pacing(&self) -> surface::FramePacing {
+        self.state
+            .get_surface(self.id)
+            .map(|s| s.pacing)
+            .unwrap_or_default()
     }
 
     fn configured_size(&self) -> Option<(u32, u32)> {
@@ -1694,7 +1705,7 @@ fn layout_pass<P: Platform>(
         with_surface(wayland_state, id, |s| {
             s.reposition_popup_if_changed(natural)
         });
-    } else if (has_pending_layouts || frame.force_render_surface)
+    } else if (has_pending_layouts || frame.pacing.forced())
         && surface::needs_content_measure(&surface.config)
     {
         // Initialization included: a freshly spawned surface reaches
@@ -1847,7 +1858,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     let tree = &mut *ctx.tree;
 
     // Force full repaint on resize, scale change, or during initialization
-    if frame.force_render_surface || geometry.needs_resize || geometry.scale_changed {
+    if frame.pacing.forced() || geometry.needs_resize || geometry.scale_changed {
         tree.mark_subtree_needs_paint(surface.widget_id);
     }
 
@@ -2101,6 +2112,34 @@ fn wait_for(pending: &Pending, now: std::time::Instant) -> Option<std::time::Dur
         .map(|deadline| deadline.saturating_duration_since(now))
 }
 
+/// How long the loop may sleep now, from everything it knows about waiting
+/// work.
+///
+/// Gathered here rather than in `App::run` so that there is one gathering:
+/// the loop blocks for what this answers, and
+/// [`Headless::next_wait`](testing::Headless::next_wait) reports it, so a test
+/// asks the question the loop asks. `wake_requested` is the caller's because
+/// the flag is process-wide, and a test binary running several applications
+/// at once shares it — see [`Pending::wake_requested`].
+fn loop_timeout<P: Platform>(
+    platform: &mut P,
+    surfaces: &SurfaceManager,
+    gpu: &GpuSlot,
+    wake_requested: bool,
+    now: std::time::Instant,
+) -> Option<std::time::Duration> {
+    let force_render = surfaces
+        .ids()
+        .any(|id| platform.surface(id).is_some_and(|s| s.pacing().forced()));
+    let pending = Pending {
+        force_render,
+        jobs: has_pending_jobs(),
+        wake_requested,
+        deadline: wake_deadline(gpu),
+    };
+    wait_for(&pending, now)
+}
+
 /// Ask one surface for something, if it is still there.
 ///
 /// Nine call sites want exactly this, and none has anything to say about a
@@ -2155,7 +2194,7 @@ fn render_surface<P: Platform>(
 
     // Nothing moved and nothing is starting up: there is no frame to draw.
     let has_pending_layouts = !layout_roots.is_empty();
-    if !(frame.force_render_surface
+    if !(frame.pacing.forced()
         || woken
         || has_pending_layouts
         || geometry.needs_resize
@@ -2433,9 +2472,9 @@ impl App {
         // and the frame that advances them is the first iteration's — so a
         // layout out here would be seeded before `Renderer::new`, before the
         // Wayland source is even inserted, and an enter would have travelled
-        // the whole of start-up before its first frame. The loop's own
-        // `first_frame_presented` is false for all of these, so `wait_for`
-        // returns a 16ms timeout and the first iteration is immediate.
+        // the whole of start-up before its first frame. Every one of these is
+        // still forced — see `FramePacing::forced` — so `wait_for` returns a
+        // 16ms timeout and the first iteration is immediate.
         for def in self.surface_definitions.drain(..) {
             // Create the widget inside an owner scope so that signals/effects
             // created in the factory (e.g. create_memo) are properly owned.
@@ -2456,16 +2495,17 @@ impl App {
 
         // Main loop - event-driven, blocks until Wayland event or signal update
         loop {
-            // Anything whose deadline has arrived becomes ordinary pending work.
+            // Anything whose deadline has arrived becomes ordinary pending
+            // work. Here and not in `loop_timeout`, which a test asks too, on
+            // a clock it does not hold.
             jobs::promote_due_jobs();
-
-            let pending = Pending {
-                force_render: wayland_state.any_surface_needs_render(),
-                jobs: has_pending_jobs(),
-                wake_requested: jobs::wake_request_pending(),
-                deadline: wake_deadline(&gpu),
-            };
-            let timeout = wait_for(&pending, std::time::Instant::now());
+            let timeout = loop_timeout(
+                &mut wayland_state,
+                &surface_manager,
+                &gpu,
+                jobs::wake_request_pending(),
+                std::time::Instant::now(),
+            );
 
             if let Err(e) = event_loop.dispatch(timeout, &mut wayland_state) {
                 // The connection died (compositor exited, protocol error).
@@ -3789,14 +3829,27 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
 mod a_frame_is_a_description_not_a_connection {
     use super::*;
 
+    /// Pacing in the state each test names, reached the way a surface reaches
+    /// it: through what it is told.
+    fn pacing(callback_pending: bool, force: bool) -> surface::FramePacing {
+        let mut pacing = surface::FramePacing::default();
+        if !force {
+            pacing.callback_done();
+            pacing.confirm_scale();
+        }
+        if callback_pending {
+            pacing.committed();
+        }
+        pacing
+    }
+
     fn frame(callback_pending: bool, force: bool) -> Frame {
         Frame {
             events: Vec::new(),
             scale_factor: 1.0,
             width: 200,
             height: 50,
-            frame_callback_pending: callback_pending,
-            force_render_surface: force,
+            pacing: pacing(callback_pending, force),
         }
     }
 
@@ -3880,9 +3933,9 @@ mod a_second_host_can_answer_for_a_compositor {
     use crate::platform::Anchor;
     use crate::surface::{ExclusiveZone, Margin, SurfaceConfig};
 
-    /// Answers nothing and remembers what it was asked. Overrides `open_frame`,
-    /// which is required, and the two methods these tests read; inherits the
-    /// other sixteen, which is the point of the defaults.
+    /// Answers nothing and remembers what it was asked. Overrides `open_frame`
+    /// and `pacing`, which are required, and the two methods these tests read;
+    /// inherits the other sixteen, which is the point of the defaults.
     #[derive(Default)]
     struct Recorder {
         configured: Option<(u32, u32)>,
@@ -3894,6 +3947,12 @@ mod a_second_host_can_answer_for_a_compositor {
         fn open_frame(&mut self) -> Option<Frame> {
             None
         }
+
+        fn pacing(&self) -> crate::surface::FramePacing {
+            crate::surface::FramePacing::default()
+        }
+
+        fn mark_frame_callback_pending(&mut self) {}
 
         fn configured_size(&self) -> Option<(u32, u32)> {
             self.configured
@@ -4186,10 +4245,15 @@ mod a_frame_lands_where_the_surface_points {
                 scale_factor: 1.0,
                 width: self.width,
                 height: self.height,
-                frame_callback_pending: false,
-                force_render_surface: true,
+                pacing: crate::surface::FramePacing::default(),
             })
         }
+
+        fn pacing(&self) -> crate::surface::FramePacing {
+            crate::surface::FramePacing::default()
+        }
+
+        fn mark_frame_callback_pending(&mut self) {}
     }
 
     /// A surface nobody has told a scale is at 1, which is what
@@ -4214,6 +4278,14 @@ mod a_frame_lands_where_the_surface_points {
     impl Surface for OneHandle<'_> {
         fn open_frame(&mut self) -> Option<Frame> {
             self.0.open_frame()
+        }
+
+        fn pacing(&self) -> crate::surface::FramePacing {
+            self.0.pacing()
+        }
+
+        fn mark_frame_callback_pending(&mut self) {
+            self.0.mark_frame_callback_pending()
         }
     }
 
