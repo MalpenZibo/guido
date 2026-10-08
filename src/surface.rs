@@ -490,6 +490,12 @@ impl FramePacing {
     pub(crate) fn forced(self) -> bool {
         !(self.shown && self.scale_confirmed)
     }
+
+    /// Whether a frame now would only queue behind one the compositor has not
+    /// shown — so this surface's queued work waits for the callback.
+    pub(crate) fn awaits_callback(self) -> bool {
+        self.callback_pending && !self.forced()
+    }
 }
 
 impl SurfaceExtent {

@@ -175,6 +175,13 @@ renders once per callback, and an idle surface renders nothing at all. There is
 no post-loop animation phase — animations advance during job processing, and
 their continuation jobs are throttled by the pacing gate.
 
+A surface waiting on its callback holds its queued work without holding the
+loop awake. The callback is what lets that work run and also what wakes the
+loop, so `jobs::has_runnable_jobs` leaves those queues out and the loop blocks
+instead of polling at frame rate for work it cannot do — which, with the output
+switched off and no callback coming, it would do for as long as the output
+stayed off.
+
 **Shape Features:**
 - Rounded rectangles with configurable superellipse curvature
 - CSS K-value corner styles: squircle (K=2), circle (K=1), bevel (K=0), scoop (K=-1)
@@ -357,7 +364,7 @@ it a calloop source of its own.
 **Main thread, but due later → `jobs::request_job_at()`.**
 Work owed to a *clock* rather than to a frame — the blinking caret — is held in
 `AppState::scheduled_jobs`, outside the queues, and deliberately does not make
-`has_pending_jobs()` true. The wakeup is the dispatch timeout itself: the loop
+`has_runnable_jobs()` true. The wakeup is the dispatch timeout itself: the loop
 asks `jobs::next_deadline()`, blocks exactly that long, and `promote_due_jobs()`
 turns whatever is due into an ordinary job at the top of the next iteration.
 

@@ -65,7 +65,7 @@ pub(crate) struct AppState {
     /// surface by `distribute_jobs`.
     pub(crate) pending_jobs: RefCell<JobQueues>,
     /// Jobs owed to a clock (the caret), queued from widget code that has no
-    /// loop. Outside `pending_jobs` so `has_pending_jobs` stays "there is work
+    /// loop. Outside `pending_jobs` so `has_runnable_jobs` stays "there is work
     /// for *this* frame": treating a scheduled job as pending is what turns a
     /// blink into a poll.
     pub(crate) scheduled_jobs: RefCell<Vec<ScheduledJob>>,

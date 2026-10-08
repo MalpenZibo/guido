@@ -353,6 +353,47 @@ fn two_surfaces_lay_out_at_their_own_sizes_and_one_signal_reaches_both() {
     );
 }
 
+/// Work queued for a surface that is waiting on the compositor cannot run until
+/// the callback arrives, and that arrival wakes the loop by itself. So the loop
+/// sleeps through the wait rather than polling for the work at frame rate —
+/// which, with an output switched off, it would have done for as long as the
+/// output stayed off.
+#[test]
+fn work_waiting_on_a_frame_callback_does_not_keep_the_loop_polling() {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(20.0);
+    let surface = app.surface(fixed_bar(), move || filling(height));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    app.step();
+    assert_eq!(app.next_wait(), None, "an idle application blocks");
+
+    app.hold_frame_callbacks(surface);
+    height.set(30.0);
+    app.step();
+    let drawn = app.frames_presented(surface);
+    height.set(40.0);
+    app.step();
+    assert_eq!(
+        app.frames_presented(surface),
+        drawn,
+        "the frame waits for the one before it to be shown"
+    );
+    assert_eq!(
+        app.next_wait(),
+        None,
+        "and the loop waits with it, rather than polling for work it cannot run"
+    );
+
+    app.release_frame_callbacks(surface);
+    app.step();
+    assert_eq!(
+        app.frames_presented(surface),
+        drawn + 1,
+        "the callback is what runs it"
+    );
+}
+
 /// `spawn_surface` is guido's own API, not the harness's: a test asks for a
 /// surface exactly as an application does, and the step that follows is the
 /// loop draining the command it queued.

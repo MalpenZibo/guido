@@ -120,12 +120,6 @@ impl JobQueues {
             self.spare.push(buf);
         }
     }
-
-    fn is_empty(&self) -> bool {
-        self.inbox.is_empty()
-            && self.orphans.is_empty()
-            && self.per_root.values().all(JobQueue::is_empty)
-    }
 }
 
 /// A job to run at a point in time.
@@ -253,7 +247,7 @@ pub fn request_job(widget_id: WidgetId, request: JobRequest) {
 /// out of 114 to no effect. On a lock screen, where a field is focused by
 /// definition, that runs all night.
 ///
-/// Scheduled jobs do not make [`has_pending_jobs`] true, and the loop uses
+/// Scheduled jobs do not make [`has_runnable_jobs`] true, and the loop uses
 /// [`next_deadline`] to choose how long to block, so between deadlines it sleeps
 /// like an idle app rather than polling.
 pub fn request_job_at(widget_id: WidgetId, request: JobRequest, at: Instant) {
@@ -414,7 +408,7 @@ fn reattach_each(tree: &mut crate::tree::Tree, root: WidgetId) {
 /// destroyed, never parented — go to the orphan lane. Queues whose root is
 /// no longer active are retired into the orphan lane too, so a closed
 /// surface's deferred Unregister jobs still run and nothing keeps
-/// `has_pending_jobs` true forever.
+/// `has_runnable_jobs` true forever.
 pub fn distribute_jobs(tree: &Tree, active_roots: &rustc_hash::FxHashSet<WidgetId>) {
     with_app_state(|app| {
         let mut jobs = app.pending_jobs.borrow_mut();
@@ -573,10 +567,30 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
     }
 }
 
-/// Check if there are pending jobs.
-/// This includes both regular jobs and animation jobs.
+/// Whether anything at all is queued, waiting on a callback or not.
+#[cfg(test)]
 pub fn has_pending_jobs() -> bool {
-    with_app_state(|app| !app.pending_jobs.borrow().is_empty())
+    has_runnable_jobs(|_| false)
+}
+
+/// Whether anything is queued that the loop could run if it woke now.
+///
+/// Every queue counts but one whose surface `waiting` names: a surface waiting
+/// on a frame callback returns before it drains its jobs, so they cannot run
+/// until the callback arrives — and its arrival wakes the loop by itself.
+/// Polling for them instead would wake at frame rate to run nothing, for as
+/// long as the compositor withholds the callback, which with the output off is
+/// indefinitely. The inbox counts whoever it belongs to: nobody has said yet.
+pub fn has_runnable_jobs(waiting: impl Fn(WidgetId) -> bool) -> bool {
+    with_app_state(|app| {
+        let jobs = app.pending_jobs.borrow();
+        !jobs.inbox.is_empty()
+            || !jobs.orphans.is_empty()
+            || jobs
+                .per_root
+                .iter()
+                .any(|(root, queue)| !queue.is_empty() && !waiting(*root))
+    })
 }
 
 /// The job types queued for one widget, for tests that assert *how* a widget

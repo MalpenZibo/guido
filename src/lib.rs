@@ -295,7 +295,7 @@ pub mod widget_prelude {
 
 use crate::app_state::with_app_state;
 use crate::{
-    jobs::{get_exit_request, has_pending_jobs, init_wakeup, process_jobs, take_wake_request},
+    jobs::{get_exit_request, init_wakeup, process_jobs, take_wake_request},
     tree::{DamageRegion, Tree, WidgetId},
 };
 
@@ -2064,7 +2064,9 @@ struct Pending {
     /// A surface has nothing on screen yet, so it must not wait for input to
     /// arrive before drawing.
     force_render: bool,
-    /// Jobs queued by the previous frame — animation continuations, mostly.
+    /// Jobs queued by the previous frame that the next one could run —
+    /// animation continuations, mostly. Not a surface's that is waiting on its
+    /// frame callback: the callback is what wakes the loop for those.
     jobs: bool,
     /// A wake request that landed *after* this iteration consumed the flag.
     /// Blocking on one already set would suppress every later ping, so it
@@ -2128,12 +2130,22 @@ fn loop_timeout<P: Platform>(
     wake_requested: bool,
     now: std::time::Instant,
 ) -> Option<std::time::Duration> {
-    let force_render = surfaces
-        .ids()
-        .any(|id| platform.surface(id).is_some_and(|s| s.pacing().forced()));
+    let mut force_render = false;
+    let mut waiting = smallvec::SmallVec::<[WidgetId; 4]>::new();
+    for id in surfaces.ids() {
+        let Some(pacing) = platform.surface(id).map(|s| s.pacing()) else {
+            continue;
+        };
+        force_render |= pacing.forced();
+        if pacing.awaits_callback()
+            && let Some(surface) = surfaces.get(id)
+        {
+            waiting.push(surface.widget_id);
+        }
+    }
     let pending = Pending {
         force_render,
-        jobs: has_pending_jobs(),
+        jobs: jobs::has_runnable_jobs(|root| waiting.contains(&root)),
         wake_requested,
         deadline: wake_deadline(gpu),
     };
