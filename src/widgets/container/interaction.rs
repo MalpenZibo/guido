@@ -443,6 +443,15 @@ impl Container {
                 }
             }
 
+            Event::KeyUp { key, modifiers } => {
+                if let Some(ref ix) = self.interaction
+                    && let Some(ref callback) = ix.on_key_up
+                {
+                    callback(*key, *modifiers);
+                    return EventResponse::Handled;
+                }
+            }
+
             // The finger lifted, and that is where the glide begins — the
             // frame that carries it decays it by however late it was, rather
             // than starting it fresh or cancelling it for the delay (#265,
@@ -453,7 +462,7 @@ impl Container {
                 }
             }
 
-            Event::KeyUp { .. } | Event::FocusIn | Event::FocusOut | Event::Pasted(_) => {}
+            Event::FocusIn | Event::FocusOut | Event::Pasted(_) => {}
         }
 
         // A press inside the box that lights up for this focus is a press on

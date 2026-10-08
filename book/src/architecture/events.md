@@ -83,7 +83,7 @@ called for what was routed to it:
 | --- | --- |
 | A pointer event with a position — move, press, release, wheel, a scroll's end, enter | The widgets that can be under the point, and those the pointer record still owes one |
 | A pointer event without one — the surface leave, or what a collapsed transform passes down | The widgets the pointer record owes one, and nothing else |
-| A key, and the surface gaining or losing the keyboard | The focused widget, then each of its ancestors; a key press nobody there took then goes to the containers that declared `on_key_down`, the innermost first |
+| A key, and the surface gaining or losing the keyboard | The focused widget, then each of its ancestors; a key press or release nobody there took then goes to the containers that declared `on_key_down` or `on_key_up`, the innermost first |
 | A paste | The widget that asked for it |
 
 *The widgets that can be under the point* are found the way paint finds what

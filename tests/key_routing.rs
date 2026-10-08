@@ -10,6 +10,9 @@
 //! And a held key arrives as presses that say they repeat (#613): every one
 //! is delivered, along either route, and a listener that wants presses alone
 //! tells them apart by the flag.
+//!
+//! And a release goes where a press goes (#631): along the focus path, then to
+//! the listeners when nothing there took it.
 
 #![cfg(feature = "testing")]
 
@@ -51,6 +54,10 @@ fn key_down(key: Key, repeat: bool) -> Event {
         modifiers: Modifiers::default(),
         repeat,
     }
+}
+
+fn key_up(key: Key, modifiers: Modifiers) -> Event {
+    Event::KeyUp { key, modifiers }
 }
 
 fn send(app: &mut Headless, id: SurfaceId, at: &mut Instant, event: Event) {
@@ -312,10 +319,7 @@ fn replay(route: Route, count: fn(bool) -> bool) -> u32 {
         key_down(Key::Enter, false),
         key_down(Key::Enter, true),
         key_down(Key::Enter, true),
-        Event::KeyUp {
-            key: Key::Enter,
-            modifiers: Modifiers::default(),
-        },
+        key_up(Key::Enter, Modifiers::default()),
         key_down(Key::Enter, false),
     ] {
         send(&mut app, id, &mut at, event);
@@ -362,4 +366,126 @@ fn a_moved_key_down_keeps_its_repeat() {
             );
         }
     }
+}
+
+/// What a container heard, in the order it heard it.
+#[derive(Debug, PartialEq)]
+enum Heard {
+    Down(&'static str, Key, bool),
+    Up(&'static str, Key, Modifiers),
+}
+
+/// A container that records the presses and releases it is given under `name`.
+fn both_ways(name: &'static str, heard: Rc<RefCell<Vec<Heard>>>) -> Container {
+    let up = heard.clone();
+    container()
+        .width(fill())
+        .on_key_down(move |key, _, repeat| heard.borrow_mut().push(Heard::Down(name, key, repeat)))
+        .on_key_up(move |key, modifiers| up.borrow_mut().push(Heard::Up(name, key, modifiers)))
+}
+
+#[test]
+fn a_release_visits_the_focus_path_after_its_press() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (around, beside) = (heard.clone(), heard.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        container()
+            .layout(Flex::column())
+            .child(
+                both_ways("around", around.clone())
+                    .height(30.0)
+                    .child(Inert),
+            )
+            .child(both_ways("beside", beside.clone()).height(30.0))
+    });
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::default()
+    };
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    for event in [
+        key_down(Key::Char(' '), false),
+        key_down(Key::Char(' '), true),
+        key_down(Key::Char(' '), true),
+        key_up(Key::Char(' '), shift),
+    ] {
+        send(&mut app, id, &mut at, event);
+    }
+
+    assert_eq!(
+        *heard.borrow(),
+        [
+            Heard::Down("around", Key::Char(' '), false),
+            Heard::Down("around", Key::Char(' '), true),
+            Heard::Down("around", Key::Char(' '), true),
+            Heard::Up("around", Key::Char(' '), shift),
+        ],
+        "the container around the focus hears the press, its repeats, then one \
+         release with its modifiers, and takes each before the listener beside it"
+    );
+}
+
+/// A container that declares only `on_key_up` listens too.
+#[test]
+fn a_listener_hears_a_release_with_nothing_focused() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let log = heard.clone();
+    let (id, mut at) = surface(&mut app, move || {
+        let log = log.clone();
+        container().child(
+            container()
+                .width(fill())
+                .height(100.0)
+                .on_key_up(move |key, modifiers| log.borrow_mut().push((key, modifiers))),
+        )
+    });
+
+    send(&mut app, id, &mut at, key_down(Key::Escape, false));
+    send(
+        &mut app,
+        id,
+        &mut at,
+        key_up(Key::Escape, Modifiers::default()),
+    );
+
+    assert_eq!(*heard.borrow(), [(Key::Escape, Modifiers::default())]);
+}
+
+/// A release is not paired with its press: the field takes the character and
+/// lets its release through.
+#[test]
+fn a_listener_hears_the_release_of_a_key_the_field_took() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let beside = heard.clone();
+    let typed = create_signal(String::new());
+    let (id, mut at) = surface(&mut app, move || {
+        container()
+            .layout(Flex::column())
+            .child(
+                container()
+                    .height(30.0)
+                    .width(fill())
+                    .child(text_input(typed)),
+            )
+            .child(both_ways("beside", beside.clone()).height(30.0))
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    send(&mut app, id, &mut at, key_down(Key::Char('a'), false));
+    send(
+        &mut app,
+        id,
+        &mut at,
+        key_up(Key::Char('a'), Modifiers::default()),
+    );
+
+    assert_eq!(typed.get_untracked(), "a");
+    assert_eq!(
+        *heard.borrow(),
+        [Heard::Up("beside", Key::Char('a'), Modifiers::default())]
+    );
 }

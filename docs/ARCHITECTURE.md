@@ -658,8 +658,11 @@ started on outside the scroller around it — and nothing else is asked.
 
 A key goes down the focus path — the focused widget has it first, then each
 ancestor up to the root — and, if nobody on it took it, down to the containers
-that declared `on_key_down`, the innermost first: Flutter's `FocusManager`
-dispatch, and its HardwareKeyboard handlers for what no focused widget wants.
+that declared `on_key_down` or `on_key_up`, the innermost first: Flutter's
+`FocusManager` dispatch, and its HardwareKeyboard handlers for what no focused
+widget wants. A release travels as a press does and is not paired with it, as
+in the DOM, Qt and Flutter — a field that took a key's press lets its release
+through to the listeners (#631).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).

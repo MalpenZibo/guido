@@ -126,6 +126,38 @@ container().on_key_down(move |key, _mods, repeat| {
 A widget of your own reads the same flag as the `repeat` field of
 `Event::KeyDown`.
 
+`on_key_up` hears a key being released, with the modifiers held as it went up,
+along the same route as `on_key_down`. That is where a button answers Space:
+the press shows it pressed, and the release activates it, so moving away before
+letting go abandons it.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let activate = move || {};
+let held = create_signal(false);
+container()
+    .on_key_down(move |key, _mods, _repeat| {
+        if key == Key::Char(' ') {
+            held.set(true);
+        }
+    })
+    .on_key_up(move |key, _mods| {
+        if key == Key::Char(' ') && held.get_untracked() {
+            held.set(false);
+            activate();
+        }
+    })
+# ;
+# }
+```
+
+A release is not paired with its press. A text input that took a key's press
+lets its release through, so a container around it or listening beside it can
+hear a key go up that it never heard go down — which is why the sample above
+remembers the press itself.
+
 ## Latched Modifiers
 
 The `Modifiers` a key event carries describe *that keystroke*, which is what a
