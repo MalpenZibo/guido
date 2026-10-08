@@ -96,6 +96,275 @@ fn crate_source() -> String {
     text
 }
 
+/// A line that opens or closes a fence: the character it is made of, how many
+/// of them, and what follows. `None` for any other line.
+///
+/// A fence is three or more backticks or tildes, indented or not — a block in
+/// a list item is indented with it. Outside a list, markdown reads a fence
+/// indented four spaces as an indented code block instead, which nothing here
+/// writes. A backtick fence's info string cannot hold a backtick, so a line
+/// that starts with a span showing a fence, as a table cell writing
+/// ```` ```text ```` can, is prose.
+fn fence_run(line: &str) -> Option<(char, usize, &str)> {
+    let line = line.trim();
+    let mark = line.chars().next().filter(|&c| c == '`' || c == '~')?;
+    let length = line.chars().take_while(|&c| c == mark).count();
+    let info = &line[length..];
+    (length >= 3 && !(mark == '`' && info.contains('`'))).then(|| (mark, length, info.trim()))
+}
+
+/// One piece of a markdown file: prose, or a fenced block with the line it
+/// opens on, its info string, its lines, and whether anything closed it.
+enum Part<'a> {
+    Prose(&'a str),
+    Fence {
+        line: usize,
+        info: &'a str,
+        body: Vec<&'a str>,
+        closed: bool,
+    },
+}
+
+/// A markdown file cut into its prose and its fenced blocks, in order.
+///
+/// A block closes on a line holding only a run of the character that opened
+/// it, at least as long — so a ```` ````md ```` block can show a three-backtick
+/// one — and a block nothing closes runs to the end of the file.
+fn parts(text: &str) -> Vec<Part<'_>> {
+    struct Open<'a> {
+        mark: char,
+        length: usize,
+        line: usize,
+        info: &'a str,
+        body: Vec<&'a str>,
+    }
+    let mut parts = Vec::new();
+    let mut open: Option<Open> = None;
+    let (mut from, mut at) = (0, 0);
+    for (number, line) in text.split_inclusive('\n').enumerate() {
+        let run = fence_run(line);
+        let start = at;
+        at += line.len();
+        match open.as_mut() {
+            Some(fence) => {
+                let closes = run.is_some_and(|(mark, length, info)| {
+                    mark == fence.mark && length >= fence.length && info.is_empty()
+                });
+                if closes {
+                    let Open {
+                        line, info, body, ..
+                    } = open.take().expect("a block is open");
+                    parts.push(Part::Fence {
+                        line,
+                        info,
+                        body,
+                        closed: true,
+                    });
+                    from = at;
+                } else {
+                    fence.body.push(line.trim_end_matches(['\n', '\r']));
+                }
+            }
+            None => {
+                if let Some((mark, length, info)) = run {
+                    parts.push(Part::Prose(&text[from..start]));
+                    open = Some(Open {
+                        mark,
+                        length,
+                        line: number + 1,
+                        info,
+                        body: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+    match open {
+        Some(Open {
+            line, info, body, ..
+        }) => parts.push(Part::Fence {
+            line,
+            info,
+            body,
+            closed: false,
+        }),
+        None => parts.push(Part::Prose(&text[from..])),
+    }
+    parts
+}
+
+/// The prose of a markdown file: everything outside its fenced blocks, which
+/// are examples rather than claims about names.
+fn prose(text: &str) -> Vec<&str> {
+    parts(text)
+        .into_iter()
+        .filter_map(|part| match part {
+            Part::Prose(prose) => Some(prose),
+            Part::Fence { .. } => None,
+        })
+        .collect()
+}
+
+/// `text` cut at its blank lines, which no span crosses.
+fn paragraphs(text: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let (mut from, mut at) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            found.push(&text[from..at]);
+            from = at + line.len();
+        }
+        at += line.len();
+    }
+    found.push(&text[from..]);
+    found
+}
+
+/// Whether the character at `index` is escaped: an odd run of backslashes
+/// before it, since `\\` is a backslash that escapes nothing.
+fn is_escaped(bytes: &[u8], index: usize) -> bool {
+    bytes[..index]
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+/// What the prose of a markdown file writes between backticks.
+///
+/// A span opens on a run of backticks and closes on the next run of the same
+/// length in its paragraph, so ```` ```text ```` is one span and not five. A
+/// run nothing closes, or a backtick escaped with `\`, is a literal backtick,
+/// not the start of a span that swallows the rest of the page.
+///
+/// A paragraph is what blank lines bound. Markdown also ends a span at a table
+/// cell, a heading or a list item; this does not, so a stray backtick in one
+/// row of a table pairs with the first in the next.
+fn backticked_spans(text: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    for paragraph in prose(text).into_iter().flat_map(paragraphs) {
+        let bytes = paragraph.as_bytes();
+        let run = |from: usize| bytes[from..].iter().take_while(|&&b| b == b'`').count();
+        let mut at = 0;
+        while let Some(offset) = paragraph[at..].find('`') {
+            let open = at + offset;
+            if is_escaped(bytes, open) {
+                at = open + 1;
+                continue;
+            }
+            let length = run(open);
+            let inside = open + length;
+            let mut close = None;
+            let mut next = inside;
+            while let Some(offset) = paragraph[next..].find('`') {
+                let start = next + offset;
+                let candidate = run(start);
+                if candidate == length {
+                    close = Some(start);
+                    break;
+                }
+                next = start + candidate;
+            }
+            let Some(close) = close else {
+                at = inside;
+                continue;
+            };
+            let span = &paragraph[inside..close];
+            // One space either side lets a span start or end with a backtick;
+            // it is not part of what the span says.
+            let span = match span.strip_prefix(' ').and_then(|s| s.strip_suffix(' ')) {
+                Some(trimmed) if !trimmed.trim().is_empty() => trimmed,
+                _ => span,
+            };
+            found.push(span);
+            at = close + length;
+        }
+    }
+    found
+}
+
+/// The scan, on what markdown makes a span or a fence and what it does not.
+#[test]
+fn a_span_and_a_fence_are_found_as_markdown_finds_them() {
+    let text = "A table cell shows ```` ```text ```` and `after_the_cell`.\n\
+                ```` ```text ```` can start a line too, and `after_the_line` is read.\n\
+                Press the ` key.\n\
+                \n\
+                Then `after_a_stray_backtick` is read, and \\`escaped` is not a span.\n\
+                ````md\n\
+                ```rust\n\
+                `inside_a_long_fence`\n\
+                ````\n\
+                ~~~\n\
+                `inside_a_tilde_fence`\n\
+                ~~~\n\
+                - in a list:\n  ```rust\n  `inside_an_indented_fence`\n  ```\n\
+                `after_every_fence`\n\
+                \n\
+                C:\\\\`after_an_escaped_backslash`\n";
+    assert_eq!(
+        backticked_spans(text),
+        [
+            "```text",
+            "after_the_cell",
+            "```text",
+            "after_the_line",
+            "after_a_stray_backtick",
+            "after_every_fence",
+            "after_an_escaped_backslash"
+        ]
+    );
+    let found: Vec<_> = fences(text)
+        .into_iter()
+        .map(|(line, info, body)| (line, info, body.len()))
+        .collect();
+    assert_eq!(found, [(6, "md", 2), (10, "", 1), (14, "rust", 1)]);
+    assert_eq!(unclosed_fence(text), None);
+    assert_eq!(unclosed_fence("Prose.\n\n```rust\nlet x = 1;\n"), Some(3));
+}
+
+/// The line of the first fence in `text` that nothing closes.
+fn unclosed_fence(text: &str) -> Option<usize> {
+    parts(text).into_iter().find_map(|part| match part {
+        Part::Fence {
+            line,
+            closed: false,
+            ..
+        } => Some(line),
+        _ => None,
+    })
+}
+
+/// Every fence in the documentation closes. One that does not runs, as these
+/// checks read it, to the end of the file, and everything after it is read as
+/// code rather than as claims about names. Markdown would close a block in a
+/// list item when the item ends; these checks would not, so it is closed here
+/// in so many words.
+#[test]
+fn every_fence_in_the_documentation_closes() {
+    let unclosed: Vec<_> = agent_documentation()
+        .iter()
+        .chain(&user_documentation())
+        .filter_map(|doc| {
+            let text = std::fs::read_to_string(doc).expect("read documentation");
+            let line = unclosed_fence(&text)?;
+            Some(format!(
+                "  {}:{line}",
+                doc.strip_prefix(repo()).unwrap_or(doc).display()
+            ))
+        })
+        .collect();
+    assert!(
+        unclosed.is_empty(),
+        "{} fence(s) in the documentation never close, so the rest of the file \
+         is read as code:\n{}",
+        unclosed.len(),
+        unclosed.join("\n")
+    );
+}
+
 /// The identifiers a markdown file writes in backticks.
 ///
 /// A span between backticks counts when it reads like code and not like prose:
@@ -103,49 +372,24 @@ fn crate_source() -> String {
 /// Anything with a space in it is a phrase, and anything shorter than three
 /// characters is noise.
 fn backticked_identifiers(text: &str) -> BTreeSet<String> {
-    let mut found = BTreeSet::new();
-    let mut rest = text;
-
-    // Fenced code blocks are examples, not claims about names: skip them.
-    while let Some(start) = rest.find("```") {
-        scan_spans(&rest[..start], &mut found);
-        let after = &rest[start + 3..];
-        match after.find("```") {
-            Some(end) => rest = &after[end + 3..],
-            None => return found,
-        }
-    }
-    scan_spans(rest, &mut found);
-    found
-}
-
-fn scan_spans(text: &str, found: &mut BTreeSet<String>) {
-    let mut parts = text.split('`');
-    // Outside a span, then inside, alternating.
-    parts.next();
-    while let Some(inside) = parts.next() {
-        let candidate = inside.strip_suffix("()").unwrap_or(inside);
-        let looks_like_code = candidate.len() >= 3
-            && candidate
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-            && candidate.chars().any(|c| c.is_ascii_alphabetic());
-        if looks_like_code {
-            found.insert(candidate.to_string());
-        }
-        parts.next();
-    }
+    backticked_spans(text)
+        .into_iter()
+        .map(|inside| inside.strip_suffix("()").unwrap_or(inside))
+        .filter(|candidate| {
+            candidate.len() >= 3
+                && candidate
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+                && candidate.chars().any(|c| c.is_ascii_alphabetic())
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// Everything an agent is handed: the contract, the working knowledge, the
-/// commands, the reviewer's criteria.
-#[test]
-fn every_identifier_the_agent_documentation_names_still_exists() {
-    let source = crate_source();
-
-    // Everything an agent is handed: the contract, the working knowledge, the
-    // commands that drive a change, and the reviewer's criteria. All of them
-    // name APIs, and all of them are followed.
+/// commands that drive a change, and the reviewer's criteria. All of them name
+/// APIs, and all of them are followed.
+fn agent_documentation() -> Vec<PathBuf> {
     let mut docs = vec![repo().join("AGENTS.md")];
     for dir in [".claude/skills", ".claude/commands", ".claude/agents"] {
         let mut found = Vec::new();
@@ -156,6 +400,31 @@ fn every_identifier_the_agent_documentation_names_still_exists() {
         );
         docs.extend(found);
     }
+    docs
+}
+
+/// Everything a user is handed: the developer reference under `docs/`, the
+/// book published to the project site, and the README.
+fn user_documentation() -> Vec<PathBuf> {
+    let mut docs = vec![repo().join("README.md")];
+    for dir in ["docs", "book/src"] {
+        let mut found = Vec::new();
+        read_dir_files(&repo().join(dir), "md", &mut found);
+        assert!(
+            !found.is_empty(),
+            "no markdown under {dir}: checking nothing"
+        );
+        docs.extend(found);
+    }
+    docs
+}
+
+/// Everything an agent is handed: the contract, the working knowledge, the
+/// commands, the reviewer's criteria.
+#[test]
+fn every_identifier_the_agent_documentation_names_still_exists() {
+    let source = crate_source();
+    let docs = agent_documentation();
 
     let mut stale = Vec::new();
     let mut checked = 0usize;
@@ -227,17 +496,7 @@ fn is_word_byte(b: u8) -> bool {
 #[test]
 fn every_identifier_the_user_documentation_names_still_exists() {
     let source = crate_source();
-
-    let mut docs = vec![repo().join("README.md")];
-    for dir in ["docs", "book/src"] {
-        let mut found = Vec::new();
-        read_dir_files(&repo().join(dir), "md", &mut found);
-        assert!(
-            !found.is_empty(),
-            "no markdown under {dir}: checking nothing"
-        );
-        docs.extend(found);
-    }
+    let docs = user_documentation();
 
     let mut stale = Vec::new();
     let mut checked = 0usize;
@@ -336,26 +595,15 @@ fn book_pages() -> Vec<(PathBuf, String)> {
 
 /// The fences in one chapter: line number, info string, and the body's lines.
 fn fences(source: &str) -> Vec<(usize, &str, Vec<&str>)> {
-    let lines: Vec<&str> = source.lines().collect();
-    let mut found = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        if !lines[index].starts_with("```") {
-            index += 1;
-            continue;
-        }
-        let info = lines[index][3..].trim();
-        let opened = index + 1;
-        index += 1;
-        let mut body = Vec::new();
-        while index < lines.len() && !lines[index].starts_with("```") {
-            body.push(lines[index]);
-            index += 1;
-        }
-        found.push((opened, info, body));
-        index += 1;
-    }
-    found
+    parts(source)
+        .into_iter()
+        .filter_map(|part| match part {
+            Part::Fence {
+                line, info, body, ..
+            } => Some((line, info, body)),
+            Part::Prose(_) => None,
+        })
+        .collect()
 }
 
 /// A fence rustdoc will not compile.
