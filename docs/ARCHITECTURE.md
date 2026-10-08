@@ -84,7 +84,7 @@ Drop guards, so a caught panic cannot wedge the reactive system.
 
 Composable UI primitives implementing the `Widget` trait.
 
-**Container** (`widgets/container.rs`)
+**Container** (`widgets/container/`)
 The primary building block. Supports:
 - Padding, background (solid or gradient)
 - Corner radius with superellipse curvature
@@ -847,7 +847,7 @@ duplicate was found.
 | `src/tree.rs` | Widget tree storage and layout metadata |
 | `src/jobs.rs` | Job-based reactive invalidation system |
 | `src/surface.rs` | Surface config, handles, dynamic properties |
-| `src/widgets/container.rs` | Container widget implementation |
+| `src/widgets/container/` | Container widget implementation |
 | `src/widgets/children.rs` | Dynamic children with keyed reconciliation |
 | `src/widgets/state_layer.rs` | State layer types and logic |
 | `src/renderer/mod.rs` | Module exports |

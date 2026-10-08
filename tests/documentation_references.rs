@@ -8,14 +8,16 @@
 //! are worse than none: they are followed.
 //!
 //! This is not a spell-checker for prose. It takes every identifier they
-//! write in backticks, and asserts the crate still has something by that name.
-//! It cannot tell whether the sentence around it is true — only that the thing
-//! it points at exists, which is the failure mode that actually happens.
+//! write in backticks, and asserts the crate still has something by that name,
+//! and every one that reads as a path, and asserts the repository has it. It
+//! cannot tell whether the sentence around it is true — only that the thing it
+//! points at exists, which is the failure mode that actually happens.
 //!
-//! When it fails, either the documentation is stale or the identifier is new
-//! and belongs in `NOT_CRATE_SYMBOLS` below, which is the list of words this
-//! documentation deliberately writes in backticks without the crate owning
-//! them.
+//! When it fails, either the documentation is stale or what it names is not
+//! this crate's and belongs on a list below: `NOT_CRATE_SYMBOLS`, the words
+//! this documentation deliberately writes in backticks without the crate
+//! owning them, or `NOT_REPOSITORY_FILES`, the paths it writes that are not
+//! the repository's.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -527,6 +529,147 @@ fn every_identifier_the_user_documentation_names_still_exists() {
          identifiers checked)",
         stale.len(),
         stale.join("\n")
+    );
+}
+
+/// Paths the documentation writes in backticks that are not files of this
+/// repository, and never were, with where it writes them: `(directory, path)`.
+const NOT_REPOSITORY_FILES: &[(&str, &str)] = &[
+    // The reader's own crate, which the getting-started chapters have them
+    // create.
+    ("book/src/getting-started/", "src/main.rs"),
+];
+
+/// The directories at the top of the repository, which a path with no
+/// extension may start from. Not a hidden one: `.git` and what a checkout's
+/// tools leave beside it differ from one machine to the next, and the hidden
+/// directories the documentation does name, `.github` and `.claude`, it names
+/// with a file at the end or a trailing `/`.
+fn top_level_directories() -> BTreeSet<String> {
+    std::fs::read_dir(repo())
+        .expect("the repository is readable")
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect()
+}
+
+/// The paths a markdown file writes in backticks: a span of a path's
+/// characters with a `/` in it, naming a file by its extension, a directory by
+/// a trailing `/`, or either by starting from one of `roots`, so that
+/// `benches/scroll_list` is a path and `Home/End` is not. A `:line` on the
+/// end is where in the file, not part of its name. A span with anything else in it — a space, a `~`, a `::`, a `*` — is
+/// not read as a path at all.
+///
+/// Only a path inside the repository counts: not an absolute one, which would
+/// be looked up on whatever machine runs this, not one that climbs out with
+/// `..`, and not one under `target/`, which is what a build writes.
+fn backticked_paths<'a>(text: &'a str, roots: &BTreeSet<String>) -> BTreeSet<&'a str> {
+    backticked_spans(text)
+        .into_iter()
+        .map(|span| {
+            let mut span = span.strip_prefix("./").unwrap_or(span);
+            // `src/layout/mod.rs:353`, `…:353:9`.
+            while let Some((path, line)) = span.rsplit_once(':') {
+                if line.is_empty() || !line.chars().all(|c| c.is_ascii_digit()) {
+                    break;
+                }
+                span = path;
+            }
+            span
+        })
+        .filter(|span| {
+            !span.starts_with('/')
+                && !span.starts_with("target/")
+                && !span.split('/').any(|segment| segment == "..")
+        })
+        .filter(|span| {
+            let leaf = span.rsplit('/').next().unwrap_or(span);
+            let names_a_file = leaf.rsplit_once('.').is_some_and(|(stem, extension)| {
+                // `1.0/60.0` is arithmetic: an extension starts with a letter.
+                !stem.is_empty()
+                    && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && extension.chars().all(|c| c.is_ascii_alphanumeric())
+            });
+            let from_a_root = span
+                .split_once('/')
+                .is_some_and(|(first, _)| roots.contains(first));
+            span.contains('/')
+                && span
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "_-./".contains(c))
+                && (names_a_file || span.ends_with('/') || from_a_root)
+        })
+        .collect()
+}
+
+/// A file the documentation names is one the repository has.
+///
+/// The identifier check above cannot see a path, which has a `/` and a `.` in
+/// it — and a path goes stale the same way a name does, when something it
+/// points at is split or moved. `widgets/container.rs` outlived the container
+/// becoming a directory in four places.
+///
+/// A path is read from the root, or from `src/`, which is where the developer
+/// reference's module headings start from.
+#[test]
+fn every_file_the_documentation_names_is_there() {
+    let roots = top_level_directories();
+    let mut missing = Vec::new();
+    let mut checked = 0usize;
+
+    for doc in agent_documentation().iter().chain(&user_documentation()) {
+        let text = std::fs::read_to_string(doc).expect("read documentation");
+        let name = doc.strip_prefix(repo()).unwrap_or(doc);
+        for path in backticked_paths(&text, &roots) {
+            let exempt = NOT_REPOSITORY_FILES
+                .iter()
+                .any(|&(directory, exempt)| exempt == path && name.starts_with(directory));
+            if exempt {
+                continue;
+            }
+            checked += 1;
+            if !repo().join(path).exists() && !repo().join("src").join(path).exists() {
+                missing.push(format!("  {}: `{path}`", name.display()));
+            }
+        }
+    }
+
+    assert!(
+        checked > 100,
+        "found only {checked} paths: the scan is broken, not the documentation"
+    );
+    assert!(
+        missing.is_empty(),
+        "the documentation names {} file(s) the repository does not have. \
+         Either it went stale when something moved, or the path belongs in \
+         NOT_REPOSITORY_FILES in this file:\n{}\n\n({checked} paths checked)",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
+/// The scan, on the spellings it has to see and the ones it must not.
+#[test]
+fn a_path_is_a_span_naming_a_file_or_a_directory() {
+    let roots: BTreeSet<String> = ["benches".to_string(), "src".to_string()].into();
+    let text = "`src/tree.rs`, `widgets/container/`, `.github/workflows/ci.yml`, \
+                `benches/scroll_list` and `src/layout/mod.rs:353`; not `Home/End`, \
+                `a / b`, `~/.config/x.toml`, `Signal::get`, `target/debug/build.log`, \
+                `/usr/share/x.json`, `/`, `../Cargo.toml`, `docs/../x.md`, \
+                `./target/x.rs`, `1.0/60.0` or `size/2.0`\n\
+                ```\n`src/in_a_fence.rs`\n```\n";
+    let found: Vec<_> = backticked_paths(text, &roots).into_iter().collect();
+    assert_eq!(
+        found,
+        [
+            ".github/workflows/ci.yml",
+            "benches/scroll_list",
+            "src/layout/mod.rs",
+            "src/tree.rs",
+            "widgets/container/"
+        ]
     );
 }
 
