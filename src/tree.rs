@@ -501,8 +501,9 @@ pub struct Tree {
     cursor_under_the_point: Prop<CursorIcon>,
     /// Who the pointer still owes an event to. See [`PointerRecord`].
     pointer: PointerRecord,
-    /// The containers that declared `on_key_down`: a key nobody on the focus
-    /// path took goes to them, without the tree being walked to find them.
+    /// The containers that declared `on_key_down` or `on_key_up`: a key nobody
+    /// on the focus path took goes to them, without the tree being walked to
+    /// find them.
     key_listeners: Vec<WidgetId>,
     /// The widgets a key or a focus change is being routed through: the focus
     /// path, or the way down to the listeners. Empty outside such a dispatch.
@@ -1396,9 +1397,11 @@ impl Tree {
             self.key_route.extend_from_slice(focus.chain());
             response = self.route_through(root, event);
         }
-        // Only a key-down, repeats included: the listeners are containers
-        // declaring `on_key_down`.
-        if response != Some(EventResponse::Handled) && matches!(event, Event::KeyDown { .. }) {
+        // A key, repeats included; gaining or losing the keyboard stays on
+        // the focus path.
+        if response != Some(EventResponse::Handled)
+            && matches!(event, Event::KeyDown { .. } | Event::KeyUp { .. })
+        {
             let mut route = std::mem::take(&mut self.key_route);
             route.clear();
             for &listener in &self.key_listeners {

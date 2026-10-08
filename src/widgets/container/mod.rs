@@ -94,6 +94,8 @@ impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
 /// Callback for a key-down: the key, the modifiers held with it, and whether
 /// a held key produced it rather than a press.
 pub type KeyCallback = Rc<dyn Fn(Key, Modifiers, bool)>;
+/// Callback for a key-up: the key, and the modifiers held as it was released.
+pub type KeyUpCallback = Rc<dyn Fn(Key, Modifiers)>;
 /// Callback for hover events (bool = is_hovered)
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
@@ -236,6 +238,7 @@ pub(super) struct InteractionState {
     pub(super) on_right_click: Option<ClickCallback>,
     pub(super) on_middle_click: Option<ClickCallback>,
     pub(super) on_key_down: Option<KeyCallback>,
+    pub(super) on_key_up: Option<KeyUpCallback>,
     pub(super) on_hover: Option<HoverCallback>,
     pub(super) on_scroll: Option<ScrollCallback>,
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
@@ -299,6 +302,7 @@ impl Default for InteractionState {
             on_right_click: None,
             on_middle_click: None,
             on_key_down: None,
+            on_key_up: None,
             on_hover: None,
             on_scroll: None,
             on_pointer_move: None,
@@ -1124,6 +1128,18 @@ impl Container {
         self
     }
 
+    /// Called for a key release nothing with the focus took, along the same
+    /// route as [`on_key_down`](Self::on_key_down): where the press went, the
+    /// release goes after it.
+    ///
+    /// A release is not paired with its press. A focused field that takes a
+    /// key's press lets its release through, so a control that must not act on
+    /// a release it never saw pressed keeps that record itself.
+    pub fn on_key_up<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
+        self.interact_mut().on_key_up = Some(Rc::new(callback));
+        self
+    }
+
     pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_hover = Some(Rc::new(callback));
         self
@@ -1580,7 +1596,7 @@ impl Widget for Container {
         if self
             .interaction
             .as_ref()
-            .is_some_and(|ix| ix.on_key_down.is_some())
+            .is_some_and(|ix| ix.on_key_down.is_some() || ix.on_key_up.is_some())
         {
             tree.listen_for_keys(id);
         }

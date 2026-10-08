@@ -1001,9 +1001,9 @@ pub trait Widget {
     /// widgets that can be under its point, and those it owes one — the widget
     /// it just left, the one a press landed on. A key reaches the widget with
     /// the focus and the containers on the way to it, then those listening
-    /// with `on_key_down`. A container hands an event to its children through
-    /// `Tree::event_targets`; a widget that holds children of its own and
-    /// offers them events by hand steps outside that routing.
+    /// with `on_key_down` or `on_key_up`. A container hands an event to its
+    /// children through `Tree::event_targets`; a widget that holds children of
+    /// its own and offers them events by hand steps outside that routing.
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
         let _ = (tree, id, event);
         EventResponse::Ignored
