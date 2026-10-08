@@ -9,16 +9,14 @@
 
 use std::sync::Arc;
 
-use glyphon::{
-    Cache, Color as GlyphonColor, ColorMode, FontSystem, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
-};
+use glyphon::{Color as GlyphonColor, Resolution, TextArea, TextBounds};
 use wgpu::{
-    BindGroup, Device, Extent3d, MultisampleState, Queue, RenderPass, Texture, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages,
+    BindGroup, Device, Extent3d, Queue, RenderPass, Texture, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureUsages,
 };
 
 use super::constants::{TEXT_BUFFER_MARGIN_MULTIPLIER, TEXT_SUPERSAMPLE, TEXT_TEXTURE_PADDING};
+use super::text_mask::Shaper;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
@@ -109,14 +107,8 @@ pub struct TextQuadRenderer {
     // Rasterized text textures reused across frames
     text_cache: rustc_hash::FxHashMap<TextCacheKey, std::rc::Rc<CachedTextTexture>>,
     frame_gen: u64,
-    // Text rendering (glyphon-based)
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    #[allow(dead_code)] // Kept alive for text rendering
-    cache: Cache,
-    atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    viewport: Viewport,
+    /// The glyphon side, built on the first texture rasterized and not before.
+    shaper: Option<Shaper>,
 
     /// Pipeline, layout, sampler and index buffer — shared with the image
     /// renderer, which draws the same quad from a different texture.
@@ -127,31 +119,12 @@ pub struct TextQuadRenderer {
 }
 
 impl TextQuadRenderer {
-    pub fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
-        // Initialize text rendering components
-        let mut font_system = FontSystem::new();
-        for data in crate::get_registered_fonts() {
-            font_system
-                .db_mut()
-                .load_font_source(glyphon::fontdb::Source::Binary(data));
-        }
-        let swash_cache = SwashCache::new();
-        let cache = Cache::new(device);
-        let mut atlas = TextAtlas::with_color_mode(device, queue, &cache, format, ColorMode::Web);
-        let text_renderer =
-            TextRenderer::new(&mut atlas, device, MultisampleState::default(), None);
-        let viewport = Viewport::new(device, &cache);
-
+    pub fn new(device: &Device, format: TextureFormat) -> Self {
         Self {
             quad: TexturedQuadPipeline::new(device, format, "TextQuad"),
-            font_system,
             text_cache: rustc_hash::FxHashMap::default(),
             frame_gen: 0,
-            swash_cache,
-            cache,
-            atlas,
-            text_renderer,
-            viewport,
+            shaper: None,
             format,
         }
     }
@@ -255,9 +228,13 @@ impl TextQuadRenderer {
         }
 
         // Cache miss: shape and rasterize
+        let format = self.format;
+        let shaper = self
+            .shaper
+            .get_or_insert_with(|| Shaper::new(device, queue, format));
         let box_width = entry.rect.width * effective_scale;
         let buffer = super::text::shape(
-            &mut self.font_system,
+            &mut shaper.font_system,
             &entry.text,
             scaled_font_size,
             entry.font_family,
@@ -284,7 +261,7 @@ impl TextQuadRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: self.format,
+            format,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -292,7 +269,7 @@ impl TextQuadRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Update viewport
-        self.viewport.update(
+        shaper.viewport.update(
             queue,
             Resolution {
                 width: tex_width,
@@ -322,14 +299,14 @@ impl TextQuadRenderer {
         };
 
         // Prepare and render text to texture
-        if let Err(e) = self.text_renderer.prepare(
+        if let Err(e) = shaper.text_renderer.prepare(
             device,
             queue,
-            &mut self.font_system,
-            &mut self.atlas,
-            &self.viewport,
+            &mut shaper.font_system,
+            &mut shaper.atlas,
+            &shaper.viewport,
             vec![text_area],
-            &mut self.swash_cache,
+            &mut shaper.swash_cache,
         ) {
             log::error!("Text texture prepare failed: {:?}", e);
         }
@@ -356,8 +333,9 @@ impl TextQuadRenderer {
                 multiview_mask: None,
             });
 
-            self.text_renderer
-                .render(&self.atlas, &self.viewport, &mut render_pass)
+            shaper
+                .text_renderer
+                .render(&shaper.atlas, &shaper.viewport, &mut render_pass)
                 .expect("Failed to render text to texture");
             render_stats::record_draw_calls(Pipeline::Text, 1);
         }
@@ -366,7 +344,7 @@ impl TextQuadRenderer {
         // This atlas draws one text at a time, and that text is drawn now: its
         // glyphs stop being in use, so the next text may evict them rather
         // than grow the atlas around them.
-        self.atlas.trim();
+        shaper.atlas.trim();
 
         // Create bind group
         let bind_group = self
@@ -500,8 +478,7 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
         let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
             return;
         };
-        let mut renderer =
-            TextQuadRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut renderer = TextQuadRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
         renderer.set_screen_size(200.0, 100.0);
 
         // Small enough that a texture apiece is cheap; the count is the point.
@@ -538,7 +515,7 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
 /// draws turned instead of upright.
 #[cfg(test)]
 mod the_glyph_atlas_holds_a_text_not_a_history {
-    use super::TextQuadRenderer;
+    use super::{Shaper, TextQuadRenderer};
     use crate::renderer::GpuContext;
     use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{page, pages};
     use crate::transform::Transform;
@@ -549,8 +526,10 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
     fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
         let before = gpu.texture_bytes();
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let mut renderer = TextQuadRenderer::new(&gpu.device, &gpu.queue, format);
-        renderer.font_system = crate::renderer::text::vendored_font_system();
+        let mut renderer = TextQuadRenderer::new(&gpu.device, format);
+        let mut shaper = Shaper::new(&gpu.device, &gpu.queue, format);
+        shaper.font_system = crate::renderer::text::vendored_font_system();
+        renderer.shaper = Some(shaper);
         renderer.set_screen_size(1200.0, 60.0);
         let mut quads = Vec::new();
         for text in frames {
@@ -577,6 +556,36 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
             every <= one,
             "one text's glyphs need {one} bytes of atlas; {} new ones left {every}",
             pages.len()
+        );
+    }
+}
+
+/// Most applications never turn a text, and a renderer that is never asked to
+/// draw one builds none of what drawing one takes: no font system, which scans
+/// every font on the machine to construct, and no atlas, which is two textures
+/// before it holds a glyph.
+#[cfg(test)]
+mod nothing_turned_nothing_built {
+    use super::TextQuadRenderer;
+    use crate::renderer::GpuContext;
+
+    #[test]
+    fn a_renderer_that_draws_no_turned_text_holds_no_atlas() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let before = gpu.texture_bytes();
+        let mut renderer = TextQuadRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut quads = Vec::new();
+        for _ in 0..3 {
+            renderer.begin_frame();
+            renderer.prepare(&gpu.device, &gpu.queue, &[], &[], 1.0, &mut quads);
+            renderer.upload(&gpu.device, &gpu.queue);
+        }
+        assert_eq!(
+            gpu.texture_bytes() - before,
+            0,
+            "three frames without a turned text, and an atlas was made for one"
         );
     }
 }

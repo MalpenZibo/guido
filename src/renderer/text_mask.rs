@@ -127,22 +127,26 @@ struct CachedMask {
     last_used: Cell<u64>,
 }
 
-/// The glyphon side, built on the first frosted text and not before.
+/// The glyphon side of a path that rasterizes one text at a time into a
+/// texture of its own — a frosted text's mask here, a turned text's texture in
+/// [`text_quad`](super::text_quad) — built on the first such text and not
+/// before.
 ///
-/// A `FontSystem` scans the machine's fonts to construct, which is not a cost
-/// to put on every app for an effect most of them never ask for.
-struct Shaper {
-    font_system: FontSystem,
-    swash_cache: SwashCache,
+/// A `FontSystem` scans the machine's fonts to construct, and the atlas is two
+/// textures before it holds a glyph: not a cost to put on every app for paths
+/// most of them never take.
+pub(super) struct Shaper {
+    pub(super) font_system: FontSystem,
+    pub(super) swash_cache: SwashCache,
     #[allow(dead_code)] // Held for the atlas and viewport.
     cache: Cache,
-    atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    viewport: Viewport,
+    pub(super) atlas: TextAtlas,
+    pub(super) text_renderer: TextRenderer,
+    pub(super) viewport: Viewport,
 }
 
 impl Shaper {
-    fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+    pub(super) fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
         for data in crate::get_registered_fonts() {
             font_system

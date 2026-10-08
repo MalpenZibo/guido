@@ -160,7 +160,7 @@ impl Renderer {
         let text_state = TextRenderState::new(&device, &queue, format);
 
         // Initialize transformed text renderer
-        let text_quad_renderer = TextQuadRenderer::new(&device, &queue, format);
+        let text_quad_renderer = TextQuadRenderer::new(&device, format);
         let text_mask = TextMaskRenderer::new(format);
 
         // Initialize image renderer
