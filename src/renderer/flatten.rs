@@ -847,7 +847,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             let mut grow: f32 = border.map_or(0.0, |b| b.width);
             let mut offset: (f32, f32) = (0.0, 0.0);
             if let Some(shadow) = shadow {
-                grow = grow.max(shadow.blur + shadow.spread);
+                grow = grow.max(shadow.spill());
                 offset = shadow.offset;
             }
             Rect::new(
@@ -1258,6 +1258,35 @@ mod tests {
         let mut layers = Vec::new();
         layered.drain_into(&mut commands, &mut layers);
         assert_eq!(layers.len(), 2);
+    }
+
+    /// A shadow is drawn two blurs and its spread out, and that is where it
+    /// can cover a label. A box whose shadow reaches the label only with its
+    /// outer ring still has to be drawn after it: kept in the group, it would
+    /// be drawn underneath, and the ring would vanish behind the text.
+    #[test]
+    fn a_shadow_that_reaches_a_label_only_with_its_outer_ring_still_splits() {
+        let mut layered = FlattenScratch::default();
+        layered.push(command_at(Text, Rect::new(0.0, 0.0, 100.0, 40.0)));
+        // 12 below the label: past one blur of 8, inside two.
+        let shadow = crate::renderer::Shadow::new((0.0, 0.0), 8.0, 0.0, Color::BLACK);
+        layered.push(FlattenedCommand {
+            command: Rc::new(DrawCommand::RoundedRect {
+                rect: Rect::new(0.0, 52.0, 100.0, 40.0),
+                color: Color::WHITE,
+                radius: 0.0.into(),
+                curvature: 1.0,
+                border: None,
+                shadow: Some(shadow),
+                gradient: None,
+            }),
+            ..command(Shapes)
+        });
+
+        let mut commands = Vec::new();
+        let mut layers = Vec::new();
+        layered.drain_into(&mut commands, &mut layers);
+        assert_eq!(layers.len(), 2, "the ring lands on the label");
     }
 
     #[test]
