@@ -488,10 +488,8 @@ pub(crate) fn is_ready(source: &ImageSource) -> bool {
 /// Hold the entry for `source`, starting its decode if it has none — or `None`
 /// for a source that needs no decode.
 pub(crate) fn acquire(source: &ImageSource) -> Option<DecodeHandle> {
-    let key = DecodeKey::of(source)?;
-    let entry = entry(key.clone(), source, 1);
+    let entry = entry(DecodeKey::of(source)?, source, 1);
     Some(DecodeHandle {
-        key,
         state: entry.state,
         pixels: entry.pixels,
         size: entry.size,
@@ -500,7 +498,6 @@ pub(crate) fn acquire(source: &ImageSource) -> Option<DecodeHandle> {
 
 /// A claim on one source's entry, given back when dropped.
 pub(crate) struct DecodeHandle {
-    key: DecodeKey,
     state: RwSignal<DecodeState>,
     pixels: DecodedImage,
     size: Option<(f32, f32)>,
@@ -526,18 +523,18 @@ impl DecodeHandle {
 /// an entry removed, its readers told — is a signal write.
 impl Drop for DecodeHandle {
     fn drop(&mut self) {
+        let key = self.pixels.key();
         with_app_state(|app| {
             let last = app
                 .decoded_images
                 .borrow_mut()
-                .get_mut(&self.key)
+                .get_mut(key)
                 .is_some_and(|entry| {
                     entry.users = entry.users.saturating_sub(1);
                     entry.users == 0
                 });
             if last {
-                app.image_events
-                    .push(ImageEvent::Released(self.key.clone()));
+                app.image_events.push(ImageEvent::Released(key.clone()));
             }
         });
     }
@@ -949,6 +946,46 @@ mod tests {
         with_app_state(|app| app.decoded_images.borrow().len())
     }
 
+    /// A holder already reaches the entry's source through its pixels. More
+    /// holders must not retain another owned source key each. Invalid bytes
+    /// keep this independent of worker timing and of the SVG feature.
+    #[test]
+    fn a_decode_holder_borrows_the_entrys_source_identity() {
+        for source in [
+            ImageSource::Bytes(Arc::from(&b"not a raster"[..])),
+            ImageSource::SvgBytes(Arc::from(&b"not an SVG"[..])),
+        ] {
+            let bytes = match &source {
+                ImageSource::Bytes(bytes) | ImageSource::SvgBytes(bytes) => bytes,
+                _ => unreachable!(),
+            };
+            let before = entries();
+            let first = acquire(&source).expect("an encoded source has an entry");
+            let source_refs = Arc::strong_count(bytes);
+            let second = acquire(&source).expect("the same entry again");
+
+            assert_eq!(
+                Arc::strong_count(bytes),
+                source_refs,
+                "another holder must share the entry's source identity"
+            );
+            assert_eq!(entries(), before + 1);
+            assert_eq!(first.state(), second.state(), "one shared decode");
+            assert_eq!(first.state().0, DecodeState::Failed);
+            assert_eq!(first.size(), None);
+            assert_eq!(second.size(), None);
+
+            drop(first);
+            settle_image_events();
+            assert_eq!(entries(), before + 1, "the second holder keeps it");
+            drop(second);
+            settle_image_events();
+            assert_eq!(entries(), before, "the last holder releases it");
+            assert_eq!(Arc::strong_count(bytes), 1, "no source left in the cache");
+            assert_eq!(started(), 0, "invalid headers start no worker");
+        }
+    }
+
     /// An entry that never became a texture lives while an image holds it and
     /// goes with the last one.
     ///
@@ -996,7 +1033,8 @@ mod tests {
         let before = entries();
         let held = acquire(&source).unwrap();
         let entry =
-            with_app_state(|app| app.decoded_images.borrow().get(&held.key).cloned()).unwrap();
+            with_app_state(|app| app.decoded_images.borrow().get(held.pixels.key()).cloned())
+                .unwrap();
         entry.state.set(DecodeState::Ready);
         entry.pixels.slots().by_extent.insert(
             None,
