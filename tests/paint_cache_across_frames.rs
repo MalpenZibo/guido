@@ -707,6 +707,50 @@ fn a_static_clip_and_what_it_cuts_are_both_replayed() {
     );
 }
 
+/// The surface root keeps no flatten entry, because no frame can read one.
+///
+/// An entry is a copy of every command its subtree drew, and the root's
+/// subtree is the whole frame. It would be worth that only if a later frame
+/// could replay it, and none can: the root node is `clear()`ed before every
+/// paint, which empties its entry and marks it repainted, and a repainted node
+/// is never offered the replay path. So the root's entry was a copy of the
+/// whole frame, made every frame, for nobody.
+///
+/// The box under the clip is in the same tree and is exactly what an entry is
+/// for, which is what says this refuses the root rather than the cache.
+#[test]
+fn the_surface_root_keeps_no_flatten_entry() {
+    let mut s = Surface::new(
+        hidden_box_over_a_poker(SQUARE_CORNERS),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + GAP + POKER + PAD,
+    );
+
+    s.frame();
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (hidden, poker) = (children[0], children[1]);
+    let viewport = Rect::new(PAD, PAD, VIEWPORT, VIEWPORT);
+
+    for frame in 0..2 {
+        assert!(
+            s.root_node.cached_flatten.borrow().is_none(),
+            "frame {frame}: the root copied the whole frame into an entry that \
+             the next frame's `clear()` throws away unread"
+        );
+        assert!(
+            s.node_of(hidden).cached_flatten.borrow().is_some(),
+            "frame {frame}: the clipped box is clean and translation-only, so it \
+             is what the cache is for — refusing it too is refusing the cache"
+        );
+        assert_eq!(
+            s.clip_shape(CLIPPED_FILL).world_aabb(),
+            viewport,
+            "frame {frame}: the box is drawn under the box that hides its overflow"
+        );
+        s.frames(poker, 1);
+    }
+}
+
 /// A clip that appears above a replayed subtree cuts it.
 ///
 /// The subtree declares a clip of its own, which travels with it — and when its
