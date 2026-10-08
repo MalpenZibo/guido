@@ -31,6 +31,7 @@
 //! ```
 
 use super::spring::SpringConfig;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// Timing function that controls the animation curve
@@ -205,46 +206,266 @@ fn ease_in_out(t: f32) -> f32 {
     }
 }
 
-/// Cubic bezier curve evaluation
-/// Simplified implementation assuming x1, x2 are in [0, 1]
+/// Cubic bezier curve evaluation, for x1 and x2 in [0, 1].
 fn cubic_bezier(t: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    // Use Newton-Raphson to solve for t given x
-    let mut current_t = t;
-    for _ in 0..8 {
-        let current_x = cubic_bezier_x(current_t, x1, x2);
-        let current_slope = cubic_bezier_slope(current_t, x1, x2);
-        if current_slope.abs() < 1e-6 {
-            break;
-        }
-        current_t -= (current_x - t) / current_slope;
+    let x = Cubic::new(f64::from(x1), f64::from(x2));
+    let y = Cubic::new(f64::from(y1), f64::from(y2));
+    match x.parameter_at(f64::from(t)) {
+        Some((parameter, _)) => y.at(parameter) as f32,
+        // A NaN progress or control has no parameter to find.
+        None => f32::NAN,
     }
-    cubic_bezier_y(current_t, y1, y2)
 }
 
-fn cubic_bezier_x(t: f32, x1: f32, x2: f32) -> f32 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    3.0 * mt2 * t * x1 + 3.0 * mt * t2 * x2 + t3
+/// Newton steps tried before a parameter is left to bisection, as in WebKit's
+/// `UnitBezier` and Chromium's `gfx::CubicBezier`.
+const NEWTON_STEPS: u32 = 8;
+
+/// One coordinate of a curve from 0 to 1 whose controls are p1 and p2, as the
+/// polynomial a·t³ + b·t² + c·t.
+#[derive(Clone, Copy)]
+struct Cubic {
+    a: f64,
+    b: f64,
+    c: f64,
 }
 
-fn cubic_bezier_y(t: f32, y1: f32, y2: f32) -> f32 {
-    let t2 = t * t;
-    let t3 = t2 * t;
-    let mt = 1.0 - t;
-    let mt2 = mt * mt;
-    3.0 * mt2 * t * y1 + 3.0 * mt * t2 * y2 + t3
+impl Cubic {
+    fn new(p1: f64, p2: f64) -> Self {
+        let c = 3.0 * p1;
+        let b = 3.0 * (p2 - p1) - c;
+        Self {
+            a: 1.0 - c - b,
+            b,
+            c,
+        }
+    }
+
+    fn at(self, t: f64) -> f64 {
+        ((self.a * t + self.b) * t + self.c) * t
+    }
+
+    fn slope(self, t: f64) -> f64 {
+        (3.0 * self.a * t + 2.0 * self.b) * t + self.c
+    }
+
+    /// The parameter where this coordinate is `value`, and how many steps it
+    /// took to find it; `None` when either is NaN.
+    ///
+    /// With controls in [0, 1] the coordinate never decreases, so every
+    /// evaluation tells which side of it the answer lies and a bracket closes
+    /// on it. A Newton step is taken only when it lands strictly inside that
+    /// bracket, and the bracket is halved otherwise: an unguarded step at a flat
+    /// slope is thrown off the curve (#629). Nothing stops on a tolerance: the
+    /// answer is exact, Newton's step no longer moves it, or the bracket's ends
+    /// are adjacent floats. Newton converges in a few steps on an ordinary
+    /// curve; where it has not after [`NEWTON_STEPS`], the bracket it narrowed
+    /// is halved until its ends meet.
+    fn parameter_at(self, value: f64) -> Option<(f64, u32)> {
+        let (mut low, mut high) = (0.0, 1.0);
+        let mut parameter = value;
+        for step in 1..=NEWTON_STEPS {
+            let residual = self.at(parameter) - value;
+            match residual.partial_cmp(&0.0)? {
+                Ordering::Less => low = parameter,
+                Ordering::Greater => high = parameter,
+                Ordering::Equal => return Some((parameter, step)),
+            }
+            let newton = parameter - residual / self.slope(parameter);
+            // Converged: the step no longer moves the parameter.
+            if newton == parameter {
+                return Some((parameter, step));
+            }
+            let next = if strictly_between(newton, low, high) {
+                newton
+            } else {
+                0.5 * (low + high)
+            };
+            if !strictly_between(next, low, high) {
+                return Some((parameter, step));
+            }
+            parameter = next;
+        }
+        for halving in 1..=f64::MANTISSA_DIGITS {
+            let middle = 0.5 * (low + high);
+            if !strictly_between(middle, low, high) {
+                return Some((low, NEWTON_STEPS + halving));
+            }
+            match self.at(middle).partial_cmp(&value)? {
+                Ordering::Greater => high = middle,
+                _ => low = middle,
+            }
+        }
+        Some((low, NEWTON_STEPS + f64::MANTISSA_DIGITS))
+    }
 }
 
-fn cubic_bezier_slope(t: f32, x1: f32, x2: f32) -> f32 {
-    let mt = 1.0 - t;
-    3.0 * mt * mt * x1 + 6.0 * mt * t * (x2 - x1) + 3.0 * t * t * (1.0 - x2)
+/// Whether `value` lies inside the open interval, as an ordering rather than a
+/// `<` that could as well have been `<=`: at the interval's ends the two differ
+/// only in how long a solve takes.
+fn strictly_between(value: f64, low: f64, high: f64) -> bool {
+    value.partial_cmp(&low) == Some(Ordering::Greater)
+        && value.partial_cmp(&high) == Some(Ordering::Less)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bezier_samples_agree_with_de_casteljau_inversion() {
+        // This oracle bisects too, but evaluates by de Casteljau rather than the
+        // solver's polynomial; the analytic inverses below are what share nothing.
+        let sample = |u: f64, a: f64, b: f64| {
+            let lerp = |p, q| p + (q - p) * u;
+            lerp(
+                lerp(lerp(0.0, a), lerp(a, b)),
+                lerp(lerp(a, b), lerp(b, 1.0)),
+            )
+        };
+        for (x1, y1, x2, y2) in [
+            (0.0, 0.0, 0.0, 1.0),
+            (1.0, 0.0, 1.0, 1.0),
+            (1.0, 0.0, 0.0, 1.0),
+            (0.25, 0.1, 0.25, 1.0),
+            (0.42, 0.0, 0.58, 1.0),
+            (0.34, 1.56, 0.64, 1.0),
+            (0.5, -0.6, 0.5, 1.2),
+            (0.45, -2.8, 0.92, 0.6),
+        ] {
+            let curve = TimingFunction::CubicBezier(x1, y1, x2, y2);
+            assert_eq!(curve.evaluate(0.0), 0.0);
+            assert_eq!(curve.evaluate(1.0), 1.0);
+            for step in 1..1000 {
+                let progress = step as f32 / 1000.0;
+                let (mut low, mut high) = (0.0, 1.0);
+                for _ in 0..50 {
+                    let u = (low + high) * 0.5;
+                    if sample(u, f64::from(x1), f64::from(x2)) < f64::from(progress) {
+                        low = u;
+                    } else {
+                        high = u;
+                    }
+                }
+                let expected = sample((low + high) * 0.5, f64::from(y1), f64::from(y2)) as f32;
+                let actual = curve.evaluate(progress);
+                assert!(
+                    (actual - expected).abs() < 1e-5,
+                    "{curve:?} at {progress}: expected {expected}, got {actual}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bezier_anticipation_and_overshoot_are_not_clamped() {
+        assert!(TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2).evaluate(0.1) < 0.0);
+        assert!(TimingFunction::CubicBezier(0.34, 1.56, 0.64, 1.0).evaluate(0.7) > 1.0);
+    }
+
+    #[test]
+    fn bezier_nan_inputs_propagate_without_stalling() {
+        for (progress, x1, x2) in [
+            (f32::NAN, 0.0, 0.0),
+            (0.5, f32::NAN, 0.0),
+            (0.5, 0.0, f32::NAN),
+        ] {
+            assert!(
+                TimingFunction::CubicBezier(x1, 0.0, x2, 1.0)
+                    .evaluate(progress)
+                    .is_nan()
+            );
+        }
+    }
+
+    /// A solve's cost is the one thing a wrong slope, a broken Newton step or a
+    /// missing bracket guard changes: the bracket still lands every answer on
+    /// the curve, only later. So the work is counted, and pinned. A change that
+    /// moves these numbers says why.
+    #[test]
+    fn bezier_solves_take_the_steps_they_are_known_to() {
+        let steps = |x1: f32, x2: f32| {
+            let x = Cubic::new(f64::from(x1), f64::from(x2));
+            (0..=1000).map(move |k| x.parameter_at(f64::from(k as f32 / 1000.0)).unwrap().1)
+        };
+        // Without a flat stretch, Newton alone converges.
+        for (x1, x2) in [(0.25, 0.25), (0.42, 0.58), (0.34, 0.64), (0.5, 0.5)] {
+            assert!(
+                steps(x1, x2).all(|taken| taken <= NEWTON_STEPS),
+                "x controls {x1},{x2} fell back to bisection"
+            );
+        }
+        let curves = [
+            (0.0, 0.0),
+            (1.0, 1.0),
+            (1.0, 0.0),
+            (0.25, 0.25),
+            (0.42, 0.58),
+            (0.34, 0.64),
+            (0.5, 0.5),
+            (0.45, 0.92),
+            (0.0, 1.0),
+        ];
+        let total: u32 = curves
+            .iter()
+            .map(|&(x1, x2)| steps(x1, x2).sum::<u32>())
+            .sum();
+        assert_eq!(total, 56_740);
+        // Too near zero for the bracket's ends ever to meet: every halving runs.
+        let (_, taken) = Cubic::new(0.0, 0.0)
+            .parameter_at(f64::from(1e-30_f32))
+            .unwrap();
+        assert_eq!(taken, NEWTON_STEPS + f64::MANTISSA_DIGITS);
+    }
+
+    #[test]
+    fn flat_bezier_slopes_stay_on_the_curve() {
+        // With y controls 0 and 1, y(u) = 3u^2 - 2u^3; each x(u) inverts exactly.
+        // The f32 neighbours of 0.5, one ulp to either side.
+        let beside_half = [
+            f32::from_bits(0.5_f32.to_bits() - 1),
+            f32::from_bits(0.5_f32.to_bits() + 1),
+        ];
+        type Inverse = fn(f64) -> f64;
+        let cases: [(f32, f32, Inverse, &[f32]); 3] = [
+            // x(u) = u^3: flat at the start.
+            (0.0, 0.0, f64::cbrt, &[0.001, 0.01, 0.1, 0.5]),
+            // x(u) = 1 - (1 - u)^3: flat at the end.
+            (
+                1.0,
+                1.0,
+                |p| 1.0 - (1.0 - p).cbrt(),
+                &[0.5, 0.9, 0.99, 0.999],
+            ),
+            // x(u) = 0.5 + 4(u - 0.5)^3: flat in the middle.
+            (
+                1.0,
+                0.0,
+                |p| 0.5 + ((p - 0.5) / 4.0).cbrt(),
+                &[
+                    0.49,
+                    0.4999,
+                    beside_half[0],
+                    0.5,
+                    beside_half[1],
+                    0.5001,
+                    0.51,
+                ],
+            ),
+        ];
+        for (x1, x2, inverse, points) in cases {
+            let curve = TimingFunction::CubicBezier(x1, 0.0, x2, 1.0);
+            for &progress in points {
+                let u = inverse(f64::from(progress));
+                let expected = (3.0 * u * u - 2.0 * u * u * u) as f32;
+                let actual = curve.evaluate(progress);
+                assert!(
+                    (actual - expected).abs() < 1e-5,
+                    "{curve:?} at {progress}: expected {expected}, got {actual}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_linear() {
