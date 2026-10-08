@@ -19,7 +19,7 @@ use super::types::TextEntry;
 /// Compute a cache key for a text buffer based on content and styling.
 /// Two entries with the same key produce identical glyphon Buffers.
 fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
-    let mut hasher = std::hash::DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
     entry.text.hash(&mut hasher);
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
