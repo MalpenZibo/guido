@@ -363,6 +363,10 @@ impl TextQuadRenderer {
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+        // This atlas draws one text at a time, and that text is drawn now: its
+        // glyphs stop being in use, so the next text may evict them rather
+        // than grow the atlas around them.
+        self.atlas.trim();
 
         // Create bind group
         let bind_group = self
@@ -525,6 +529,54 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
             renderer.text_cache.len(),
             1,
             "the frame before rasterized {BOUND} textures nobody wants now"
+        );
+    }
+}
+
+/// The glyph atlas behind the textures holds one text's glyphs, not every
+/// text's — see the module of the same name in `text.rs`, whose pages this
+/// draws turned instead of upright.
+#[cfg(test)]
+mod the_glyph_atlas_holds_a_text_not_a_history {
+    use super::TextQuadRenderer;
+    use crate::renderer::GpuContext;
+    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{page, pages};
+    use crate::transform::Transform;
+
+    /// The atlas a fresh renderer holds after drawing `frames`, one frame
+    /// each — and only the atlas: the textures it rasterized are given back
+    /// before the device is asked.
+    fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
+        let before = gpu.texture_bytes();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut renderer = TextQuadRenderer::new(&gpu.device, &gpu.queue, format);
+        renderer.font_system = crate::renderer::text::vendored_font_system();
+        renderer.set_screen_size(1200.0, 60.0);
+        let mut quads = Vec::new();
+        for text in frames {
+            renderer.begin_frame();
+            quads.clear();
+            let texts = [page(text, Transform::rotate_degrees(10.0))];
+            renderer.prepare(&gpu.device, &gpu.queue, &texts, &[0], 1.0, &mut quads);
+            renderer.upload(&gpu.device, &gpu.queue);
+        }
+        quads.clear();
+        renderer.text_cache.clear();
+        gpu.texture_bytes() - before
+    }
+
+    #[test]
+    fn a_turned_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let pages = pages();
+        let one = atlas_after(&gpu, &pages[..1]);
+        let every = atlas_after(&gpu, &pages);
+        assert!(
+            every <= one,
+            "one text's glyphs need {one} bytes of atlas; {} new ones left {every}",
+            pages.len()
         );
     }
 }

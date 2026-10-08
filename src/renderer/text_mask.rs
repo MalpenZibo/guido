@@ -343,6 +343,10 @@ impl TextMaskRenderer {
             }
         }
         queue.submit(std::iter::once(encoder.finish()));
+        // This atlas draws one mask at a time, and that mask is drawn now: its
+        // glyphs stop being in use, so the next mask may evict them rather
+        // than grow the atlas around them.
+        shaper.atlas.trim();
 
         let view = Rc::new(view);
         self.masks.insert(
@@ -354,5 +358,68 @@ impl TextMaskRenderer {
             }),
         );
         Some(view)
+    }
+}
+
+/// The glyph atlas behind the masks holds one text's glyphs, not every
+/// text's — see the module of the same name in `text.rs`, whose pages this
+/// frosts.
+#[cfg(test)]
+mod the_glyph_atlas_holds_a_text_not_a_history {
+    use super::{MaskSpec, Shaper, TextMaskRenderer};
+    use crate::renderer::GpuContext;
+    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{page, pages};
+    use crate::transform::Transform;
+
+    /// The atlas a fresh renderer holds after frosting `frames`, one frame
+    /// each — and only the atlas: the masks it rasterized are given back
+    /// before the device is asked.
+    fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
+        let before = gpu.texture_bytes();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut renderer = TextMaskRenderer::new(format);
+        let mut shaper = Shaper::new(&gpu.device, &gpu.queue, format);
+        shaper.font_system = crate::renderer::text::vendored_font_system();
+        renderer.shaper = Some(shaper);
+        for text in frames {
+            renderer.begin_frame();
+            let entry = page(text, Transform::IDENTITY);
+            let spec = MaskSpec {
+                text: &entry.text,
+                font_size: entry.font_size,
+                font_family: entry.font_family,
+                font_weight: entry.font_weight,
+                line_height: entry.line_height,
+                letter_spacing: entry.letter_spacing,
+                fit: None,
+                align: entry.align,
+                buffer_height: entry.rect.height,
+                box_width: entry.rect.width,
+                size: (entry.rect.width as u32, entry.rect.height as u32),
+                offset: (0.0, 0.0),
+                density: 1.0,
+            };
+            assert!(
+                renderer.mask(&gpu.device, &gpu.queue, &spec).is_some(),
+                "a frame's mask was not made"
+            );
+        }
+        renderer.masks.clear();
+        gpu.texture_bytes() - before
+    }
+
+    #[test]
+    fn a_frosted_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let pages = pages();
+        let one = atlas_after(&gpu, &pages[..1]);
+        let every = atlas_after(&gpu, &pages);
+        assert!(
+            every <= one,
+            "one text's glyphs need {one} bytes of atlas; {} new ones left {every}",
+            pages.len()
+        );
     }
 }
