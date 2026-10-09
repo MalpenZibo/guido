@@ -182,7 +182,7 @@ impl Animatable for Shadow {
     /// forward in both directions.
     ///
     /// The ties this keeps are the ones that trade one dimension for another —
-    /// a blur of 8 becoming a spread of 8, an offset moving from down to
+    /// a blur of 4 becoming a spread of 8, an offset moving from down to
     /// sideways. Both reduce to the same extent, and neither is larger.
     fn is_reverse(from: &Self, to: &Self) -> bool {
         (to.extent(), to.color.a) < (from.extent(), from.color.a)
@@ -444,7 +444,9 @@ mod tests {
     /// impl says which ties it chooses to keep.
     #[test]
     fn a_shadow_trading_one_dimension_for_another_is_a_tie() {
-        let blurred = Shadow::new((0.0, 0.0), 8.0, 0.0, Color::BLACK);
+        // A blurred edge is drawn two blurs out, so a blur of 4 reaches as far
+        // as a spread of 8.
+        let blurred = Shadow::new((0.0, 0.0), 4.0, 0.0, Color::BLACK);
         let spread = Shadow::new((0.0, 0.0), 0.0, 8.0, Color::BLACK);
         assert_eq!(blurred.extent(), spread.extent());
         assert!(!Shadow::is_reverse(&blurred, &spread));

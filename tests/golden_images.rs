@@ -767,6 +767,86 @@ fn shadow_variations() {
     );
 }
 
+/// A shadow draws nothing past the reach it reports.
+///
+/// `Shadow::extent` is what a damage rect and a cull rect grow by. The shader
+/// is what draws, and nothing compared the two. A pixel the shadow reaches past
+/// its extent is composited only when something else repaints it, and left on
+/// screen otherwise, as a ring around a card that moved or lost its shadow.
+///
+/// No reference image. On each side the shadow is drawn no further than two
+/// blurs and the spread, moved by its offset along that axis: the first whole
+/// pixel past that is the background, against a light one a faint shadow
+/// still visibly darkens. And `extent` has to cover the furthest of the four.
+#[test]
+fn a_shadow_draws_nothing_past_the_extent_it_reports() {
+    const NAME: &str = "a_shadow_draws_nothing_past_the_extent_it_reports";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    // Offset on both axes, blur and spread all at once, so every term counts
+    // and every side reaches a different distance.
+    let shadow = Shadow::new((4.0, 6.0), 8.0, 2.0, Color::rgba(0.0, 0.0, 0.0, 0.6));
+    let (margin, side) = (40.0, 40.0);
+    let view = container()
+        .background(light)
+        .padding(margin)
+        .child(swatch(side, side, Color::WHITE).shadow(shadow));
+    let logical = margin * 2.0 + side;
+    let pixels = render_with_own_renderer(ctx, view, (logical, logical), 1.0, light);
+
+    let at = |x: u32, y: u32| -> [u8; 3] {
+        let i = ((y * pixels.width + x) * 4) as usize;
+        [pixels.data[i], pixels.data[i + 1], pixels.data[i + 2]]
+    };
+    let background = at(0, 0);
+    let off = |p: [u8; 3]| {
+        (0..3)
+            .map(|c| p[c].abs_diff(background[c]))
+            .max()
+            .unwrap_or(0)
+    };
+
+    let (near, far) = (margin as u32, (margin + side) as u32);
+    let middle = (margin + side / 2.0) as u32;
+    assert!(
+        off(at(middle, far + 2)) > TOLERANCE,
+        "the shadow has to be drawn at all for its edge to mean anything"
+    );
+
+    let spill = 2.0 * shadow.blur + shadow.spread;
+    let (dx, dy) = shadow.offset;
+    let extent = shadow.extent();
+    for (label, reach) in [
+        ("below", spill + dy),
+        ("above", spill - dy),
+        ("right", spill + dx),
+        ("left", spill - dx),
+    ] {
+        // The first whole pixel past this side's reach: pixel `p` spans
+        // `p..p + 1`, so on the near sides it is the one before `near - out`.
+        let out = reach.ceil() as u32;
+        let (x, y) = match label {
+            "below" => (middle, far + out),
+            "above" => (middle, near - out - 1),
+            "right" => (far + out, middle),
+            _ => (near - out - 1, middle),
+        };
+        let darkened = off(at(x, y));
+        assert!(
+            darkened <= TOLERANCE,
+            "{label} the box, {out} px out, past the {reach} px the shadow reaches \
+             there, it still darkens the background by {darkened} units"
+        );
+        assert!(
+            extent >= reach,
+            "{label} the box the shadow is drawn {reach} px out, past an extent of \
+             {extent}: that ring is outside every rect that repaints it"
+        );
+    }
+}
+
 /// Rotation, scale and translation, including a transform inherited through a
 /// parent — the case where the world transform is a chain and not a matrix
 /// somebody wrote down.

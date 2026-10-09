@@ -58,7 +58,23 @@ impl Shadow {
         if self.color.a <= 0.0 {
             return 0.0;
         }
-        self.blur + self.spread + self.offset.0.abs().max(self.offset.1.abs())
+        self.spill() + self.offset.0.abs().max(self.offset.1.abs())
+    }
+
+    /// How far the blurred edge is drawn past the box on every side, before
+    /// the offset moves it.
+    ///
+    /// The shader fades the shadow out with
+    /// `smoothstep(-shadow_blur, shadow_blur * 2.0, distance - spread)`
+    /// (`shader.wgsl`), so it is drawn until it is two blurs and the spread
+    /// past the edge.
+    ///
+    /// A blur below zero, which a spring can overshoot to, counts as none: the
+    /// quad the shader draws into is then grown by no more than the spread and
+    /// the offset, so nothing is drawn further out than that. A `NaN` blur stays
+    /// `NaN`, which is what `shrunk_to` answers by leaving the shadow alone.
+    pub(crate) fn spill(&self) -> f32 {
+        2.0 * self.blur.clamp(0.0, f32::INFINITY) + self.spread
     }
 
     /// The same shadow, every length multiplied by `k`.
@@ -175,13 +191,62 @@ mod shadow_extent_tests {
 
     #[test]
     fn the_extent_is_what_scaling_a_shadow_scales() {
-        assert_eq!(DEEP.extent(), 22.0, "blur + spread + the longer offset");
+        assert_eq!(
+            DEEP.extent(),
+            32.0,
+            "two blurs + spread + the longer offset"
+        );
         for k in [0.0, 0.25, 1.0, 3.0] {
             assert!(
                 (DEEP.scaled(k).extent() - DEEP.extent() * k).abs() < 1e-4,
                 "scaling by {k} has to scale the extent by {k}"
             );
         }
+    }
+
+    /// `spill` is the shader's falloff written again in Rust, and the GPU test
+    /// that compares the two skips on a machine without lavapipe. Changing the
+    /// falloff without changing `spill` fails here instead.
+    #[test]
+    fn the_spill_is_where_the_shader_fades_a_shadow_out() {
+        let shader = include_str!("shader.wgsl");
+        for (line, what) in [
+            (
+                "rounded_rect_sdf(shadow_pos, in.shape_rect, radii, curvature) - shadow_spread",
+                "the distance a shadow fades over",
+            ),
+            (
+                "1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist)",
+                "the falloff",
+            ),
+        ] {
+            assert!(
+                shader.contains(line),
+                "{what} changed in shader.wgsl: `Shadow::spill` has to say how far the \
+                 new one reaches"
+            );
+        }
+        // The quad a shadow is drawn into has to make room for all of it.
+        let fadeout: f32 = shader
+            .split_once("let fadeout = ")
+            .and_then(|(_, rest)| rest.split_once(';'))
+            .and_then(|(value, _)| value.trim().parse().ok())
+            .expect("the shader grows a shadow's quad by `fadeout` blurs");
+        assert!(
+            fadeout >= 2.0,
+            "a quad grown by {fadeout} blurs cuts off a shadow drawn two blurs out"
+        );
+    }
+
+    #[test]
+    fn a_blur_overshot_below_zero_spills_no_further_than_the_spread() {
+        let overshot = Shadow::new((0.0, 1.0), -1.0, 1.0, Color::BLACK);
+        assert_eq!(overshot.spill(), 1.0);
+        assert_eq!(overshot.extent(), 2.0, "the spread and the offset");
+        // And one that is not a number stays one, so `shrunk_to` leaves it be.
+        let unknown = Shadow::new((0.0, 1.0), f32::NAN, 1.0, Color::BLACK);
+        assert!(unknown.extent().is_nan());
+        assert_eq!(unknown.shrunk_to(1.0).spread, 1.0);
     }
 
     #[test]
@@ -193,8 +258,8 @@ mod shadow_extent_tests {
 
     #[test]
     fn a_shadow_shrunk_to_a_reach_fits_inside_it() {
-        let fitted = DEEP.shrunk_to(11.0);
-        assert!(fitted.extent() <= 11.0 + 1e-4, "{}", fitted.extent());
+        let fitted = DEEP.shrunk_to(16.0);
+        assert!(fitted.extent() <= 16.0 + 1e-4, "{}", fitted.extent());
         assert_eq!(fitted.blur, 5.0, "and uniformly, so the shape survives");
         assert_eq!(fitted.spread, 2.0);
         assert_eq!(fitted.offset, (1.5, -4.0));
@@ -202,7 +267,7 @@ mod shadow_extent_tests {
 
     #[test]
     fn a_shadow_already_inside_the_reach_is_untouched() {
-        assert_eq!(DEEP.shrunk_to(22.0), DEEP, "exactly at the reach");
+        assert_eq!(DEEP.shrunk_to(32.0), DEEP, "exactly at the reach");
         assert_eq!(DEEP.shrunk_to(100.0), DEEP);
     }
 
