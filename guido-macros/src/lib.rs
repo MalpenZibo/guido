@@ -453,6 +453,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.borrow().as_ref().unwrap().refresh_paint_bounds(tree, id)
             }
 
+            fn placement(&self, tree: &::guido::tree::Tree, id: ::guido::tree::WidgetId) -> ::guido::widgets::Placement {
+                self.ensure_built();
+                self.__inner.borrow().as_ref().unwrap().placement(tree, id)
+            }
+
         }
 
         #vis fn #fn_name() -> #struct_name {

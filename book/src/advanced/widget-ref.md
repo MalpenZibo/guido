@@ -16,7 +16,7 @@ let module_ref = create_widget_ref();
 # }
 ```
 
-This creates a `WidgetRef` with an internal `Signal<Rect>` initialized to `Rect::default()` (all zeros). The signal is updated automatically after each layout pass.
+This creates a `WidgetRef` with an internal `Signal<Rect>` initialized to `Rect::default()` (all zeros). The signal is updated automatically on every frame that may have moved the widget.
 
 ## Attaching to a Container
 
@@ -53,9 +53,20 @@ let bounds_text = text(move || {
 # }
 ```
 
-The `Rect` contains surface-relative coordinates:
-- `x`, `y` — top-left corner position relative to the surface origin
-- `width`, `height` — the widget's layout size
+The `Rect` is where the widget is drawn, relative to the surface origin:
+- `x`, `y` — its top-left corner
+- `width`, `height` — its size
+
+That is the box it was laid out in, moved by the scroll offset of every scroll
+area it is in and by its transforms and its ancestors'. A row in a scrolled list
+reports the row you see, and a scaled widget its scaled size; a rotated one
+reports the axis-aligned box around it. A shadow is not part of it. The signal
+changes when any of those move — after a scroll or an animation frame as well as
+after layout. A pressed or hovered state that scales the widget moves it too, so a
+popup anchored to a button that shrinks while pressed follows it.
+
+Do not move a widget by its own rect, or by the rect of something it carries:
+each frame's rect would move it again, and it would never settle.
 
 ## Positioning a Popup
 
@@ -157,8 +168,8 @@ for a handle at all — use
 
 ## When Not to Use It
 
-A `WidgetRef` rect is written *after* layout, so a property derived from one
-lags a frame — and reads zero on the first frame, before any layout has run.
+A `WidgetRef` rect is written *after* layout, on the frame's way to paint, so a
+property derived from one lags a frame — and reads zero on the first frame, before any layout has run.
 That is fine for positioning a popup, and wrong for sizing. Two common cases
 have direct layout support instead:
 

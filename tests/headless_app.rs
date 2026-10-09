@@ -2251,13 +2251,12 @@ fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
     );
 }
 
-/// `rect()` is where a widget was laid out and at what size, which is what the
-/// book promises: "the widget's layout size". How far it paints outside that
-/// box is the damage tracker's concern. It used to grow `rect()` by its shadow's
-/// reach, moving the corner and the size, so a popup anchored to the widget
-/// opened beside it.
+/// `rect()` is the box a widget is drawn in, and not what it paints outside
+/// that box: how far a shadow reaches is the damage tracker's concern. It used
+/// to grow `rect()` by its shadow's reach, moving the corner and the size, so a
+/// popup anchored to the widget opened beside it.
 #[test]
-fn a_widget_ref_rect_is_the_box_it_was_laid_out_in_whatever_it_paints_outside_it() {
+fn a_widget_ref_rect_leaves_out_what_its_widget_paints_outside_it() {
     let Some(mut app) = headless() else { return };
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
@@ -2282,6 +2281,135 @@ fn a_widget_ref_rect_is_the_box_it_was_laid_out_in_whatever_it_paints_outside_it
         card.rect().get_untracked(),
         Rect::new(10.0, 10.0, 60.0, 20.0),
         "the card laid out 60 by 20 at the padding's corner"
+    );
+}
+
+/// A widget ref's rect is where the row is drawn in a scrolled list, frame by
+/// frame as the content coasts.
+///
+/// The row is laid out 500 down. A flick sets the content coasting, which
+/// moves it on every frame, and the rect has to follow: on each frame it is
+/// 500 less what the frame shows has scrolled, to the pixel the frame can say
+/// it to.
+#[test]
+fn a_widget_ref_rect_follows_the_scroll_its_widget_is_drawn_under() {
+    let Some(mut app) = headless() else { return };
+    let row = create_widget_ref();
+    let (surface, mut at) = scroller(&mut app, move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .scroll(hidden_scroll())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .width(fill())
+                    .child(block(500.0, Color::rgb(1.0, 0.0, 0.0)))
+                    .child(block(1500.0, Color::rgb(0.0, 0.0, 1.0)).widget_ref(row)),
+            )
+    });
+    assert_eq!(row.rect().get_untracked().y, 500.0, "laid out 500 down");
+
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    app.step_at(at);
+
+    let mut seen = Vec::new();
+    for frame in 0..30 {
+        let y = row.rect().get_untracked().y;
+        let drawn = 500.0 - scrolled(&app, surface);
+        assert!(
+            (y - drawn).abs() <= 1.0,
+            "frame {frame}: the rect says {y}, the row is drawn at {drawn}"
+        );
+        seen.push(y);
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    seen.dedup();
+    assert!(
+        seen.len() > 5 && seen[0] - seen[seen.len() - 1] > 60.0,
+        "the content coasted and the rect followed it: {seen:?}"
+    );
+}
+
+/// A widget ref's rect follows an ancestor's translate as it animates, frame
+/// by frame, and rests where the translate does.
+#[test]
+fn a_widget_ref_rect_follows_an_ancestor_translate_as_it_animates() {
+    let Some(mut app) = headless() else { return };
+    let moved = create_signal(false);
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container()
+            .translate(
+                (move || {
+                    if moved.get() {
+                        Translate::new(20.0, 0.0)
+                    } else {
+                        Translate::NONE
+                    }
+                })
+                .transition(160.0),
+            )
+            .child(container().width(60.0).height(20.0).widget_ref(card))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    assert_eq!(card.rect().get_untracked(), Rect::new(0.0, 0.0, 60.0, 20.0));
+
+    moved.set(true);
+    let mut xs = Vec::new();
+    for _ in 0..20 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        xs.push(card.rect().get_untracked().x);
+    }
+    assert!(
+        xs.iter().any(|&x| x > 0.5 && x < 19.5),
+        "the rect passed through the translate's frames, not only its ends: {xs:?}"
+    );
+    assert!(
+        xs.windows(2).all(|pair| pair[1] >= pair[0]),
+        "and moved one way: {xs:?}"
+    );
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(20.0, 0.0, 60.0, 20.0),
+        "and rests where the translate does"
+    );
+}
+
+/// A widget ref's rect is the box its own transform draws: scaled twice about
+/// its centre, a 60 by 20 card laid out at (10, 10) is drawn 120 by 40 around
+/// the same centre.
+#[test]
+fn a_widget_ref_rect_is_the_box_its_own_scale_draws() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding(10.0).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .scale(2.0)
+                .widget_ref(card),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(-20.0, 0.0, 120.0, 40.0)
     );
 }
 

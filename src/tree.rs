@@ -27,6 +27,7 @@ use smallvec::SmallVec;
 
 use crate::layout::{Constraints, Size};
 use crate::reactive::{CursorIcon, Prop};
+use crate::transform::Transform;
 use crate::widgets::{Rect, Widget};
 
 /// Inline capacity for children. Most widgets have 0–4 children,
@@ -1853,16 +1854,51 @@ impl Tree {
     // Surface-relative position
     // -------------------------------------------------------------------------
 
-    /// Get the surface-relative bounds of a widget by walking up the parent chain
-    /// and summing origins: where it was laid out and at what size, which is
-    /// what [`WidgetRef::rect`](crate::widget_ref::WidgetRef::rect) promises.
+    /// Where a widget is drawn, relative to its surface: the box it was laid
+    /// out in, carried by the scroll offset of every container it is in and by
+    /// every transform on the way down, its own included. Under a rotation that
+    /// is the axis-aligned box around the result, taken once at the end. What
+    /// it paints outside that box — a shadow — is not part of it; that is what
+    /// damage grows by, from the laid-out box below.
+    ///
+    /// This is what [`WidgetRef::rect`](crate::widget_ref::WidgetRef::rect)
+    /// reports. Each widget on the way up is asked its
+    /// [`placement`](crate::widgets::Widget::placement), so it reads what they
+    /// paint with; inside a reactive scope, those reads subscribe it.
+    ///
+    /// Not for a scroller's own scrollbar track and handle: the container
+    /// places those itself, clear of its scroll offset, and no ref can be
+    /// attached to them.
     pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
-        self.surface_relative_layout_and_root(id)
-            .map(|(_, bounds)| bounds)
+        let placement_of = |id: WidgetId| self.with_widget(id, |widget| widget.placement(self, id));
+        let size = self.cached_size(id)?;
+        let mut current = id;
+        let mut placement = placement_of(id)?;
+        // From the widget's own coordinates to those of the one `current` is
+        // laid out in, built up one ancestor at a time.
+        let mut placed = Transform::IDENTITY;
+        loop {
+            let (x, y) = self.get_origin(current)?;
+            let parent = self.get_parent(current);
+            let above = match parent {
+                Some(parent) => Some(placement_of(parent)?),
+                None => None,
+            };
+            let scroll = above.map_or((0.0, 0.0), |above| above.scroll);
+            placed = Transform::translate(x - scroll.0, y - scroll.1)
+                .then(&placement.own)
+                .then(&placed);
+            match (parent, above) {
+                (Some(parent), Some(above)) => (current, placement) = (parent, above),
+                _ => break,
+            }
+        }
+        Some(placed.map_rect(Rect::new(0.0, 0.0, size.width, size.height)))
     }
 
     /// Walk to the surface root, returning it together with the widget's
-    /// surface-relative bounds (origins summed along the chain).
+    /// laid-out box relative to the surface: origins summed along the chain,
+    /// with no scroll and no transform. What damage is measured from.
     fn surface_relative_layout_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
@@ -3069,12 +3105,13 @@ mod tests {
         );
     }
 
-    /// A widget's bounds are where it was laid out, whatever it or its
-    /// children paint outside it: how far that reaches is damage's question,
-    /// and `WidgetRef::rect` reads these. A reach of 20 carries the child past
-    /// the root's edge, so the root's own overflow grows too.
+    /// A widget's bounds are not grown by what it or its children paint
+    /// outside it: how far that reaches is damage's question, and
+    /// `WidgetRef::rect` reads these. A reach of 20 carries the child past the
+    /// root's edge, so the root's own overflow grows too. Neither widget here
+    /// moves what it draws, so the bounds are the boxes they were laid out in.
     #[test]
-    fn a_widgets_bounds_are_its_laid_out_box_whatever_is_painted_outside_it() {
+    fn a_widgets_bounds_leave_out_what_is_painted_outside_it() {
         let (mut tree, root, child) = inset_child();
         tree.set_own_paint_reach(child, 20.0);
         assert_eq!(

@@ -508,6 +508,12 @@ pub trait Widget {
     /// own Paint scope, so what it reads belongs to it.
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {}
 
+    /// Where it draws itself and its children against where it was laid out:
+    /// its own transform about its pivot, and the scroll offset it moves its
+    /// children by. What a `WidgetRef`'s rect is composed from. Hidden from
+    /// the docs.
+    fn placement(&self, tree: &Tree, id: WidgetId) -> Placement { Placement::NONE }
+
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;

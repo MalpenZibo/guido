@@ -7528,3 +7528,122 @@ fn an_entering_opacity_fades_the_whole_subtree() {
     let done = run_to(&mut h, t0, std::time::Duration::from_millis(100), drawn);
     assert_eq!(done, 0.0, "and gone at the end");
 }
+
+/// Where `Tree::get_surface_relative_bounds` says a widget is drawn is where
+/// paint and flatten put it.
+///
+/// Two oracles. Every box that draws is checked against flatten's own output:
+/// the command it emitted, carried by the `world_transform` flatten gave it.
+/// Every widget, the containers that draw nothing included, is checked against
+/// the render tree composed the way flatten composes it — each node's
+/// transform about its pivot, under its parent's — applied to the node's box. The scene nests the four things the query
+/// has to agree with paint about: a translate, a scroll offset, a rotation and
+/// a scale, each about its own pivot. The query reads them through
+/// `Widget::placement` and paint through the container's own fields, so this is
+/// what holds the two together.
+#[test]
+fn a_widgets_drawn_bounds_are_where_paint_and_flatten_put_it() {
+    let mut h = H::new(
+        container().translate((15.0, 5.0)).padding(10.0).child(
+            container()
+                .width(200.0)
+                .height(150.0)
+                .scroll(Scroll::both().visibility(ScrollbarVisibility::Hidden))
+                .child(
+                    container()
+                        .layout(Flex::column())
+                        .child(box_of(300.0, 100.0).background(Color::RED))
+                        .child(
+                            container()
+                                .padding(6.0)
+                                .rotate(30.0)
+                                .pivot(Pivot::TOP_LEFT)
+                                .child(box_of(40.0, 20.0).scale(1.5).background(Color::GREEN)),
+                        )
+                        .child(box_of(80.0, 400.0).background(Color::BLUE)),
+                ),
+        ),
+    );
+    h.frame(300.0, 300.0);
+    let first = h.tree.get_children(h.children()[0])[0];
+    let first = h.tree.get_children(first)[0];
+    let before = h.tree.get_surface_relative_bounds(first).expect("laid out");
+    h.send(Event::scroll(
+        60.0,
+        60.0,
+        30.0,
+        50.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+    let frame = h.frame(300.0, 300.0);
+    let after = h.tree.get_surface_relative_bounds(first).expect("laid out");
+    assert_eq!(
+        (after.x, after.y),
+        (before.x - 30.0, before.y - 50.0),
+        "the wheel scrolled the content 30 sideways and 50 down"
+    );
+
+    // Every painted node's world box, composed as flatten composes it.
+    fn worlds(node: &RenderNode, parent: Transform, out: &mut Vec<(u64, Rect)>) {
+        let world = parent.then(&node.local_transform.about(node.pivot, node.bounds));
+        out.push((node.id, world.map_rect(node.bounds)));
+        for child in &node.children {
+            worlds(child, world, out);
+        }
+    }
+    let mut drawn = Vec::new();
+    worlds(&frame.node, Transform::IDENTITY, &mut drawn);
+
+    let mut ids = vec![h.root];
+    let mut compared = 0;
+    while let Some(id) = ids.pop() {
+        ids.extend_from_slice(h.tree.get_children(id));
+        let Some(&(_, world)) = drawn.iter().find(|(node, _)| *node == id.as_u64()) else {
+            continue;
+        };
+        let reported = h.tree.get_surface_relative_bounds(id).expect("laid out");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(
+            near(reported.x, world.x)
+                && near(reported.y, world.y)
+                && near(reported.width, world.width)
+                && near(reported.height, world.height),
+            "widget {id:?}: the query says {reported:?}, paint and flatten put it at {world:?}"
+        );
+        compared += 1;
+    }
+    assert_eq!(
+        compared, 7,
+        "every widget of the scene was painted and compared"
+    );
+
+    // And each box that draws, against the command flatten emitted for it.
+    let column = h.tree.get_children(h.children()[0])[0];
+    let rows = h.tree.get_children(column).to_vec();
+    let scaled = h.tree.get_children(rows[1])[0];
+    let commands = &h.last.as_ref().expect("a frame was flattened").1;
+    for (id, color) in [
+        (rows[0], Color::RED),
+        (scaled, Color::GREEN),
+        (rows[2], Color::BLUE),
+    ] {
+        let flattened = commands
+            .iter()
+            .find_map(|flattened| match &*flattened.command {
+                DrawCommand::RoundedRect {
+                    rect, color: fill, ..
+                } if *fill == color => Some(flattened.world_transform.map_rect(*rect)),
+                _ => None,
+            })
+            .expect("the box drew");
+        let reported = h.tree.get_surface_relative_bounds(id).expect("laid out");
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(
+            near(reported.x, flattened.x)
+                && near(reported.y, flattened.y)
+                && near(reported.width, flattened.width)
+                && near(reported.height, flattened.height),
+            "{color:?}: the query says {reported:?}, flatten drew it at {flattened:?}"
+        );
+    }
+}

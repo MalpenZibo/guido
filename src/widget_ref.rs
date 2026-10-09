@@ -52,10 +52,15 @@ pub struct WidgetRef {
 }
 
 impl WidgetRef {
-    /// The reactive signal holding this widget's surface-relative bounds (read-only):
-    /// the box it was laid out in, at its corner relative to the surface. Not
-    /// grown by a shadow or a transform it paints outside that box, and not
-    /// moved by a scrolled or transformed ancestor.
+    /// The reactive signal holding where this widget is drawn, relative to the
+    /// surface (read-only): the box it was laid out in, moved by the scroll
+    /// offset of every container it is in and by the transforms of its
+    /// ancestors and its own. Under a rotation, the axis-aligned box around
+    /// it. Not grown by a shadow or anything else it paints outside that box.
+    ///
+    /// Updated on every frame that may have moved it — after a layout, a
+    /// scroll, or a transform's animation frame — and written only when it
+    /// changed.
     pub fn rect(&self) -> Signal<Rect> {
         self.signal.read_only()
     }
@@ -152,43 +157,53 @@ pub(crate) fn register_widget_ref(id: WidgetId, widget_ref: WidgetRef) {
     with_app_state(|app| app.widget_refs.borrow_mut().insert(id, widget_ref));
 }
 
-/// Update all registered widget ref signals with current bounds from `tree`.
+/// Update all registered widget ref signals with where their widgets are
+/// drawn in `tree`.
 ///
 /// Entries whose widget no longer exists in the tree are removed (GC).
-/// Called once per surface after layout completes.
+/// Called once per surface on every frame that reaches layout, whether or not
+/// anything was laid out — a scroll or a transform's animation frame moves a
+/// widget without a layout. Only the widgets a ref points at, and their
+/// ancestors, are asked where they are; a rect that did not move writes
+/// nothing, because a signal set to the value it holds notifies nobody.
+///
+/// The placements are read as a snapshot: no reactive scope is open here, and
+/// none is wanted.
 pub(crate) fn update_widget_refs(tree: &Tree) {
-    with_app_state(|app| {
-        app.widget_refs.borrow_mut().retain(|&id, widget_ref| {
-            // A ref's signals belong to the scope that created it — a popup's
-            // widget tree, a dynamic child — and this registry outlives every
-            // one of them, so the handle is asked whether it is still there
-            // before it is read.
-            //
-            // Dead is not the same as detached: a `WidgetRef` is `Copy`, so one
-            // can be registered under two ids — the same view function used for
-            // two surfaces does it — and the entry whose widget left the tree
-            // clears the handle for both. The other entry is still live and
-            // still laid out, and evicting it would freeze its `rect()` until
-            // its container next re-registers.
-            if !widget_ref.is_alive() {
-                return false;
-            }
-            let attached = widget_ref.widget();
-            if let Some(rect) = tree.get_surface_relative_bounds(id) {
-                widget_ref.signal.set(rect);
-                true
-            } else {
-                // Widget removed from tree — drop registry entry, and stop
-                // claiming the handle points at something. A focus request
-                // parked on this ref was waiting for the widget that just
-                // left, so it goes with it.
-                if attached == Some(id) {
-                    widget_ref.widget.set(None);
-                    crate::reactive::focus::drop_pending_focus_for(*widget_ref);
+    crate::reactive::diagnostics::snapshot_zone(|| {
+        with_app_state(|app| {
+            app.widget_refs.borrow_mut().retain(|&id, widget_ref| {
+                // A ref's signals belong to the scope that created it — a popup's
+                // widget tree, a dynamic child — and this registry outlives every
+                // one of them, so the handle is asked whether it is still there
+                // before it is read.
+                //
+                // Dead is not the same as detached: a `WidgetRef` is `Copy`, so one
+                // can be registered under two ids — the same view function used for
+                // two surfaces does it — and the entry whose widget left the tree
+                // clears the handle for both. The other entry is still live and
+                // still laid out, and evicting it would freeze its `rect()` until
+                // its container next re-registers.
+                if !widget_ref.is_alive() {
+                    return false;
                 }
-                false
-            }
-        });
+                let attached = widget_ref.widget();
+                if let Some(rect) = tree.get_surface_relative_bounds(id) {
+                    widget_ref.signal.set(rect);
+                    true
+                } else {
+                    // Widget removed from tree — drop registry entry, and stop
+                    // claiming the handle points at something. A focus request
+                    // parked on this ref was waiting for the widget that just
+                    // left, so it goes with it.
+                    if attached == Some(id) {
+                        widget_ref.widget.set(None);
+                        crate::reactive::focus::drop_pending_focus_for(*widget_ref);
+                    }
+                    false
+                }
+            });
+        })
     });
 }
 
