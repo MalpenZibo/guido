@@ -426,6 +426,33 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 self.__inner.borrow_mut().as_mut().unwrap().event(tree, id, event)
             }
 
+            fn begin_exit(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
+                self.ensure_built();
+                self.__inner.borrow_mut().as_mut().unwrap().begin_exit(tree, id)
+            }
+
+            fn is_exiting(&self) -> bool {
+                self.ensure_built();
+                self.__inner.borrow().as_ref().unwrap().is_exiting()
+            }
+
+            fn cancel_exit(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) {
+                self.ensure_built();
+                self.__inner.borrow_mut().as_mut().unwrap().cancel_exit(tree, id)
+            }
+
+            // The scope the body ran in, which the component owns, rather
+            // than whatever the widget it built answers — as `OwnedWidget`
+            // answers for the scope it made.
+            fn owned_scope(&self) -> Option<::guido::reactive::__internal::OwnerId> {
+                self.__owner_id.get()
+            }
+
+            fn refresh_paint_bounds(&self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) {
+                self.ensure_built();
+                self.__inner.borrow().as_ref().unwrap().refresh_paint_bounds(tree, id)
+            }
+
         }
 
         #vis fn #fn_name() -> #struct_name {

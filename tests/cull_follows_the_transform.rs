@@ -164,6 +164,22 @@ fn a_lifted_row_added_dynamically_survives_both_frames() {
     }));
 }
 
+/// The same row built by a component, whose generated struct is a third
+/// wrapper the tree reaches the row through.
+///
+/// Red before that struct forwarded `refresh_paint_bounds`: the row was culled
+/// where it was laid out, as #558's two wrappers once culled it.
+#[test]
+fn a_lifted_row_built_by_a_component_survives_both_frames() {
+    #[component]
+    fn lifted_card() -> impl Widget {
+        lifted_row()
+    }
+    let mut rows: Vec<AnyWidget> = rows(20).into_iter().map(Widget::into_any).collect();
+    rows[15] = lifted_card().into_any();
+    the_lifted_row_is_painted_on_both_frames(scroller(rows));
+}
+
 /// Row fifteen, told from its neighbours by width, lifted by its own
 /// transform from below the fold into the middle of the viewport.
 fn lifted_row() -> guido::widgets::Container {
