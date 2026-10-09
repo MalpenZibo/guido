@@ -735,6 +735,79 @@ fn shadow_ladder() {
     );
 }
 
+/// A shadow never shrinks the shape that casts it.
+///
+/// The vertex shader grows a shape's quad by its shadow on each side, and a
+/// negative spread larger than the rest of that side's growth used to make it
+/// shrink instead, so the shape's own fill was not drawn there. No reference
+/// image: every pixel inside the box has to be the box.
+#[test]
+fn a_shadow_never_shrinks_the_shape_that_casts_it() {
+    const NAME: &str = "a_shadow_never_shrinks_the_shape_that_casts_it";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let render = |shadow: Shadow| {
+        let view = container()
+            .background(light)
+            .padding(40.0)
+            .child(swatch(40.0, 40.0, Color::RED).shadow(shadow));
+        render_with_own_renderer(ctx, view, (120.0, 120.0), 1.0, light)
+    };
+    let at = |pixels: &Pixels, x: u32, y: u32| {
+        let i = ((y * pixels.width + x) * 4) as usize;
+        [pixels.data[i], pixels.data[i + 1], pixels.data[i + 2]]
+    };
+    // The box as it is drawn with no shadow at all.
+    let bare = render(Shadow::none());
+    for (what, shadow, shows_at) in [
+        // Pulled in on top only: 3·2 − 8 is below zero there. Still cast
+        // below the box, where the offset carries it past the bottom edge.
+        (
+            "an offset tight shadow",
+            Shadow::new((0.0, 8.0), 2.0, -6.0, Color::rgba(0.0, 0.0, 0.0, 0.6)),
+            Some((60, 81)),
+        ),
+        // Pulled in on every side, by 3·0.5 − 5. Its blur is not zero, which
+        // would leave the shader's smoothstep with equal edges, undefined in
+        // WGSL. It lies wholly inside the box, so nothing of it shows.
+        (
+            "a near-hard inset shadow",
+            Shadow::new((0.0, 0.0), 0.5, -5.0, Color::rgba(0.0, 0.0, 0.0, 0.6)),
+            None,
+        ),
+    ] {
+        let pixels = render(shadow);
+        if let Some((x, y)) = shows_at {
+            let (drawn, background) = (at(&pixels, x, y), at(&bare, x, y));
+            assert!(
+                background[0].saturating_sub(drawn[0]) > 20,
+                "with {what}, the shadow is not drawn below the box at ({x}, {y}): \
+                 {drawn:?} against {background:?}"
+            );
+        }
+        // The whole box, but for its bottom row when the shadow is cast below
+        // it: that edge is antialiased over the shadow, not over the
+        // background. No shadow reaches the other three edges.
+        let bottom = if shows_at.is_some() { 79 } else { 80 };
+        for y in 40..bottom {
+            for x in 40..80 {
+                let (drawn, expected) = (at(&pixels, x, y), at(&bare, x, y));
+                let off = (0..3)
+                    .map(|c| drawn[c].abs_diff(expected[c]))
+                    .max()
+                    .unwrap_or(0);
+                assert!(
+                    off <= TOLERANCE,
+                    "with {what}, the box is not drawn at ({x}, {y}): {drawn:?} where it \
+                     is {expected:?} with no shadow"
+                );
+            }
+        }
+    }
+}
+
 /// The three degrees of freedom the elevation table could not reach: a shadow
 /// thrown sideways, a coloured one, and one with spread.
 ///
