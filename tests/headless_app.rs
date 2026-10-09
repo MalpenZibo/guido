@@ -3113,3 +3113,101 @@ fn a_right_press_during_a_drag_keeps_the_cursor_under_the_pointer() {
         app.cursors_asked()
     );
 }
+
+/// A surface configured before the compositor has sent a scale is drawn at 1,
+/// the scale Wayland defines it to have until it is told another (#643), and
+/// is kept rendering: nothing has changed between these passes, and each one
+/// still draws, so the frame after a late scale is drawn at it.
+#[test]
+fn a_surface_with_no_scale_yet_is_built_at_one_and_kept_rendering() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), container);
+    app.configure_size(surface, 200, 50);
+    app.step();
+    assert_eq!(
+        app.targets_built(surface),
+        [(200, 50)],
+        "built at a scale of 1"
+    );
+
+    let drawn = app.frames_presented(surface);
+    app.step();
+    app.step();
+    assert_eq!(
+        app.frames_presented(surface),
+        drawn + 2,
+        "rendered on every pass while no scale has come"
+    );
+}
+
+/// A scale that arrives after the first frame resizes the surface's buffer to
+/// it, and once a frame is up at that scale the surface stops being rendered
+/// on passes where nothing changed.
+#[test]
+fn a_late_scale_resizes_the_buffer_and_ends_the_forced_render() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), container);
+    app.configure_size(surface, 200, 50);
+    app.step();
+    assert_eq!(app.physical_size(surface), (200, 50));
+
+    app.send_scale(surface, 2.0);
+    app.step();
+    assert_eq!(app.physical_size(surface), (400, 100), "resized to 2");
+
+    let drawn = app.frames_presented(surface);
+    app.step();
+    app.step();
+    assert_eq!(
+        app.frames_presented(surface),
+        drawn,
+        "with a frame up at its scale, a pass that changes nothing draws nothing"
+    );
+}
+
+/// A scale sent before the surface is configured is the one its first buffer
+/// is built at: one target, at 2, and never one at 1 grown to it.
+#[test]
+fn a_scale_sent_before_configure_is_the_first_buffers() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), container);
+    app.send_scale(surface, 2.0);
+    app.configure_size(surface, 200, 50);
+    app.step();
+    assert_eq!(app.targets_built(surface), [(400, 100)], "built at 2");
+    assert_eq!(app.physical_size(surface), (400, 100));
+}
+
+/// A lock surface given its size and no scale is built at 1, as every surface
+/// is until the compositor sends one: one target, at its logical size.
+#[test]
+fn a_lock_surface_with_no_scale_yet_is_built_at_one() {
+    let Some(mut app) = headless() else { return };
+    app.connect_output("eDP-1");
+    lock_session(lock_screen);
+    app.step();
+    let (cover, _) = app.lock_surfaces_created()[0];
+
+    app.configure_size(cover, 300, 200);
+    app.step();
+    assert_eq!(app.targets_built(cover), [(300, 200)]);
+}
+
+/// A popup arrives with its scale, so once it has drawn, a pass that changes
+/// nothing does not draw it again.
+#[test]
+fn a_drawn_popup_is_not_drawn_again_for_nothing() {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), measuring_24);
+    app.configure(parent, 200, 24, 1.0);
+    app.step();
+    let popup = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+    app.step();
+
+    let drawn = app.frames_presented(popup.id());
+    assert!(drawn > 0, "the popup drew");
+    app.step();
+    app.step();
+    assert_eq!(app.frames_presented(popup.id()), drawn);
+}
