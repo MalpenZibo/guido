@@ -160,6 +160,8 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
         expand.y = max(shadow_blur * fadeout - shadow_offset.y, 0.0) + shadow_spread;
         expand.z = max(shadow_blur * fadeout + shadow_offset.x, 0.0) + shadow_spread;
         expand.w = max(shadow_blur * fadeout + shadow_offset.y, 0.0) + shadow_spread;
+        // A negative spread shrinks the shadow, never the shape's own quad.
+        expand = max(expand, vec4<f32>(0.0));
     }
 
     // Compute expanded quad bounds

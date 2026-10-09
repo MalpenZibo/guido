@@ -304,7 +304,8 @@ fn the_window_widens_on_the_near_side_as_well() {
         })
         .collect();
     // Row seven ends at y=248, just above the 300..500 the lift brings into
-    // view, and this shadow reaches 100px past its box — into the middle of it.
+    // view, and this shadow reaches 140px past its box (two blurs, the spread
+    // and the offset), well into it.
     rows[7] = container()
         .width(MARKED_WIDTH)
         .height(ROW_HEIGHT)
