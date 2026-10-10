@@ -68,18 +68,23 @@ pub mod __internal {
     pub use super::runtime::batch;
 }
 pub use callback::Callback;
-pub(crate) use runtime::flush_bg_writes;
+pub(crate) use runtime::{flush_bg_writes, reset_bg_writes};
 pub use service::{Service, ServiceContext, create_service, create_task};
 pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored};
 pub use timer::{TimerHandle, set_interval, set_timeout};
 
 /// Reset all reactive system state.
 ///
-/// Called during `App::drop()` to wipe all thread-local reactive state,
-/// enabling clean restart of the application.
+/// Called through `reset_thread_state` by `App::drop` and `Headless::drop` to
+/// wipe the thread's reactive state, so the next application on the thread
+/// starts clean.
+///
+/// The background-write queue is not here: it is the process's, not the
+/// thread's, and [`reset_bg_writes`] is for `App::drop` alone. `Headless` runs
+/// this too, beside other `Headless` on other threads, and retiring the queue
+/// from here threw their writes away.
 pub(crate) fn reset_reactive() {
     state::reset();
-    runtime::reset_bg_writes();
     diagnostics::reset();
 }
 
@@ -87,9 +92,10 @@ pub(crate) fn reset_reactive() {
 mod tests {
     use super::*;
 
-    /// `App::drop` is the only caller, and until now nothing said what it is
-    /// for: the next `App` on this thread starts on the arena the last one
-    /// left, and an id kept across that names a signal somebody else now owns.
+    /// `App::drop` and `Headless::drop` call it, and until now nothing said
+    /// what it is for: the next application on this thread starts on the
+    /// arena the last one left, and an id kept across that names a signal
+    /// somebody else now owns.
     ///
     /// Named by the mutation job on #220's diff — deleting the body of
     /// `reset_reactive` changed nothing any test could see.
