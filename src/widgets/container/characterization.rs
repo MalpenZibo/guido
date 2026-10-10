@@ -5648,6 +5648,127 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
     assert!(worst > 0.0, "the flicker has to actually raise a shadow");
 }
 
+/// A spring between two shadows pulled inside the box is drawn as the spring
+/// moves it, never rescaled by the clamp.
+///
+/// Both declarations reach nothing past the box, so the reach measured from
+/// them is zero — but the spring's overshoot carries the shadow past the edge,
+/// and clamped to a reach of zero it collapsed onto the box instead. The blur
+/// is the same in both, so any frame drawn with another blur was scaled.
+#[test]
+fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
+    let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
+    let near_edge = Shadow::new((0.0, 0.0), 2.0, -4.2, Color::BLACK);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(deep_inside.transition(Transition::spring(SpringConfig::BOUNCY)))
+            .when_hovered(|s| s.shadow(near_edge)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    set_hover(&mut h, true);
+    // The headroom is the step the spring travels, times its overshoot: no
+    // more, or every frame of the bounce damages a ring nothing is drawn in.
+    let step_travelled = near_edge.signed_extent() - deep_inside.signed_extent();
+    let headroom =
+        near_edge.signed_extent() + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
+    let t0 = std::time::Instant::now();
+    let mut furthest = f32::NEG_INFINITY;
+    for step in 1..=60 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(5 * step),
+            100.0,
+            100.0,
+        );
+        let reach = h.tree.paint_overflow(h.root);
+        assert!(
+            reach <= headroom + 0.05,
+            "step {step} reserved {reach} past the box, the bounce reaches {headroom}"
+        );
+        let node = h.paint();
+        let Some(drawn) = drawn_shadow(&node) else {
+            continue;
+        };
+        furthest = furthest.max(drawn.spread);
+        assert!(
+            (drawn.blur - 2.0).abs() < 1e-3,
+            "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
+        );
+        assert!(
+            drawn.extent() <= reach + 0.01,
+            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
+            drawn.extent()
+        );
+    }
+    assert!(
+        furthest > -4.0,
+        "the spring has to carry the shadow past the edge, got a spread of {furthest}"
+    );
+}
+
+/// The same for a timeline between two pulled-in shadows: its stops reach
+/// nothing past the box, and an easing that overshoots carries the shadow past
+/// the edge between them.
+#[test]
+fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
+    let plays = create_signal(0u32);
+    let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
+    let near_edge = Shadow::new((0.0, 0.0), 2.0, -4.2, Color::BLACK);
+    let overshooting = TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(
+                deep_inside.timeline(
+                    Keyframes::new(200.0)
+                        .at_with(0.0, deep_inside, overshooting.clone())
+                        .at(1.0, near_edge)
+                        .played_by(plays),
+                ),
+            ),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 100.0, 100.0);
+    h.paint();
+
+    plays.set(1);
+    let mut furthest = f32::NEG_INFINITY;
+    for step in 1..=40 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(5 * step),
+            100.0,
+            100.0,
+        );
+        let reach = h.tree.paint_overflow(h.root);
+        let node = h.paint();
+        let Some(drawn) = drawn_shadow(&node) else {
+            continue;
+        };
+        furthest = furthest.max(drawn.spread);
+        assert!(
+            (drawn.blur - 2.0).abs() < 1e-3,
+            "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
+        );
+        assert!(
+            drawn.extent() <= reach + 0.01,
+            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
+            drawn.extent()
+        );
+    }
+    assert!(
+        furthest > -4.0,
+        "the easing has to carry the shadow past the edge, got a spread of {furthest}"
+    );
+}
+
 /// A shadow's reach covers what its *timeline* can reach, not only what its
 /// declarations resolve to.
 ///

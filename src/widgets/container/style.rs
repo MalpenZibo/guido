@@ -184,14 +184,21 @@ impl Container {
             .shadow_prop()
             .get_finite_or(Shadow::none(), id, "shadow");
         let anim = self.anims.as_ref().and_then(|a| a.shadow());
-        let declared = self
+        // Signed, because a step between two shadows pulled inside the box can
+        // overshoot past its edge though neither end reaches it. The low end
+        // starts at zero, so a shadow rising from none, or from any positive
+        // declaration, keeps the bound it had: a fraction of its own depth.
+        let resting = base.signed_extent();
+        let (floor, deepest) = self
             .interaction
             .iter()
             .flat_map(|ix| ix.states.iter())
             .filter_map(|(_, state)| state.shadow.get())
             .filter(AllFinite::all_finite)
-            .map(|shadow| shadow.extent())
-            .fold(base.extent(), f32::max);
+            .map(|shadow| shadow.signed_extent())
+            .fold((resting.min(0.0), resting), |(low, high), extent| {
+                (low.min(extent), high.max(extent))
+            });
 
         match anim {
             // The value in flight is already past its overshoot, so it is folded
@@ -205,10 +212,10 @@ impl Container {
             // peak on a sign-crossing bounce rather than a ring outside the
             // damage rect — the same one-sided error the clamp already trades
             // for not sizing every rect to a resonant gain.
-            Some(anim) => (declared * (1.0 + anim.peak_overshoot()))
+            Some(anim) => (deepest + (deepest - floor) * anim.peak_overshoot())
                 .max(anim.current().extent())
-                .max(anim.sequence_reach(Shadow::extent)),
-            None => declared,
+                .max(anim.sequence_reach(Shadow::signed_extent)),
+            None => deepest.max(0.0),
         }
     }
 
@@ -370,8 +377,9 @@ impl Container {
         }
 
         // A spring passes its target before it settles, so the declared reach
-        // is inflated by the overshoot still to come — the same allowance
-        // `max_shadow_extent` makes — and the value in flight, which is already
+        // is inflated by the overshoot still to come — the allowance
+        // `max_shadow_extent` makes for a shadow rising from none — and the
+        // value in flight, which is already
         // past whatever overshoot it had, is folded in flat.
         if let Some(anims) = anims {
             let overshoot = [

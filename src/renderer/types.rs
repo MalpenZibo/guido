@@ -53,8 +53,22 @@ impl Shadow {
     /// How far this shadow reaches past the box that casts it.
     ///
     /// The amount the damage rect has to grow by, so repainting the box also
-    /// re-composites the shadow instead of leaving the old one behind.
+    /// re-composites the shadow instead of leaving the old one behind:
+    /// `signed_extent` floored at zero, since a shadow
+    /// pulled inside its box reaches nothing past it.
     pub fn extent(&self) -> f32 {
+        // `clamp` rather than `max`, so a `NaN` stays one.
+        self.signed_extent().clamp(0.0, f32::INFINITY)
+    }
+
+    /// How far this shadow reaches past its box, below zero for one pulled
+    /// inside it.
+    ///
+    /// What orders two shadows and what a spring's overshoot is measured
+    /// across: every shadow pulled inside the box has an
+    /// [`extent`](Self::extent) of zero, but one pulled in by 16 and one by 4
+    /// are still a step apart.
+    pub(crate) fn signed_extent(&self) -> f32 {
         if self.color.a <= 0.0 {
             return 0.0;
         }
@@ -105,8 +119,10 @@ impl Shadow {
     /// Uniform, so the shape survives rather than the shadow collapsing along
     /// one axis. A shadow already inside the rect is returned untouched, and so
     /// is one whose extent is not a positive number — which is what answers a
-    /// `NaN` field, since every comparison against it is false.
+    /// `NaN` field, since every comparison against it is false. A reach below
+    /// zero counts as zero, so the factor is never above one or below zero.
     pub fn shrunk_to(self, reach: f32) -> Self {
+        let reach = reach.clamp(0.0, f32::INFINITY);
         let extent = self.extent();
         match extent.partial_cmp(&reach) {
             Some(std::cmp::Ordering::Greater) => self.scaled(reach / extent),
@@ -180,9 +196,11 @@ pub struct TextEntry {
 ///
 /// `shrunk_to` is only correct because `extent` is homogeneous of degree one in
 /// the three lengths — scale them all by `k` and the extent scales by `k`. Add a
-/// constant term or a floor to `extent` and the clamp silently stops fitting,
-/// which paints a ring outside the damage rect a container reserved. That is
-/// what these say, at the definition rather than through a hover test.
+/// constant term to `extent`, or a floor anywhere but zero, and the clamp
+/// silently stops fitting, which paints a ring outside the damage rect a
+/// container reserved. The floor at zero keeps it for any `k >= 0`, which is
+/// every factor `shrunk_to` uses. That is what these say, at the definition
+/// rather than through a hover test.
 #[cfg(test)]
 mod shadow_extent_tests {
     use super::*;
@@ -277,6 +295,27 @@ mod shadow_extent_tests {
     #[test]
     fn a_reach_that_is_not_a_number_shrinks_nothing() {
         assert_eq!(DEEP.shrunk_to(f32::NAN), DEEP);
+    }
+
+    /// A spread more negative than the rest pulls the shadow inside its box,
+    /// where it reaches nothing past it.
+    const PULLED_IN: Shadow = Shadow::new((0.0, 0.0), 2.0, -10.0, Color::BLACK);
+
+    #[test]
+    fn a_shadow_pulled_inside_its_box_reaches_nothing_past_it() {
+        assert_eq!(PULLED_IN.extent(), 0.0);
+    }
+
+    /// A reach below the shadow's own depth inside the box is not a reason to
+    /// scale it: grown by a spring's overshoot, such a reach was more
+    /// negative still and scaled the shadow *up*.
+    #[test]
+    fn a_reach_of_zero_or_less_leaves_a_pulled_in_shadow_untouched() {
+        assert_eq!(PULLED_IN.shrunk_to(0.0), PULLED_IN);
+        assert_eq!(PULLED_IN.shrunk_to(-6.0 * 1.17), PULLED_IN);
+        // One that reaches exactly to the edge has nothing to divide by.
+        let flush = Shadow::new((0.0, 0.0), 2.0, -4.0, Color::BLACK);
+        assert_eq!(flush.shrunk_to(-1.0), flush);
     }
 
     /// A transparent shadow reaches nowhere however large its numbers, so there
