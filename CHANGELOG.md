@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/MalpenZibo/guido/compare/v0.11.1...v0.12.0) - 2026-10-10
+
+### Other
+
+- Every way a container draws is a way it is hit, and a test says so ([#663](https://github.com/MalpenZibo/guido/pull/663))
+- Tab's reading order is by each box's centre, and a test says so ([#662](https://github.com/MalpenZibo/guido/pull/662))
+- Tab moves the keyboard focus to the next widget that takes it ([#661](https://github.com/MalpenZibo/guido/pull/661))
+- Every hover leave of a pointer event is heard before any enter ([#658](https://github.com/MalpenZibo/guido/pull/658))
+- A click goes to the widget drawn on top ([#656](https://github.com/MalpenZibo/guido/pull/656))
+- A clipped instance is built inline, whatever the rest of the crate looks like ([#659](https://github.com/MalpenZibo/guido/pull/659))
+- A shadow pulled inside its box reaches nothing past it ([#655](https://github.com/MalpenZibo/guido/pull/655))
+- A shadow's blur reaches the shader no lower than a hard edge ([#654](https://github.com/MalpenZibo/guido/pull/654))
+- A file or a trait method the documentation names is one the crate has ([#649](https://github.com/MalpenZibo/guido/pull/649))
+- Dropping a Headless leaves the background writes of the others alone ([#651](https://github.com/MalpenZibo/guido/pull/651))
+- A widget ref's rect is where the widget is drawn ([#648](https://github.com/MalpenZibo/guido/pull/648))
+- A component answers the tree as the widget its body built ([#641](https://github.com/MalpenZibo/guido/pull/641))
+- A shadow never shrinks the shape that casts it ([#644](https://github.com/MalpenZibo/guido/pull/644))
+- A shadow's reach is where the shader stops drawing it ([#639](https://github.com/MalpenZibo/guido/pull/639))
+- A container hears a key being released, along the route its press took ([#635](https://github.com/MalpenZibo/guido/pull/635))
+- Bézier easing stays on its curve at flat slopes ([#630](https://github.com/MalpenZibo/guido/pull/630))
+- Image decode handles share their source key ([#633](https://github.com/MalpenZibo/guido/pull/633))
+- A press route lasts until the last button is up ([#628](https://github.com/MalpenZibo/guido/pull/628))
+- Images fit the device texture limit ([#612](https://github.com/MalpenZibo/guido/pull/612))
+- A text is shaped in the width it was laid out in and drawn at its box's edge ([#627](https://github.com/MalpenZibo/guido/pull/627))
+- Children are offered the size their container reports ([#626](https://github.com/MalpenZibo/guido/pull/626))
+- A key-down says whether a held key produced it ([#616](https://github.com/MalpenZibo/guido/pull/616))
+- A cluster's boundary is the x of its first glyph ([#620](https://github.com/MalpenZibo/guido/pull/620))
+- A text can declare a letter spacing, and every path measures and draws with it ([#619](https://github.com/MalpenZibo/guido/pull/619))
+- Scrollbar presses stop the previous glide ([#611](https://github.com/MalpenZibo/guido/pull/611))
+- Timer cancellation releases captures outside the table borrow ([#609](https://github.com/MalpenZibo/guido/pull/609))
+- A texture is found by its source's identity, not by a sample of it ([#607](https://github.com/MalpenZibo/guido/pull/607))
+- A named family that is installed is measured in itself ([#605](https://github.com/MalpenZibo/guido/pull/605))
+- Disposed services ignore late commands ([#602](https://github.com/MalpenZibo/guido/pull/602))
+- Disposed globals return their replacement signal ([#600](https://github.com/MalpenZibo/guido/pull/600))
+- Raster files use their headers for format detection ([#595](https://github.com/MalpenZibo/guido/pull/595))
+- Every event has a route, and a test says none reaches a widget outside it ([#598](https://github.com/MalpenZibo/guido/pull/598))
+- A container and a literal text create no signal ([#594](https://github.com/MalpenZibo/guido/pull/594))
+- A scope allocates what it holds the first time it holds anything ([#592](https://github.com/MalpenZibo/guido/pull/592))
+- A derived signal keeps its closure in its own slot ([#597](https://github.com/MalpenZibo/guido/pull/597))
+- Signals nothing subscribes to cost no subscriber bookkeeping ([#590](https://github.com/MalpenZibo/guido/pull/590))
+- A key goes down the focus path, then to the containers listening for keys ([#596](https://github.com/MalpenZibo/guido/pull/596))
+- A pointer event with nowhere to narrow to reaches what the pointer record owes ([#593](https://github.com/MalpenZibo/guido/pull/593))
+- Timer handles stay stale after application restart ([#585](https://github.com/MalpenZibo/guido/pull/585))
+- A positioned event visits the children that can be under it ([#588](https://github.com/MalpenZibo/guido/pull/588))
+
 ## [0.11.1](https://github.com/MalpenZibo/guido/compare/v0.11.0...v0.11.1) - 2026-10-01
 
 ### Other
