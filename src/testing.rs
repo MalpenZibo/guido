@@ -59,6 +59,10 @@ struct RecordedSurface {
     width: u32,
     height: u32,
     scale: f32,
+    /// Whether the compositor has sent a scale. Until it has, `scale` is the
+    /// 1 Wayland defines a surface's scale to be before its first
+    /// `preferred_buffer_scale`.
+    scale_received: bool,
     configured: bool,
     events: Vec<(Instant, Event)>,
     first_frame_presented: bool,
@@ -132,6 +136,10 @@ struct Recorder {
     primary: Option<String>,
     /// Every read the seat was asked for, oldest first.
     selection_reads: Vec<crate::reactive::SelectionKind>,
+    /// The physical size of every render target the loop built, per surface,
+    /// oldest first. A resize is not a build, so a target built at one scale
+    /// and grown to another shows here as the first size only.
+    targets_built: std::cell::RefCell<rustc_hash::FxHashMap<SurfaceId, Vec<(u32, u32)>>>,
 }
 
 impl Recorder {
@@ -221,7 +229,9 @@ impl Surface for &mut RecordedSurface {
             // Never pending: a driver that had to wait for a callback nobody
             // sends would step once and stop.
             frame_callback_pending: false,
-            force_render_surface: !self.first_frame_presented,
+            // As Wayland's: rendered until a frame is up and a scale has come,
+            // so the frame that follows a late scale is drawn at it.
+            force_render_surface: !(self.first_frame_presented && self.scale_received),
         })
     }
 
@@ -230,7 +240,7 @@ impl Surface for &mut RecordedSurface {
     }
 
     fn scale_factor(&self) -> Option<f32> {
-        self.configured.then_some(self.scale)
+        Some(self.scale)
     }
 
     fn set_size(&mut self, width: u32, height: u32) {
@@ -310,8 +320,9 @@ impl Platform for Recorder {
     }
 
     /// A popup is a surface that knows what it hangs from. The size is the
-    /// compositor's answer, so it arrives configured — a real one would wait a
-    /// round trip, and nothing here is waiting for anything.
+    /// compositor's answer, so it arrives configured, and at the scale of 1
+    /// with it — a real one would wait a round trip, and nothing here is
+    /// waiting for anything.
     fn create_popup(
         &mut self,
         id: SurfaceId,
@@ -328,6 +339,7 @@ impl Platform for Recorder {
                 width: size.0,
                 height: size.1,
                 scale: 1.0,
+                scale_received: true,
                 configured: true,
                 ..Default::default()
             },
@@ -389,10 +401,16 @@ impl Platform for Recorder {
             return false;
         }
         self.created.push(id);
-        // Born with nothing, as a lock surface is: its size and its scale both
-        // arrive with the compositor's configure, and until one does there is
-        // no frame for either to be wrong in.
-        self.surfaces.insert(id, RecordedSurface::default());
+        // Born with no size, as a lock surface is: that arrives with the
+        // compositor's configure. Its scale is 1 until the compositor sends
+        // one, as every Wayland surface's is.
+        self.surfaces.insert(
+            id,
+            RecordedSurface {
+                scale: 1.0,
+                ..Default::default()
+            },
+        );
         true
     }
 
@@ -429,10 +447,15 @@ impl Platform for Recorder {
 
     fn create_render_target(
         &self,
-        _id: SurfaceId,
+        id: SurfaceId,
         gpu: &crate::renderer::GpuContext,
         size: (u32, u32),
     ) -> Option<crate::renderer::RenderTarget> {
+        self.targets_built
+            .borrow_mut()
+            .entry(id)
+            .or_default()
+            .push(size);
         Some(crate::renderer::RenderTarget::offscreen(
             gpu, size.0, size.1,
         ))
@@ -570,15 +593,31 @@ impl Headless {
         outputs::surface_entered_output(surface, output);
     }
 
-    /// Say what the compositor confirmed for one surface. Until this is called
-    /// there is no size to draw at and [`step`](Self::step) does nothing for it
-    /// — which is what an unconfigured surface does in the real loop.
+    /// Say what the compositor confirmed for one surface: its size, and the
+    /// scale it sent with it. Until a surface is configured there is no size to
+    /// draw at and [`step`](Self::step) does nothing for it — which is what an
+    /// unconfigured surface does in the real loop.
     pub fn configure(&mut self, id: SurfaceId, width: u32, height: u32, scale: f32) {
+        self.configure_size(id, width, height);
+        self.send_scale(id, scale);
+    }
+
+    /// Configure a surface's size, and nothing about its scale. If none has
+    /// been sent, it is drawn at 1, the scale Wayland defines a surface to have
+    /// before it is told one, and kept rendering until one arrives.
+    pub fn configure_size(&mut self, id: SurfaceId, width: u32, height: u32) {
         let surface = self.host.get_mut(id);
         surface.width = width;
         surface.height = height;
-        surface.scale = scale;
         surface.configured = true;
+    }
+
+    /// Send a surface the scale to draw at, as `preferred_buffer_scale` or a
+    /// fractional scale does — before it is configured, or after.
+    pub fn send_scale(&mut self, id: SurfaceId, scale: f32) {
+        let surface = self.host.get_mut(id);
+        surface.scale = scale;
+        surface.scale_received = true;
     }
 
     /// Queue a press and a release at a point on one surface, in logical
@@ -658,8 +697,7 @@ impl Headless {
     }
 
     /// The size of the buffer a surface's last frame was drawn into, in
-    /// physical pixels — the logical size times the scale the compositor
-    /// confirmed.
+    /// physical pixels — the logical size times the scale it was drawn at.
     pub fn physical_size(&self, id: SurfaceId) -> (u32, u32) {
         let target = self.target(id);
         (target.width(), target.height())
@@ -739,6 +777,18 @@ impl Headless {
     /// cannot see them disagree.
     pub fn viewport_destinations(&self, id: SurfaceId) -> &[(u32, u32)] {
         &self.host.get(id).viewport_destinations
+    }
+
+    /// The physical size of every render target built for a surface, oldest
+    /// first. A target the loop resized is not built again, so a surface drawn
+    /// at its scale from the start shows one entry, at that scale.
+    pub fn targets_built(&self, id: SurfaceId) -> Vec<(u32, u32)> {
+        self.host
+            .targets_built
+            .borrow()
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// How many frames a surface has presented and had its callback re-armed.
