@@ -1148,7 +1148,8 @@ impl Container {
     ///
     /// It answers whether it took the key, in the words of
     /// [`Widget::event`]: `Handled` stops it there, and `Ignored` lets it go
-    /// on to the next container listening.
+    /// on to the next container listening and then to what the key does by
+    /// default — Tab moving the focus.
     ///
     /// The third argument says whether a held key produced it rather than a
     /// press. A held key is delivered once per repeat, so a listener that acts
@@ -1640,6 +1641,9 @@ impl Widget for Container {
             .is_some_and(|ix| ix.on_key_down.is_some() || ix.on_key_up.is_some())
         {
             tree.listen_for_keys(id);
+        }
+        if self.visible.is_set() {
+            tree.declare_visible(id, self.visible);
         }
 
         // Register pending children

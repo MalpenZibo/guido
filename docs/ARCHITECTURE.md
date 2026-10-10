@@ -700,6 +700,18 @@ as Flutter's onKeyEvent and GTK's key-pressed do: one answering `Ignored`
 lets it on to the next. A listener on the focus path that let a key through is
 not asked again when the way down to another listener passes it — `Tree`
 keeps the path the key already went up for that (#634).
+
+A Tab that neither route took then does what Tab does by default: it moves the
+focus, as the DOM runs a default action after dispatch and Flutter's root
+Shortcuts map Tab to NextFocusIntent past the focused chain. `Tree` keeps
+the stops in a list, as it keeps the listeners — a text input joins it as it
+enters the tree — and the `visible` every container declared, so the walk can
+pass over what is hidden without asking a widget; disabled is the folded
+`enabled` the nearest control already carries. The stops on the surface
+holding the keyboard are sorted into reading order by the centre of the box
+each was laid out in, GTK's focus_sort_tab, and the ends wrap, as Qt's focus
+chain and GTK's gtk_window_focus do. `FocusPath::by_keyboard` says the focus
+got there by Tab (#634).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).

@@ -113,7 +113,10 @@ container()
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
 It answers whether it took the key, as a widget's `event` does. `Handled` stops
-the key there; `Ignored` lets it go on to the next container listening.
+the key there; `Ignored` lets it go on to the next container listening, and
+then to what the key does by default — Tab moving the focus, under
+[Moving the Focus with Tab](#moving-the-focus-with-tab). A listener that answers
+`Handled` for every key keeps Tab from ever moving the focus out of it.
 
 A widget with the focus — a text input you clicked into — hears a key first,
 and the containers around it after. `on_key_down` hears what nothing focused
@@ -182,6 +185,28 @@ A release is not paired with its press. A text input that took a key's press
 lets its release through, so a container around it or listening beside it can
 hear a key go up that it never heard go down — which is why the sample above
 remembers the press itself.
+
+## Moving the Focus with Tab
+
+Tab moves the keyboard focus to the next text input on the surface, and
+Shift+Tab to the one before. It is what a Tab does when nothing took it: the
+focused widget hears it first, then the containers around it, then the
+listeners, and only a Tab all of them let through moves the focus. A widget
+that wants Tab for itself — an editor inserting a tab character — answers
+`Handled`, and the focus stays where it is.
+
+The order is reading order: top to bottom by where each input was laid out,
+then left to right, as GTK orders it. It follows what is on screen, so a list
+reordered by key is walked in the order it is shown. At the last input Tab goes
+round to the first, and Shift+Tab at the first to the last. With nothing
+focused, Tab takes the first and Shift+Tab the last.
+
+An input inside a hidden or disabled container is passed over, and so is one
+playing its exit. Tab stays on the surface holding the keyboard: in a popup, it
+goes round the popup's own inputs.
+
+Tab with Ctrl, Alt or the logo key held does not move the focus; that is left
+to whatever shortcut it is.
 
 ## Latched Modifiers
 

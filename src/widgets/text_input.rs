@@ -1520,6 +1520,11 @@ impl<C: Content> TextInput<C> {
 }
 
 impl<C: Content> Widget for TextInput<C> {
+    /// A field is a place Tab stops at. It has no children to register.
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        tree.make_tab_stop(id);
+    }
+
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let blinking = self.update_cursor_blink(id, tree.frame_instant());
         let animating = self.advance_text_anims(tree, id);

@@ -35,17 +35,22 @@ use crate::widget_ref::Attachment;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FocusPath {
     chain: SmallVec<[WidgetId; 8]>,
+    by_keyboard: bool,
 }
 
 impl FocusPath {
-    fn of(tree: &Tree, id: WidgetId) -> Self {
-        let mut chain = SmallVec::new();
-        let mut current = Some(id);
-        while let Some(node) = current {
-            chain.push(node);
-            current = tree.get_parent(node);
+    fn of(tree: &Tree, id: WidgetId, by_keyboard: bool) -> Self {
+        Self {
+            chain: tree.ancestors(id).collect(),
+            by_keyboard,
         }
-        Self { chain }
+    }
+
+    /// Whether the focus got here from the keyboard — Tab — rather than from
+    /// a press or a call. What a focus ring that shows only for the keyboard
+    /// would ask, as the web's `:focus-visible` does.
+    pub fn by_keyboard(&self) -> bool {
+        self.by_keyboard
     }
 
     /// The focused widget itself, if any.
@@ -105,13 +110,22 @@ pub fn focus_path() -> FocusPath {
 /// Takes the tree because the ancestor path is resolved here, once, rather
 /// than by every reader later — see the module docs.
 pub fn request_focus(tree: &Tree, id: WidgetId) {
+    move_focus(tree, id, false);
+}
+
+/// Move the focus to `id` because a key said so: what Tab does.
+pub(crate) fn request_focus_by_keyboard(tree: &Tree, id: WidgetId) {
+    move_focus(tree, id, true);
+}
+
+fn move_focus(tree: &Tree, id: WidgetId, by_keyboard: bool) {
     // A child playing its exit is leaving: it gave the focus up at removal
     // and cannot take it back.
     if super::invalidation::is_detached(id) {
         return;
     }
     let old = focus().get_untracked();
-    if old.widget() == Some(id) {
+    if old.widget() == Some(id) && old.by_keyboard == by_keyboard {
         return;
     }
     // Repaint the previously focused widget so it drops focused styling. The
@@ -120,7 +134,7 @@ pub fn request_focus(tree: &Tree, id: WidgetId) {
     if let Some(old_id) = old.widget() {
         request_job(old_id, JobRequest::Paint);
     }
-    focus().set(FocusPath::of(tree, id));
+    focus().set(FocusPath::of(tree, id, by_keyboard));
     request_job(id, JobRequest::Paint);
 }
 
