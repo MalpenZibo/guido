@@ -109,23 +109,29 @@ impl<T: Animatable> Keyframes<T> {
     /// every frame of it back to the declared value, because the reach knew
     /// only what the signals said.
     ///
-    /// The overshoot is applied as a fraction of the measured value rather
-    /// than of each segment's distance, which is the same crude bound the
+    /// The overshoot is applied as a fraction of the distance from zero, or
+    /// from the lowest stop when a measure goes below it, to the deepest stop
+    /// — not of each segment's distance — which is the same crude bound the
     /// declared side takes: it over-reserves for a sequence that travels less
-    /// than its deepest stop, and a reserved pixel nobody draws on costs
-    /// nothing but the damage rect.
+    /// than that, and a reserved pixel nobody draws on costs nothing but the
+    /// damage rect. Never below zero, since a reach is how far past the box.
     pub(crate) fn reach(&self, measure: impl Fn(&T) -> f32) -> f32 {
-        let deepest = self
+        if self.stops.is_empty() {
+            return 0.0;
+        }
+        let (floor, deepest) = self
             .stops
             .iter()
             .map(|stop| measure(&stop.value))
-            .fold(0.0_f32, f32::max);
+            .fold((0.0_f32, f32::NEG_INFINITY), |(low, high), value| {
+                (low.min(value), high.max(value))
+            });
         let overshoot = self
             .stops
             .iter()
             .map(|stop| stop.easing.peak_overshoot())
             .fold(0.0_f32, f32::max);
-        deepest * (1.0 + overshoot)
+        (deepest + (deepest - floor) * overshoot).max(0.0)
     }
 
     /// A stop, at a fraction of the run. The segment leaving it is linear.
@@ -323,6 +329,26 @@ mod tests {
              expected {expected}, got {}",
             wound.reach(|v| *v)
         );
+    }
+
+    /// Stops measured below zero still travel between them, and the easing
+    /// overshoots that step: two shadows pulled inside their box, eased past
+    /// the shallower one, carry it past the edge though neither stop reaches
+    /// it.
+    #[test]
+    fn a_reach_covers_the_overshoot_between_stops_below_zero() {
+        let overshooting = TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2);
+        let inside = Keyframes::new(100.0)
+            .at_with(0.0, -16.0, overshooting.clone())
+            .at(1.0, -0.2);
+        let expected = -0.2 + 15.8 * overshooting.peak_overshoot();
+        assert!(
+            (inside.reach(|v| *v) - expected).abs() < 1e-3,
+            "expected {expected}, got {}",
+            inside.reach(|v| *v)
+        );
+        // And a sequence with no stops reaches nowhere.
+        assert_eq!(Keyframes::<f32>::new(100.0).reach(|v| *v), 0.0);
     }
 
     #[test]

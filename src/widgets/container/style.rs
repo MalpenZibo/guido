@@ -214,7 +214,7 @@ impl Container {
             // for not sizing every rect to a resonant gain.
             Some(anim) => (deepest + (deepest - floor) * anim.peak_overshoot())
                 .max(anim.current().extent())
-                .max(anim.sequence_reach(Shadow::extent)),
+                .max(anim.sequence_reach(Shadow::signed_extent)),
             None => deepest.max(0.0),
         }
     }
@@ -377,8 +377,9 @@ impl Container {
         }
 
         // A spring passes its target before it settles, so the declared reach
-        // is inflated by the overshoot still to come — the same allowance
-        // `max_shadow_extent` makes — and the value in flight, which is already
+        // is inflated by the overshoot still to come — the allowance
+        // `max_shadow_extent` makes for a shadow rising from none — and the
+        // value in flight, which is already
         // past whatever overshoot it had, is folded in flat.
         if let Some(anims) = anims {
             let overshoot = [

@@ -5702,6 +5702,64 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
     );
 }
 
+/// The same for a timeline between two pulled-in shadows: its stops reach
+/// nothing past the box, and an easing that overshoots carries the shadow past
+/// the edge between them.
+#[test]
+fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
+    let plays = create_signal(0u32);
+    let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
+    let near_edge = Shadow::new((0.0, 0.0), 2.0, -4.2, Color::BLACK);
+    let overshooting = TimingFunction::CubicBezier(0.5, -0.6, 0.5, 1.2);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(
+                deep_inside.timeline(
+                    Keyframes::new(200.0)
+                        .at_with(0.0, deep_inside, overshooting.clone())
+                        .at(1.0, near_edge)
+                        .played_by(plays),
+                ),
+            ),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 100.0, 100.0);
+    h.paint();
+
+    plays.set(1);
+    let mut furthest = f32::NEG_INFINITY;
+    for step in 1..=40 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(5 * step),
+            100.0,
+            100.0,
+        );
+        let reach = h.tree.paint_overflow(h.root);
+        let node = h.paint();
+        let Some(drawn) = drawn_shadow(&node) else {
+            continue;
+        };
+        furthest = furthest.max(drawn.spread);
+        assert!(
+            (drawn.blur - 2.0).abs() < 1e-3,
+            "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
+        );
+        assert!(
+            drawn.extent() <= reach + 0.01,
+            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
+            drawn.extent()
+        );
+    }
+    assert!(
+        furthest > -4.0,
+        "the easing has to carry the shadow past the edge, got a spread of {furthest}"
+    );
+}
+
 /// A shadow's reach covers what its *timeline* can reach, not only what its
 /// declarations resolve to.
 ///
