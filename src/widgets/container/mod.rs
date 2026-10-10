@@ -1805,7 +1805,7 @@ impl Widget for Container {
         if let Some(ref ix) = self.interaction
             && !ix.declared_enabled.get_or(true)
         {
-            self.pointer_left(id, tree.event_instant());
+            self.pointer_left(tree, id);
             if hit.contains(local_event.coords()) && self.draws_its_own_surface(id) {
                 return EventResponse::Hit;
             }
@@ -1847,7 +1847,7 @@ impl Widget for Container {
             }
         }
 
-        self.track_pointer(id, &hit, &local_event, at);
+        self.track_pointer(tree, id, &hit, &local_event, at);
 
         // Children are positioned relative to our origin (and to the scroll
         // offset, when we scroll), so their events have to be too.

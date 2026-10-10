@@ -487,7 +487,8 @@ impl Rows<'_> {
         crate::reactive::diagnostics::snapshot_zone(|| {
             self.tree.with_widget_mut(id, |widget, id, tree| {
                 widget.event(tree, id, &Event::MouseLeave)
-            })
+            });
+            self.tree.deliver_hover_changes();
         });
         crate::jobs::detach_widget_subtree(self.tree, id);
         true

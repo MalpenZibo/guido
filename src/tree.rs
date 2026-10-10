@@ -303,6 +303,16 @@ struct PointerRecord {
     root: Option<WidgetId>,
 }
 
+/// An `on_hover` a pointer event owes, held until the dispatch that carried
+/// the event returns. See [`Tree::hover_changed`].
+struct HoverChange {
+    id: WidgetId,
+    /// How far down the tree the widget stands: one at the root.
+    depth: u32,
+    hovered: bool,
+    callback: crate::widgets::container::HoverCallback,
+}
+
 /// The bit a button holds in a chord.
 fn button_bit(button: crate::widgets::MouseButton) -> u8 {
     1 << button as u8
@@ -507,6 +517,9 @@ pub struct Tree {
     cursor_under_the_point: Prop<CursorIcon>,
     /// Who the pointer still owes an event to. See [`PointerRecord`].
     pointer: PointerRecord,
+    /// The `on_hover` calls the event being dispatched owes. Empty outside a
+    /// dispatch.
+    hover_changes: Vec<HoverChange>,
     /// The containers that declared `on_key_down` or `on_key_up`: a key nobody
     /// on the focus path took goes to them, without the tree being walked to
     /// find them.
@@ -532,6 +545,7 @@ impl Tree {
             drag_claimed_by_a_scroller: false,
             cursor_under_the_point: Prop::Unset,
             pointer: PointerRecord::default(),
+            hover_changes: Vec::new(),
             key_listeners: Vec::new(),
             key_route: SmallVec::new(),
         }
@@ -1320,7 +1334,11 @@ impl Tree {
     ) -> Option<crate::widgets::EventResponse> {
         use crate::widgets::Event;
         if event.follows_the_focus() {
-            return self.dispatch_key(root, event);
+            // A container disabled under the pointer gives up its hover to
+            // whatever event reaches it, a key included.
+            let response = self.dispatch_key(root, event);
+            self.deliver_hover_changes();
+            return response;
         }
         self.pointer.offering.clear();
         self.pointer.reached.clear();
@@ -1373,7 +1391,65 @@ impl Tree {
         if press_or_release {
             record.chord = (after != 0).then_some((root, after));
         }
+        self.deliver_hover_changes();
         response
+    }
+
+    /// Owe `callback` the hover `id` just took on, until the dispatch carrying
+    /// the event returns.
+    ///
+    /// The walk visits a parent before its children and the sibling drawn on
+    /// top first, which is neither order a hover callback is owed in. So the
+    /// state changes where the walk finds it and the callback waits: when the
+    /// dispatch returns, [`Self::deliver_hover_changes`] says every leave
+    /// before any enter (#657).
+    ///
+    /// A widget whose hover flips back within the same event — a scroller
+    /// taking back a press its child had just been told about — changed
+    /// nothing, and hears nothing.
+    pub(crate) fn hover_changed(
+        &mut self,
+        id: WidgetId,
+        hovered: bool,
+        callback: &crate::widgets::container::HoverCallback,
+    ) {
+        if let Some(index) = self.hover_changes.iter().position(|c| c.id == id) {
+            self.hover_changes.remove(index);
+            return;
+        }
+        let depth = self.ancestors(id).count() as u32;
+        self.hover_changes.push(HoverChange {
+            id,
+            depth,
+            hovered,
+            callback: std::rc::Rc::clone(callback),
+        });
+    }
+
+    /// Say what [`Self::hover_changed`] held: every leave, innermost first,
+    /// then every enter, outermost first, with widgets at the same depth in
+    /// the order the walk reached them.
+    ///
+    /// The order the DOM, Chromium's `BoundaryEventDispatcher`, Flutter's
+    /// `MouseTracker`, GTK and Qt each give: the widget the pointer left hears
+    /// it first, the widget it reached hears it last, and a container holding
+    /// both was never told anything.
+    pub(crate) fn deliver_hover_changes(&mut self) {
+        if self.hover_changes.is_empty() {
+            return;
+        }
+        let mut changes = std::mem::take(&mut self.hover_changes);
+        changes.sort_by(|a, b| {
+            a.hovered.cmp(&b.hovered).then(if a.hovered {
+                a.depth.cmp(&b.depth)
+            } else {
+                b.depth.cmp(&a.depth)
+            })
+        });
+        for change in changes.drain(..) {
+            (change.callback)(change.hovered);
+        }
+        self.hover_changes = changes;
     }
 
     /// Route a key, or the surface gaining or losing the keyboard, the way
@@ -2183,6 +2259,24 @@ impl Default for Tree {
 mod tests {
 
     use super::*;
+
+    /// A hover that flips and flips back within one event changed nothing, so
+    /// its callback hears nothing.
+    #[test]
+    fn a_hover_taken_back_within_one_event_is_not_heard() {
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(MockWidget::new()));
+        let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = heard.clone();
+        let callback: crate::widgets::container::HoverCallback =
+            std::rc::Rc::new(move |hovered| sink.borrow_mut().push(hovered));
+
+        tree.hover_changed(id, true, &callback);
+        tree.hover_changed(id, false, &callback);
+        tree.deliver_hover_changes();
+
+        assert!(heard.borrow().is_empty(), "heard {:?}", heard.borrow());
+    }
 
     /// A container leaving the tree stops listening for keys, and the others
     /// go on listening.

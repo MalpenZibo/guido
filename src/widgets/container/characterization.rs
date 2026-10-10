@@ -4697,6 +4697,29 @@ fn a_leaving_child_takes_no_pointer_and_holds_no_focus() {
     );
 }
 
+/// A child removed under the pointer hears its hover go in the pass that
+/// removed it, not at the next pointer event: the leave it is sent there is
+/// not part of any dispatch, so nothing else would deliver it.
+#[test]
+fn a_child_removed_under_the_pointer_hears_its_hover_go() {
+    let step = create_signal(0u32);
+    let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let sink = heard.clone();
+    let mut h = H::new(container().child(move || {
+        let n = step.get();
+        let sink = sink.clone();
+        leaving_card().on_hover(move |hovered| sink.borrow_mut().push((n, hovered)))
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    h.send(Event::mouse_move(20.0, 20.0));
+    assert_eq!(*heard.borrow(), [(0, true)], "the setup needs it hovered");
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(*heard.borrow(), [(0, true), (0, false)]);
+}
+
 /// A leaving child does not react: a signal it read, written after it was
 /// removed, queues nothing for it — not even after it has painted again.
 #[test]
