@@ -12,6 +12,10 @@
 //! children have had their turn ([`handle_own_event`]), so the innermost
 //! interested widget wins.
 //!
+//! The hover *state* changes where the walk finds it; `on_hover` waits for the
+//! dispatch to return, which says every leave before any enter
+//! ([`Tree::hover_changed`]).
+//!
 //! [`track_pointer`]: Container::track_pointer
 //! [`handle_own_event`]: Container::handle_own_event
 
@@ -122,7 +126,8 @@ impl Container {
     /// over a disabled subtree cost one comparison each and wake nobody.
     ///
     /// [`Control::is_hovered`]: crate::widgets::Control::is_hovered
-    pub(super) fn pointer_left(&mut self, id: WidgetId, now: EventInstant) {
+    pub(super) fn pointer_left(&mut self, tree: &mut Tree, id: WidgetId) {
+        let now = tree.event_instant();
         let Some(ref mut ix) = self.interaction else {
             return;
         };
@@ -131,7 +136,7 @@ impl Container {
         if was_hovered {
             ix.set_flag(InteractionFlags::HOVERED, false);
             if let Some(ref callback) = ix.on_hover {
-                callback(false);
+                tree.hover_changed(id, false, callback);
             }
         }
         ix.set_flag(InteractionFlags::PRESSED, false);
@@ -190,6 +195,7 @@ impl Container {
     /// ancestors from tracking their own hover.
     pub(super) fn track_pointer(
         &mut self,
+        tree: &mut Tree,
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
@@ -222,7 +228,7 @@ impl Container {
                     request_repaint(id);
                 }
                 if let Some(ref callback) = ix.on_hover {
-                    callback(false);
+                    tree.hover_changed(id, false, callback);
                 }
             }
             Event::MouseEnter { at } if hit.contains(*at) && !ix.is_hovered() => {
@@ -231,7 +237,7 @@ impl Container {
                     request_repaint(id);
                 }
                 if let Some(ref callback) = ix.on_hover {
-                    callback(true);
+                    tree.hover_changed(id, true, callback);
                 }
             }
             Event::MouseMove { at, .. } => {
@@ -272,7 +278,7 @@ impl Container {
                         request_repaint(id);
                     }
                     if let Some(ref callback) = ix.on_hover {
-                        callback(ix.is_hovered());
+                        tree.hover_changed(id, ix.is_hovered(), callback);
                     }
                 }
             }
@@ -416,7 +422,7 @@ impl Container {
                 }
             }
 
-            Event::MouseLeave => self.pointer_left(id, now),
+            Event::MouseLeave => self.pointer_left(tree, id),
 
             Event::Scroll {
                 at,

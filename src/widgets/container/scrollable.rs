@@ -1011,7 +1011,7 @@ impl Container {
                 // gesture. Android subtracts the slop from the first delta for
                 // this reason.
                 let (dx, dy) = if crossed_here {
-                    self.take_the_press_back(tree, id, now);
+                    self.take_the_press_back(tree, id);
                     self.scroll_mut().scroll_state.begin_gesture();
                     let beyond = (travel - TOUCH_SLOP) / travel;
                     let (ox, oy) =
@@ -1084,13 +1084,13 @@ impl Container {
     /// completing it, and the `MouseUp` arm's `is_pressed` guard is what makes
     /// the real release that follows fire nothing. It is the same event the
     /// compositor's own `wl_touch.cancel` is folded into, for the same reason.
-    fn take_the_press_back(&mut self, tree: &mut Tree, id: WidgetId, now: EventInstant) {
+    fn take_the_press_back(&mut self, tree: &mut Tree, id: WidgetId) {
         for &child_id in self.children_source.get() {
             tree.with_widget_mut(child_id, |child, child_id, tree| {
                 child.event(tree, child_id, &Event::MouseLeave)
             });
         }
-        self.pointer_left(id, now);
+        self.pointer_left(tree, id);
     }
 
     /// Apply scroll delta and return true if any scrolling occurred
