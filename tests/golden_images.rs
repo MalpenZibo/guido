@@ -920,6 +920,44 @@ fn a_shadow_draws_nothing_past_the_extent_it_reports() {
     }
 }
 
+/// A blur below zero draws the hard-edged shadow a blur just above zero does.
+///
+/// A spring bringing a blur down to zero overshoots below it. The shader's
+/// falloff, `smoothstep(-blur, 2·blur, distance)`, runs backwards then: the
+/// shadow was drawn at full strength on the side its offset points away from,
+/// and not at all on the side it points towards.
+///
+/// No reference image: the two renders are compared with each other. The
+/// reference blur is 0.01 rather than zero: `smoothstep` with equal edges is
+/// undefined in WGSL, so zero is floored as a negative blur is, and would
+/// compare the floor with itself.
+#[test]
+fn a_blur_below_zero_draws_a_hard_shadow() {
+    const NAME: &str = "a_blur_below_zero_draws_a_hard_shadow";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let render = |blur: f32| {
+        let shadow = Shadow::new((0.0, 6.0), blur, 2.0, Color::rgba(0.0, 0.0, 0.0, 0.6));
+        let view = container()
+            .background(light)
+            .padding(40.0)
+            .child(swatch(40.0, 40.0, Color::WHITE).shadow(shadow));
+        render_with_own_renderer(ctx, view, (120.0, 120.0), 1.0, light)
+    };
+    let hard = render(0.01);
+    let at = |x: u32, y: u32| hard.data[((y * hard.width + x) * 4) as usize];
+    assert!(
+        at(0, 0).saturating_sub(at(60, 86)) > 20,
+        "the shadow has to be drawn below the box for the comparison to mean anything"
+    );
+
+    if let Some(report) = differences(NAME, &hard, &render(-1.0)) {
+        panic!("a blur of -1 is not drawn as a blur of 0.01 is: {report}");
+    }
+}
+
 /// Rotation, scale and translation, including a transform inherited through a
 /// parent — the case where the world transform is a chain and not a matrix
 /// somebody wrote down.
