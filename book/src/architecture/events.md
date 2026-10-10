@@ -103,11 +103,27 @@ route rather than to whatever is under the pointer. A point a clipping
 container clips away reaches only the record, and without its position — except
 for the widget a press holds, which keeps it for its drag and its release.
 
-Within a container the children are offered an event in the order they stand,
-and the first to answer `Handled` stops it; if none did, the container handles
-it itself. So the innermost widget hears an event first, and its ancestors
-after it — with one exception: a scroller answers its own scrollbar, and a
-content drag it has already won, before its children are asked.
+Within a container the children are offered an event from the one drawn on
+top to the one drawn first, and the first the point is *on* stops it, whether
+or not it took it: what that child covers is not under the point. If it did
+not take the event, the container handles it itself. So the innermost widget
+hears an event first, and its ancestors after it — with one exception: a
+scroller answers its own scrollbar, and a content drag it has already won,
+before its children are asked.
+
+A container is hit where the point is inside its shape and it draws there — a
+visible fill or gradient, a border, a backdrop blur — or listens there — a
+handler, a state layer, a cursor — or one of its children is hit. A disabled
+container asks none of its children and handles nothing, but where it draws it
+is still hit, and covers what is beneath it; a text field is hit wherever the
+point is inside it. One that
+only lays out is not, so a full-size `ZStack` layer that aligns its content
+lets the point through to the layers beneath it. This is Flutter's rule; the
+DOM, GTK and Qt hit every box under the point and make passing through
+something to declare. A sibling the point is covered from is told what a point
+clipped away tells it: its hover falls, and a press it holds keeps the
+position. The cursor and the hover follow the same walk, so they agree with the
+click about which widget is under the pointer.
 
 ## Hit Testing
 
@@ -247,12 +263,15 @@ resolving a state layer subscribes to them — see
 
 ## EventResponse
 
-Widgets return whether they handled the event:
+Widgets return whether the point is on them, and whether they took the
+event:
 
 ```rust,ignore
 pub enum EventResponse {
-    Handled,   // Stop propagation
-    Ignored,   // Continue to parent
+    Ignored,   // Not on me: ask the sibling beneath
+    Hit,       // On me, not taken: the siblings beneath are covered,
+               // the ancestors still handle it
+    Handled,   // Taken: stop propagation
 }
 ```
 

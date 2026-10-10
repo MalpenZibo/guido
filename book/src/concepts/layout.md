@@ -339,7 +339,10 @@ container()
 ## Stacking Children (ZStack)
 
 `ZStack` places every child at the same position, stacked along the Z axis —
-later children paint on top:
+later children paint on top, and take the pointer first. A layer that draws
+where the pointer is — a fill, a border, a blur — or listens there covers what
+is beneath it, even a translucent scrim; one that only lays out its content
+lets the pointer through:
 
 ```rust
 # extern crate guido;
