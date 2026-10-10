@@ -14,6 +14,10 @@ pub const NO_CLIP_RECT: [f32; 4] = [0.0, 0.0, -1.0, -1.0];
 /// negative extents mean there is no clip at all.
 pub const EMPTY_CLIP_RECT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
+/// The least blur a shadow reaches the shader with, in physical pixels: a
+/// hard edge, since the fade it spans is a small fraction of one pixel.
+pub const SHARPEST_SHADOW_BLUR: f32 = 1e-3;
+
 /// Uniform buffer data passed to the shader.
 ///
 /// Contains screen-wide information needed for coordinate conversion.
@@ -272,10 +276,15 @@ impl ShapeInstance {
     }
 
     /// Set shadow properties.
+    ///
+    /// The blur is floored at [`SHARPEST_SHADOW_BLUR`]. The shader fades a
+    /// shadow with `smoothstep(-blur, 2·blur, distance)`, which runs backwards
+    /// below zero — a spring settling on no blur overshoots there — and is
+    /// undefined in WGSL at zero, where its edges meet.
     pub fn with_shadow(mut self, shadow: &super::types::Shadow, scale: f32) -> Self {
         let scaled = shadow.scaled(scale);
         self.shadow_offset = [scaled.offset.0, scaled.offset.1];
-        self.shadow_blur = scaled.blur;
+        self.shadow_blur = scaled.blur.max(SHARPEST_SHADOW_BLUR);
         self.shadow_spread = scaled.spread;
         self.shadow_color = [
             scaled.color.r,
@@ -359,6 +368,22 @@ mod tests {
             [1.0, 0.0, 0.0, 0.5],
             "the colour is not a length"
         );
+    }
+
+    /// A blur below zero, or at it, reaches the shader as the sharpest edge it
+    /// can draw: one with its two edges apart.
+    #[test]
+    fn a_blur_at_or_below_zero_reaches_the_instance_buffer_as_the_sharpest() {
+        for blur in [-1.0, 0.0] {
+            let shadow = super::super::types::Shadow::new(
+                (0.0, 6.0),
+                blur,
+                2.0,
+                crate::widgets::Color::rgba(0.0, 0.0, 0.0, 0.6),
+            );
+            let i = ShapeInstance::default().with_shadow(&shadow, 2.0);
+            assert_eq!(i.shadow_blur, SHARPEST_SHADOW_BLUR, "a blur of {blur}");
+        }
     }
 
     /// Every colour an instance draws with is faded, and nothing else is.
