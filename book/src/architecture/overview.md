@@ -31,7 +31,7 @@ let doubled = create_memo(move || count.get() * 2);
 
 ### `widgets/` - UI Components
 
-**Container** (`widgets/container.rs`)
+**Container** (`widgets/container/`)
 
 The primary building block supporting:
 - Padding, backgrounds (solid/gradient)
@@ -51,7 +51,7 @@ Text rendering with:
 - Font styling (size, weight, color)
 - Wrapping control
 
-**Layout** (`widgets/layout.rs`)
+**Layout** (`layout/`)
 
 Pluggable layouts via the `Layout` trait:
 
@@ -59,7 +59,7 @@ Pluggable layouts via the `Layout` trait:
 pub trait Layout {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -153,7 +153,7 @@ Children choose a size within constraints.
 | File | Purpose |
 |------|---------|
 | `src/lib.rs` | App entry, main loop |
-| `src/widgets/container.rs` | Container implementation |
+| `src/widgets/container/` | Container implementation |
 | `src/widgets/state_layer.rs` | State layer types |
 | `src/renderer/mod.rs` | Renderer, GPU setup |
 | `src/renderer/types.rs` | Shape types (Gradient, Shadow) |

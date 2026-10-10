@@ -84,7 +84,7 @@ Drop guards, so a caught panic cannot wedge the reactive system.
 
 Composable UI primitives implementing the `Widget` trait.
 
-**Container** (`widgets/container.rs`)
+**Container** (`widgets/container/`)
 The primary building block. Supports:
 - Padding, background (solid or gradient)
 - Corner radius with superellipse curvature
@@ -115,7 +115,7 @@ Pluggable layouts via the `Layout` trait:
 pub trait Layout {
     fn layout(
         &mut self,
-        tree: &mut Tree,
+        ctx: &mut LayoutCtx,
         children: &[WidgetId],
         constraints: Constraints,
         origin: (f32, f32),
@@ -513,16 +513,22 @@ pub trait Widget {
     /// children by. What a `WidgetRef`'s rect is composed from. Hidden from
     /// the docs.
     fn placement(&self, tree: &Tree, id: WidgetId) -> Placement { Placement::NONE }
+    /// Whether it fills its parent's width or height, asked by `Flex` and
+    /// `ZStack` before they lay it out.
+    fn layout_hints(&self) -> LayoutHints { LayoutHints::default() }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);
-    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse;
-
-    /// Check if a descendant has the given ID (for focus tracking)
-    fn has_focus_descendant(&self, tree: &Tree, id: WidgetId) -> bool { false }
+    /// Ignores what reaches it unless it says otherwise.
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        EventResponse::Ignored
+    }
 
     /// Register this widget's pending children with the tree.
     fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {}
+
+    /// Box it as an `AnyWidget`, for branches that return different widgets.
+    fn into_any(self) -> AnyWidget where Self: Sized + 'static { Box::new(self) }
 }
 ```
 
@@ -853,7 +859,7 @@ duplicate was found.
 | `src/tree.rs` | Widget tree storage and layout metadata |
 | `src/jobs.rs` | Job-based reactive invalidation system |
 | `src/surface.rs` | Surface config, handles, dynamic properties |
-| `src/widgets/container.rs` | Container widget implementation |
+| `src/widgets/container/` | Container widget implementation |
 | `src/widgets/children.rs` | Dynamic children with keyed reconciliation |
 | `src/widgets/state_layer.rs` | State layer types and logic |
 | `src/renderer/mod.rs` | Module exports |

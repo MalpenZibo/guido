@@ -230,8 +230,8 @@ pub(crate) enum Motion<T> {
         /// almost every declaration; see [`Animated::exiting_to`].
         exit_to: Option<ExitTo<T>>,
     },
-    /// Play a sequence whenever the trigger changes, and rest on the declared
-    /// value in between.
+    /// Play a sequence when the widget appears, or on every change of its
+    /// trigger if it has one, and rest on the declared value in between.
     Play { keyframes: Keyframes<T> },
 }
 
@@ -266,13 +266,14 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
         }
     }
 
-    /// Play `keyframes` whenever `plays` changes, resting on this value in
-    /// between.
+    /// Play `keyframes` when the widget appears — or, if they are
+    /// [`played_by`](super::Keyframes::played_by) a trigger, on every change
+    /// of it — resting on this value in between.
     ///
-    /// The trigger is a count and not a flag on purpose: a second refusal has
+    /// A trigger is a count and not a flag on purpose: a second refusal has
     /// to shake as loudly as the first, and a signal that stays equal notifies
     /// nobody. The count it starts at is whatever it holds when the widget is
-    /// built, so nothing plays on the first frame.
+    /// built, so a triggered sequence plays nothing on the first frame.
     ///
     /// The resting value is required because it is what the property *is*
     /// whenever nothing is playing — a shake returns to where it began and
