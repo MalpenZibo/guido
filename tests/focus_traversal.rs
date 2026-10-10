@@ -207,6 +207,12 @@ fn tab_says_the_focus_came_from_the_keyboard() {
     tab(&mut app, id, &mut at);
     assert_eq!(focused(&fields), Some(1));
     assert!(focus_path().by_keyboard(), "Tab is");
+    click(&mut app, id, &mut at, 10.0, 40.0);
+    assert_eq!(focused(&fields), Some(1));
+    assert!(
+        !focus_path().by_keyboard(),
+        "and a click on the field Tab focused takes it back from the keyboard"
+    );
     click(&mut app, id, &mut at, 10.0, 70.0);
     assert!(!focus_path().by_keyboard(), "and a click after it is not");
 }
@@ -299,6 +305,63 @@ fn reading_order_is_where_the_fields_are_not_where_they_were_declared() {
     assert_eq!(focused(&fields), Some(0), "the left one first");
     tab(&mut app, id, &mut at);
     assert_eq!(focused(&fields), Some(1), "then the right one");
+}
+
+/// Which of two focusable boxes Tab takes first and second, each box given as
+/// `(x, y, width, height)` on a stack.
+fn first_two(boxes: [(f32, f32, f32, f32); 2]) -> Option<[Option<usize>; 2]> {
+    let mut app = headless()?;
+    let stops = refs::<2>();
+    let (id, mut at) = surface(&mut app, move || {
+        container()
+            .layout(ZStack::new())
+            .children(stops.into_iter().zip(boxes).map(|(r, (x, y, w, h))| {
+                container()
+                    .padding([y, 0.0, 0.0, x])
+                    .child(container().width(w).height(h).focusable(true).widget_ref(r))
+            }))
+    });
+    let mut order = [None; 2];
+    for slot in &mut order {
+        tab(&mut app, id, &mut at);
+        *slot = focused(&stops);
+    }
+    Some(order)
+}
+
+/// Reading order is by the centre of each box, not its top or left edge, and
+/// not any other mix of edge and size: one box starting higher but reaching
+/// lower comes after one wholly inside its span, and a tall box high up comes
+/// before a short one below its middle.
+#[test]
+fn reading_order_goes_by_the_centre_of_each_box() {
+    let cases = [
+        // Starts lower, centred higher (50 against 60).
+        (
+            [(0.0, 40.0, 20.0, 20.0), (40.0, 0.0, 20.0, 120.0)],
+            "vertical, centre over top",
+        ),
+        // Centred at 30 against 45, though twice its height reaches further.
+        (
+            [(0.0, 0.0, 20.0, 60.0), (40.0, 40.0, 20.0, 10.0)],
+            "vertical, centre over size",
+        ),
+        // The same two along a row, every centre at the same height.
+        (
+            [(40.0, 0.0, 20.0, 20.0), (0.0, 0.0, 120.0, 20.0)],
+            "horizontal, centre over left",
+        ),
+        (
+            [(0.0, 0.0, 60.0, 20.0), (40.0, 0.0, 10.0, 20.0)],
+            "horizontal, centre over size",
+        ),
+    ];
+    for (boxes, case) in cases {
+        let Some(order) = first_two(boxes) else {
+            return;
+        };
+        assert_eq!(order, [Some(0), Some(1)], "{case}");
+    }
 }
 
 /// Where Tab goes from nothing focused, `presses` times over, by index into
