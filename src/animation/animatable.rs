@@ -184,8 +184,14 @@ impl Animatable for Shadow {
     /// The ties this keeps are the ones that trade one dimension for another —
     /// a blur of 4 becoming a spread of 8, an offset moving from down to
     /// sideways. Both reduce to the same extent, and neither is larger.
+    ///
+    /// Showing comes before size: a transparent shadow measures zero, which is
+    /// above every shadow pulled inside its box, so by extent alone fading one
+    /// of those out would read as growing.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        (to.signed_extent(), to.color.a) < (from.signed_extent(), from.color.a)
+        let shows = |s: &Self| s.color.a > 0.0;
+        (shows(to), to.signed_extent(), to.color.a)
+            < (shows(from), from.signed_extent(), from.color.a)
     }
 
     fn channels(&self) -> Channels {
@@ -431,6 +437,24 @@ mod tests {
         let near_edge = Shadow::new((0.0, 0.0), 2.0, -8.0, Color::BLACK);
         assert!(!Shadow::is_reverse(&deep_inside, &near_edge));
         assert!(Shadow::is_reverse(&near_edge, &deep_inside));
+    }
+
+    /// Fading to nothing is giving ground back, whichever side of the edge the
+    /// shadow was on: a transparent shadow measures zero, which is above every
+    /// pulled-in one.
+    #[test]
+    fn a_shadow_fading_to_none_is_reversing_inside_its_box_or_out() {
+        for spread in [8.0, -20.0] {
+            let shown = Shadow::new((0.0, 0.0), 2.0, spread, Color::BLACK);
+            assert!(
+                Shadow::is_reverse(&shown, &Shadow::none()),
+                "spread {spread}"
+            );
+            assert!(
+                !Shadow::is_reverse(&Shadow::none(), &shown),
+                "spread {spread}"
+            );
+        }
     }
 
     /// A relative translate interpolates its fraction, not a width it was
