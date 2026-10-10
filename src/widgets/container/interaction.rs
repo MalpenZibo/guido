@@ -168,6 +168,23 @@ impl Container {
         }
     }
 
+    /// Whether the point is on this container, for a container none of whose
+    /// children it is on: inside its shape, where it draws or listens.
+    ///
+    /// Flutter's rule rather than the DOM's. A container that only lays out —
+    /// a full-size layer of a `ZStack` aligning its content — is not hit, so
+    /// the layers beneath it are still reached without a pass-through
+    /// declaration on every one above (#636).
+    pub(super) fn is_hit(&self, id: WidgetId, hit: &HitContext, event: &Event) -> bool {
+        hit.contains(event.coords())
+            && (self.is_control()
+                || self
+                    .interaction
+                    .as_deref()
+                    .is_some_and(|ix| ix.cursor.is_set())
+                || self.draws_its_own_surface(id))
+    }
+
     /// Update hover state and fire the pointer-move callback, before children
     /// get the event: a child that handles a `MouseMove` must not stop its
     /// ancestors from tracking their own hover.

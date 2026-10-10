@@ -109,8 +109,8 @@ fn a_collapse_reaches_every_depth_below_it() {
 }
 
 /// And a sibling stacked with it gets the click the collapsed one used to
-/// swallow. Children are asked in declaration order, so the collapsed one is
-/// declared first: it is the one that answered before anybody else was asked.
+/// swallow. Children are asked from the one drawn on top, so the collapsed one
+/// is declared last: it is the one that answers before anybody else is asked.
 #[test]
 fn a_collapsed_container_does_not_swallow_a_siblings_click() {
     let (clicks, bump) = counter();
@@ -123,15 +123,15 @@ fn a_collapsed_container_does_not_swallow_a_siblings_click() {
                 container()
                     .width(80.0)
                     .height(40.0)
-                    .scale(COLLAPSED)
-                    .on_click(|| panic!("the collapsed one must not answer")),
+                    .background(Color::BLUE)
+                    .on_click(bump),
             )
             .child(
                 container()
                     .width(80.0)
                     .height(40.0)
-                    .background(Color::BLUE)
-                    .on_click(bump),
+                    .scale(COLLAPSED)
+                    .on_click(|| panic!("the collapsed one must not answer")),
             ),
         400.0,
         200.0,

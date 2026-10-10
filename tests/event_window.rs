@@ -144,7 +144,11 @@ fn a_row_the_pointer_jumps_away_from_is_no_longer_hovered() {
     app.event_at(id, Event::mouse_move(50.0, 550.0), at);
     app.step_at(at);
 
-    let hover = &log.borrow().hover;
+    // The second move's two are sorted: the walk asks the row drawn on top
+    // first, so which of them hears first follows where they stand, not which
+    // way the pointer went.
+    let mut hover = log.borrow().hover.clone();
+    hover[1..].sort_unstable();
     assert_eq!(
         hover.as_slice(),
         &[(2, true), (2, false), (27, true)],
@@ -193,10 +197,10 @@ fn a_row_moved_by_a_transform_is_clicked_where_it_is_drawn() {
                 .height(ROW_HEIGHT)
                 .width(fill())
                 .on_click(move || clicked.set(Some(i)));
-            // Row 0 is laid out at the top and drawn three hundred pixels
-            // below, over row 15.
-            let row = if i == 0 {
-                row.translate((0.0, 300.0))
+            // Row 30 is laid out below the surface and drawn three hundred
+            // pixels above that, over row 15 — and after it, so on top.
+            let row = if i == 30 {
+                row.translate((0.0, -300.0))
             } else {
                 row
             };
@@ -210,8 +214,8 @@ fn a_row_moved_by_a_transform_is_clicked_where_it_is_drawn() {
 
     assert_eq!(
         clicked.get(),
-        Some(0),
-        "the click lands on what is drawn there, which is the first row"
+        Some(30),
+        "the click lands on what is drawn there, which is row 30"
     );
 }
 
@@ -314,7 +318,8 @@ fn a_release_and_a_leave_leave_nothing_owed() {
     );
 }
 
-/// A row that takes every move it is offered, and says which it was.
+/// A row that takes every move it is offered with a position, and says which
+/// it was.
 struct Greedy(usize, Rc<RefCell<Vec<usize>>>);
 
 impl Widget for Greedy {
@@ -323,7 +328,7 @@ impl Widget for Greedy {
     }
 
     fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
-        if matches!(event, Event::MouseMove { .. }) {
+        if matches!(event, Event::MouseMove { at: Some(_), .. }) {
             self.1.borrow_mut().push(self.0);
             return EventResponse::Handled;
         }
@@ -334,7 +339,7 @@ impl Widget for Greedy {
 }
 
 #[test]
-fn the_children_owed_an_event_are_offered_it_in_the_order_they_stand() {
+fn the_children_owed_an_event_are_offered_it_the_one_drawn_on_top_first() {
     let Some(mut app) = headless() else { return };
     let took = Rc::new(RefCell::new(Vec::new()));
     let rows = took.clone();
@@ -343,10 +348,10 @@ fn the_children_owed_an_event_are_offered_it_in_the_order_they_stand() {
         list((0..ROWS).map(move |i| Box::new(Greedy(i, rows.clone())) as Box<dyn Widget>))
     });
 
-    // The first move's window over row 25 starts at row 24, which takes it.
-    // The second lands on row 2, whose window starts at row 1 — and row 24 is
-    // owed it, but stands below row 1, so row 1 takes it first, as the walk
-    // over every child would have had it.
+    // The first move's window over row 25 ends at row 26, which is drawn
+    // last and takes it. The second lands on row 2, whose window ends at row
+    // 3 — and row 26 is owed it, and stands above row 3, so row 26 takes it
+    // first, as the walk over every child would have had it.
     play(
         &mut app,
         id,
@@ -356,7 +361,7 @@ fn the_children_owed_an_event_are_offered_it_in_the_order_they_stand() {
             Event::mouse_move(50.0, 50.0),
         ],
     );
-    assert_eq!(*took.borrow(), [24, 1]);
+    assert_eq!(*took.borrow(), [26, 26]);
 }
 
 #[test]
