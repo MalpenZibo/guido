@@ -1749,7 +1749,8 @@ fn layout_pass<P: Platform>(
         }
     }
 
-    // Update widget ref signals with current bounds after layout
+    // Where every ref'd widget is drawn now: after layout, and on a frame
+    // that only scrolled or animated a transform, which moves it all the same.
     widget_ref::update_widget_refs(tree);
 
     // A `WidgetRef::focus()` from application code lands here: after layout, so

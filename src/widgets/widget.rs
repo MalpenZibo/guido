@@ -884,6 +884,27 @@ pub struct LayoutHints {
     pub fill_height: bool,
 }
 
+/// Where a widget draws itself and its children, against where it was laid
+/// out: what [`Widget::placement`] answers.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Placement {
+    /// The widget's own transform, about its pivot, in its own coordinates:
+    /// its laid-out box is `(0, 0, width, height)` before it.
+    pub own: crate::transform::Transform,
+    /// How far it moves its children against where they were laid out — a
+    /// scroll offset, which carries the content the other way.
+    pub scroll: (f32, f32),
+}
+
+impl Placement {
+    /// Drawn where it was laid out, with its children where they were.
+    pub const NONE: Self = Self {
+        own: crate::transform::Transform::IDENTITY,
+        scroll: (0.0, 0.0),
+    };
+}
+
 pub trait Widget {
     /// Advance animations for this widget and children.
     /// Returns true if any animations are still active and need another frame.
@@ -970,6 +991,22 @@ pub trait Widget {
     /// goes. One channel, two schedules.
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
         let _ = (tree, id);
+    }
+
+    /// Where this widget draws itself and its children, against where it was
+    /// laid out: its own transform and the scroll offset it moves its children
+    /// by. A widget that paints with a transform or scrolls answers it, the
+    /// same numbers it paints and hit-tests with; the rest draw where they
+    /// were laid out, which is the default.
+    ///
+    /// Asked only for the widgets a [`WidgetRef`](crate::widget_ref::WidgetRef)
+    /// points at and their ancestors, whenever a frame may have moved them, so
+    /// that [`WidgetRef::rect`](crate::widget_ref::WidgetRef::rect) is where
+    /// the widget is drawn.
+    #[doc(hidden)]
+    fn placement(&self, tree: &Tree, id: WidgetId) -> Placement {
+        let _ = (tree, id);
+        Placement::NONE
     }
 
     fn layout_hints(&self) -> LayoutHints {
@@ -1097,6 +1134,9 @@ impl Widget for Box<dyn Widget> {
     }
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {
         (**self).refresh_paint_bounds(tree, id)
+    }
+    fn placement(&self, tree: &Tree, id: WidgetId) -> Placement {
+        (**self).placement(tree, id)
     }
     fn layout_hints(&self) -> LayoutHints {
         (**self).layout_hints()
