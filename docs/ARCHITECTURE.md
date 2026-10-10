@@ -695,7 +695,11 @@ that declared `on_key_down` or `on_key_up`, the innermost first: Flutter's
 `FocusManager` dispatch, and its HardwareKeyboard handlers for what no focused
 widget wants. A release travels as a press does and is not paired with it, as
 in the DOM, Qt and Flutter — a field that took a key's press lets its release
-through to the listeners (#631).
+through to the listeners (#631). A listener answers whether it took the key,
+as Flutter's onKeyEvent and GTK's key-pressed do: one answering `Ignored`
+lets it on to the next. A listener on the focus path that let a key through is
+not asked again when the way down to another listener passes it — `Tree`
+keeps the path the key already went up for that (#634).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).

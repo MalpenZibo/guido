@@ -121,7 +121,9 @@ fn main() {
                     .on_key_down(|key, _, _| {
                         if key == Key::Escape {
                             quit_app();
+                            return EventResponse::Handled;
                         }
+                        EventResponse::Ignored
                     })
             },
         );

@@ -101,7 +101,9 @@ container()
     .on_key_down(move |key, _mods, _repeat| {
         if key == Key::Escape {
             close();
+            return EventResponse::Handled;
         }
+        EventResponse::Ignored
     })
 # ;
 # }
@@ -110,11 +112,15 @@ container()
 `on_key_down` fires while the surface has keyboard focus — a layer surface
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
+It answers whether it took the key, as a widget's `event` does. `Handled` stops
+the key there; `Ignored` lets it go on to the next container listening.
+
 A widget with the focus — a text input you clicked into — hears a key first,
 and the containers around it after. `on_key_down` hears what nothing focused
 took, so Escape still closes a menu while its search field has the focus, and
 it hears it with nothing focused at all. Where two containers both declare it,
-the inner one hears the key; where they stand side by side, the earlier one.
+the inner one hears the key first; where they stand side by side, the earlier
+one. The other hears it only when the first lets it through.
 
 A held key arrives again at the compositor's repeat rate, and each repeat is
 an ordinary key-down whose third argument is `true`. Text editing wants every
@@ -126,9 +132,13 @@ one; something that should happen once per press returns early on a repeat:
 # fn main() {
 # let activate = move || {};
 container().on_key_down(move |key, _mods, repeat| {
-    if key == Key::Enter && !repeat {
+    if key != Key::Enter {
+        return EventResponse::Ignored;
+    }
+    if !repeat {
         activate();
     }
+    EventResponse::Handled
 })
 # ;
 # }
@@ -150,15 +160,19 @@ letting go abandons it.
 let held = create_signal(false);
 container()
     .on_key_down(move |key, _mods, _repeat| {
-        if key == Key::Char(' ') {
-            held.set(true);
+        if key != Key::Char(' ') {
+            return EventResponse::Ignored;
         }
+        held.set(true);
+        EventResponse::Handled
     })
     .on_key_up(move |key, _mods| {
         if key == Key::Char(' ') && held.get_untracked() {
             held.set(false);
             activate();
+            return EventResponse::Handled;
         }
+        EventResponse::Ignored
     })
 # ;
 # }

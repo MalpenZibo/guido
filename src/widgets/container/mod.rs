@@ -92,10 +92,11 @@ impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
 }
 
 /// Callback for a key-down: the key, the modifiers held with it, and whether
-/// a held key produced it rather than a press.
-pub type KeyCallback = Rc<dyn Fn(Key, Modifiers, bool)>;
+/// a held key produced it rather than a press. Answers whether it took the key.
+pub type KeyCallback = Rc<dyn Fn(Key, Modifiers, bool) -> EventResponse>;
 /// Callback for a key-up: the key, and the modifiers held as it was released.
-pub type KeyUpCallback = Rc<dyn Fn(Key, Modifiers)>;
+/// Answers whether it took the key.
+pub type KeyUpCallback = Rc<dyn Fn(Key, Modifiers) -> EventResponse>;
 /// Callback for hover events (bool = is_hovered)
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
@@ -1145,6 +1146,10 @@ impl Container {
     /// focused widget inside lets it through, or with nothing focused at all.
     /// Where two containers both declare it, the inner one hears the key.
     ///
+    /// It answers whether it took the key, in the words of
+    /// [`Widget::event`]: `Handled` stops it there, and `Ignored` lets it go
+    /// on to the next container listening.
+    ///
     /// The third argument says whether a held key produced it rather than a
     /// press. A held key is delivered once per repeat, so a listener that acts
     /// once per press returns early when it is `true`.
@@ -1152,19 +1157,26 @@ impl Container {
     /// Delivered while the surface has keyboard focus — a layer surface with
     /// [`KeyboardInteractivity`](crate::platform::KeyboardInteractivity) set,
     /// or a popup holding a grab.
-    pub fn on_key_down<F: Fn(Key, Modifiers, bool) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_key_down<F: Fn(Key, Modifiers, bool) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
         self.interact_mut().on_key_down = Some(Rc::new(callback));
         self
     }
 
     /// Called for a key release nothing with the focus took, along the same
     /// route as [`on_key_down`](Self::on_key_down): where the press went, the
-    /// release goes after it.
+    /// release goes after it. It answers whether it took the key, as
+    /// `on_key_down` does.
     ///
     /// A release is not paired with its press. A focused field that takes a
     /// key's press lets its release through, so a control that must not act on
     /// a release it never saw pressed keeps that record itself.
-    pub fn on_key_up<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_key_up<F: Fn(Key, Modifiers) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
         self.interact_mut().on_key_up = Some(Rc::new(callback));
         self
     }

@@ -182,7 +182,7 @@ fn a_key_through_a_container_disabled_under_the_pointer_says_its_hover_went() {
     let mut h = Harness::laid_out(
         square(&heard, "A", Color::RED)
             .enabled(enabled)
-            .on_key_down(|_, _, _| {}),
+            .on_key_down(|_, _, _| EventResponse::Handled),
         200.0,
         100.0,
     );

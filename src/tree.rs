@@ -527,6 +527,10 @@ pub struct Tree {
     /// The widgets a key or a focus change is being routed through: the focus
     /// path, or the way down to the listeners. Empty outside such a dispatch.
     key_route: SmallVec<[WidgetId; 16]>,
+    /// The focus path a key has already gone up, while it goes down to the
+    /// listeners: a listener on it let the key through once, and the way down
+    /// to a listener inside it passes it again. `None` otherwise.
+    key_heard_by: Option<crate::reactive::focus::FocusPath>,
 }
 
 impl Tree {
@@ -548,6 +552,7 @@ impl Tree {
             hover_changes: Vec::new(),
             key_listeners: Vec::new(),
             key_route: SmallVec::new(),
+            key_heard_by: None,
         }
     }
 
@@ -1512,11 +1517,22 @@ impl Tree {
             }
             self.key_route = route;
             if !self.key_route.is_empty() {
+                self.key_heard_by = Some(focus.clone());
                 response = self.route_through(root, event);
+                self.key_heard_by = None;
             }
         }
         self.key_route.clear();
         response
+    }
+
+    /// Whether the key being routed already went through `id` on the focus
+    /// path, so a listener there is not asked a second time on the way down
+    /// to another.
+    pub(crate) fn heard_this_key(&self, id: WidgetId) -> bool {
+        self.key_heard_by
+            .as_ref()
+            .is_some_and(|path| path.contains(id))
     }
 
     /// Hand `event` to `root`, to travel the key route set beside it.

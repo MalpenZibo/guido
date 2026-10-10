@@ -460,8 +460,9 @@ impl Container {
             } => {
                 if let Some(ref ix) = self.interaction
                     && let Some(ref callback) = ix.on_key_down
+                    && !tree.heard_this_key(id)
+                    && callback(*key, *modifiers, *repeat) == EventResponse::Handled
                 {
-                    callback(*key, *modifiers, *repeat);
                     return EventResponse::Handled;
                 }
             }
@@ -469,8 +470,9 @@ impl Container {
             Event::KeyUp { key, modifiers } => {
                 if let Some(ref ix) = self.interaction
                     && let Some(ref callback) = ix.on_key_up
+                    && !tree.heard_this_key(id)
+                    && callback(*key, *modifiers) == EventResponse::Handled
                 {
-                    callback(*key, *modifiers);
                     return EventResponse::Handled;
                 }
             }
