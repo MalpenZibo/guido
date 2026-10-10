@@ -5671,6 +5671,11 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
     h.paint();
 
     set_hover(&mut h, true);
+    // The headroom is the step the spring travels, times its overshoot: no
+    // more, or every frame of the bounce damages a ring nothing is drawn in.
+    let step_travelled = near_edge.signed_extent() - deep_inside.signed_extent();
+    let headroom =
+        near_edge.signed_extent() + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
     let t0 = std::time::Instant::now();
     let mut furthest = f32::NEG_INFINITY;
     for step in 1..=60 {
@@ -5681,6 +5686,10 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
             100.0,
         );
         let reach = h.tree.paint_overflow(h.root);
+        assert!(
+            reach <= headroom + 0.05,
+            "step {step} reserved {reach} past the box, the bounce reaches {headroom}"
+        );
         let node = h.paint();
         let Some(drawn) = drawn_shadow(&node) else {
             continue;

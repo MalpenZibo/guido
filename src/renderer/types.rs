@@ -54,7 +54,7 @@ impl Shadow {
     ///
     /// The amount the damage rect has to grow by, so repainting the box also
     /// re-composites the shadow instead of leaving the old one behind:
-    /// [`signed_extent`](Self::signed_extent) floored at zero, since a shadow
+    /// `signed_extent` floored at zero, since a shadow
     /// pulled inside its box reaches nothing past it.
     pub fn extent(&self) -> f32 {
         // `clamp` rather than `max`, so a `NaN` stays one.
