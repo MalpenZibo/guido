@@ -251,6 +251,11 @@ impl ShapeInstance {
     /// A placement that collapses — `scale(0.0)` — has no inverse and no
     /// inside; the sentinel clips everything, which is what a shape of zero
     /// area should do.
+    ///
+    /// Inlined on purpose: out of line, every clipped instance pays a call and
+    /// a copy of this struct, and unrelated changes elsewhere have tipped the
+    /// compiler into that (`static_clip/overflow-hidden`, +40% render time).
+    #[inline]
     pub fn with_clip(mut self, clip: &crate::shape::PlacedShape, scale: f32) -> Self {
         let Some(to_clip) = clip.to_local(scale) else {
             self.clip_rect = EMPTY_CLIP_RECT;
