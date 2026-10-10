@@ -16,7 +16,7 @@ Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `Image`'s `content_fit`, `TextInput`'s `caret`, `readonly` and `cursor`, `PasswordInput`'s `mask_char` and `reveal`,
 `RippleConfig`'s colour, and the direction a `Flex` is built with.
 
-Structural: `layout`, `child`, `children`, `control`, the axis a `Scroll` is
+Structural: `layout`, `child`, `children`, `control`, `focusable`, the axis a `Scroll` is
 built with, the event handlers — and the *motion* a value is declared with,
 which is the next section.
 

@@ -92,10 +92,11 @@ impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
 }
 
 /// Callback for a key-down: the key, the modifiers held with it, and whether
-/// a held key produced it rather than a press.
-pub type KeyCallback = Rc<dyn Fn(Key, Modifiers, bool)>;
+/// a held key produced it rather than a press. Answers whether it took the key.
+pub type KeyCallback = Rc<dyn Fn(Key, Modifiers, bool) -> EventResponse>;
 /// Callback for a key-up: the key, and the modifiers held as it was released.
-pub type KeyUpCallback = Rc<dyn Fn(Key, Modifiers)>;
+/// Answers whether it took the key.
+pub type KeyUpCallback = Rc<dyn Fn(Key, Modifiers) -> EventResponse>;
 /// Callback for hover events (bool = is_hovered)
 pub type HoverCallback = Rc<dyn Fn(bool)>;
 /// Callback for scroll events (delta_x, delta_y, source)
@@ -244,6 +245,8 @@ pub(super) struct InteractionState {
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
     pub(super) on_mouse_down: Option<MouseDownCallback>,
     pub(super) on_mouse_up: Option<MouseUpCallback>,
+    /// Whether Tab stops here, and a press inside takes the focus.
+    pub(super) focusable: bool,
     /// Hover and press, behind a signal so that *resolving a state layer
     /// subscribes to them*.
     ///
@@ -308,6 +311,7 @@ impl Default for InteractionState {
             on_pointer_move: None,
             on_mouse_down: None,
             on_mouse_up: None,
+            focusable: false,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
             declares_transform: Moves::default(),
@@ -1145,6 +1149,11 @@ impl Container {
     /// focused widget inside lets it through, or with nothing focused at all.
     /// Where two containers both declare it, the inner one hears the key.
     ///
+    /// It answers whether it took the key, in the words of
+    /// [`Widget::event`]: `Handled` stops it there, and `Ignored` lets it go
+    /// on to the next container listening and then to what the key does by
+    /// default — Tab moving the focus.
+    ///
     /// The third argument says whether a held key produced it rather than a
     /// press. A held key is delivered once per repeat, so a listener that acts
     /// once per press returns early when it is `true`.
@@ -1152,20 +1161,44 @@ impl Container {
     /// Delivered while the surface has keyboard focus — a layer surface with
     /// [`KeyboardInteractivity`](crate::platform::KeyboardInteractivity) set,
     /// or a popup holding a grab.
-    pub fn on_key_down<F: Fn(Key, Modifiers, bool) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_key_down<F: Fn(Key, Modifiers, bool) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
         self.interact_mut().on_key_down = Some(Rc::new(callback));
         self
     }
 
     /// Called for a key release nothing with the focus took, along the same
     /// route as [`on_key_down`](Self::on_key_down): where the press went, the
-    /// release goes after it.
+    /// release goes after it. It answers whether it took the key, as
+    /// `on_key_down` does.
     ///
     /// A release is not paired with its press. A focused field that takes a
     /// key's press lets its release through, so a control that must not act on
     /// a release it never saw pressed keeps that record itself.
-    pub fn on_key_up<F: Fn(Key, Modifiers) + 'static>(mut self, callback: F) -> Self {
+    pub fn on_key_up<F: Fn(Key, Modifiers) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
         self.interact_mut().on_key_up = Some(Rc::new(callback));
+        self
+    }
+
+    /// Make this container a place the keyboard focus can be: Tab stops here,
+    /// in reading order among the text inputs and the other focusable
+    /// containers, and a press inside takes the focus — what `tabindex="0"`
+    /// does in HTML. That is how its own
+    /// [`when_focused`](crate::widgets::Stateful::when_focused) and the keys
+    /// its [`on_key_down`](Self::on_key_down) hears on the focus path become
+    /// reachable without a text input inside.
+    ///
+    /// Structural, like the event handlers: it says what the container is,
+    /// and does not reach paint. A container that is not focusable can still
+    /// be given the focus by [`WidgetRef::focus`](crate::widget_ref::WidgetRef::focus);
+    /// it is only not a stop.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.interact_mut().focusable = focusable;
         self
     }
 
@@ -1422,6 +1455,10 @@ impl Container {
         };
     }
 
+    pub(super) fn is_focusable(&self) -> bool {
+        self.interaction.as_ref().is_some_and(|ix| ix.focusable)
+    }
+
     /// Whether this container is an interaction unit.
     ///
     /// A pointer target *is* one — it has to know whether it is being pointed
@@ -1628,6 +1665,12 @@ impl Widget for Container {
             .is_some_and(|ix| ix.on_key_down.is_some() || ix.on_key_up.is_some())
         {
             tree.listen_for_keys(id);
+        }
+        if self.visible.is_set() {
+            tree.declare_visible(id, self.visible);
+        }
+        if self.is_focusable() {
+            tree.make_tab_stop(id);
         }
 
         // Register pending children

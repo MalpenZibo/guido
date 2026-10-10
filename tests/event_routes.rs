@@ -59,7 +59,7 @@ fn no_event_visits_a_row_outside_its_route() {
                         container()
                             .height(30.0)
                             .width(fill())
-                            .on_key_down(|_, _, _| {})
+                            .on_key_down(|_, _, _| EventResponse::Handled)
                             .child(text_input(typed)),
                     )
                     .child(container().scroll(Scroll::vertical()).height(570.0).child(

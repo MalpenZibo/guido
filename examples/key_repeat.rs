@@ -54,6 +54,7 @@ fn main() {
                         } else {
                             presses.update(|n| *n += 1);
                         }
+                        EventResponse::Handled
                     })
             },
         );

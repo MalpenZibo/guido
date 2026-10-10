@@ -13,6 +13,9 @@
 //!
 //! And a release goes where a press goes (#631): along the focus path, then to
 //! the listeners when nothing there took it.
+//!
+//! And a listener says whether it took the key (#634): one answering `Ignored`
+//! lets it go on along the route, and is not asked again.
 
 #![cfg(feature = "testing")]
 
@@ -87,11 +90,22 @@ impl Widget for Counted {
     fn paint(&self, _ctx: &mut PaintContext) {}
 }
 
-/// A container that records the keys it is given under `name`.
+/// A container that records the keys it is given under `name`, and takes them.
 fn listener(name: &'static str, heard: Rc<RefCell<Vec<(&'static str, Key)>>>) -> Container {
-    container()
-        .width(fill())
-        .on_key_down(move |key, _, _| heard.borrow_mut().push((name, key)))
+    answering(name, heard, EventResponse::Handled)
+}
+
+/// A container that records the keys it is given under `name`, and answers
+/// `answer` to each.
+fn answering(
+    name: &'static str,
+    heard: Rc<RefCell<Vec<(&'static str, Key)>>>,
+    answer: EventResponse,
+) -> Container {
+    container().width(fill()).on_key_down(move |key, _, _| {
+        heard.borrow_mut().push((name, key));
+        answer
+    })
 }
 
 #[test]
@@ -116,7 +130,7 @@ fn a_key_visits_the_focus_path_and_nothing_else() {
                 container()
                     .height(10.0)
                     .width(fill())
-                    .on_key_down(|_, _, _| {}),
+                    .on_key_down(|_, _, _| EventResponse::Handled),
             )
             .child(container().scroll(Scroll::vertical()).height(560.0).child(
                 container().layout(Flex::column()).children(
@@ -202,6 +216,67 @@ fn the_innermost_listener_hears_a_key_first() {
     key(&mut app, id, &mut at, Key::Escape);
 
     assert_eq!(*heard.borrow(), [("inner", Key::Escape)]);
+}
+
+/// A container that records the keys it is given under `name`, and lets them
+/// all through.
+fn passer(name: &'static str, heard: Rc<RefCell<Vec<(&'static str, Key)>>>) -> Container {
+    answering(name, heard, EventResponse::Ignored)
+}
+
+#[test]
+fn a_listener_that_lets_a_key_through_passes_it_to_the_next() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (outer, inner) = (heard.clone(), heard.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        container().child(
+            listener("outer", outer.clone())
+                .height(100.0)
+                .child(passer("inner", inner.clone()).height(50.0)),
+        )
+    });
+
+    key(&mut app, id, &mut at, Key::Escape);
+
+    assert_eq!(
+        *heard.borrow(),
+        [("inner", Key::Escape), ("outer", Key::Escape)],
+        "the inner listener let the key through, so the outer one heard it too"
+    );
+}
+
+#[test]
+fn a_listener_on_the_focus_path_hears_a_key_it_let_through_once() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (around, beside) = (heard.clone(), heard.clone());
+    let typed = create_signal(String::new());
+    let (id, mut at) = surface(&mut app, move || {
+        container().child(
+            passer("around", around.clone())
+                .height(100.0)
+                .layout(Flex::column())
+                .child(
+                    container()
+                        .height(30.0)
+                        .width(fill())
+                        .child(text_input(typed)),
+                )
+                .child(passer("beside", beside.clone()).height(30.0)),
+        )
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    key(&mut app, id, &mut at, Key::Escape);
+
+    assert_eq!(
+        *heard.borrow(),
+        [("around", Key::Escape), ("beside", Key::Escape)],
+        "the container around the field heard the escape on the focus path; \
+         the way down to the listener inside it passes it again, and must not \
+         ask it twice"
+    );
 }
 
 #[test]
@@ -298,6 +373,7 @@ fn replay(route: Route, count: fn(bool) -> bool) -> u32 {
                 if key == Key::Enter && count(repeat) {
                     log.set(log.get() + 1);
                 }
+                EventResponse::Handled
             })
     };
     let (id, mut at) = surface(&mut app, move || match route {
@@ -380,8 +456,14 @@ fn both_ways(name: &'static str, heard: Rc<RefCell<Vec<Heard>>>) -> Container {
     let up = heard.clone();
     container()
         .width(fill())
-        .on_key_down(move |key, _, repeat| heard.borrow_mut().push(Heard::Down(name, key, repeat)))
-        .on_key_up(move |key, modifiers| up.borrow_mut().push(Heard::Up(name, key, modifiers)))
+        .on_key_down(move |key, _, repeat| {
+            heard.borrow_mut().push(Heard::Down(name, key, repeat));
+            EventResponse::Handled
+        })
+        .on_key_up(move |key, modifiers| {
+            up.borrow_mut().push(Heard::Up(name, key, modifiers));
+            EventResponse::Handled
+        })
 }
 
 #[test]
@@ -435,12 +517,12 @@ fn a_listener_hears_a_release_with_nothing_focused() {
     let log = heard.clone();
     let (id, mut at) = surface(&mut app, move || {
         let log = log.clone();
-        container().child(
-            container()
-                .width(fill())
-                .height(100.0)
-                .on_key_up(move |key, modifiers| log.borrow_mut().push((key, modifiers))),
-        )
+        container().child(container().width(fill()).height(100.0).on_key_up(
+            move |key, modifiers| {
+                log.borrow_mut().push((key, modifiers));
+                EventResponse::Handled
+            },
+        ))
     });
 
     send(&mut app, id, &mut at, key_down(Key::Escape, false));

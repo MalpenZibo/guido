@@ -527,6 +527,21 @@ pub struct Tree {
     /// The widgets a key or a focus change is being routed through: the focus
     /// path, or the way down to the listeners. Empty outside such a dispatch.
     key_route: SmallVec<[WidgetId; 16]>,
+    /// The focus path a key has already gone up, while it goes down to the
+    /// listeners: a listener on it let the key through once, and the way down
+    /// to a listener inside it passes it again. `None` otherwise.
+    key_heard_by: Option<crate::reactive::focus::FocusPath>,
+    /// The widgets Tab stops at: the text inputs, and the containers that
+    /// declared `focusable(true)`. Each with the turn it joined in, which is
+    /// the order two of them in the same place are visited in. A map, so
+    /// joining and leaving cost the same with five thousand of them as with
+    /// five.
+    tab_stops: rustc_hash::FxHashMap<WidgetId, u64>,
+    /// The turn the next widget to become a Tab stop joins in.
+    tab_stop_turn: u64,
+    /// The `visible` each container that declared one was given, so Tab can
+    /// pass over what is inside a hidden one without asking the widgets.
+    declared_visible: rustc_hash::FxHashMap<WidgetId, Prop<bool>>,
 }
 
 impl Tree {
@@ -548,6 +563,10 @@ impl Tree {
             hover_changes: Vec::new(),
             key_listeners: Vec::new(),
             key_route: SmallVec::new(),
+            key_heard_by: None,
+            tab_stops: rustc_hash::FxHashMap::default(),
+            tab_stop_turn: 0,
+            declared_visible: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -774,6 +793,8 @@ impl Tree {
         crate::reactive::release_focus_if_within(id);
 
         self.key_listeners.retain(|&listener| listener != id);
+        self.tab_stops.remove(&id);
+        self.declared_visible.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1458,7 +1479,8 @@ impl Tree {
     /// that path took then goes down to the containers listening for keys —
     /// the innermost first, as the walk over every widget used to have it —
     /// which is what lets a menu close on Escape with nothing focused. Nothing
-    /// else is asked.
+    /// else is asked. A Tab neither route took then moves the focus — see
+    /// [`Self::next_tab_stop`].
     ///
     /// Down from the root rather than to each widget directly, so a hidden or
     /// disabled container still stops what is routed through it.
@@ -1512,11 +1534,133 @@ impl Tree {
             }
             self.key_route = route;
             if !self.key_route.is_empty() {
+                self.key_heard_by = Some(focus.clone());
                 response = self.route_through(root, event);
+                self.key_heard_by = None;
             }
         }
         self.key_route.clear();
+
+        // What Tab does by default, once nothing on either route took it: the
+        // DOM's default action, run after dispatch, and Flutter's root
+        // `Shortcuts`, reached only after the focused chain.
+        if response != Some(EventResponse::Handled)
+            && let Event::KeyDown {
+                key: crate::widgets::Key::Tab,
+                modifiers,
+                ..
+            } = event
+            && !(modifiers.ctrl || modifiers.alt || modifiers.logo)
+        {
+            let from = focus.widget().filter(|_| focus.root() == Some(root));
+            if let Some(next) = self.next_tab_stop(root, from, modifiers.shift) {
+                crate::reactive::focus::request_focus_by_keyboard(self, next);
+                response = Some(EventResponse::Handled);
+            }
+        }
         response
+    }
+
+    /// Where Tab — or Shift+Tab, `backwards` — takes the focus from `from` on
+    /// the surface rooted at `root`.
+    ///
+    /// The stops in reading order, as GTK's `focus_sort_tab` has it: by the
+    /// vertical centre of the box each was laid out in, then the horizontal
+    /// one, ties in the order they joined the tree. A stop that is hidden,
+    /// disabled or playing its exit is not one. The ends wrap. With nothing
+    /// focused here, Tab takes the first and Shift+Tab the last; from a
+    /// widget that is not a stop, the next stop after where it stands.
+    fn next_tab_stop(
+        &self,
+        root: WidgetId,
+        from: Option<WidgetId>,
+        backwards: bool,
+    ) -> Option<WidgetId> {
+        let reading_place = |id: WidgetId| {
+            let (its_root, laid_out) = self.surface_relative_layout_and_root(id)?;
+            (its_root == root).then(|| {
+                (
+                    laid_out.y + laid_out.height / 2.0,
+                    laid_out.x + laid_out.width / 2.0,
+                )
+            })
+        };
+        let in_reading_order =
+            |a: &(f32, f32), b: &(f32, f32)| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1));
+        let mut stops: SmallVec<[_; 16]> = self
+            .tab_stops
+            .iter()
+            .filter_map(|(&id, &turn)| Some((reading_place(id)?, turn, id)))
+            .filter(|&(_, _, id)| self.takes_tab(id))
+            .collect();
+        // A tie goes to the stop that joined the tree first.
+        stops.sort_unstable_by(|a, b| in_reading_order(&a.0, &b.0).then(a.1.cmp(&b.1)));
+        let round = if backwards {
+            stops.last()
+        } else {
+            stops.first()
+        }?
+        .2;
+        let Some(from) = from else {
+            return Some(round);
+        };
+        let next = match stops.iter().position(|&(_, _, id)| id == from) {
+            Some(at) if backwards => at.checked_sub(1).map(|at| stops[at].2),
+            Some(at) => stops.get(at + 1).map(|&(_, _, id)| id),
+            // A widget with no laid-out place of its own stands nowhere, and
+            // Tab from it goes round as from nothing focused.
+            None => reading_place(from).and_then(|place| {
+                if backwards {
+                    stops
+                        .iter()
+                        .rev()
+                        .find(|(p, _, _)| in_reading_order(p, &place).is_lt())
+                } else {
+                    stops
+                        .iter()
+                        .find(|(p, _, _)| in_reading_order(p, &place).is_gt())
+                }
+                .map(|&(_, _, id)| id)
+            }),
+        };
+        Some(next.unwrap_or(round))
+    }
+
+    /// Whether Tab can stop at `id`: it is not playing its exit, and nothing
+    /// it is in is hidden or disabled.
+    fn takes_tab(&self, id: WidgetId) -> bool {
+        !crate::reactive::invalidation::is_detached(id)
+            && self.ancestors(id).all(|above| {
+                self.declared_visible
+                    .get(&above)
+                    .is_none_or(|visible| visible.get_or_untracked(true))
+            })
+            && self
+                .nearest_control(id)
+                .is_none_or(|control| control.enabled_prop().get_or_untracked(true))
+    }
+
+    /// Make `id` a place Tab stops at. See [`Self::next_tab_stop`].
+    pub(crate) fn make_tab_stop(&mut self, id: WidgetId) {
+        let turn = self.tab_stop_turn;
+        if let std::collections::hash_map::Entry::Vacant(stop) = self.tab_stops.entry(id) {
+            stop.insert(turn);
+            self.tab_stop_turn += 1;
+        }
+    }
+
+    /// Record the `visible` a container declared, for Tab to read.
+    pub(crate) fn declare_visible(&mut self, id: WidgetId, visible: Prop<bool>) {
+        self.declared_visible.insert(id, visible);
+    }
+
+    /// Whether the key being routed already went through `id` on the focus
+    /// path, so a listener there is not asked a second time on the way down
+    /// to another.
+    pub(crate) fn heard_this_key(&self, id: WidgetId) -> bool {
+        self.key_heard_by
+            .as_ref()
+            .is_some_and(|path| path.contains(id))
     }
 
     /// Hand `event` to `root`, to travel the key route set beside it.

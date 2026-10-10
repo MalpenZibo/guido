@@ -678,7 +678,8 @@ impl<C: Content> TextInput<C> {
     /// Attach a handle, so application code can move the keyboard here.
     ///
     /// The container has the same builder; put the ref on the *input* when what
-    /// you mean is "focus this field", since a container cannot take focus.
+    /// you mean is "focus this field", since a container around it given the
+    /// focus keeps it, and the field never hears the keys.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -1520,6 +1521,11 @@ impl<C: Content> TextInput<C> {
 }
 
 impl<C: Content> Widget for TextInput<C> {
+    /// A field is a place Tab stops at. It has no children to register.
+    fn register_children(&mut self, tree: &mut Tree, id: WidgetId) {
+        tree.make_tab_stop(id);
+    }
+
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let blinking = self.update_cursor_blink(id, tree.frame_instant());
         let animating = self.advance_text_anims(tree, id);

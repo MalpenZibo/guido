@@ -101,7 +101,9 @@ container()
     .on_key_down(move |key, _mods, _repeat| {
         if key == Key::Escape {
             close();
+            return EventResponse::Handled;
         }
+        EventResponse::Ignored
     })
 # ;
 # }
@@ -110,11 +112,18 @@ container()
 `on_key_down` fires while the surface has keyboard focus — a layer surface
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
+It answers whether it took the key, as a widget's `event` does. `Handled` stops
+the key there; `Ignored` lets it go on to the next container listening, and
+then to what the key does by default — Tab moving the focus, under
+[Moving the Focus with Tab](#moving-the-focus-with-tab). A listener that answers
+`Handled` for every key keeps Tab from ever moving the focus out of it.
+
 A widget with the focus — a text input you clicked into — hears a key first,
 and the containers around it after. `on_key_down` hears what nothing focused
 took, so Escape still closes a menu while its search field has the focus, and
 it hears it with nothing focused at all. Where two containers both declare it,
-the inner one hears the key; where they stand side by side, the earlier one.
+the inner one hears the key first; where they stand side by side, the earlier
+one. The other hears it only when the first lets it through.
 
 A held key arrives again at the compositor's repeat rate, and each repeat is
 an ordinary key-down whose third argument is `true`. Text editing wants every
@@ -126,9 +135,13 @@ one; something that should happen once per press returns early on a repeat:
 # fn main() {
 # let activate = move || {};
 container().on_key_down(move |key, _mods, repeat| {
-    if key == Key::Enter && !repeat {
+    if key != Key::Enter {
+        return EventResponse::Ignored;
+    }
+    if !repeat {
         activate();
     }
+    EventResponse::Handled
 })
 # ;
 # }
@@ -150,15 +163,19 @@ letting go abandons it.
 let held = create_signal(false);
 container()
     .on_key_down(move |key, _mods, _repeat| {
-        if key == Key::Char(' ') {
-            held.set(true);
+        if key != Key::Char(' ') {
+            return EventResponse::Ignored;
         }
+        held.set(true);
+        EventResponse::Handled
     })
     .on_key_up(move |key, _mods| {
         if key == Key::Char(' ') && held.get_untracked() {
             held.set(false);
             activate();
+            return EventResponse::Handled;
         }
+        EventResponse::Ignored
     })
 # ;
 # }
@@ -168,6 +185,59 @@ A release is not paired with its press. A text input that took a key's press
 lets its release through, so a container around it or listening beside it can
 hear a key go up that it never heard go down — which is why the sample above
 remembers the press itself.
+
+## Moving the Focus with Tab
+
+Tab moves the keyboard focus to the next text input on the surface, and
+Shift+Tab to the one before. A container joins them by declaring
+`focusable(true)`:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = move || {};
+container()
+    .focusable(true)
+    .when_focused(|s| s.border(2.0, Color::WHITE))
+    .on_key_down(move |key, _mods, _repeat| {
+        if key == Key::Enter {
+            open();
+            return EventResponse::Handled;
+        }
+        EventResponse::Ignored
+    })
+    .child(text("Settings"))
+# ;
+# }
+```
+
+Tab stops at it, a press inside it takes the focus — as `tabindex="0"` does on
+the web — and with the focus there its `when_focused` lights up and its
+`on_key_down` hears the keys first. The press is not consumed: a clickable row
+around it still gets its click. A press that something inside it took — a
+button in the card — stays that button's, and the focus does not move. A container that is not focusable can still be
+given the focus by a [widget ref](../advanced/widget-ref.md#moving-the-keyboard);
+it is only not a place Tab stops.
+
+Moving the focus is what a Tab does when nothing took it: the
+focused widget hears it first, then the containers around it, then the
+listeners, and only a Tab all of them let through moves the focus. A widget
+that wants Tab for itself — an editor inserting a tab character — answers
+`Handled`, and the focus stays where it is.
+
+The order is reading order: top to bottom by where each stop was laid out,
+then left to right, as GTK orders it. It follows what is on screen, so a list
+reordered by key is walked in the order it is shown. At the last stop Tab goes
+round to the first, and Shift+Tab at the first to the last. With nothing
+focused, Tab takes the first and Shift+Tab the last.
+
+A stop inside a hidden or disabled container is passed over, and so is one
+playing its exit. Tab stays on the surface holding the keyboard: in a popup, it
+goes round the popup's own stops.
+
+Tab with Ctrl, Alt or the logo key held does not move the focus; that is left
+to whatever shortcut it is.
 
 ## Latched Modifiers
 
@@ -420,6 +490,19 @@ impl Container {
 
     /// Handle hover state changes
     pub fn on_hover(self, handler: impl Fn(bool) + 'static) -> Self;
+
+    /// Handle a key press, or its release; each answers whether it took it
+    pub fn on_key_down(
+        self,
+        handler: impl Fn(Key, Modifiers, bool) -> EventResponse + 'static
+    ) -> Self;
+    pub fn on_key_up(
+        self,
+        handler: impl Fn(Key, Modifiers) -> EventResponse + 'static
+    ) -> Self;
+
+    /// Make Tab stop here, and a press inside take the focus
+    pub fn focusable(self, focusable: bool) -> Self;
 
     /// Handle scroll events
     pub fn on_scroll(

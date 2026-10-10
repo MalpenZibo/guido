@@ -695,7 +695,26 @@ that declared `on_key_down` or `on_key_up`, the innermost first: Flutter's
 `FocusManager` dispatch, and its HardwareKeyboard handlers for what no focused
 widget wants. A release travels as a press does and is not paired with it, as
 in the DOM, Qt and Flutter — a field that took a key's press lets its release
-through to the listeners (#631).
+through to the listeners (#631). A listener answers whether it took the key,
+as Flutter's onKeyEvent and GTK's key-pressed do: one answering `Ignored`
+lets it on to the next. A listener on the focus path that let a key through is
+not asked again when the way down to another listener passes it — `Tree`
+keeps the path the key already went up for that (#634).
+
+A Tab that neither route took then does what Tab does by default: it moves the
+focus, as the DOM runs a default action after dispatch and Flutter's root
+Shortcuts map Tab to NextFocusIntent past the focused chain. `Tree` keeps
+the stops in a map from each to the turn it joined in — a text input joins as
+it enters the tree, and a container that declares `focusable(true)`, and
+joining or leaving is a lookup rather than a scan — and the
+`visible` every container declared, so the walk can
+pass over what is hidden without asking a widget; disabled is the folded
+`enabled` the nearest control already carries. The stops on the surface
+holding the keyboard are sorted into reading order by the centre of the box
+each was laid out in, GTK's focus_sort_tab, ties in the turn they joined in,
+and the ends wrap, as Qt's focus
+chain and GTK's gtk_window_focus do. `FocusPath::by_keyboard` says the focus
+got there by Tab (#634).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).
