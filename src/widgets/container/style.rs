@@ -636,9 +636,7 @@ impl Container {
         // fully transparent colours draws nothing, and with both endpoints
         // reactive one animating out through transparent would push a rect per
         // frame to do it. One end still visible is still a gradient.
-        let gradient = d
-            .gradient
-            .filter(|g| g.start_color.a > 0.0 || g.end_color.a > 0.0);
+        let gradient = d.gradient.filter(gradient_shows);
         if let Some(ref gradient) = gradient {
             ctx.draw_rounded_rect_full(
                 bounds,
@@ -676,7 +674,7 @@ impl Container {
         // is only reached deliberately — `border(2.0, TRANSPARENT)`,
         // `border(0.0, RED)` — or in passing, while an animated colour crosses
         // transparent.
-        if d.border_width > 0.0 && d.border_color.a > 0.0 {
+        if border_shows(d.border_width, d.border_color) {
             ctx.draw_border_frame_with_curvature(
                 bounds,
                 d.border_color,
@@ -686,6 +684,43 @@ impl Container {
             );
         }
     }
+}
+
+impl Container {
+    /// Whether this container draws a surface of its own: a fill, a border
+    /// frame or a backdrop blur, by the gates `paint` puts each through. A
+    /// shadow does not count — it rides the fill, and draws nothing without
+    /// one.
+    ///
+    /// What makes a point inside its shape a point *on* it, which covers the
+    /// siblings painted beneath it (#636).
+    pub(super) fn draws_its_own_surface(&self, id: WidgetId) -> bool {
+        // The plain fill first: it is the common surface, and the gradient the
+        // dearest to resolve.
+        self.animated_background(id).a > 0.0
+            || self
+                .effective_gradient(id)
+                .is_some_and(|g| gradient_shows(&g))
+            || border_shows(
+                self.animated_border_width(id),
+                self.animated_border_color(id),
+            )
+            || self
+                .backdrop_blur
+                .get()
+                .is_some_and(|blur| blur.asks_for_anything())
+    }
+}
+
+/// A gradient between two fully transparent colours draws nothing; one end
+/// still visible is still a gradient.
+fn gradient_shows(gradient: &LinearGradient) -> bool {
+    gradient.start_color.a > 0.0 || gradient.end_color.a > 0.0
+}
+
+/// A border draws only with both a width and a colour that shows.
+fn border_shows(width: f32, color: Color) -> bool {
+    width > 0.0 && color.a > 0.0
 }
 
 /// Below this the shadow is not a faint shadow, it is nothing — and a rect

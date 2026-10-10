@@ -1149,13 +1149,15 @@ fn a_drag_does_not_outlive_the_pointer_leaving_the_surface() {
     field.now += Duration::from_millis(1);
     field.harness.send_at(Event::MouseLeave, field.now);
     field.now += Duration::from_millis(1);
+    // `Hit`, not `Handled`: the point is on the field, which covers what is
+    // beneath it, but nothing took the move.
     assert_eq!(
         field
             .harness
             .send_at(Event::mouse_move(150.0, 5.0), field.now),
-        EventResponse::Ignored,
-        "the leave ended the drag, so a later move is not the field's — and \
-         150 is inside the field, so only a live drag could have claimed it"
+        EventResponse::Hit,
+        "the leave ended the drag, so a later move is not the field's to take — \
+         and 150 is inside the field, so only a live drag could have claimed it"
     );
 
     // The same thing said in the text rather than the response, and it has to

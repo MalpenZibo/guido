@@ -637,7 +637,20 @@ not.
 
 Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)
-- Ignore and let parent continue (`EventResponse::Ignored`)
+- Say the point is on it but take nothing, which covers the siblings beneath
+  it and lets the parent continue (`EventResponse::Hit`)
+- Ignore it, and let the sibling beneath and then the parent continue
+  (`EventResponse::Ignored`)
+
+Siblings are asked from the one drawn last — on top — to the one drawn first,
+and the walk stops at the first that answers anything but `Ignored` (#636). A
+container answers `Hit` where the point is inside its shape and it draws, it
+listens, or a child of it is hit: Flutter's rule, under which a layer that only
+lays out lets the point through. A disabled container that draws answers
+`Hit` without asking its children, and a `TextInput` answers `Hit` for a point
+inside it that it did not take. What the walk stopped above is offered the
+event as a point clipped away is — under `Tree::begin_withholding`, so a hover
+it had falls and a press it holds keeps the position.
 
 A positioned event is not offered to every child. A container whose children
 are ordered along an axis offers it to the ones that can be under the point —

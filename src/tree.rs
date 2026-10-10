@@ -275,8 +275,8 @@ struct PointerRecord {
     /// What the event being dispatched offered by position.
     offering: Vec<Offered>,
     /// The containers that event reached. What the record owes in a container
-    /// it did not reach — one whose parent clipped the point away, one a
-    /// sibling's `Handled` stopped the walk before — stays owed.
+    /// it did not reach — one whose parent clipped the point away, one covered by
+    /// the sibling the walk stopped at and owed nothing — stays owed.
     reached: Vec<WidgetId>,
     /// What the last positioned event to reach each container offered by
     /// position. Sorted by container, so each finds its own with a search.
@@ -348,12 +348,18 @@ fn keep_what_the_root_reaches(record: &mut Vec<Offered>, root: WidgetId) {
     });
 }
 
-/// The children an event is offered to, in the order they stand: a window of
-/// them, and the few outside it the pointer record owes one or a bounds test
-/// found under the point.
+/// The children an event is offered to, the one drawn on top first: a window
+/// of them, and the few outside it the pointer record owes one or a bounds
+/// test found under the point.
+///
+/// Paint draws them in the order they stand, so the last stands on top, and a
+/// point is asked of what covers it before what it covers — as Flutter's
+/// `defaultHitTestChildren` walks from `lastChild`, and GTK's pick from the
+/// last child (#636).
 pub(crate) struct PointerTargets {
     window: std::ops::Range<usize>,
-    owed: std::iter::Peekable<smallvec::IntoIter<[usize; 4]>>,
+    /// Ascending, and taken from the end.
+    owed: SmallVec<[usize; 4]>,
     /// Owed and offered without the event's position: the children a clipped
     /// point is owed to for anything but the press holding them.
     blind: SmallVec<[usize; 4]>,
@@ -364,16 +370,17 @@ impl PointerTargets {
     fn every(len: usize) -> Self {
         Self {
             window: 0..len,
-            owed: SmallVec::new().into_iter().peekable(),
+            owed: SmallVec::new(),
             blind: SmallVec::new(),
         }
     }
 
-    /// The children at `indices`, in ascending order: a route through them.
+    /// The children at `indices`, given in ascending order: a route through
+    /// them.
     fn only(indices: SmallVec<[usize; 4]>) -> Self {
         Self {
             window: 0..0,
-            owed: indices.into_iter().peekable(),
+            owed: indices,
             blind: SmallVec::new(),
         }
     }
@@ -383,12 +390,12 @@ impl Iterator for PointerTargets {
     /// A child, and whether it is offered the event's position.
     type Item = (usize, bool);
 
-    /// The two merged in order. The owed ones lie outside the window, so
-    /// nothing comes out twice.
+    /// The two merged, from the last index down. The owed ones lie outside
+    /// the window, so nothing comes out twice.
     fn next(&mut self) -> Option<(usize, bool)> {
-        let index = match self.owed.peek() {
-            Some(&owed) if self.window.is_empty() || owed < self.window.start => self.owed.next(),
-            _ => self.window.next(),
+        let index = match self.owed.last() {
+            Some(&owed) if self.window.is_empty() || owed >= self.window.end => self.owed.pop(),
+            _ => self.window.next_back(),
         }?;
         Some((index, !self.blind.contains(&index)))
     }
@@ -489,14 +496,12 @@ pub struct Tree {
     /// is always asked before its children — so the last to say it is the
     /// innermost one, and the resolution needs no walk of its own: it is the
     /// dispatch's hit test, read at the end. CSS resolves `cursor` from the
-    /// hit-test target up through its ancestors, which is the same answer
-    /// wherever siblings do not overlap.
+    /// hit-test target up through its ancestors, which is the same answer.
     ///
-    /// Where they do, it is not quite: a sibling drawn over another that
-    /// declares nothing leaves the one beneath it standing, and a press the
-    /// one beneath consumes never reaches the one above. That is the
-    /// dispatch's own order, and the cursor follows it rather than walking a
-    /// second one.
+    /// Where siblings overlap it still is: the one drawn on top is asked
+    /// first, and a container that declares a cursor is hit wherever the point
+    /// is inside it, so the walk stops there and the one beneath never gets to
+    /// say anything (#636).
     ///
     /// Cleared before every event, like the two claims above it.
     cursor_under_the_point: Prop<CursorIcon>,
@@ -1466,8 +1471,8 @@ impl Tree {
         }
     }
 
-    /// Which of `parent`'s children `event` is offered to, in the order they
-    /// stand.
+    /// Which of `parent`'s children `event` is offered to, the one drawn on
+    /// top first.
     ///
     /// A key or a focus change goes to the children on the key route — see
     /// `dispatch_key` — and a paste, handed straight to one widget, is never
@@ -1598,9 +1603,26 @@ impl Tree {
         }
         PointerTargets {
             window,
-            owed: owed.into_iter().peekable(),
+            owed,
             blind,
         }
+    }
+
+    /// Whether the pointer record owes the event being dispatched to one of
+    /// `parent`'s children below `top`: what a sibling drawn over them has to
+    /// tell them. Read after [`Self::event_targets`] has put the record's
+    /// indices right for `parent`.
+    pub(crate) fn owes_a_child_below(&self, parent: WidgetId, top: usize) -> bool {
+        let key = parent.as_u64();
+        [&self.pointer.last, &self.pointer.pressed]
+            .into_iter()
+            .any(|list| {
+                let start = list.partition_point(|entry| by_parent(entry) < key);
+                list[start..]
+                    .iter()
+                    .take_while(|entry| entry.parent == parent)
+                    .any(|entry| (entry.index as usize) < top)
+            })
     }
 
     /// Offer what follows as a point a container above clipped away, until

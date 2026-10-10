@@ -1850,7 +1850,14 @@ impl<C: Content> Widget for TextInput<C> {
             _ => {}
         }
 
-        EventResponse::Ignored
+        // A point on the field that it did not take is still on the field:
+        // what it covers is not under the point, and the I-beam it showed
+        // must not be overwritten by a widget beneath it (#636).
+        if pointed_at {
+            EventResponse::Hit
+        } else {
+            EventResponse::Ignored
+        }
     }
 }
 

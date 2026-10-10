@@ -6499,9 +6499,11 @@ fn a_fully_transparent_gradient_draws_nothing() {
 /// The subtree gate, at its plainest: the handler is on the child, the
 /// declaration on the parent, and the click reaches neither.
 ///
-/// `Ignored` rather than a merely silent handler, because a click a disabled
-/// form swallows must not be swallowed at all — the container behind it is
-/// entitled to it.
+/// `Ignored` rather than a merely silent handler, because this disabled form
+/// draws nothing: there is nothing on it to cover a sibling beneath, and the
+/// container behind it is entitled to the click. One that draws answers `Hit`
+/// instead, and covers what is beneath it as an enabled one does —
+/// `tests/overlap_hit_order.rs` (#636).
 #[test]
 fn a_click_does_not_reach_a_handler_below_a_disabled_container() {
     let clicks = std::rc::Rc::new(std::cell::Cell::new(0));

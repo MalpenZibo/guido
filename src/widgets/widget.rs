@@ -705,9 +705,21 @@ pub enum Event {
     Pasted(crate::reactive::PastedText),
 }
 
+/// What a widget answers for an event routed to it.
+///
+/// Siblings are asked from the one drawn on top to the one drawn first, and
+/// the first that answers anything but `Ignored` stops the walk: the siblings
+/// beneath it are not asked (#636). Its ancestors still are, whatever it said,
+/// and they decide by the same three answers whether the event goes on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventResponse {
+    /// The point is not on this widget: the sibling beneath it is asked.
     Ignored,
+    /// The point is on this widget and nothing here took the event. The
+    /// siblings beneath are covered and are not asked; the ancestors still
+    /// handle it, and a press nobody took still releases the focus.
+    Hit,
+    /// Taken: nothing else handles it.
     Handled,
 }
 

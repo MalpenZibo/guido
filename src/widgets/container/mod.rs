@@ -1775,16 +1775,6 @@ impl Widget for Container {
         if !self.visible.get_or(true) {
             return EventResponse::Ignored;
         }
-        // The subtree gate. Only this container's own declaration, because
-        // returning before the children are asked *is* the propagation: an
-        // ancestor that is disabled has already stopped the event above us.
-        if let Some(ref ix) = self.interaction
-            && !ix.declared_enabled.get_or(true)
-        {
-            self.pointer_left(id, tree.event_instant());
-            return EventResponse::Ignored;
-        }
-
         let bounds = tree.get_bounds(id).unwrap_or_default();
         let placed = self.placed(id, bounds);
         let hit = HitContext {
@@ -1805,6 +1795,22 @@ impl Widget for Container {
             ),
             _ => Cow::Borrowed(event),
         };
+
+        // The subtree gate. Only this container's own declaration, because
+        // returning before the children are asked *is* the propagation: an
+        // ancestor that is disabled has already stopped the event above us.
+        // What it draws still covers the siblings beneath it, as a disabled
+        // control does in the DOM, Flutter and Qt; one that only lays out has
+        // nothing to cover them with.
+        if let Some(ref ix) = self.interaction
+            && !ix.declared_enabled.get_or(true)
+        {
+            self.pointer_left(id, tree.event_instant());
+            if hit.contains(local_event.coords()) && self.draws_its_own_surface(id) {
+                return EventResponse::Hit;
+            }
+            return EventResponse::Ignored;
+        }
 
         // Before anything below can return: a point over this container's
         // scrollbar is still a point over this container.
@@ -1866,7 +1872,6 @@ impl Widget for Container {
                 .coords()
                 .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
 
-        let mut a_child_took_it = false;
         let children = self.children_source.get();
         // A pointer event goes to the children that can be under its point —
         // the window paint narrows to — and to those the pointer record still
@@ -1885,25 +1890,46 @@ impl Widget for Container {
             self.children_sorted_along,
         );
         let mut blind: Option<Event> = None;
-        for (index, positioned) in targets {
+        let mut offer = |tree: &mut Tree, index: usize, positioned: bool| {
             let child_id = children[index];
             // A child playing its exit is drawn and takes nothing: the event
             // goes on to whatever is under it.
             if is_detached(child_id) {
-                continue;
+                return EventResponse::Ignored;
             }
             let event = if positioned {
                 &*child_event
             } else {
                 &*blind.get_or_insert_with(|| child_event.with_coords(None))
             };
-            if let Some(response) = tree.with_widget_mut(child_id, |child, child_id, tree| {
+            tree.with_widget_mut(child_id, |child, child_id, tree| {
                 child.event(tree, child_id, event)
-            }) && response == EventResponse::Handled
-            {
-                a_child_took_it = true;
-                break;
+            })
+            .unwrap_or(EventResponse::Ignored)
+        };
+        // The one drawn on top first, and the first the point is on stops the
+        // walk, whether or not it took the event: what it covers is not under
+        // the point (#636).
+        let stopped_at = targets.into_iter().find_map(|(index, positioned)| {
+            let response = offer(tree, index, positioned);
+            (response != EventResponse::Ignored).then_some((index, response))
+        });
+        let answered = stopped_at.map_or(EventResponse::Ignored, |(_, response)| response);
+        // What it covers may still be owed this event: hovered by the last
+        // one, or held by the press. It is told what a point clipped away
+        // tells — that the pointer is nowhere it can see — so its hover falls,
+        // and only the press keeps the position its drag and release need.
+        if let Some((top, _)) = stopped_at
+            && child_event.coords().is_some()
+            && tree.owes_a_child_below(id, top)
+        {
+            let was = tree.begin_withholding();
+            let owed =
+                tree.event_targets(id, children, &child_event, None, self.children_sorted_along);
+            for (index, positioned) in owed.filter(|&(index, _)| index < top) {
+                offer(tree, index, positioned);
             }
+            tree.end_withholding(was);
         }
         if let Some(was) = withheld {
             tree.end_withholding(was);
@@ -1919,11 +1945,18 @@ impl Widget for Container {
         {
             return response;
         }
-        if a_child_took_it {
+        if answered == EventResponse::Handled {
             return EventResponse::Handled;
         }
 
-        self.handle_own_event(tree, id, &hit, event, &local_event, at)
+        match self.handle_own_event(tree, id, &hit, event, &local_event, at) {
+            EventResponse::Ignored
+                if answered == EventResponse::Hit || self.is_hit(id, &hit, &local_event) =>
+            {
+                EventResponse::Hit
+            }
+            own => own,
+        }
     }
 
     fn refresh_paint_bounds(&self, tree: &mut Tree, id: WidgetId) {

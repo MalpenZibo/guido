@@ -8,7 +8,9 @@ use crate::widgets::LayoutHints;
 use super::{Constraints, Layout, Size};
 
 /// Layout that places all children at the same position, stacking them along
-/// the Z axis. Later children appear on top.
+/// the Z axis. Later children appear on top, and a pointer event is offered to
+/// them first: one that draws or listens where the point is covers the ones
+/// beneath it, and one that only lays out does not.
 ///
 /// # Sizing
 ///
