@@ -106,8 +106,8 @@ let popup = container()
 
 ## Moving the Keyboard
 
-Attach the ref to the widget that takes focus — a `text_input`, since a container
-cannot hold focus — and ask:
+Attach the ref to the widget that takes focus — a `text_input`, or a container
+that declares `focusable(true)` — and ask:
 
 ```rust
 # extern crate guido;

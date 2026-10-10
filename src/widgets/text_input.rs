@@ -678,7 +678,8 @@ impl<C: Content> TextInput<C> {
     /// Attach a handle, so application code can move the keyboard here.
     ///
     /// The container has the same builder; put the ref on the *input* when what
-    /// you mean is "focus this field", since a container cannot take focus.
+    /// you mean is "focus this field", since a container around it given the
+    /// focus keeps it, and the field never hears the keys.
     ///
     /// ```no_run
     /// # use guido::prelude::*;

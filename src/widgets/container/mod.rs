@@ -245,6 +245,8 @@ pub(super) struct InteractionState {
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
     pub(super) on_mouse_down: Option<MouseDownCallback>,
     pub(super) on_mouse_up: Option<MouseUpCallback>,
+    /// Whether Tab stops here, and a press inside takes the focus.
+    pub(super) focusable: bool,
     /// Hover and press, behind a signal so that *resolving a state layer
     /// subscribes to them*.
     ///
@@ -309,6 +311,7 @@ impl Default for InteractionState {
             on_pointer_move: None,
             on_mouse_down: None,
             on_mouse_up: None,
+            focusable: false,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
             declares_transform: Moves::default(),
@@ -1182,6 +1185,23 @@ impl Container {
         self
     }
 
+    /// Make this container a place the keyboard focus can be: Tab stops here,
+    /// in reading order among the text inputs and the other focusable
+    /// containers, and a press inside takes the focus — what `tabindex="0"`
+    /// does in HTML. That is how its own
+    /// [`when_focused`](crate::widgets::Stateful::when_focused) and the keys
+    /// its [`on_key_down`](Self::on_key_down) hears on the focus path become
+    /// reachable without a text input inside.
+    ///
+    /// Structural, like the event handlers: it says what the container is,
+    /// and does not reach paint. A container that is not focusable can still
+    /// be given the focus by [`WidgetRef::focus`](crate::widget_ref::WidgetRef::focus);
+    /// it is only not a stop.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.interact_mut().focusable = focusable;
+        self
+    }
+
     pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_hover = Some(Rc::new(callback));
         self
@@ -1435,6 +1455,10 @@ impl Container {
         };
     }
 
+    pub(super) fn is_focusable(&self) -> bool {
+        self.interaction.as_ref().is_some_and(|ix| ix.focusable)
+    }
+
     /// Whether this container is an interaction unit.
     ///
     /// A pointer target *is* one — it has to know whether it is being pointed
@@ -1644,6 +1668,9 @@ impl Widget for Container {
         }
         if self.visible.is_set() {
             tree.declare_visible(id, self.visible);
+        }
+        if self.is_focusable() {
+            tree.make_tab_stop(id);
         }
 
         // Register pending children

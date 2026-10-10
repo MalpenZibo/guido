@@ -10,6 +10,8 @@
 
 #![cfg(feature = "testing")]
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
@@ -508,37 +510,158 @@ fn a_popup_keeps_tab_among_its_own_fields() {
     );
 }
 
-/// Focus a widget ref names, and let the loop apply it.
-fn focus_by_ref(app: &mut Headless, at: &mut Instant, r: WidgetRef) {
-    r.focus();
-    *at += Duration::from_millis(16);
-    app.step_at(*at);
+/// Two fields with a container between them that declares `focusable(true)` —
+/// inside a row that counts its clicks, when `in_a_row`.
+fn a_focusable_between(
+    app: &mut Headless,
+    in_a_row: bool,
+) -> ([WidgetRef; 3], Rc<Cell<u32>>, SurfaceId, Instant) {
+    let stops = refs::<3>();
+    let clicks = Rc::new(Cell::new(0));
+    let counted = clicks.clone();
+    let (id, at) = surface(app, move || {
+        let card = container()
+            .height(30.0)
+            .width(fill())
+            .focusable(true)
+            .widget_ref(stops[1])
+            .child(text("a card"));
+        let counted = counted.clone();
+        let middle = if in_a_row {
+            container()
+                .width(fill())
+                .on_click(move || counted.set(counted.get() + 1))
+                .child(card)
+        } else {
+            card
+        };
+        container()
+            .layout(Flex::column())
+            .child(field(stops[0]))
+            .child(middle)
+            .child(field(stops[2]))
+    });
+    (stops, clicks, id, at)
 }
 
-/// A widget focused by a ref without being a stop: Tab goes on from where it
-/// stands, to the next stop after it, and Shift+Tab to the one before.
+#[test]
+fn a_focusable_container_is_a_stop() {
+    let Some(mut app) = headless() else { return };
+    let (stops, _, id, mut at) = a_focusable_between(&mut app, false);
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    tab(&mut app, id, &mut at);
+    assert_eq!(focused(&stops), Some(1), "the container between them");
+    tab(&mut app, id, &mut at);
+    assert_eq!(focused(&stops), Some(2));
+    shift_tab(&mut app, id, &mut at);
+    assert_eq!(focused(&stops), Some(1));
+}
+
+#[test]
+fn a_press_inside_a_focusable_container_focuses_it() {
+    let Some(mut app) = headless() else { return };
+    for in_a_row in [false, true] {
+        let (stops, clicks, id, mut at) = a_focusable_between(&mut app, in_a_row);
+
+        click(&mut app, id, &mut at, 10.0, 10.0);
+        assert_eq!(focused(&stops), Some(0));
+        click(&mut app, id, &mut at, 150.0, 45.0);
+        assert_eq!(
+            focused(&stops),
+            Some(1),
+            "the press focused the container (in a row: {in_a_row})"
+        );
+        assert!(!focus_path().by_keyboard());
+        assert_eq!(
+            clicks.get(),
+            u32::from(in_a_row),
+            "and did not take the click from a row around it"
+        );
+        surface_handle(id).close();
+    }
+}
+
+/// Nested focusable containers: a press goes to the innermost one it landed
+/// in, as a click focuses the innermost focusable element on the web.
+#[test]
+fn a_press_focuses_the_innermost_focusable_container() {
+    let Some(mut app) = headless() else { return };
+    let [outer, inner] = refs::<2>();
+    let stops = [outer, inner];
+    let (id, mut at) = surface(&mut app, move || {
+        container().child(
+            container()
+                .height(100.0)
+                .width(fill())
+                .focusable(true)
+                .widget_ref(outer)
+                .child(
+                    container()
+                        .height(30.0)
+                        .width(fill())
+                        .focusable(true)
+                        .widget_ref(inner),
+                ),
+        )
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    assert_eq!(focused(&stops), Some(1), "the inner one");
+    click(&mut app, id, &mut at, 10.0, 60.0);
+    assert_eq!(focused(&stops), Some(0), "and below it, the outer one");
+}
+
+/// A widget that takes the focus when pressed and is not a Tab stop, as a
+/// widget focused by a ref is not.
+///
+/// Pressed rather than focused through a `WidgetRef`: a ref's request is
+/// applied by the frame the wake flag asks for, and that flag belongs to the
+/// process, so another test's `Headless` stepping on another thread can take
+/// it first and leave this one's request parked.
+struct FocusedByPress;
+
+impl Widget for FocusedByPress {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+        Size::new(200.0, 30.0)
+    }
+
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        if let Event::MouseDown { .. } = event {
+            request_focus(tree, id);
+            return EventResponse::Handled;
+        }
+        EventResponse::Ignored
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+}
+
+/// A widget focused without being a stop: Tab goes on from where it stands,
+/// to the next stop after it, and Shift+Tab to the one before.
 #[test]
 fn from_a_widget_that_is_not_a_stop_tab_goes_on_from_where_it_stands() {
     let Some(mut app) = headless() else { return };
-    let refs = refs::<3>();
+    let fields = refs::<2>();
     let (id, mut at) = surface(&mut app, move || {
         container()
             .layout(Flex::column())
-            .child(field(refs[0]))
-            .child(container().height(30.0).width(fill()).widget_ref(refs[1]))
-            .child(field(refs[2]))
+            .child(field(fields[0]))
+            .child(FocusedByPress)
+            .child(field(fields[1]))
     });
 
-    focus_by_ref(&mut app, &mut at, refs[1]);
-    assert_eq!(
-        focused(&refs),
-        Some(1),
-        "the ref focused the plain container"
+    click(&mut app, id, &mut at, 10.0, 40.0);
+    let middle = focused_widget();
+    assert!(
+        middle.is_some() && focused(&fields).is_none(),
+        "the press focused the widget between the fields"
     );
     tab(&mut app, id, &mut at);
-    assert_eq!(focused(&refs), Some(2), "Tab: the stop after it");
+    assert_eq!(focused(&fields), Some(1), "Tab: the stop after it");
 
-    focus_by_ref(&mut app, &mut at, refs[1]);
+    click(&mut app, id, &mut at, 10.0, 40.0);
+    assert_eq!(focused_widget(), middle);
     shift_tab(&mut app, id, &mut at);
-    assert_eq!(focused(&refs), Some(0), "Shift+Tab: the stop before it");
+    assert_eq!(focused(&fields), Some(0), "Shift+Tab: the stop before it");
 }

@@ -20,7 +20,7 @@
 //! [`handle_own_event`]: Container::handle_own_event
 
 use crate::clock::EventInstant;
-use crate::reactive::focus::focus_within;
+use crate::reactive::focus::{focus_within, request_focus};
 
 use super::*;
 
@@ -306,6 +306,16 @@ impl Container {
         // case that would otherwise run it more than once.
         let pressed_inside =
             matches!(local, Event::MouseDown { .. }) && hit.contains(local.coords());
+
+        // A press inside a focusable container that nothing in it took is a
+        // press on the container, and the focus goes there — said on the tree
+        // rather than by consuming it, for the reason the end of this
+        // function gives. A focusable container inside that already said so
+        // keeps it: the innermost is the one pressed.
+        if pressed_inside && self.is_focusable() && !tree.focus_claimed_the_press() {
+            request_focus(tree, id);
+            tree.keep_the_focus_this_press_landed_on();
+        }
 
         match local {
             // Hover was tracked before the children ran. Returning Ignored
