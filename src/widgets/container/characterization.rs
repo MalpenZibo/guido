@@ -5648,6 +5648,60 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
     assert!(worst > 0.0, "the flicker has to actually raise a shadow");
 }
 
+/// A spring between two shadows pulled inside the box is drawn as the spring
+/// moves it, never rescaled by the clamp.
+///
+/// Both declarations reach nothing past the box, so the reach measured from
+/// them is zero — but the spring's overshoot carries the shadow past the edge,
+/// and clamped to a reach of zero it collapsed onto the box instead. The blur
+/// is the same in both, so any frame drawn with another blur was scaled.
+#[test]
+fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
+    let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
+    let near_edge = Shadow::new((0.0, 0.0), 2.0, -4.2, Color::BLACK);
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .shadow(deep_inside.transition(Transition::spring(SpringConfig::BOUNCY)))
+            .when_hovered(|s| s.shadow(near_edge)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    set_hover(&mut h, true);
+    let t0 = std::time::Instant::now();
+    let mut furthest = f32::NEG_INFINITY;
+    for step in 1..=60 {
+        frame_at(
+            &mut h,
+            t0 + std::time::Duration::from_millis(5 * step),
+            100.0,
+            100.0,
+        );
+        let reach = h.tree.paint_overflow(h.root);
+        let node = h.paint();
+        let Some(drawn) = drawn_shadow(&node) else {
+            continue;
+        };
+        furthest = furthest.max(drawn.spread);
+        assert!(
+            (drawn.blur - 2.0).abs() < 1e-3,
+            "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
+        );
+        assert!(
+            drawn.extent() <= reach + 0.01,
+            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
+            drawn.extent()
+        );
+    }
+    assert!(
+        furthest > -4.0,
+        "the spring has to carry the shadow past the edge, got a spread of {furthest}"
+    );
+}
+
 /// A shadow's reach covers what its *timeline* can reach, not only what its
 /// declarations resolve to.
 ///
