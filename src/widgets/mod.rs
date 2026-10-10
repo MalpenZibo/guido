@@ -38,7 +38,7 @@ pub use text_input::{PasswordInput, Selection, TextInput, password_input, text_i
 pub use text_style::{TextShadow, TextStroke, TextStyle};
 pub use widget::{
     AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding,
-    Point, PointerKind, Rect, ScrollSource, Widget,
+    Placement, Point, PointerKind, Rect, ScrollSource, Widget,
 };
 
 // Every conversion a corner shape or a padding accepts, declared once. The

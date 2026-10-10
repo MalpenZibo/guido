@@ -733,6 +733,10 @@ impl Widget for OwnedWidget {
         self.inner.refresh_paint_bounds(tree, id)
     }
 
+    fn placement(&self, tree: &Tree, id: WidgetId) -> crate::widgets::Placement {
+        self.inner.placement(tree, id)
+    }
+
     fn layout_hints(&self) -> LayoutHints {
         self.inner.layout_hints()
     }

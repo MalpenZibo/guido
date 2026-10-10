@@ -8,11 +8,9 @@
 //! A binary of its own rather than a part of `tests/headless_app.rs`, and its
 //! tests taken one at a time: the decode lands through the background-write
 //! queue, which is process-wide. Every `Headless::step` drains it on whichever
-//! thread steps, and every `Headless` dropped retires the writes queued before
-//! it — so beside tests that step and drop in parallel, a decode written by one
-//! test's worker would be applied to another test's thread, or thrown away.
-//! An application has one loop in its process; a test binary has as many as it
-//! has threads.
+//! thread steps — so beside tests that step in parallel, a decode written by
+//! one test's worker would be applied to another test's thread. An application
+//! has one loop in its process; a test binary has as many as it has threads.
 
 use std::cell::Cell;
 use std::io::Cursor;

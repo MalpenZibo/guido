@@ -46,8 +46,8 @@ use super::state_layer::{
     Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
 };
 use super::widget::{
-    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Point, Rect,
-    ScrollSource, Widget,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Placement,
+    Point, Rect, ScrollSource, Widget,
 };
 
 /// Callback for click events
@@ -510,6 +510,13 @@ pub struct Container {
     pub(super) children_sorted_along: Option<Axis>,
 }
 
+/// What [`Container::placed`] answers.
+struct Placed {
+    transform: Transform,
+    pivot: Pivot,
+    scroll: (f32, f32),
+}
+
 impl Container {
     pub fn new() -> Self {
         let children_source = ChildrenSource::default();
@@ -594,6 +601,28 @@ impl Container {
         };
         data.metrics = metrics;
         data.scrollbar_visibility = visibility;
+    }
+
+    /// Where this container draws itself and its children against where it
+    /// was laid out: its own transform, the pivot that turns about, and the
+    /// scroll offset it moves its children by.
+    ///
+    /// Paint, the hit test and [`Widget::placement`] all read the three through
+    /// here, so what a widget ref reports, where a click lands and what is
+    /// drawn cannot disagree about where this container is. `bounds` is the
+    /// laid-out box a relative translate is a fraction of.
+    fn placed(&self, id: WidgetId, bounds: Rect) -> Placed {
+        let scroll = if self.scroll_axis != ScrollAxis::None {
+            let sd = self.scroll_data();
+            (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
+        } else {
+            (0.0, 0.0)
+        };
+        Placed {
+            transform: self.animated_transform(id, bounds),
+            pivot: self.resolved_pivot(id),
+            scroll,
+        }
     }
 
     /// Get scroll data (panics if not scrollable — only call when scroll_axis != None)
@@ -1757,11 +1786,12 @@ impl Widget for Container {
         }
 
         let bounds = tree.get_bounds(id).unwrap_or_default();
+        let placed = self.placed(id, bounds);
         let hit = HitContext {
             bounds,
             corners: self.animated_corners(id),
-            transform: self.animated_transform(id, bounds),
-            pivot: self.resolved_pivot(id),
+            transform: placed.transform,
+            pivot: placed.pivot,
         };
 
         // Undo our own transform before hit testing against the laid-out
@@ -1817,11 +1847,7 @@ impl Widget for Container {
         // offset, when we scroll), so their events have to be too.
         let child_event: Cow<'_, Event> = match local_event.coords() {
             Some(at) => {
-                let mut child_at = hit.rebase(at);
-                if self.scroll_axis != ScrollAxis::None {
-                    let sd = self.scroll_data();
-                    child_at = child_at.offset(sd.scroll_state.offset_x, sd.scroll_state.offset_y);
-                }
+                let child_at = hit.rebase(at).offset(placed.scroll.0, placed.scroll.1);
                 Cow::Owned(local_event.with_coords(Some(child_at)))
             }
             None => local_event.clone(),
@@ -1905,6 +1931,21 @@ impl Widget for Container {
         self.publish_paint_reach(tree, id, Rect::from_size(size));
     }
 
+    fn placement(&self, tree: &Tree, id: WidgetId) -> Placement {
+        let Some(bounds) = tree.get_bounds(id) else {
+            return Placement::NONE;
+        };
+        let placed = self.placed(id, bounds);
+        Placement {
+            // About the pivot in the container's own box, as flatten turns it.
+            own: placed.transform.about(
+                placed.pivot,
+                Rect::from_size(Size::new(bounds.width, bounds.height)),
+            ),
+            scroll: placed.scroll,
+        }
+    }
+
     fn paint(&self, ctx: &mut PaintContext) {
         let (tree, id) = (ctx.tree(), ctx.id());
         let is_visible = self.visible.get_or(true);
@@ -1914,6 +1955,7 @@ impl Widget for Container {
 
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
+        let placed = self.placed(id, bounds);
 
         // Read inside the scope the framework opened around this call, so a
         // change to any of them repaints this container and nothing else.
@@ -1934,8 +1976,8 @@ impl Widget for Container {
             self.animated_background(id),
             self.animated_corners(id),
             self.animated_shadow(id),
-            self.animated_transform(id, bounds),
-            self.resolved_pivot(id),
+            placed.transform,
+            placed.pivot,
             self.animated_border_width(id),
             self.animated_border_color(id),
             self.effective_gradient(id),
@@ -2017,10 +2059,9 @@ impl Widget for Container {
         // For scrollable containers: viewport mapped to layout space (before scroll transform).
         // For non-scrollable containers: inherited from parent via PaintContext.
         let effective_cull_rect = if is_scrollable {
-            let sd = self.scroll_data();
             Some(Rect::new(
-                sd.scroll_state.offset_x,
-                sd.scroll_state.offset_y,
+                placed.scroll.0,
+                placed.scroll.1,
                 local_bounds.width,
                 local_bounds.height,
             ))
@@ -2037,17 +2078,11 @@ impl Widget for Container {
 
         let all_children = self.children_source.get();
 
-        let scroll_offset = if is_scrollable {
-            let sd = self.scroll_data();
-            (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
-        } else {
-            (0.0, 0.0)
-        };
         paint_children(
             ctx,
             all_children,
             &ChildPaintOptions {
-                scroll_offset,
+                scroll_offset: placed.scroll,
                 cull_rect: effective_cull_rect,
                 children_sorted_along: self.children_sorted_along,
                 children_reach: tree.children_reach(id),

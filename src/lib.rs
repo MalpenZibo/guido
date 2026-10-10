@@ -1749,7 +1749,8 @@ fn layout_pass<P: Platform>(
         }
     }
 
-    // Update widget ref signals with current bounds after layout
+    // Where every ref'd widget is drawn now: after layout, and on a frame
+    // that only scrolled or animated a transform, which moves it all the same.
     widget_ref::update_widget_refs(tree);
 
     // A `WidgetRef::focus()` from application code lands here: after layout, so
@@ -2168,6 +2169,12 @@ fn render_surface<P: Platform>(
     ctx.tree.set_frame_instant(None);
 }
 
+/// The application: the loop, its surfaces and the reactive state they run on.
+///
+/// One at a time per process. A new one may start once the previous one is
+/// dropped, and starts clean: dropping an `App` retires what it left behind,
+/// the writes its background services queued included. Two at once in one
+/// process would share that process-wide state, and are not supported.
 pub struct App {
     /// Surface definitions added via add_surface()
     surface_definitions: Vec<SurfaceDefinition>,
@@ -2673,9 +2680,10 @@ fn iterate<P: Platform>(
 ///
 /// What is deliberately *not* here is the state that belongs to the process
 /// rather than the thread: the wake flag and the ping in [`jobs`], the ingress
-/// sender. `App` clears those below, because a program has one; `Headless`
-/// must not, because a test binary runs several of them at once and clearing
-/// them reaches into somebody else's application.
+/// sender, the background-write queue and its epoch. `App` clears those below,
+/// because a program has one; `Headless` must not, because a test binary runs
+/// several of them at once and clearing them reaches into somebody else's
+/// application.
 pub(crate) fn reset_thread_state(tree: &mut Tree) {
     // The tree BEFORE the queues. Dropping widgets triggers
     // ChildrenSource::drop() which pushes Unregister jobs; reset the queues
@@ -2697,9 +2705,11 @@ impl Drop for App {
         reset_thread_state(&mut self.tree);
 
         // And the process-wide half, which only a program that owns the process
-        // may clear.
+        // may clear. Retiring the background writes is what stops the next
+        // application receiving the ones this one's services queued.
         jobs::reset_wakeup();
         ingress::reset_ingress();
+        reactive::reset_bg_writes();
     }
 }
 
