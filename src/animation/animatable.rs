@@ -174,10 +174,10 @@ impl Animatable for Shadow {
 
     /// Shrinking, and then fading at a constant size.
     ///
-    /// [`extent`](Shadow::extent) is the same reduction the
+    /// [`signed_extent`](Shadow::signed_extent) is the same reduction the
     /// damage rect is sized by, so "reverse" here means the same thing it means
     /// to everything downstream: the shadow is giving ground back. Alpha breaks
-    /// the tie because `extent` reports the full reach at any alpha above zero,
+    /// the tie because the extent reports the full reach at any alpha above zero,
     /// so a shadow fading out at a constant geometry would otherwise read as
     /// forward in both directions.
     ///
@@ -185,7 +185,7 @@ impl Animatable for Shadow {
     /// a blur of 4 becoming a spread of 8, an offset moving from down to
     /// sideways. Both reduce to the same extent, and neither is larger.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        (to.extent(), to.color.a) < (from.extent(), from.color.a)
+        (to.signed_extent(), to.color.a) < (from.signed_extent(), from.color.a)
     }
 
     fn channels(&self) -> Channels {
@@ -421,6 +421,16 @@ mod tests {
             "fading out is a reversal"
         );
         assert!(!Shadow::is_reverse(&faint, &solid));
+    }
+
+    /// A pressed state going from one pulled-in shadow to another still has a
+    /// direction, though neither reaches past the box.
+    #[test]
+    fn a_shadow_pulled_further_inside_its_box_is_reversing() {
+        let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
+        let near_edge = Shadow::new((0.0, 0.0), 2.0, -8.0, Color::BLACK);
+        assert!(!Shadow::is_reverse(&deep_inside, &near_edge));
+        assert!(Shadow::is_reverse(&near_edge, &deep_inside));
     }
 
     /// A relative translate interpolates its fraction, not a width it was
