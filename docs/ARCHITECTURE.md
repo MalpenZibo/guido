@@ -681,6 +681,14 @@ for their drag and their release. So the row the pointer was over is told it
 left, a press is told it was given up, and a drag keeps reaching what it
 started on outside the scroller around it — and nothing else is asked.
 
+Hover state changes where the walk finds it, but `on_hover` does not run
+there: the walk goes parent before child and top sibling first, which is
+neither order a hover is owed in. `Tree::hover_changed` holds each call, and
+`Tree::dispatch` delivers them when the event's walk returns — every leave,
+innermost first, then every enter, outermost first, as the DOM, Chromium's
+boundary dispatcher, Flutter's `MouseTracker`, GTK and Qt do (#657). A container
+whose hover flipped and flipped back within the one event hears nothing.
+
 A key goes down the focus path — the focused widget has it first, then each
 ancestor up to the root — and, if nobody on it took it, down to the containers
 that declared `on_key_down` or `on_key_up`, the innermost first: Flutter's

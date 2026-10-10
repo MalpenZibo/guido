@@ -55,6 +55,17 @@ container()
 
 The callback receives a boolean indicating hover state.
 
+When one pointer move leaves some containers and enters others, every
+`on_hover(false)` it causes is called before any `on_hover(true)`. Leaves go
+from the innermost container outward, enters from the outermost inward, so the
+container the pointer left hears first and the one it reached hears last. A
+container holding both, which the pointer never left, hears nothing. The order
+is the same whichever way the pointer moved and whichever sibling is drawn on
+top, and it is the one browsers, Flutter, GTK and Qt give.
+
+The hover *state* that `when_hovered` reads has already changed by the time
+any of these callbacks runs.
+
 ### Hover with State Layer
 
 For visual hover effects, use `when_hovered` instead:
