@@ -461,3 +461,69 @@ fn a_disabled_card_on_top_hides_the_cursor_beneath() {
         "beside the card, then over it, where it covers the strip"
     );
 }
+
+/// Whether `top`, a full-size card drawn over a button, takes the click that
+/// would otherwise be the button's.
+fn covers_the_button_beneath(top: Container) -> bool {
+    let (button, bump_button) = counter();
+    let mut h = Harness::laid_out(
+        stack([
+            container()
+                .width(80.0)
+                .height(40.0)
+                .background(Color::RED)
+                .on_click(bump_button),
+            top.width(80.0).height(40.0),
+        ]),
+        400.0,
+        200.0,
+    );
+    h.click(40.0, 20.0);
+    button.get() == 0
+}
+
+/// Each surface a card can draw is one it is hit by, on its own: a fill is
+/// not the only way to be over something.
+#[test]
+fn a_card_drawn_only_with_a_gradient_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(container().gradient(
+        LinearGradient::horizontal(Color::BLUE, Color::GREEN)
+    )));
+}
+
+#[test]
+fn a_card_drawn_only_with_a_border_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(
+        container().border(2.0, Color::BLUE)
+    ));
+}
+
+#[test]
+fn a_card_drawn_only_with_a_backdrop_blur_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(container().backdrop_blur(4.0)));
+}
+
+/// A gradient with one end still visible draws, from either end; one between
+/// two fully transparent colours draws nothing and lets the click through.
+#[test]
+fn a_gradient_covers_the_button_beneath_while_one_end_shows() {
+    assert!(
+        covers_the_button_beneath(
+            container().gradient(LinearGradient::horizontal(Color::BLUE, Color::TRANSPARENT))
+        ),
+        "the start shows"
+    );
+    assert!(
+        covers_the_button_beneath(
+            container().gradient(LinearGradient::horizontal(Color::TRANSPARENT, Color::BLUE))
+        ),
+        "the end shows"
+    );
+    assert!(
+        !covers_the_button_beneath(container().gradient(LinearGradient::horizontal(
+            Color::TRANSPARENT,
+            Color::TRANSPARENT
+        ))),
+        "neither end shows"
+    );
+}
