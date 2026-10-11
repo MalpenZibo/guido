@@ -540,7 +540,9 @@ pub struct Tree {
     /// The turn the next widget to become a Tab stop joins in.
     tab_stop_turn: u64,
     /// The `visible` each container that declared one was given, so Tab can
-    /// pass over what is inside a hidden one without asking the widgets.
+    /// pass over what is inside a hidden one without asking the widgets, and
+    /// an animation inside one can stop and be queued again when it is shown
+    /// (#666).
     declared_visible: rustc_hash::FxHashMap<WidgetId, Prop<bool>>,
 }
 
@@ -1630,11 +1632,7 @@ impl Tree {
     /// it is in is hidden or disabled.
     fn takes_tab(&self, id: WidgetId) -> bool {
         !crate::reactive::invalidation::is_detached(id)
-            && self.ancestors(id).all(|above| {
-                self.declared_visible
-                    .get(&above)
-                    .is_none_or(|visible| visible.get_or_untracked(true))
-            })
+            && !self.any_declared_hidden(self.ancestors(id), Prop::get_or_untracked)
             && self
                 .nearest_control(id)
                 .is_none_or(|control| control.enabled_prop().get_or_untracked(true))
@@ -1649,7 +1647,30 @@ impl Tree {
         }
     }
 
-    /// Record the `visible` a container declared, for Tab to read.
+    /// Whether a container `id` sits inside has declared itself hidden.
+    ///
+    /// Reads tracked: `process_jobs` asks it under the widget's Animation job,
+    /// so a flip of any of those back to visible queues the job again (#666).
+    pub(crate) fn inside_a_hidden_container(&self, id: WidgetId) -> bool {
+        self.any_declared_hidden(self.ancestors(id).skip(1), Prop::get_or)
+    }
+
+    /// Whether any of `ids` is a container that declared itself hidden, each
+    /// `visible` read with `read`. The one rule Tab and animations both ask.
+    fn any_declared_hidden(
+        &self,
+        mut ids: impl Iterator<Item = WidgetId>,
+        read: fn(&Prop<bool>, bool) -> bool,
+    ) -> bool {
+        ids.any(|id| {
+            self.declared_visible
+                .get(&id)
+                .is_some_and(|visible| !read(visible, true))
+        })
+    }
+
+    /// Record the `visible` a container declared, for Tab and animations to
+    /// read.
     pub(crate) fn declare_visible(&mut self, id: WidgetId, visible: Prop<bool>) {
         self.declared_visible.insert(id, visible);
     }

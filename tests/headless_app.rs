@@ -3275,3 +3275,176 @@ fn a_right_press_during_a_drag_keeps_the_cursor_under_the_pointer() {
         app.cursors_asked()
     );
 }
+
+/// What hiding the panel is tested with: a spinner, and a label whose colour
+/// pulses for ever, each inside the panel rather than the panel itself.
+fn spinner_and_pulse() -> (Container, Text) {
+    let spinner = container()
+        .width(20.0)
+        .height(20.0)
+        .background(Color::WHITE)
+        .rotate(
+            0.0.timeline(
+                Keyframes::new(1000.0)
+                    .at(0.0, 0.0)
+                    .at(1.0, 360.0)
+                    .repeat(Repeat::Forever),
+            ),
+        );
+    let pulse = text("busy").color(
+        Color::WHITE.timeline(
+            Keyframes::new(1000.0)
+                .at(0.0, Color::WHITE)
+                .at(1.0, Color::BLACK)
+                .repeat(Repeat::Forever),
+        ),
+    );
+    (spinner, pulse)
+}
+
+/// Hiding a panel stops the animations inside it, not only its own (#666):
+/// what it holds is not on screen, so nothing should be presented for it.
+/// Showing the panel again starts them again.
+#[test]
+fn what_a_hidden_panel_holds_lets_the_surface_go_idle() {
+    for which in ["spinner", "pulse"] {
+        let Some(mut app) = headless() else { return };
+        let busy = create_signal(true);
+        let surface = app.surface(fixed_bar(), move || {
+            let (spinner, pulse) = spinner_and_pulse();
+            let panel = container().visible(busy);
+            container().width(fill()).height(fill()).child(match which {
+                "spinner" => panel.child(spinner),
+                _ => panel.child(pulse),
+            })
+        });
+        app.configure(surface, 200, 50, 1.0);
+        let t0 = Instant::now();
+        let at = |i: u64| t0 + Duration::from_millis(16 * i);
+        for i in 0..5 {
+            app.step_at(at(i));
+        }
+        assert_eq!(app.frames_presented(surface), 5, "{which}: running");
+
+        busy.set(false);
+        for i in 5..8 {
+            app.step_at(at(i));
+        }
+        let settled = app.frames_presented(surface);
+        for i in 8..28 {
+            app.step_at(at(i));
+        }
+        assert_eq!(
+            app.frames_presented(surface),
+            settled,
+            "{which}: a hidden panel's contents presented frames of nothing"
+        );
+
+        busy.set(true);
+        for i in 28..32 {
+            app.step_at(at(i));
+        }
+        assert!(
+            app.frames_presented(surface) >= settled + 3,
+            "{which}: shown again, it runs again"
+        );
+    }
+}
+
+/// Inside two panels, the outer one hidden: showing it again starts the
+/// spinner again, though the inner panel never changed and the spinner's last
+/// read stopped at the outer one.
+#[test]
+fn a_spinner_two_panels_deep_runs_again_when_the_outer_one_is_shown() {
+    let Some(mut app) = headless() else { return };
+    let outer = create_signal(true);
+    let inner = create_signal(true);
+    let surface = app.surface(fixed_bar(), move || {
+        let (spinner, _) = spinner_and_pulse();
+        container().width(fill()).height(fill()).child(
+            container()
+                .visible(outer)
+                .child(container().visible(inner).child(spinner)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let t0 = Instant::now();
+    let at = |i: u64| t0 + Duration::from_millis(16 * i);
+    for i in 0..5 {
+        app.step_at(at(i));
+    }
+    outer.set(false);
+    for i in 5..8 {
+        app.step_at(at(i));
+    }
+    let settled = app.frames_presented(surface);
+    for i in 8..28 {
+        app.step_at(at(i));
+    }
+    assert_eq!(app.frames_presented(surface), settled, "hidden two deep");
+
+    outer.set(true);
+    for i in 28..32 {
+        app.step_at(at(i));
+    }
+    assert!(
+        app.frames_presented(surface) >= settled + 3,
+        "shown again, it runs again"
+    );
+}
+
+/// A widget from outside the crate that animates by reading a signal under
+/// its Animation job: inside a hidden panel a change of that signal advances
+/// nothing, and shown again it does (#666). The check is the loop's, so it is
+/// one a widget cannot forget to make.
+#[test]
+fn a_widget_from_outside_the_crate_does_not_animate_inside_a_hidden_panel() {
+    struct Ticker {
+        tick: Signal<u32>,
+        advanced: Rc<Cell<u32>>,
+    }
+    impl Widget for Ticker {
+        fn layout(&mut self, ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
+            let id = ctx.id();
+            with_signal_tracking(id, JobType::Animation, || self.tick.get());
+            Size::new(10.0, 10.0)
+        }
+        fn advance_animations(&mut self, _tree: &mut Tree, id: WidgetId) -> bool {
+            self.advanced.set(self.advanced.get() + 1);
+            with_signal_tracking(id, JobType::Animation, || self.tick.get());
+            false
+        }
+        fn paint(&self, _ctx: &mut PaintContext) {}
+    }
+
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(true);
+    let tick = create_signal(0u32);
+    let advanced = Rc::new(Cell::new(0));
+    let counted = advanced.clone();
+    let surface = app.surface(fixed_bar(), move || {
+        container().child(container().visible(shown).child(Ticker {
+            tick: tick.into(),
+            advanced: counted.clone(),
+        }))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    tick.set(1);
+    app.step();
+    assert_eq!(advanced.get(), 1, "a tick advances it");
+
+    shown.set(false);
+    app.step();
+    tick.set(2);
+    app.step();
+    assert_eq!(
+        advanced.get(),
+        1,
+        "inside a hidden panel a tick advances nothing"
+    );
+
+    shown.set(true);
+    app.step();
+    assert!(advanced.get() > 1, "shown again, it advances");
+}

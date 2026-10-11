@@ -1019,7 +1019,9 @@ impl Container {
     /// Set visibility of this container.
     ///
     /// When `visible` is false, the container takes up no space in layout,
-    /// does not paint, and ignores all events.
+    /// does not paint, and ignores all events. Nothing inside it advances an
+    /// animation while it is hidden, except an exit, which plays out so that
+    /// its widget can leave.
     pub fn visible<M>(mut self, visible: impl IntoSignal<bool, M>) -> Self {
         self.visible = visible.into_prop();
         self
@@ -1530,6 +1532,8 @@ impl Widget for Container {
             // Inside a child that is leaving: only the exit moves.
             return false;
         }
+        // The containers it sits in are asked by `process_jobs`, before this
+        // runs (#666).
         let is_visible =
             leaving || with_signal_tracking(id, JobType::Animation, || self.visible.get_or(true));
         if !is_visible {
