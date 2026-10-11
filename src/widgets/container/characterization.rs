@@ -302,6 +302,75 @@ fn fill_takes_the_whole_offered_axis() {
     assert_eq!(h.fit(500.0, 500.0).width, 500.0);
 }
 
+/// A hidden sibling measures nothing and placement keeps no gap beside it, so a
+/// filling child is given that gap too and reaches the row's end (#667). Beside
+/// a shown badge it is the row less the gap and the badge, as before.
+#[test]
+fn a_hidden_sibling_takes_no_spacing_from_a_filling_one() {
+    use crate::layout::flex_layout::MIN_VISIBLE_SIZE;
+
+    // Lays `children` out in a 300-long flex with spacing 8, and says where
+    // each one starts and how long it is, along the flex.
+    let laid_out = |column: bool, children: Vec<Container>| {
+        let flex = if column { Flex::column() } else { Flex::row() };
+        let mut h = H::new(
+            container()
+                .width(300.0)
+                .height(300.0)
+                .layout(flex.spacing(8.0))
+                .children(children),
+        );
+        h.fit(500.0, 500.0);
+        h.children()
+            .iter()
+            .map(|&child| {
+                let r = h.tree.get_bounds(child).unwrap();
+                if column {
+                    (r.y, r.height)
+                } else {
+                    (r.x, r.width)
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let filling = |column: bool| {
+        if column {
+            container().height(fill()).width(20.0)
+        } else {
+            container().width(fill()).height(20.0)
+        }
+    };
+    let badge = |shown: bool, long: f32| container().visible(shown).width(long).height(long);
+
+    for column in [false, true] {
+        assert_eq!(
+            laid_out(column, vec![filling(column), badge(false, 40.0)])[0],
+            (0.0, 300.0),
+            "column: {column}, badge hidden"
+        );
+        assert_eq!(
+            laid_out(column, vec![filling(column), badge(true, 40.0)]),
+            [(0.0, 252.0), (260.0, 40.0)],
+            "column: {column}, badge shown"
+        );
+    }
+    // Between two filling children, a hidden one leaves the one gap between
+    // them, not two.
+    assert_eq!(
+        laid_out(
+            false,
+            vec![filling(false), badge(false, 40.0), filling(false)]
+        ),
+        [(0.0, 146.0), (146.0, 0.0), (154.0, 146.0)]
+    );
+    // Exactly `MIN_VISIBLE_SIZE` long is too short to keep a gap beside it, in
+    // the share as in placement.
+    assert_eq!(
+        laid_out(false, vec![filling(false), badge(true, MIN_VISIBLE_SIZE)])[0],
+        (0.0, 300.0 - MIN_VISIBLE_SIZE)
+    );
+}
+
 #[test]
 fn fraction_resolves_against_the_incoming_max() {
     let mut h = H::new(container().width(fraction(0.5)).child(box_of(40.0, 20.0)));
