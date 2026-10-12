@@ -6,6 +6,7 @@ use glyphon::{
     Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use wgpu::{Device, MultisampleState, Queue};
 
 use crate::app_state::with_app_state;
@@ -19,7 +20,7 @@ use super::types::TextEntry;
 /// Compute a cache key for a text buffer based on content and styling.
 /// Two entries with the same key produce identical glyphon Buffers.
 fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
-    let mut hasher = std::hash::DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
     entry.text.hash(&mut hasher);
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
@@ -477,7 +478,11 @@ pub struct TextRenderState {
     /// several times in a frame (e.g. repeated list items) — with a
     /// single-entry cache the first occurrence consumed the only buffer and
     /// every duplicate re-shaped from scratch, every frame, forever.
-    buffer_cache: FxHashMap<u64, Vec<Buffer>>,
+    ///
+    /// One buffer inline, because almost every key holds one: a `Vec` here
+    /// was an allocation per text per frame, made in `begin_frame` and
+    /// dropped by `end_frame`'s `clear`. Only a label drawn twice spills.
+    buffer_cache: FxHashMap<u64, SmallVec<[Buffer; 1]>>,
     /// Keys for current frame's buffers (parallel to `self.buffers`), used to
     /// repopulate `buffer_cache` at the start of the next frame.
     frame_keys: Vec<u64>,

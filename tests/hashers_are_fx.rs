@@ -22,11 +22,9 @@
 //! degradation to arrange, and the frame path is exactly where the cheaper hash
 //! pays.
 //!
-//! `text_buffer_key`'s `u64` was never unpredictable anyway: it comes from
-//! `DefaultHasher::new()`, which is SipHash-1-3 with a *fixed* seed rather than
-//! `RandomState`. All the bare `HashMap` around it added was an unpredictable
-//! bucket for a predictable key, and a second SipHash over the result of the
-//! first.
+//! `text_buffer_key`'s `u64` was never unpredictable anyway: it came from
+//! `DefaultHasher::new()`, SipHash-1-3 with a *fixed* seed rather than
+//! `RandomState`, and it is hashed with `FxHasher` now.
 //!
 //! The crate moved to `FxHashMap` once already and the move was done by hand,
 //! so it was done for the maps somebody happened to be looking at. The rest
@@ -69,11 +67,8 @@ fn repo() -> &'static Path {
 /// snippet rather than a line number, because a line number is wrong by the
 /// next commit and says nothing about which map it meant.
 ///
-/// One entry today, and it is on its way off: `text_buffer_key` is being moved
-/// to `FxHasher` in a change of its own, and the test below that refuses an
-/// excuse for a line that has gone is what takes the entry off with it. Beyond
-/// that, an entry is not a formality: it says the type is
-/// somebody else's to choose, or that keys from outside the process can
+/// Empty today. An entry is not a formality: it says the type is somebody
+/// else's to choose, or that keys from outside the process can
 /// *accumulate* here — a map nothing sweeps, holding what it is given for as
 /// long as it is given it, which is the shape SipHash answers and Fx does not.
 /// Text-derived keys alone are not that shape; the three caches that have them
@@ -81,12 +76,7 @@ fn repo() -> &'static Path {
 /// costs there. A map that is merely not on a hot path does not need an entry
 /// either: Fx costs nothing there, and "it is not hot" is an argument the next
 /// reader has to re-derive.
-const NOT_FX: &[(&str, &str, &str)] = &[(
-    "src/renderer/text.rs",
-    "let mut hasher = std::hash::DefaultHasher::new();",
-    "being removed separately: `text_buffer_key` moves to `FxHasher` in its own \
-     change, and this entry goes with it",
-)];
+const NOT_FX: &[(&str, &str, &str)] = &[];
 
 /// Rust files under `src/`.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {

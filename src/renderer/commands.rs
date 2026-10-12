@@ -244,8 +244,10 @@ pub enum DrawCommand {
 
     /// Draw text.
     Text {
-        /// The text string to render
-        text: String,
+        /// The text string to render. Shared rather than owned: the renderer
+        /// takes it into a [`TextEntry`](super::TextEntry) every frame the
+        /// text is drawn, and a decorated text pushes it once per copy.
+        text: std::rc::Rc<str>,
         /// The bounding rectangle for the text in local coordinates
         rect: Rect,
         /// The text color

@@ -85,7 +85,7 @@ struct CachedTextTexture {
 /// Everything that affects the rasterized pixels of a text texture.
 #[derive(PartialEq, Eq, Hash)]
 struct TextCacheKey {
-    text: String,
+    text: std::rc::Rc<str>,
     font_size_bits: u32,
     weight: u16,
     family: crate::widgets::FontFamily,
@@ -439,7 +439,7 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
         let box_ = Rect::new(0.0, 0.0, 6.0, 6.0);
         let labelled = |text: String| {
             let mut entry = test_entry(box_, Transform::scale(2.0));
-            entry.text = text;
+            entry.text = text.into();
             entry
         };
 

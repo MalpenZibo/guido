@@ -2211,7 +2211,7 @@ mod tests {
         fn collect(node: &crate::renderer::RenderNode, out: &mut Vec<String>) {
             for cmd in &node.commands {
                 if let crate::renderer::DrawCommand::Text { text, .. } = &**cmd {
-                    out.push(text.clone());
+                    out.push(text.to_string());
                 }
             }
             for child in &node.children {
@@ -2866,7 +2866,7 @@ mod tests {
                         ..
                     } = &**cmd
                     {
-                        out.push((text.clone(), *letter_spacing));
+                        out.push((text.to_string(), *letter_spacing));
                     }
                 }
                 node.children.iter().for_each(|c| spacings(c, out));
