@@ -505,6 +505,11 @@ The TextInput widget supports standard text editing shortcuts:
 | `Backspace` | Delete before cursor |
 | `Delete` | Delete after cursor |
 
+A character here is what is drawn as one: a letter and its combining accent, or
+an emoji made of several code points, such as a flag. The arrows step over it
+and both deletes take all of it. A password field steps one code point at a
+time, because its mask draws one bullet for each.
+
 ## Styling with Container
 
 TextInput handles text editing but not visual styling like backgrounds and borders. Wrap it in a Container for full styling:

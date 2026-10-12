@@ -14,6 +14,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use unicode_segmentation::GraphemeCursor;
 use zeroize::Zeroizing;
 
 use crate::clock::{EventInstant, FrameInstant};
@@ -967,9 +968,15 @@ impl<C: Content> TextInput<C> {
         self.last_cursor_toggle = at;
     }
 
+    /// Where a press at `x` puts the cursor: the nearest boundary, moved out
+    /// of any cluster it falls inside.
+    fn char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
+        self.cluster_start(self.nearest_char_index_at_x(x, bounds))
+    }
+
     /// Get character index from x coordinate relative to text start.
     /// Uses cached glyph positions for O(log n) binary search.
-    fn char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
+    fn nearest_char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
         let text_x = bounds.x;
         // Account for scroll offset
         let relative_x = x - text_x + self.scroll_offset;
@@ -1088,36 +1095,20 @@ impl<C: Content> TextInput<C> {
         if self.refuses_edits() {
             return;
         }
-        // Check if there's anything to delete
-        let has_content_to_delete = if self.selection.has_selection() {
-            true
+        let cursor = self.selection.cursor;
+        let (start, end) = if self.selection.has_selection() {
+            self.selection.range()
         } else if forward {
-            self.selection.cursor < self.cached_char_count
+            (cursor, self.step(cursor, true))
         } else {
-            self.selection.cursor > 0
+            (self.step(cursor, false), cursor)
         };
-
-        // Save state before modification (only if we'll actually delete something)
-        if has_content_to_delete {
+        // Nothing to delete is no edit: no history entry, and nothing for
+        // `on_change` to hear.
+        if start < end {
             self.save_to_history(EditType::Delete, edit.at);
-        }
-
-        if self.selection.has_selection() {
-            // Delete selection
-            let (start, end) = self.selection.range();
             self.delete_range(start, end);
             self.selection = Selection::new(start);
-        } else if forward {
-            // Delete character after cursor
-            if self.selection.cursor < self.cached_char_count {
-                self.delete_range(self.selection.cursor, self.selection.cursor + 1);
-            }
-        } else {
-            // Delete character before cursor (backspace)
-            if self.selection.cursor > 0 {
-                self.delete_range(self.selection.cursor - 1, self.selection.cursor);
-                self.selection = Selection::new(self.selection.cursor - 1);
-            }
         }
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
@@ -1139,19 +1130,18 @@ impl<C: Content> TextInput<C> {
         self.cached_char_count = char_count;
         self.display_text_dirty = true;
         self.measurements_dirty = true;
-        // Clamp selection to valid range
-        self.selection.cursor = self.selection.cursor.min(char_count);
-        self.selection.anchor = self.selection.anchor.min(char_count);
+        // Clamp selection to valid range, and out of any cluster the new
+        // text put it inside
+        self.selection.cursor = self.cluster_start(self.selection.cursor.min(char_count));
+        self.selection.anchor = self.cluster_start(self.selection.anchor.min(char_count));
     }
 
     /// Move cursor left/right, optionally extending selection
     fn move_cursor(&mut self, direction: i32, extend_selection: bool, word: bool, edit: Edit) {
         let new_pos = if word {
             self.find_word_boundary(self.selection.cursor, direction)
-        } else if direction < 0 {
-            self.selection.cursor.saturating_sub(1)
         } else {
-            (self.selection.cursor + 1).min(self.cached_char_count)
+            self.step(self.selection.cursor, direction > 0)
         };
 
         self.selection.cursor = new_pos;
@@ -1160,6 +1150,48 @@ impl<C: Content> TextInput<C> {
         }
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
+    }
+
+    /// The position one character on from `from`, where a character is what
+    /// is drawn as one: an `e` and its combining accent, a flag of two code
+    /// points. The arrows, Delete and Backspace all step by it.
+    ///
+    /// A hidden text steps one `char` at a time, because its mask draws a
+    /// bullet for each.
+    fn step(&self, from: usize, forward: bool) -> usize {
+        if C::HIDDEN {
+            return if forward {
+                (from + 1).min(self.cached_char_count)
+            } else {
+                from.saturating_sub(1)
+            };
+        }
+        let byte = self.char_to_byte_index(from);
+        self.content.with_text(|text| {
+            let mut cursor = GraphemeCursor::new(byte, text.len(), true);
+            let boundary = if forward {
+                cursor.next_boundary(text, 0)
+            } else {
+                cursor.prev_boundary(text, 0)
+            };
+            match boundary {
+                Ok(Some(to)) if forward => from + text[byte..to].chars().count(),
+                Ok(Some(to)) => from - text[to..byte].chars().count(),
+                _ => from,
+            }
+        })
+    }
+
+    /// `at`, or the start of the character as drawn that it falls inside.
+    fn cluster_start(&self, at: usize) -> usize {
+        if C::HIDDEN {
+            return at;
+        }
+        let byte = self.char_to_byte_index(at);
+        let inside = self.content.with_text(|text| {
+            GraphemeCursor::new(byte, text.len(), true).is_boundary(text, 0) == Ok(false)
+        });
+        if inside { self.step(at, false) } else { at }
     }
 
     /// Find word boundary in given direction
