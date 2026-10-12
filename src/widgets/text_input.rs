@@ -968,9 +968,15 @@ impl<C: Content> TextInput<C> {
         self.last_cursor_toggle = at;
     }
 
+    /// Where a press at `x` puts the cursor: the nearest boundary, moved out
+    /// of any cluster it falls inside.
+    fn char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
+        self.cluster_start(self.nearest_char_index_at_x(x, bounds))
+    }
+
     /// Get character index from x coordinate relative to text start.
     /// Uses cached glyph positions for O(log n) binary search.
-    fn char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
+    fn nearest_char_index_at_x(&self, x: f32, bounds: Rect) -> usize {
         let text_x = bounds.x;
         // Account for scroll offset
         let relative_x = x - text_x + self.scroll_offset;
@@ -1124,9 +1130,10 @@ impl<C: Content> TextInput<C> {
         self.cached_char_count = char_count;
         self.display_text_dirty = true;
         self.measurements_dirty = true;
-        // Clamp selection to valid range
-        self.selection.cursor = self.selection.cursor.min(char_count);
-        self.selection.anchor = self.selection.anchor.min(char_count);
+        // Clamp selection to valid range, and out of any cluster the new
+        // text put it inside
+        self.selection.cursor = self.cluster_start(self.selection.cursor.min(char_count));
+        self.selection.anchor = self.cluster_start(self.selection.anchor.min(char_count));
     }
 
     /// Move cursor left/right, optionally extending selection
@@ -1173,6 +1180,18 @@ impl<C: Content> TextInput<C> {
                 _ => from,
             }
         })
+    }
+
+    /// `at`, or the start of the character as drawn that it falls inside.
+    fn cluster_start(&self, at: usize) -> usize {
+        if C::HIDDEN {
+            return at;
+        }
+        let byte = self.char_to_byte_index(at);
+        let inside = self.content.with_text(|text| {
+            GraphemeCursor::new(byte, text.len(), true).is_boundary(text, 0) == Ok(false)
+        });
+        if inside { self.step(at, false) } else { at }
     }
 
     /// Find word boundary in given direction

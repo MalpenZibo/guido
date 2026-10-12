@@ -487,6 +487,36 @@ fn backspace_takes_a_whole_flag() {
     assert_eq!(field.text(), "");
 }
 
+/// A click just right of where the é starts is nearer its start than the
+/// next letter's, and the character nearest it is the mark, which has no
+/// boundary of its own.
+#[test]
+fn a_click_inside_a_letter_and_its_mark_lands_before_them() {
+    let mut field = Field::focused(&format!("{E_ACUTE}a"));
+
+    field.now += Duration::from_millis(1);
+    field
+        .harness
+        .send_at(Event::mouse_down(1.0, 5.0, MouseButton::Left), field.now);
+    field.type_text("X");
+
+    assert_eq!(field.text(), format!("X{E_ACUTE}a"));
+}
+
+/// The cursor one character into "ab" is inside the é the signal then holds.
+#[test]
+fn a_text_set_from_outside_does_not_leave_the_cursor_inside_a_cluster() {
+    let mut field = Field::focused("ab");
+    field.key(Key::Right);
+
+    field.value.set(E_ACUTE.to_owned());
+    field.harness.tree.mark_needs_layout(field.harness.root);
+    field.harness.lay_out(WIDTH, HEIGHT);
+    field.type_text("X");
+
+    assert_eq!(field.text(), format!("X{E_ACUTE}"));
+}
+
 #[test]
 fn home_and_end_go_to_the_ends() {
     let mut field = Field::focused("bcd");
