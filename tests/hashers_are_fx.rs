@@ -43,6 +43,17 @@
 //! parameters: `let mut seen = HashSet::new();` declares a SipHash set without
 //! writing a single type parameter, and an import left behind after the last
 //! map in a file has gone is the invitation for the next one.
+//!
+//! A map is not the only way to reach SipHash. A key hashed into a `u64` by
+//! hand — a texture cache keyed by its image's source, a buffer cache keyed by
+//! its text — takes `DefaultHasher`, or builds one from `RandomState`, and no
+//! map type is written anywhere near it. The image cache did exactly that, once
+//! per image per frame, after every map beside it had moved to Fx, and it
+//! stayed that way until #607 took the hash out for another reason. So those
+//! names, and the deprecated `SipHasher` with them, are read for as well,
+//! under every path they can be reached by —
+//! `std::hash::DefaultHasher`, `std::collections::hash_map::DefaultHasher`, an
+//! import of either — and they are excused, or not, on the same list.
 
 use std::path::{Path, PathBuf};
 
@@ -50,14 +61,18 @@ fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// Bare `HashMap`s and `HashSet`s that stay, and why.
+/// Bare `HashMap`s, `HashSet`s, `DefaultHasher`s and `RandomState`s that
+/// stay, and why.
 ///
 /// An entry is `(file, snippet, reason)`: the file it is in, enough of the line
 /// to say which one it is, and what makes SipHash the right hasher there. The
 /// snippet rather than a line number, because a line number is wrong by the
 /// next commit and says nothing about which map it meant.
 ///
-/// Nothing is on it today, and an entry is not a formality: it says the type is
+/// One entry today, and it is on its way off: `text_buffer_key` is being moved
+/// to `FxHasher` in a change of its own, and the test below that refuses an
+/// excuse for a line that has gone is what takes the entry off with it. Beyond
+/// that, an entry is not a formality: it says the type is
 /// somebody else's to choose, or that keys from outside the process can
 /// *accumulate* here — a map nothing sweeps, holding what it is given for as
 /// long as it is given it, which is the shape SipHash answers and Fx does not.
@@ -66,7 +81,12 @@ fn repo() -> &'static Path {
 /// costs there. A map that is merely not on a hot path does not need an entry
 /// either: Fx costs nothing there, and "it is not hot" is an argument the next
 /// reader has to re-derive.
-const NOT_FX: &[(&str, &str, &str)] = &[];
+const NOT_FX: &[(&str, &str, &str)] = &[(
+    "src/renderer/text.rs",
+    "let mut hasher = std::hash::DefaultHasher::new();",
+    "being removed separately: `text_buffer_key` moves to `FxHasher` in its own \
+     change, and this entry goes with it",
+)];
 
 /// Rust files under `src/`.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -90,7 +110,8 @@ fn is_word_byte(b: u8) -> bool {
 }
 
 /// Where `name` appears in `line` as a whole identifier, so that `FxHashMap`
-/// and `HashMapExt` are not `HashMap`.
+/// and `HashMapExt` are not `HashMap`, and `BuildHasherDefault` is not
+/// `DefaultHasher`.
 fn names_the_type(line: &str, name: &str) -> bool {
     let bytes = line.as_bytes();
     let mut from = 0;
@@ -118,13 +139,28 @@ fn code(line: &str) -> &str {
     line.split("//").next().unwrap_or("")
 }
 
+/// What std calls a SipHash map, set or hasher. Each is read as a whole
+/// identifier, so the path in front of it does not matter.
+const SIPHASH: [&str; 5] = [
+    "HashMap",
+    "HashSet",
+    "DefaultHasher",
+    "RandomState",
+    "SipHasher",
+];
+
+/// The names in [`SIPHASH`], as a message spells them.
+fn siphash_names() -> String {
+    SIPHASH.map(|name| format!("`{name}`")).join("/")
+}
+
 /// The bare declarations a source file makes, as `(line number, the line)`.
 fn hits_in(text: &str) -> Vec<(usize, String)> {
     text.lines()
         .enumerate()
         .filter(|(_, line)| {
             let code = code(line);
-            names_the_type(code, "HashMap") || names_the_type(code, "HashSet")
+            SIPHASH.iter().any(|name| names_the_type(code, name))
         })
         .map(|(index, line)| (index + 1, line.trim().to_string()))
         .collect()
@@ -192,11 +228,12 @@ fn every_map_in_the_crate_is_an_fx_one_or_says_why_it_is_not() {
 
     assert!(
         unexcused.is_empty(),
-        "{} bare `HashMap`/`HashSet` declaration(s) under src/, keyed by SipHash:\n{}\n\
-         Every key in this crate is one we mint ourselves, so use `rustc_hash::FxHashMap` \
-         or `FxHashSet` — or add the line to NOT_FX in this file with the reason SipHash \
-         is the right hasher there.",
+        "{} bare {} line(s) under src/, hashing with SipHash:\n{}\n\
+         Every key in this crate is one we mint ourselves, so use `rustc_hash::FxHashMap`, \
+         `FxHashSet` or `FxHasher` — or add the line to NOT_FX in this file with the reason \
+         SipHash is the right hasher there.",
         unexcused.len(),
+        siphash_names(),
         unexcused.join("\n")
     );
 }
@@ -211,8 +248,9 @@ fn the_opt_out_list_excuses_nothing_that_is_gone() {
         assert!(
             hits.iter()
                 .any(|(hit, _, line)| hit == file && line.contains(snippet)),
-            "NOT_FX excuses `{snippet}` in `{file}`, where there is no bare \
-             `HashMap`/`HashSet` line saying that any more"
+            "NOT_FX excuses `{snippet}` in `{file}`, where there is no bare {} line \
+             saying that any more",
+            siphash_names()
         );
     }
 }
@@ -244,6 +282,17 @@ fn build() {
     let mut seen = HashSet::new();
     let mut rows = FxHashMap::default();
 }
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{BuildHasherDefault, RandomState};
+fn key(source: &[u8]) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    let mut fx = rustc_hash::FxHasher::default();
+    let state = std::collections::hash_map::RandomState::new();
+    let fine: BuildHasherDefault<FxHasher> = Default::default();
+    #[allow(deprecated)]
+    let old = std::hash::SipHasher::new();
+}
 "#;
     assert_eq!(
         hits_in(text),
@@ -255,6 +304,23 @@ fn build() {
             ),
             (10, "masks: HashMap<MaskKey, Rc<CachedMask>>,".to_string()),
             (19, "let mut seen = HashSet::new();".to_string()),
+            (
+                23,
+                "use std::collections::hash_map::DefaultHasher;".to_string()
+            ),
+            (
+                24,
+                "use std::hash::{BuildHasherDefault, RandomState};".to_string()
+            ),
+            (
+                26,
+                "let mut hasher = std::hash::DefaultHasher::new();".to_string()
+            ),
+            (
+                28,
+                "let state = std::collections::hash_map::RandomState::new();".to_string()
+            ),
+            (31, "let old = std::hash::SipHasher::new();".to_string()),
         ]
     );
 }
