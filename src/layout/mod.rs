@@ -394,7 +394,9 @@ pub enum CrossAlignment {
     ///
     /// Only meaningful across a row; in a column it behaves as `Start`.
     /// A child that reports no baseline — a box, an image — is aligned by its
-    /// bottom edge, which is what CSS does with it.
+    /// bottom edge, which is what CSS does with it. The row is as deep as the
+    /// deepest baseline plus the greatest depth any child has below its own,
+    /// so nothing the alignment moves down ends below the row.
     Baseline,
 }
 

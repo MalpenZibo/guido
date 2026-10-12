@@ -278,6 +278,26 @@ impl Flex {
             Axis::Vertical => (constraints.min_height, constraints.min_width),
         };
 
+        // Baseline alignment needs the deepest baseline in the row before it
+        // can place anything: every child shifts down by the difference
+        // between it and its own. A child shifted down takes its depth below
+        // its baseline with it, so the row is as deep as the deepest baseline
+        // plus the greatest of those depths, which is how CSS sizes a line box.
+        let max_baseline = if cross_align == CrossAlignment::Baseline && axis == Axis::Horizontal {
+            let mut max_depth = 0.0f32;
+            let mut max_baseline = 0.0f32;
+            for (i, &id) in children.iter().enumerate() {
+                let child_cross = self.child_sizes[i].cross_axis(axis);
+                let baseline = baseline_of(ctx.tree_ref(), id, child_cross);
+                max_baseline = max_baseline.max(baseline);
+                max_depth = max_depth.max(child_cross - baseline);
+            }
+            max_cross = max_cross.max(max_baseline + max_depth);
+            max_baseline
+        } else {
+            0.0
+        };
+
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
 
         // For Stretch: if we didn't have a known cross size before, re-layout children
@@ -360,21 +380,6 @@ impl Flex {
             Axis::Horizontal => origin.0,
             Axis::Vertical => origin.1,
         } + initial_offset;
-
-        // Baseline alignment needs the deepest baseline in the row before it
-        // can place anything: every child shifts down by the difference
-        // between it and its own.
-        let max_baseline = if cross_align == CrossAlignment::Baseline && axis == Axis::Horizontal {
-            children
-                .iter()
-                .enumerate()
-                .map(|(i, &id)| {
-                    baseline_of(ctx.tree_ref(), id, self.child_sizes[i].cross_axis(axis))
-                })
-                .fold(0.0f32, f32::max)
-        } else {
-            0.0
-        };
 
         let mut prev_nonzero = false;
         for (i, &child_id) in children.iter().enumerate() {
