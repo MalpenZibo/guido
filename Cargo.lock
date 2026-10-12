@@ -658,6 +658,7 @@ dependencies = [
  "smithay-client-toolkit",
  "syn 2.0.119",
  "tokio",
+ "unicode-segmentation",
  "wayland-backend",
  "wayland-protocols",
  "wgpu",

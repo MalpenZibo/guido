@@ -51,6 +51,8 @@ glyphon = "0.12"
 # Packs small images onto atlas pages; glyphon packs its glyphs with it already.
 etagere = "0.3"
 cosmic-text = "0.19"
+# Where one character as drawn ends: cosmic-text already builds it.
+unicode-segmentation = "1.13"
 smithay-client-toolkit = { version = "0.21.1", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
 # Staging protocols not wrapped by sctk (ext-background-effect-v1 for blur)

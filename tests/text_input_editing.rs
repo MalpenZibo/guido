@@ -370,7 +370,15 @@ fn delete_takes_the_character_after_it() {
 
 #[test]
 fn backspace_at_the_start_and_delete_at_the_end_do_nothing() {
-    let mut field = Field::focused("hi");
+    // Nothing at all: a text that comes out the same is still a change
+    // `on_change` would be told about.
+    let changes = Rc::new(RefCell::new(0));
+    let counted = changes.clone();
+    let value = create_signal("hi".to_owned());
+    let mut field = Field::focused_around(
+        value,
+        text_input(value).on_change(move |_| *counted.borrow_mut() += 1),
+    );
 
     field.key(Key::Backspace);
     assert_eq!(field.text(), "hi");
@@ -378,6 +386,7 @@ fn backspace_at_the_start_and_delete_at_the_end_do_nothing() {
     field.key(Key::End);
     field.key(Key::Delete);
     assert_eq!(field.text(), "hi");
+    assert_eq!(*changes.borrow(), 0, "on_change heard of a change");
 }
 
 #[test]
@@ -401,6 +410,81 @@ fn left_moves_the_cursor_backward_one_character() {
     field.type_text("X");
 
     assert_eq!(field.text(), "bcXd");
+}
+
+/// An `e` and a combining acute are two characters drawn as one é. A caret
+/// stopped between them is drawn before the é, and what is typed there takes
+/// its accent.
+const E_ACUTE: &str = "e\u{301}";
+/// Two regional indicators, drawn as one flag.
+const FLAG: &str = "🇮🇹";
+/// Three people joined by zero-width joiners, drawn as one family.
+const FAMILY: &str = "👨\u{200d}👩\u{200d}👧";
+
+#[test]
+fn right_steps_over_a_letter_and_its_mark_together() {
+    let mut field = Field::focused(E_ACUTE);
+
+    field.key(Key::Right);
+    field.type_text("a");
+
+    assert_eq!(
+        field.text(),
+        format!("{E_ACUTE}a"),
+        "the accent stays on the e"
+    );
+}
+
+#[test]
+fn right_steps_over_a_joined_emoji_in_one_press() {
+    let mut field = Field::focused(FAMILY);
+
+    field.key(Key::Right);
+    field.type_text("X");
+
+    assert_eq!(field.text(), format!("{FAMILY}X"));
+}
+
+#[test]
+fn left_steps_back_over_a_letter_and_its_mark_together() {
+    let mut field = Field::focused(E_ACUTE);
+    field.key(Key::End);
+
+    field.key(Key::Left);
+    field.type_text("X");
+
+    assert_eq!(field.text(), format!("X{E_ACUTE}"));
+}
+
+#[test]
+fn delete_takes_a_whole_flag() {
+    let mut field = Field::focused(FLAG);
+
+    field.key(Key::Delete);
+
+    assert_eq!(field.text(), "", "half a flag is a broken glyph");
+}
+
+/// Backspace takes the whole of what is drawn as one character, as GTK does
+/// after a Latin letter or an emoji, and as Flutter and iced do everywhere.
+#[test]
+fn backspace_takes_a_letter_and_its_mark_together() {
+    let mut field = Field::focused(E_ACUTE);
+    field.key(Key::End);
+
+    field.key(Key::Backspace);
+
+    assert_eq!(field.text(), "");
+}
+
+#[test]
+fn backspace_takes_a_whole_flag() {
+    let mut field = Field::focused(FLAG);
+    field.key(Key::End);
+
+    field.key(Key::Backspace);
+
+    assert_eq!(field.text(), "");
 }
 
 #[test]

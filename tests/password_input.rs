@@ -179,6 +179,18 @@ fn a_word_jump_goes_to_the_edge_rather_than_to_a_word() {
     );
 }
 
+/// A mask draws one bullet per character, so a step is one character: stepping
+/// a whole cluster would move the caret over two bullets and say there is a
+/// cluster there. Flutter steps an obscured field the same way.
+#[test]
+fn an_arrow_steps_one_character_even_inside_a_cluster() {
+    let mut field = Field::new(|f, _| f);
+    field.type_str("e\u{301}");
+    field.key(Key::Left);
+    field.type_str("X");
+    assert_eq!(field.held(), "eX\u{301}");
+}
+
 #[test]
 fn a_readonly_field_refuses_edits() {
     let busy = create_signal(false);
