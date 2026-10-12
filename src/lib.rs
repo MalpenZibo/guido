@@ -812,19 +812,16 @@ struct Frame {
 
 /// Whether this frame would only queue behind one the compositor has not shown.
 ///
-/// The three that open the gate anyway — the fields say why each is what it is
-/// — are a surface with nothing on screen yet, a resize, and a scale change:
-/// all three have something to tell the compositor that cannot wait for a
-/// callback.
+/// The two that open the gate anyway are a resize and a scale change: both
+/// have something to tell the compositor that cannot wait for a callback. A
+/// surface with nothing on screen yet needs no third: it has committed
+/// nothing, so no callback is in flight to wait on.
 ///
 /// A function rather than the condition inline, because it is the one decision
 /// in the frame path that can be taken from a `Frame` and a `Geometry` alone,
 /// and so the one a test could reach first.
 fn paced_out(frame: &Frame, geometry: &Geometry) -> bool {
-    frame.pacing.callback_pending()
-        && !frame.pacing.forced()
-        && !geometry.needs_resize
-        && !geometry.scale_changed
+    frame.pacing.callback_pending() && !geometry.needs_resize && !geometry.scale_changed
 }
 
 /// What the frame path asks of whatever is showing one surface.
@@ -2137,7 +2134,7 @@ fn loop_timeout<P: Platform>(
             continue;
         };
         force_render |= pacing.forced();
-        if pacing.awaits_callback()
+        if pacing.callback_pending()
             && let Some(surface) = surfaces.get(id)
         {
             waiting.push(surface.widget_id);
@@ -3841,27 +3838,24 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
 mod a_frame_is_a_description_not_a_connection {
     use super::*;
 
-    /// Pacing in the state each test names, reached the way a surface reaches
-    /// it: through what it is told.
-    fn pacing(callback_pending: bool, force: bool) -> surface::FramePacing {
+    /// A surface with a frame out, and its callback in flight or come back —
+    /// reached the way a surface reaches it, through what it is told.
+    fn pacing(callback_pending: bool) -> surface::FramePacing {
         let mut pacing = surface::FramePacing::default();
-        if !force {
+        pacing.committed();
+        if !callback_pending {
             pacing.callback_done();
-            pacing.confirm_scale();
-        }
-        if callback_pending {
-            pacing.committed();
         }
         pacing
     }
 
-    fn frame(callback_pending: bool, force: bool) -> Frame {
+    fn frame(callback_pending: bool) -> Frame {
         Frame {
             events: Vec::new(),
             scale_factor: 1.0,
             width: 200,
             height: 50,
-            pacing: pacing(callback_pending, force),
+            pacing: pacing(callback_pending),
         }
     }
 
@@ -3877,26 +3871,25 @@ mod a_frame_is_a_description_not_a_connection {
 
     #[test]
     fn a_frame_can_be_described_without_a_display() {
-        let f = frame(false, false);
+        let f = frame(false);
         assert_eq!((f.width, f.height), (200, 50));
     }
 
     #[test]
     fn a_callback_still_in_flight_paces_a_frame_out() {
-        assert!(paced_out(&frame(true, false), &geometry(false, false)));
+        assert!(paced_out(&frame(true), &geometry(false, false)));
     }
 
-    /// Each on its own, because any one of them alone has to open the gate.
+    /// Each on its own, because either alone has to open the gate.
     #[test]
-    fn a_first_frame_a_resize_and_a_scale_change_each_bypass_the_gate() {
-        assert!(!paced_out(&frame(true, true), &geometry(false, false)));
-        assert!(!paced_out(&frame(true, false), &geometry(true, false)));
-        assert!(!paced_out(&frame(true, false), &geometry(false, true)));
+    fn a_resize_and_a_scale_change_each_bypass_the_gate() {
+        assert!(!paced_out(&frame(true), &geometry(true, false)));
+        assert!(!paced_out(&frame(true), &geometry(false, true)));
     }
 
     #[test]
     fn no_callback_in_flight_paces_nothing_out() {
-        assert!(!paced_out(&frame(false, false), &geometry(false, false)));
+        assert!(!paced_out(&frame(false), &geometry(false, false)));
     }
 }
 

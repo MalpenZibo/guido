@@ -154,19 +154,16 @@ impl WaylandSurfaceState {
 
     /// Record the scale this surface renders at, and answer whether it moved.
     ///
-    /// One writer for two fields that have to stay in step, because the scale
-    /// now arrives through two events — `preferred_buffer_scale` for a surface
-    /// without a viewport and `wp_fractional_scale_v1.preferred_scale` for one
-    /// with — and a confirmed scale gates startup. Two spellings of it
-    /// would be two chances for a surface to be believed ready before it is.
+    /// One writer, because the scale arrives through two events —
+    /// `preferred_buffer_scale` for a surface without a viewport and
+    /// `wp_fractional_scale_v1.preferred_scale` for one with — and two
+    /// spellings of it would be two chances to floor it differently.
     ///
     /// The rule itself is [`crate::surface::adopted_scale`], where a test can
-    /// reach it; what is here is the pair of fields it writes.
+    /// reach it; what is here is the field it writes.
     pub(super) fn adopt_scale(&mut self, scale: f32) -> bool {
-        let held = self.pacing.scale_confirmed().then_some(self.scale_factor);
-        let (scale, moved) = crate::surface::adopted_scale(held, scale);
+        let (scale, moved) = crate::surface::adopted_scale(self.scale_factor, scale);
         self.scale_factor = scale;
-        self.pacing.confirm_scale();
         moved
     }
 }
@@ -914,9 +911,7 @@ impl CompositorHandler for WaylandState {
         if let Some(id) = self.surface_lookup.get(&surface.id()).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            if surface_state.pacing.callback_done() {
-                log::info!("Surface {:?} first frame presented by compositor", id);
-            }
+            surface_state.pacing.callback_done();
             // Wake the loop so a dirty surface renders promptly
             crate::jobs::wake_loop();
         }

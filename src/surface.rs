@@ -417,8 +417,7 @@ pub(crate) fn buffer_size((width, height): (u32, u32), scale: f32) -> (u32, u32)
 }
 
 /// The scale a surface takes from a compositor that has just named one, and
-/// whether that moved it. `held` is what it had, or `None` if it has been told
-/// nothing yet.
+/// whether that moved it from `held`, the scale it had.
 ///
 /// **The floor is here** rather than at the buffer arithmetic, so the
 /// invariant is "a surface's scale is never below 1" rather than "the one path
@@ -426,17 +425,15 @@ pub(crate) fn buffer_size((width, height): (u32, u32), scale: f32) -> (u32, u32)
 /// same number. A scale below 1 asks for a buffer smaller than the surface,
 /// which is a decision nobody has taken here; zero asks for no buffer at all.
 ///
-/// A first answer always moves, even when it is the 1.0 the surface started
-/// at, because "believed by default" and "confirmed by the compositor" are
-/// different states and only the second lets a surface stop repainting in
-/// full. A compositor repeating a number it has already sent moves nothing.
+/// A compositor naming the scale the surface already holds — the 1 it
+/// started at included — moves nothing.
 ///
 /// A free function, and not a method on the surface state, because that state
 /// holds a `wl_surface` and a shell role and so cannot be built by a test —
 /// which is the whole of what is worth checking here.
-pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
+pub(crate) fn adopted_scale(held: f32, named: f32) -> (f32, bool) {
     let named = named.max(1.0);
-    (named, held != Some(named))
+    (named, held != named)
 }
 
 /// Where one surface stands with the compositor's `wl_surface.frame`
@@ -445,56 +442,49 @@ pub(crate) fn adopted_scale(held: Option<f32>, named: f32) -> (f32, bool) {
 /// in full regardless.
 ///
 /// One definition for both platforms. The Wayland surface and the recorder
-/// that stands in for it each hold one and tell it the same things — a frame
-/// committed, a callback come back, a scale confirmed — so the decision the
-/// loop takes from it cannot drift between the compositor and the test.
+/// that stands in for it each hold one and tell it the same two things — a
+/// frame committed, a callback come back — so the decision the loop takes from
+/// it cannot drift between the compositor and the test.
+///
+/// A surface stops being forced at its own first present, not at the
+/// compositor's first callback or its first word on the scale. Neither of
+/// those is promised: a surface whose output is off hears no callback, and
+/// sctk reports a scale only when it differs from the 1 it assumed, so a
+/// compositor without fractional scaling at scale 1 never names one. Waiting
+/// on either repainted such a surface in full at frame rate for good. Nothing
+/// is lost by not waiting: once a frame is out there is a callback to pace
+/// against, and a scale that arrives later is a scale change, which opens the
+/// gate and repaints in full by itself.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct FramePacing {
     /// A callback rode the last commit and has not come back.
     callback_pending: bool,
-    /// A callback has come back at least once: the compositor has shown a
-    /// frame of this surface.
-    shown: bool,
-    /// The compositor has named a scale for this surface.
-    scale_confirmed: bool,
+    /// A frame has gone out at least once.
+    presented: bool,
 }
 
 impl FramePacing {
     /// A frame went out with a callback armed on its commit.
     pub(crate) fn committed(&mut self) {
         self.callback_pending = true;
+        self.presented = true;
     }
 
-    /// The callback came back. Answers whether it is the first one.
-    pub(crate) fn callback_done(&mut self) -> bool {
+    /// The callback came back: the compositor has shown the last frame.
+    pub(crate) fn callback_done(&mut self) {
         self.callback_pending = false;
-        !std::mem::replace(&mut self.shown, true)
-    }
-
-    /// The compositor named a scale.
-    pub(crate) fn confirm_scale(&mut self) {
-        self.scale_confirmed = true;
-    }
-
-    /// Whether the compositor has named a scale yet.
-    pub(crate) fn scale_confirmed(self) -> bool {
-        self.scale_confirmed
-    }
-
-    /// Whether a callback is still in flight.
-    pub(crate) fn callback_pending(self) -> bool {
-        self.callback_pending
-    }
-
-    /// Whether this surface bypasses the pacing gate and repaints in full.
-    pub(crate) fn forced(self) -> bool {
-        !(self.shown && self.scale_confirmed)
     }
 
     /// Whether a frame now would only queue behind one the compositor has not
     /// shown — so this surface's queued work waits for the callback.
-    pub(crate) fn awaits_callback(self) -> bool {
-        self.callback_pending && !self.forced()
+    pub(crate) fn callback_pending(self) -> bool {
+        self.callback_pending
+    }
+
+    /// Whether this surface bypasses the pacing gate and repaints in full:
+    /// it has nothing on screen to pace against yet.
+    pub(crate) fn forced(self) -> bool {
+        !self.presented
     }
 }
 
@@ -1464,28 +1454,25 @@ mod tests {
         );
     }
 
-    /// A surface never holds a scale below 1, a first answer always counts as
-    /// a change, and a repeat never does.
+    /// A surface never holds a scale below 1, and a scale it already holds is
+    /// not a change.
     ///
     /// The floor used to live inside `buffer_size`, where only the buffer got
     /// it; the renderer and the damage rectangles read the same number and did
-    /// not. The first-answer rule is what lets a surface stop repainting in
-    /// full — a compositor that confirms the 1.0 a surface already believed
-    /// has still told it something.
+    /// not.
     #[test]
     fn a_scale_is_floored_at_one_and_a_repeat_of_it_is_not_a_change() {
-        assert_eq!(adopted_scale(None, 1.5), (1.5, true));
-        assert_eq!(adopted_scale(Some(1.5), 1.5), (1.5, false));
-        assert_eq!(adopted_scale(Some(1.5), 2.0), (2.0, true));
+        assert_eq!(adopted_scale(1.0, 1.5), (1.5, true));
+        assert_eq!(adopted_scale(1.5, 1.5), (1.5, false));
+        assert_eq!(adopted_scale(1.5, 2.0), (2.0, true));
 
-        // A compositor confirming what the surface already believed is still
-        // the first thing it has been told.
-        assert_eq!(adopted_scale(None, 1.0), (1.0, true));
+        // The 1 a surface starts at, confirmed, tells it nothing new.
+        assert_eq!(adopted_scale(1.0, 1.0), (1.0, false));
 
         // Below 1 is floored, and the floor is what the repeat compares
         // against — so 0.5 twice is one change, not two.
-        assert_eq!(adopted_scale(None, 0.5), (1.0, true));
-        assert_eq!(adopted_scale(Some(1.0), 0.5), (1.0, false));
+        assert_eq!(adopted_scale(2.0, 0.5), (1.0, true));
+        assert_eq!(adopted_scale(1.0, 0.5), (1.0, false));
     }
 
     /// The buffer is the logical size times the scale, rounded halfway away

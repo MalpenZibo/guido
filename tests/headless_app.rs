@@ -394,6 +394,36 @@ fn work_waiting_on_a_frame_callback_does_not_keep_the_loop_polling() {
     );
 }
 
+/// A surface whose output is off never hears a frame callback, and on a
+/// compositor without fractional scaling at scale 1 it is never told a scale
+/// either. Neither is a reason to keep repainting it: once it has presented,
+/// it has a callback to pace against, and a scale that arrives later is a
+/// scale change, which opens the gate on its own. Before, it was redrawn in
+/// full every 16 ms for as long as either stayed unsaid.
+#[test]
+fn a_surface_that_never_hears_a_frame_callback_stops_repainting_after_its_first_present() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+    app.hold_frame_callbacks(surface);
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    assert_eq!(
+        app.frames_presented(surface),
+        1,
+        "the first frame waits for nothing"
+    );
+
+    for _ in 0..3 {
+        app.step();
+    }
+    assert_eq!(
+        app.frames_presented(surface),
+        1,
+        "nothing changed, and nothing it drew has been shown"
+    );
+    assert_eq!(app.next_wait(), None, "so the loop blocks");
+}
+
 /// `spawn_surface` is guido's own API, not the harness's: a test asks for a
 /// surface exactly as an application does, and the step that follows is the
 /// loop draining the command it queued.
@@ -3492,10 +3522,12 @@ fn a_widget_from_outside_the_crate_does_not_animate_inside_a_hidden_panel() {
 
 /// A surface configured before the compositor has sent a scale is drawn at 1,
 /// the scale Wayland defines it to have until it is told another (#643), and
-/// is kept rendering: nothing has changed between these passes, and each one
-/// still draws, so the frame after a late scale is drawn at it.
+/// redrawn only when something changes. sctk names a scale only when it differs
+/// from the 1 it assumed, so at scale 1 without fractional scaling none ever
+/// comes: waiting on one repainted the surface in full at frame rate for good.
+/// A scale that does come is a change, which the test below draws.
 #[test]
-fn a_surface_with_no_scale_yet_is_built_at_one_and_kept_rendering() {
+fn a_surface_never_told_its_scale_is_built_at_one_and_redrawn_only_on_change() {
     let Some(mut app) = headless() else { return };
     let surface = app.surface(fixed_bar(), container);
     app.configure_size(surface, 200, 50);
@@ -3511,8 +3543,8 @@ fn a_surface_with_no_scale_yet_is_built_at_one_and_kept_rendering() {
     app.step();
     assert_eq!(
         app.frames_presented(surface),
-        drawn + 2,
-        "rendered on every pass while no scale has come"
+        drawn,
+        "a pass that changes nothing draws nothing, scale or no scale"
     );
 }
 

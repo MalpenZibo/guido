@@ -62,7 +62,7 @@ struct RecordedSurface {
     configured: bool,
     events: Vec<(Instant, Event)>,
     /// The same pacing state the Wayland surface keeps, told the same things:
-    /// a frame committed, a callback come back, a scale confirmed.
+    /// a frame committed, a callback come back.
     pacing: crate::surface::FramePacing,
     /// The compositor is not sending this surface its frame callbacks — the
     /// output it is on is off, or it is hidden. Unset, every step begins with
@@ -214,14 +214,6 @@ impl Recorder {
     }
 }
 
-/// Pacing for a surface whose scale arrived with its size, as a recorded
-/// configure says both at once.
-fn confirmed_scale() -> crate::surface::FramePacing {
-    let mut pacing = crate::surface::FramePacing::default();
-    pacing.confirm_scale();
-    pacing
-}
-
 /// The two ways to name a surface that is not there, said once.
 fn missing(id: SurfaceId) -> ! {
     panic!("surface {id:?} was never declared, or has been closed")
@@ -350,7 +342,6 @@ impl Platform for Recorder {
                 height: size.1,
                 scale: 1.0,
                 configured: true,
-                pacing: confirmed_scale(),
                 ..Default::default()
             },
         );
@@ -614,7 +605,7 @@ impl Headless {
 
     /// Configure a surface's size, and nothing about its scale. If none has
     /// been sent, it is drawn at 1, the scale Wayland defines a surface to have
-    /// before it is told one, and kept rendering until one arrives.
+    /// before it is told one; one that arrives later is a scale change.
     pub fn configure_size(&mut self, id: SurfaceId, width: u32, height: u32) {
         let surface = self.host.get_mut(id);
         surface.width = width;
@@ -656,7 +647,6 @@ impl Headless {
     pub fn send_scale(&mut self, id: SurfaceId, scale: f32) {
         let surface = self.host.get_mut(id);
         surface.scale = scale;
-        surface.pacing.confirm_scale();
     }
 
     /// Queue a press and a release at a point on one surface, in logical
