@@ -236,6 +236,24 @@ impl GpuContext {
             queue: self.queue.clone(),
         }
     }
+
+    /// The bytes of texture memory this device holds right now, once what has
+    /// been dropped is really gone.
+    ///
+    /// For the tests that ask whether a glyph atlas keeps growing: glyphon
+    /// will not say how big its atlas is, but the device it allocates from
+    /// can. Needs wgpu's `counters`, which the dev-dependency turns on.
+    #[cfg(test)]
+    pub(crate) fn texture_bytes(&self) -> isize {
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("the device never went idle");
+        self.device
+            .get_internal_counters()
+            .hal
+            .texture_memory
+            .read()
+    }
 }
 
 pub struct SurfaceState {

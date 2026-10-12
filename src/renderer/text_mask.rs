@@ -127,22 +127,26 @@ struct CachedMask {
     last_used: Cell<u64>,
 }
 
-/// The glyphon side, built on the first frosted text and not before.
+/// The glyphon side of a path that rasterizes one text at a time into a
+/// texture of its own — a frosted text's mask here, a turned text's texture in
+/// [`text_quad`](super::text_quad) — built on the first such text and not
+/// before.
 ///
-/// A `FontSystem` scans the machine's fonts to construct, which is not a cost
-/// to put on every app for an effect most of them never ask for.
-struct Shaper {
-    font_system: FontSystem,
-    swash_cache: SwashCache,
+/// A `FontSystem` scans the machine's fonts to construct, and the atlas is two
+/// textures before it holds a glyph: not a cost to put on every app for paths
+/// most of them never take.
+pub(super) struct Shaper {
+    pub(super) font_system: FontSystem,
+    pub(super) swash_cache: SwashCache,
     #[allow(dead_code)] // Held for the atlas and viewport.
     cache: Cache,
-    atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    viewport: Viewport,
+    pub(super) atlas: TextAtlas,
+    pub(super) text_renderer: TextRenderer,
+    pub(super) viewport: Viewport,
 }
 
 impl Shaper {
-    fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
+    pub(super) fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
         let mut font_system = FontSystem::new();
         for data in crate::get_registered_fonts() {
             font_system
@@ -163,6 +167,67 @@ impl Shaper {
             text_renderer,
             viewport,
         }
+    }
+
+    /// Draw one text into `view`, cleared first, and submit it. Answers
+    /// whether the text could be prepared at all.
+    ///
+    /// Ends by trimming: this atlas draws one text at a time, and that text is
+    /// drawn now, so its glyphs stop being in use and the next text may evict
+    /// them rather than grow the atlas around them. After the submit and not
+    /// before, because the next text's glyph uploads would otherwise overwrite
+    /// slots this one's pass still reads.
+    pub(super) fn draw(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        area: glyphon::TextArea<'_>,
+        view: &wgpu::TextureView,
+        label: &str,
+    ) -> bool {
+        if let Err(e) = self.text_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            [area],
+            &mut self.swash_cache,
+        ) {
+            log::error!("{label} prepare failed: {e:?}");
+            return false;
+        }
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            match self
+                .text_renderer
+                .render(&self.atlas, &self.viewport, &mut pass)
+            {
+                Ok(()) => render_stats::record_draw_calls(Pipeline::Text, 1),
+                Err(e) => log::error!("{label} render failed: {e:?}"),
+            }
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        self.atlas.trim();
+        true
     }
 }
 
@@ -301,48 +366,9 @@ impl TextMaskRenderer {
             custom_glyphs: &[],
         };
 
-        if let Err(e) = shaper.text_renderer.prepare(
-            device,
-            queue,
-            &mut shaper.font_system,
-            &mut shaper.atlas,
-            &shaper.viewport,
-            vec![area],
-            &mut shaper.swash_cache,
-        ) {
-            log::error!("text mask prepare failed: {e:?}");
+        if !shaper.draw(device, queue, area, &view, "Text Mask") {
             return None;
         }
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Text Mask Encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Text Mask Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            match shaper
-                .text_renderer
-                .render(&shaper.atlas, &shaper.viewport, &mut pass)
-            {
-                Ok(()) => render_stats::record_draw_calls(Pipeline::Text, 1),
-                Err(e) => log::error!("text mask render failed: {e:?}"),
-            }
-        }
-        queue.submit(std::iter::once(encoder.finish()));
 
         let view = Rc::new(view);
         self.masks.insert(
@@ -354,5 +380,60 @@ impl TextMaskRenderer {
             }),
         );
         Some(view)
+    }
+}
+
+/// The glyph atlas behind the masks holds one text's glyphs, not every
+/// text's — see `the_glyph_atlas_holds_a_frame_not_a_history` in `text.rs`, whose pages this
+/// frosts.
+#[cfg(test)]
+mod the_glyph_atlas_holds_a_text_not_a_history {
+    use super::{MaskSpec, Shaper, TextMaskRenderer};
+    use crate::renderer::GpuContext;
+    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{
+        holds_one_page, page,
+    };
+    use crate::transform::Transform;
+
+    /// The atlas a fresh renderer holds after frosting `frames`, one frame
+    /// each — and only the atlas: the masks it rasterized are given back
+    /// before the device is asked.
+    fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
+        let before = gpu.texture_bytes();
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut renderer = TextMaskRenderer::new(format);
+        let mut shaper = Shaper::new(&gpu.device, &gpu.queue, format);
+        shaper.font_system = crate::renderer::text::vendored_font_system();
+        renderer.shaper = Some(shaper);
+        for text in frames {
+            renderer.begin_frame();
+            let entry = page(text, Transform::IDENTITY);
+            let spec = MaskSpec {
+                text: &entry.text,
+                font_size: entry.font_size,
+                font_family: entry.font_family,
+                font_weight: entry.font_weight,
+                line_height: entry.line_height,
+                letter_spacing: entry.letter_spacing,
+                fit: None,
+                align: entry.align,
+                buffer_height: entry.rect.height,
+                box_width: entry.rect.width,
+                size: (entry.rect.width as u32, entry.rect.height as u32),
+                offset: (0.0, 0.0),
+                density: 1.0,
+            };
+            assert!(
+                renderer.mask(&gpu.device, &gpu.queue, &spec).is_some(),
+                "a frame's mask was not made"
+            );
+        }
+        renderer.masks.clear();
+        gpu.texture_bytes() - before
+    }
+
+    #[test]
+    fn a_frosted_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
+        holds_one_page(atlas_after);
     }
 }
