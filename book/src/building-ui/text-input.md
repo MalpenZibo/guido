@@ -625,7 +625,10 @@ fn login_form() -> Container {
 - **Selection**: Click and drag to select text, or use Shift+Arrow keys
 - **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. Another
   application's copy is read only when you paste, off the UI thread, so a
-  paste never blocks it: the text appears once that application answers
+  paste never blocks it: the text appears once that application answers.
+  The field is one line, so a pasted line break is removed, as a browser's
+  text input removes it: a line copied from a terminal with its newline
+  arrives as the line alone, and two lines arrive joined
 - **Primary selection**: selecting text with the mouse sets the primary
   selection (paste it elsewhere with middle click); middle-clicking the
   input pastes the primary selection at the click position

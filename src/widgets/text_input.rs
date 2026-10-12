@@ -1053,7 +1053,6 @@ impl<C: Content> TextInput<C> {
         self.scroll_offset = self.scroll_offset.max(0.0);
     }
 
-    /// Insert text at cursor, replacing any selection
     /// Whether the field is refusing edits right now.
     ///
     /// Asked by each of the four functions that write the text, rather than at
@@ -1067,8 +1066,26 @@ impl<C: Content> TextInput<C> {
         self.readonly.get_or_untracked(false)
     }
 
+    /// Insert text at cursor, replacing any selection
     fn insert_text(&mut self, text: &str, edit: Edit) {
         if self.refuses_edits() {
+            return;
+        }
+        // The field is one line, and a line copied from a terminal brings its
+        // line break: removed, as HTML strips newlines from an `<input
+        // type=text>`'s value. Wiped, because a paste is often a password, and
+        // sized up front so no regrowth frees an unwiped buffer.
+        const LINE_BREAKS: [char; 2] = ['\n', '\r'];
+        let mut one_line;
+        let text = if text.contains(LINE_BREAKS) {
+            one_line = Zeroizing::new(String::with_capacity(text.len()));
+            one_line.extend(text.split(LINE_BREAKS));
+            &one_line
+        } else {
+            text
+        };
+        // Nothing to insert over nothing selected is no edit, as in `delete`.
+        if text.is_empty() && !self.selection.has_selection() {
             return;
         }
         // Save state before modification

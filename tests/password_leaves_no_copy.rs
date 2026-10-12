@@ -41,6 +41,10 @@ const PASSWORD: &str = "Tr0ub4dor&3-horse-99";
 /// accidents; the whole password would miss the prefixes a history keeps.
 const NEEDLE: &[u8] = b"Tr0ub4do";
 
+/// `PASSWORD` as a copy from a terminal brings it. Written out again rather
+/// than built, because building it would put the password on the test's heap.
+const PASSWORD_AND_A_LINE_BREAK: &str = "Tr0ub4dor&3-horse-99\n";
+
 static FOUND: AtomicBool = AtomicBool::new(false);
 
 /// `System`, with every freed block searched first.
@@ -175,6 +179,18 @@ fn no_freed_block_ever_held_the_password() {
     assert!(
         password.with_untracked(|s| s.expose() == PASSWORD),
         "the paste did not arrive"
+    );
+    password.clear();
+    relayout(&mut harness);
+
+    // Pasted with the line break a copy from a terminal carries, which the
+    // field removes — and the text without it is a copy too.
+    ctrl(&mut harness, 'v');
+    answer_pastes(SelectionKind::Clipboard, Some(PASSWORD_AND_A_LINE_BREAK));
+    deliver_pastes(&mut harness.tree);
+    assert!(
+        password.with_untracked(|s| s.expose() == PASSWORD),
+        "the paste kept its line break"
     );
     password.clear();
     relayout(&mut harness);

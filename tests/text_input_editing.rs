@@ -649,6 +649,57 @@ fn ctrl_v_inserts_the_paste_when_it_arrives() {
     assert_eq!(field.text(), "abcXYd");
 }
 
+/// A field is one line, and a line copied from a terminal or an editor comes
+/// with its line break. The break is removed, as HTML's `<input type=text>`
+/// strips newlines from its value: left in, it reaches `on_submit` and the
+/// search misses or the password is refused, with nothing on screen to say why.
+#[test]
+fn a_pasted_line_break_never_enters_the_field() {
+    let submitted: Rc<RefCell<Vec<String>>> = Rc::default();
+    let sink = Rc::clone(&submitted);
+    let value = create_signal(String::new());
+    let mut field = Field::focused_around(
+        value,
+        text_input(value).on_submit(move |text| sink.borrow_mut().push(text.to_owned())),
+    );
+
+    field.ctrl('v');
+    field.paste_arrives(SelectionKind::Clipboard, "hunter2\n");
+    assert_eq!(field.text(), "hunter2");
+
+    field.key(Key::Enter);
+    assert_eq!(submitted.borrow().as_slice(), ["hunter2".to_owned()]);
+}
+
+/// Removed rather than replaced: a Windows line ending is two characters, and
+/// neither of them is left behind.
+#[test]
+fn a_pasted_line_break_inside_the_text_joins_its_two_halves() {
+    let mut field = Field::focused("");
+
+    field.ctrl('v');
+    field.paste_arrives(SelectionKind::Clipboard, "a\r\nb\nc\rd");
+
+    assert_eq!(field.text(), "abcd");
+}
+
+/// A paste that was nothing but a line break inserts nothing, and nothing is
+/// no edit: an undo after it takes back what came before, rather than an
+/// entry for the paste that changed nothing.
+#[test]
+fn a_paste_of_only_a_line_break_leaves_nothing_to_undo() {
+    // A delete before it, so the paste could not coalesce into its entry.
+    let mut field = Field::focused("ab");
+    field.key(Key::End);
+    field.key(Key::Backspace);
+
+    field.ctrl('v');
+    field.paste_arrives(SelectionKind::Clipboard, "\n");
+    field.ctrl('z');
+
+    assert_eq!(field.text(), "ab");
+}
+
 #[test]
 fn a_cut_leaves_the_cursor_where_the_selection_was() {
     let mut field = Field::focused("abcd");
