@@ -6089,8 +6089,8 @@ fn a_declared_transform_change_invalidates_the_reach_without_a_layout() {
 /// This is what `gather_reach_upward` is for, and the only thing that asks for
 /// it: `publish_paint_reach` gathers a container's children when *it* lays out,
 /// which covers everything except the case where it does not lay out at all. A
-/// fixed width and height make the row a boundary (`is_relayout_boundary_for`),
-/// so `mark_needs_layout` stops there and the parent never re-runs.
+/// transform is paint-only, so the parent never re-runs: a change to the box's
+/// own size would lay it out, boundary or not (`Tree::mark_needs_layout`).
 #[test]
 fn a_reach_that_grows_under_a_relayout_boundary_still_reaches_the_parent() {
     let lift = create_signal(0.0f32);

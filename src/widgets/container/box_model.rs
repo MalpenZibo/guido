@@ -59,6 +59,10 @@ pub(super) struct ChildLayout {
 impl Container {
     /// Whether this container's size is independent of its children, so a
     /// dirty descendant can stop bubbling here instead of reaching the root.
+    ///
+    /// Only a descendant: the size still follows this container's own
+    /// signals, so its own changes go on to the parent, which places it.
+    /// `Tree::mark_needs_layout` never stops at the widget that changed.
     pub(super) fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
         // A layout-affecting animation re-sizes the container every frame, so
         // the parent has to keep repositioning its siblings: not a boundary.

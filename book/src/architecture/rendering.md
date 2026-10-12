@@ -284,6 +284,8 @@ The layout system includes several optimizations:
 
 **Relayout Boundaries**: Widgets with fixed width and height are relayout boundaries.
 Layout changes inside don't propagate to the parent, limiting recalculation scope.
+A change to the boundary itself, such as its width or whether it is visible, still lays
+its parent out, so its siblings move around it.
 
 **Layout Caching**: Layout results are cached. The system uses reactive version tracking
 to detect when signals have changed. Layout only runs when:
