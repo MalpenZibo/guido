@@ -133,6 +133,10 @@ text(label)  // Only repaints when the formatted string changes
 # }
 ```
 
+A memo is current whenever an effect that reads it runs. Take an effect that
+reads a list's length and a memo clamping an index into it: it runs once per
+write, and sees the new length beside the new index, never the old one.
+
 ## Effects
 
 Side effects that re-run when tracked signals change:

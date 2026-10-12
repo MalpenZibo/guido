@@ -466,6 +466,18 @@ an effect notifies its subscribers normally, so effect → effect and memo → m
 chains work. Panics inside effects or `batch()` are unwind-safe — scope state
 restores via Drop guards and the effect stays alive and re-runnable.
 
+A write queues its readers in two queues: memos, and plain effects. A flush
+runs every queued memo before any plain effect, and a memo whose value changes
+queues the memos that read it behind those still pending. So an effect that
+reads a signal and a memo derived from it runs once per write, with both
+current — never with the new signal beside the old memo (#665). This is
+Solid's split of a write's readers into pure computations and effects, without
+its pull: guido stays eager. The limit is among memos themselves: they run in
+the order they were notified, so a memo that reads a signal and another memo of
+that signal can compute once with the new signal and the old memo, then again.
+Effects below it run after both and see only the settled value. Ordering memos
+by depth would close that too; nothing has needed it yet.
+
 `WriteSignal<T>` is a separate `Send` handle that queues writes through a thread-safe channel, which the main thread drains each frame:
 
 ```rust

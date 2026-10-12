@@ -17,7 +17,8 @@ Single-threaded, SolidJS-shaped, thread-local runtime. Full reference in
   `create_derived` (closure-backed). `.get()`, `.with()`, and nothing that
   mutates.
 - `Memo<T>` — eager, recomputes when a dependency changes, notifies only when
-  the value actually changed (`PartialEq`).
+  the value actually changed (`PartialEq`). A flush runs queued memos before
+  plain effects, so an effect never reads a memo staler than its sources.
 - `create_effect` — a side effect that re-runs when what it read changes. It
   returns nothing on purpose: an effect's lifetime is its scope's.
 - `Owner` — the scope that owns signals, effects and custom cleanups.
