@@ -865,9 +865,12 @@ pub(crate) trait Surface {
         None
     }
 
-    /// The scale the compositor confirmed for this surface, if it has.
-    fn scale_factor(&self) -> Option<f32> {
-        None
+    /// The scale to build this surface's buffer at now: 1 until the compositor
+    /// sends one, which is what `wl_surface.preferred_buffer_scale` defines a
+    /// surface's scale to be before its first event. A scale that arrives
+    /// later is a change like any other, and the target is resized to it.
+    fn scale_factor(&self) -> f32 {
+        1.0
     }
 
     /// The width an auto-width popup should be measured against.
@@ -1358,8 +1361,10 @@ impl Surface for WaylandSurface<'_> {
             .map(|s| (s.width, s.height))
     }
 
-    fn scale_factor(&self) -> Option<f32> {
-        Some(self.state.get_surface(self.id)?.scale_factor)
+    fn scale_factor(&self) -> f32 {
+        self.state
+            .get_surface(self.id)
+            .map_or(1.0, |surface| surface.scale_factor)
     }
 
     fn popup_auto_width(&self) -> Option<u32> {
@@ -4185,6 +4190,18 @@ mod a_frame_lands_where_the_surface_points {
                 force_render_surface: true,
             })
         }
+    }
+
+    /// A surface nobody has told a scale is at 1, which is what
+    /// `wl_surface.preferred_buffer_scale` defines it to be before its first
+    /// event: the trait's own answer, for an implementation that keeps no scale.
+    #[test]
+    fn a_surface_nobody_has_told_a_scale_is_at_one() {
+        let surface = OneSurface {
+            width: W,
+            height: H,
+        };
+        assert_eq!(surface.scale_factor(), 1.0);
     }
 
     struct OnePlatform(OneSurface);
