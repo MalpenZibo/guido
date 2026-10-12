@@ -1930,43 +1930,37 @@ impl Tree {
 
     /// Mark a widget as needing layout, returning the layout root.
     ///
-    /// The needs_layout flag bubbles up to the nearest relayout boundary or root.
-    /// Returns `Some(root_id)` if a layout root was found and should be queued.
-    /// Returns `None` if the widget already needs layout (boundary already queued).
+    /// The needs_layout flag bubbles up to the nearest relayout boundary
+    /// *above* the widget, or the root. Returns `Some(root_id)` if a layout
+    /// root was found and should be queued, `None` if an ancestor already
+    /// needed layout (its boundary is already queued).
     ///
-    /// Optimization: If a widget already needs layout, we stop early since its
-    /// boundary must already be in the queue. This requires all widgets to
-    /// call `clear_needs_layout` after completing layout.
+    /// The widget itself is never the boundary its own walk stops at: a
+    /// boundary's size does not depend on its children, but it does depend on
+    /// its own properties, and placing it is its parent's job (#670). Blink's
+    /// `MarkContainerChainForLayout` starts at the container too. Nor does the
+    /// widget being marked already stop the walk: a descendant's walk marks a
+    /// boundary without telling its parent.
+    ///
+    /// Stopping at a marked ancestor requires all widgets to call
+    /// `clear_needs_layout` after completing layout.
     pub fn mark_needs_layout(&mut self, widget_id: WidgetId) -> Option<WidgetId> {
+        let mut idx = self.get_dense_index(widget_id)?;
+        self.dense[idx].needs_layout = true;
+
         let mut current = widget_id;
-
-        loop {
-            let dense_idx = self.get_dense_index(current)?;
-
-            // Optimization: Stop if already marked - boundary is already in queue
-            if self.dense[dense_idx].needs_layout {
+        while let Some(parent) = self.dense[idx].parent {
+            idx = self.get_dense_index(parent)?;
+            if self.dense[idx].needs_layout {
                 return None;
             }
-
-            // Mark as needing layout
-            self.dense[dense_idx].needs_layout = true;
-
-            // Check if this is a relayout boundary
-            if self.dense[dense_idx].is_relayout_boundary {
-                return Some(current);
+            self.dense[idx].needs_layout = true;
+            if self.dense[idx].is_relayout_boundary {
+                return Some(parent);
             }
-
-            // Move up to parent
-            match self.dense[dense_idx].parent {
-                Some(parent) => {
-                    current = parent;
-                }
-                None => {
-                    // Reached root
-                    return Some(current);
-                }
-            }
+            current = parent;
         }
+        Some(current)
     }
 
     /// Clear the needs-layout flag for a widget.
@@ -2710,10 +2704,8 @@ mod tests {
         let layout_root = tree.mark_needs_layout(child_id);
         assert_eq!(layout_root, Some(root_id));
 
-        // Clear only root's flag, leave child marked
-        tree.clear_needs_layout(root_id);
-
-        // Mark child again - should return None (already marked)
+        // Mark child again before layout runs - should return None, because
+        // the walk meets the root already marked, and so already queued
         let layout_root = tree.mark_needs_layout(child_id);
         assert_eq!(layout_root, None);
     }
