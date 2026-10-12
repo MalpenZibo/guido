@@ -683,6 +683,23 @@ fn a_pasted_line_break_inside_the_text_joins_its_two_halves() {
     assert_eq!(field.text(), "abcd");
 }
 
+/// A paste that was nothing but a line break inserts nothing, and nothing is
+/// no edit: an undo after it takes back what came before, rather than an
+/// entry for the paste that changed nothing.
+#[test]
+fn a_paste_of_only_a_line_break_leaves_nothing_to_undo() {
+    // A delete before it, so the paste could not coalesce into its entry.
+    let mut field = Field::focused("ab");
+    field.key(Key::End);
+    field.key(Key::Backspace);
+
+    field.ctrl('v');
+    field.paste_arrives(SelectionKind::Clipboard, "\n");
+    field.ctrl('z');
+
+    assert_eq!(field.text(), "ab");
+}
+
 #[test]
 fn a_cut_leaves_the_cursor_where_the_selection_was() {
     let mut field = Field::focused("abcd");

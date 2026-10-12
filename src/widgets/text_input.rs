@@ -1053,7 +1053,6 @@ impl<C: Content> TextInput<C> {
         self.scroll_offset = self.scroll_offset.max(0.0);
     }
 
-    /// Insert text at cursor, replacing any selection
     /// Whether the field is refusing edits right now.
     ///
     /// Asked by each of the four functions that write the text, rather than at
@@ -1067,6 +1066,7 @@ impl<C: Content> TextInput<C> {
         self.readonly.get_or_untracked(false)
     }
 
+    /// Insert text at cursor, replacing any selection
     fn insert_text(&mut self, text: &str, edit: Edit) {
         if self.refuses_edits() {
             return;
@@ -1084,6 +1084,10 @@ impl<C: Content> TextInput<C> {
         } else {
             text
         };
+        // Nothing to insert over nothing selected is no edit, as in `delete`.
+        if text.is_empty() && !self.selection.has_selection() {
+            return;
+        }
         // Save state before modification
         self.save_to_history(EditType::Insert, edit.at);
 
