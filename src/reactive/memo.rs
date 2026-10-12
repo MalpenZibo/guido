@@ -1,5 +1,5 @@
 use super::diagnostics::snapshot_zone;
-use super::effect::create_effect;
+use super::effect::create_memo_effect;
 use super::into_signal::{IntoSignal, MemoMarker};
 use super::invalidation::suspend_widget_tracking;
 use super::runtime::suspend_effect_tracking;
@@ -73,7 +73,7 @@ where
     // outlives the binding either way — a memo created outside any scope
     // keeps updating for as long as the application runs. Being an effect,
     // what `f` itself creates is disposed when it recomputes.
-    create_effect(move || {
+    create_memo_effect(move || {
         signal.set(f());
     });
     Memo { signal }
@@ -248,5 +248,116 @@ mod tests {
         base.set(3);
         assert_eq!(doubled.get(), 6);
         assert_eq!(quadrupled.get(), 12, "second-level memo must recompute");
+    }
+
+    /// What an effect reading `len` and `index` saw on each run.
+    type Seen = std::rc::Rc<std::cell::RefCell<Vec<(i32, i32)>>>;
+
+    /// An effect that records `(len, index)` each time it runs.
+    fn record(len: RwSignal<i32>, index: Memo<i32>) -> Seen {
+        let seen = Seen::default();
+        let sink = seen.clone();
+        crate::reactive::create_effect(move || sink.borrow_mut().push((len.get(), index.get())));
+        seen
+    }
+
+    /// A list that shrinks under a memo clamping an index into it: the effect
+    /// reading both must never see the new length beside the old index. It
+    /// once did whenever another effect also read the length, because the memo
+    /// was queued behind it like any effect, and `items[index]` would panic.
+    #[test]
+    fn an_effect_never_sees_a_memo_older_than_the_signal_it_reads() {
+        for other_readers in 1..=2 {
+            let len = create_signal(5);
+            let selected = create_signal(4);
+            let clamped = create_memo(move || selected.get().min(len.get() - 1));
+            let seen = record(len, clamped);
+            for _ in 0..other_readers {
+                crate::reactive::create_effect(move || {
+                    len.get();
+                });
+            }
+
+            for shorter in [4, 3, 2, 1] {
+                len.set(shorter);
+            }
+
+            let seen = seen.borrow();
+            assert!(
+                seen.iter().all(|&(len, index)| index < len),
+                "with {other_readers} other reader(s), an index was not below its length: {seen:?}"
+            );
+            assert_eq!(
+                *seen,
+                [(5, 4), (4, 3), (3, 2), (2, 1), (1, 0)],
+                "with {other_readers} other reader(s), one run per write"
+            );
+        }
+    }
+
+    /// The same through a memo of a memo: the second memo is queued only when
+    /// the first one changes, after the effect that reads it already was, and
+    /// still recomputes before that effect runs.
+    #[test]
+    fn a_memo_of_a_memo_recomputes_before_the_effect_reading_it() {
+        let len = create_signal(5);
+        let selected = create_signal(4);
+        let clamped = create_memo(move || selected.get().min(len.get() - 1));
+        let index = create_memo(move || clamped.get());
+        let seen = record(len, index);
+        crate::reactive::create_effect(move || {
+            len.get();
+        });
+
+        for shorter in [4, 3, 2, 1] {
+            len.set(shorter);
+        }
+
+        assert_eq!(*seen.borrow(), [(5, 4), (4, 3), (3, 2), (2, 1), (1, 0)]);
+    }
+
+    /// Resuming a paused scope queues what it missed, and a memo among them
+    /// still goes before the effect reading it. The memo is made in a scope of
+    /// its own so that the walk hands the effect back first.
+    #[test]
+    fn a_resumed_memo_runs_before_the_resumed_effect_reading_it() {
+        use crate::reactive::owner::{pause_owner, resume_owner, with_owner};
+
+        let len = create_signal(5);
+        let selected = create_signal(4);
+        let (seen, scope) = with_owner(|| {
+            let (clamped, _) =
+                with_owner(|| create_memo(move || selected.get().min(len.get() - 1)));
+            record(len, clamped)
+        });
+
+        pause_owner(scope);
+        len.set(4);
+        resume_owner(scope);
+
+        assert_eq!(*seen.borrow(), [(5, 4), (4, 3)]);
+    }
+
+    /// A diamond among memos: `pair` reads `len` and `clamped`, which reads
+    /// `len` too. Memos run in the order they were notified, so `pair` itself
+    /// may compute once with the new length and the old index — that is the
+    /// limit of running memos first rather than by depth, and nothing here
+    /// claims otherwise. What holds is the effect's side: it runs after every
+    /// memo has settled, once per write, and never sees that pair.
+    #[test]
+    fn an_effect_below_a_diamond_of_memos_sees_only_settled_values() {
+        let len = create_signal(5);
+        let selected = create_signal(4);
+        let clamped = create_memo(move || selected.get().min(len.get() - 1));
+        let pair = create_memo(move || (len.get(), clamped.get()));
+        let seen = Seen::default();
+        let sink = seen.clone();
+        crate::reactive::create_effect(move || sink.borrow_mut().push(pair.get()));
+
+        for shorter in [4, 3, 2, 1] {
+            len.set(shorter);
+        }
+
+        assert_eq!(*seen.borrow(), [(5, 4), (4, 3), (3, 2), (2, 1), (1, 0)]);
     }
 }

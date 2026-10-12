@@ -40,8 +40,24 @@ pub(crate) fn create_effect_id<F>(f: F) -> EffectId
 where
     F: FnMut() + 'static,
 {
+    spawn_effect(f, false)
+}
+
+/// A memo's effect: [`create_effect`], queued with the memos a flush runs
+/// first.
+pub(crate) fn create_memo_effect<F>(f: F)
+where
+    F: FnMut() + 'static,
+{
+    spawn_effect(f, true);
+}
+
+fn spawn_effect<F>(f: F, memo: bool) -> EffectId
+where
+    F: FnMut() + 'static,
+{
     let scope = child_scope();
-    let id = with_runtime(|rt| rt.allocate_effect(Box::new(f), scope));
+    let id = with_runtime(|rt| rt.allocate_effect(Box::new(f), scope, memo));
 
     // Initial run establishes dependencies. Runs outside the runtime borrow, so
     // the callback can freely write signals or create new ones.
