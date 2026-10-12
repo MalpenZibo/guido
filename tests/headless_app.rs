@@ -3646,3 +3646,115 @@ fn a_drawn_popup_is_not_drawn_again_for_nothing() {
     app.step();
     assert_eq!(app.frames_presented(popup.id()), drawn);
 }
+
+/// The row #670 measured, on a surface wider than it: a title that takes what
+/// is left, and a badge of a fixed size whose width and visibility are signals.
+///
+/// A fixed width and height make the badge a relayout boundary, and so does
+/// being hidden. A boundary absorbs what changes *inside* it; these change the
+/// badge itself, and the row has to place its children again around it.
+fn title_and_badge(app: &mut Headless, width: f32, shown: bool) -> BadgeRow {
+    let (badge_width, badge_shown) = (create_signal(width), create_signal(shown));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(300.0)
+                .layout(Flex::row().spacing(8.0))
+                .child(block(20.0, Color::rgb(1.0, 0.0, 0.0)))
+                .child(
+                    container()
+                        .visible(move || badge_shown.get())
+                        .width(move || badge_width.get())
+                        .height(20.0)
+                        .background(Color::rgb(0.0, 0.0, 1.0)),
+                )
+        },
+    );
+    app.configure(surface, 400, 20, 1.0);
+    app.step();
+    BadgeRow {
+        surface,
+        width: badge_width,
+        shown: badge_shown,
+    }
+}
+
+struct BadgeRow {
+    surface: SurfaceId,
+    width: RwSignal<f32>,
+    shown: RwSignal<bool>,
+}
+
+impl BadgeRow {
+    /// Where the title and the badge are on the last frame, read across row
+    /// 10: the red run and the blue run, each as `(x, width)`, `None` for one
+    /// that is not drawn.
+    fn spans(&self, app: &Headless) -> [Option<(u32, u32)>; 2] {
+        let (width, _) = app.physical_size(self.surface);
+        let frame = app.read_frame(self.surface);
+        let row = &frame[(10 * width * 4) as usize..(11 * width * 4) as usize];
+        let span = |channel: usize| {
+            let lit: Vec<u32> = (0..width)
+                .filter(|&x| {
+                    let px = &row[(x * 4) as usize..(x * 4 + 3) as usize];
+                    (0..3).all(|c| (px[c] > 127) == (c == channel))
+                })
+                .collect();
+            let (&first, &last) = (lit.first()?, lit.last()?);
+            assert_eq!(lit.len() as u32, last - first + 1, "one run of {channel}");
+            Some((first, last - first + 1))
+        };
+        [span(0), span(2)]
+    }
+}
+
+/// A badge that grows pushes the title back rather than out of the row.
+#[test]
+fn a_badge_that_grows_lays_its_row_out_again() {
+    let Some(mut app) = headless() else { return };
+    let row = title_and_badge(&mut app, 40.0, true);
+    assert_eq!(row.spans(&app), [Some((0, 252)), Some((260, 40))]);
+
+    row.width.set(80.0);
+    app.step();
+    assert_eq!(
+        row.spans(&app),
+        [Some((0, 212)), Some((220, 80))],
+        "the badge grew past the row's edge and the title never moved"
+    );
+}
+
+/// A badge that is hidden gives the title its place, spacing and all.
+#[test]
+fn a_badge_that_is_hidden_lays_its_row_out_again() {
+    let Some(mut app) = headless() else { return };
+    let row = title_and_badge(&mut app, 40.0, true);
+
+    row.shown.set(false);
+    app.step();
+    assert_eq!(
+        row.spans(&app),
+        [Some((0, 300)), None],
+        "the badge left a hole where it was"
+    );
+}
+
+/// A badge built hidden and then shown takes its place beside the title, though
+/// a hidden container is a relayout boundary whatever its size says.
+#[test]
+fn a_badge_that_is_shown_lays_its_row_out_again() {
+    let Some(mut app) = headless() else { return };
+    let row = title_and_badge(&mut app, 40.0, false);
+    assert_eq!(row.spans(&app), [Some((0, 300)), None]);
+
+    row.shown.set(true);
+    app.step();
+    assert_eq!(
+        row.spans(&app),
+        [Some((0, 252)), Some((260, 40))],
+        "the badge was drawn over the title's end"
+    );
+}

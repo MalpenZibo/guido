@@ -2650,6 +2650,43 @@ mod tests {
         assert_eq!(layout_root, Some(boundary_id));
     }
 
+    /// A boundary absorbs what changes below it, not what changes in itself:
+    /// its own size is its parent's to place, so its own mark walks on to the
+    /// parent's boundary (#670). Blink's `MarkContainerChainForLayout` starts
+    /// at the container for the same reason.
+    #[test]
+    fn test_tree_relayout_boundary_own_mark_reaches_the_parent() {
+        let mut tree = Tree::new();
+        let root_id = tree.register(Box::new(MockWidget::new()));
+        let outer_id = tree.register(Box::new(MockWidget::new()));
+        let inner_id = tree.register(Box::new(MockWidget::new()));
+        let leaf_id = tree.register(Box::new(MockWidget::new()));
+
+        // root -> outer (boundary) -> inner (boundary) -> leaf
+        tree.set_parent(outer_id, root_id);
+        tree.set_parent(inner_id, outer_id);
+        tree.set_parent(leaf_id, inner_id);
+        tree.set_relayout_boundary(outer_id, true);
+        tree.set_relayout_boundary(inner_id, true);
+
+        assert_eq!(tree.mark_needs_layout(inner_id), Some(outer_id));
+        assert!(tree.needs_layout(inner_id) && tree.needs_layout(outer_id));
+        assert!(!tree.needs_layout(root_id));
+
+        for id in [outer_id, inner_id] {
+            tree.clear_needs_layout(id);
+        }
+
+        // A descendant's mark still stops at the nearest boundary...
+        assert_eq!(tree.mark_needs_layout(leaf_id), Some(inner_id));
+        assert!(!tree.needs_layout(outer_id));
+
+        // ...and the boundary it stopped at, already marked by that walk, still
+        // tells its parent when it changes itself.
+        assert_eq!(tree.mark_needs_layout(inner_id), Some(outer_id));
+        assert!(tree.needs_layout(outer_id));
+    }
+
     #[test]
     fn test_tree_needs_layout_optimization() {
         let mut tree = Tree::new();
