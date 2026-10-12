@@ -218,7 +218,7 @@ See [Animations](../animations/README.md) for timing and spring options.
 
 ## Visibility
 
-Control whether a container is visible. When hidden, it takes up no space in layout, does not paint, and ignores all events.
+Control whether a container is visible. When hidden, it takes up no space in layout, does not paint, and ignores all events. Nothing inside it advances an animation either, so a spinner in a hidden panel costs no frames, and shown again it spins again. An exit still plays out, so that its widget can leave.
 
 ```rust
 # extern crate guido;

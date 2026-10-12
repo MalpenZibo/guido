@@ -527,6 +527,21 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
     }
     for id in animation {
         tree.with_widget_mut(id, |widget, wid, tree| {
+            // Inside a hidden container nothing is on screen to move, so
+            // nothing advances and no frame is asked for — except an exit,
+            // which has to play out for its widget to leave. Asked here rather
+            // than by each widget, so a widget from outside the crate is
+            // covered too. Read under tracking: showing the container queues
+            // this job again (#666).
+            if !widget.is_exiting()
+                && crate::reactive::invalidation::with_signal_tracking(
+                    wid,
+                    JobType::Animation,
+                    || tree.inside_a_hidden_container(wid),
+                )
+            {
+                return;
+            }
             widget.advance_animations(tree, wid);
         });
     }
