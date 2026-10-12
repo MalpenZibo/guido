@@ -59,13 +59,16 @@ struct RecordedSurface {
     width: u32,
     height: u32,
     scale: f32,
-    /// Whether the compositor has sent a scale. Until it has, `scale` is the
-    /// 1 Wayland defines a surface's scale to be before its first
-    /// `preferred_buffer_scale`.
-    scale_received: bool,
     configured: bool,
     events: Vec<(Instant, Event)>,
-    first_frame_presented: bool,
+    /// The same pacing state the Wayland surface keeps, told the same things:
+    /// a frame committed, a callback come back.
+    pacing: crate::surface::FramePacing,
+    /// The compositor is not sending this surface its frame callbacks — the
+    /// output it is on is off, or it is hidden. Unset, every step begins with
+    /// the callback for the frame before it, as a compositor showing each
+    /// frame promptly would.
+    callbacks_held: bool,
     exclusive_zones: Vec<i32>,
     /// Every input region asked for, oldest first. Kept whole rather than
     /// resolved, because "no region at all" and "a region holding nothing" are
@@ -226,13 +229,12 @@ impl Surface for &mut RecordedSurface {
             scale_factor: self.scale,
             width: self.width,
             height: self.height,
-            // Never pending: a driver that had to wait for a callback nobody
-            // sends would step once and stop.
-            frame_callback_pending: false,
-            // As Wayland's: rendered until a frame is up and a scale has come,
-            // so the frame that follows a late scale is drawn at it.
-            force_render_surface: !(self.first_frame_presented && self.scale_received),
+            pacing: self.pacing,
         })
+    }
+
+    fn pacing(&self) -> crate::surface::FramePacing {
+        self.pacing
     }
 
     fn configured_size(&self) -> Option<(u32, u32)> {
@@ -285,7 +287,7 @@ impl Surface for &mut RecordedSurface {
     }
 
     fn mark_frame_callback_pending(&mut self) {
-        self.first_frame_presented = true;
+        self.pacing.committed();
     }
 }
 
@@ -339,7 +341,6 @@ impl Platform for Recorder {
                 width: size.0,
                 height: size.1,
                 scale: 1.0,
-                scale_received: true,
                 configured: true,
                 ..Default::default()
             },
@@ -604,7 +605,7 @@ impl Headless {
 
     /// Configure a surface's size, and nothing about its scale. If none has
     /// been sent, it is drawn at 1, the scale Wayland defines a surface to have
-    /// before it is told one, and kept rendering until one arrives.
+    /// before it is told one; one that arrives later is a scale change.
     pub fn configure_size(&mut self, id: SurfaceId, width: u32, height: u32) {
         let surface = self.host.get_mut(id);
         surface.width = width;
@@ -612,12 +613,40 @@ impl Headless {
         surface.configured = true;
     }
 
+    /// Stop sending one surface its frame callbacks, as a compositor does for
+    /// a surface whose output is off. What it has committed stays unshown, and
+    /// the loop has to wait for it rather than draw past it.
+    pub fn hold_frame_callbacks(&mut self, id: SurfaceId) {
+        self.host.get_mut(id).callbacks_held = true;
+    }
+
+    /// Send them again: the next [`step`](Self::step) begins with the one that
+    /// was held.
+    pub fn release_frame_callbacks(&mut self, id: SurfaceId) {
+        self.host.get_mut(id).callbacks_held = false;
+    }
+
+    /// How long `App::run` would sleep before its next iteration, were this its
+    /// loop: `None` blocks until the compositor or a ping says something.
+    ///
+    /// Asked of the function the loop asks, with one thing left out — a wake
+    /// request, whose flag is process-wide and so, in a test binary, as likely
+    /// to be another application's as this one's.
+    pub fn next_wait(&mut self) -> Option<std::time::Duration> {
+        crate::loop_timeout(
+            &mut self.host,
+            &self.surfaces,
+            &self.gpu,
+            false,
+            Instant::now(),
+        )
+    }
+
     /// Send a surface the scale to draw at, as `preferred_buffer_scale` or a
     /// fractional scale does — before it is configured, or after.
     pub fn send_scale(&mut self, id: SurfaceId, scale: f32) {
         let surface = self.host.get_mut(id);
         surface.scale = scale;
-        surface.scale_received = true;
     }
 
     /// Queue a press and a release at a point on one surface, in logical
@@ -657,6 +686,13 @@ impl Headless {
 
     /// [`step`](Self::step), at a moment you name.
     pub fn step_at(&mut self, at: Instant) -> Option<crate::ExitReason> {
+        // The compositor's half of the frame before: what it was shown, it
+        // says it has shown — unless it has been told to hold its tongue.
+        for surface in self.host.surfaces.values_mut() {
+            if !surface.callbacks_held && surface.pacing.callback_pending() {
+                surface.pacing.callback_done();
+            }
+        }
         let ctx = LoopContext {
             wayland_state: &mut self.host,
             surface_manager: &mut self.surfaces,

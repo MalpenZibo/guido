@@ -90,14 +90,9 @@ pub struct WaylandSurfaceState {
     pub height: u32,
     /// Scale factor for HiDPI
     pub scale_factor: f32,
-    /// Whether scale factor has been received
-    pub scale_factor_received: bool,
-    /// Whether the first frame has been presented
-    pub first_frame_presented: bool,
-    /// Whether a wl_surface.frame callback is in flight. While true, the
-    /// compositor has not yet shown the last frame — rendering another one
-    /// would outpace it. Cleared by the frame-done handler.
-    pub frame_callback_pending: bool,
+    /// The frame callbacks in flight and what the compositor has confirmed —
+    /// what the frame-pacing gate is decided from.
+    pub(crate) pacing: crate::surface::FramePacing,
     /// Events waiting for the next frame, each with when it happened.
     ///
     /// The instant travels with the event because the two are separated in
@@ -142,9 +137,7 @@ impl WaylandSurfaceState {
             width,
             height,
             scale_factor: 1.0,
-            scale_factor_received: false,
-            first_frame_presented: false,
-            frame_callback_pending: false,
+            pacing: crate::surface::FramePacing::default(),
             pending_events: Vec::new(),
             bg_effect_surface: None,
             blur_region: None,
@@ -161,19 +154,16 @@ impl WaylandSurfaceState {
 
     /// Record the scale this surface renders at, and answer whether it moved.
     ///
-    /// One writer for two fields that have to stay in step, because the scale
-    /// now arrives through two events — `preferred_buffer_scale` for a surface
-    /// without a viewport and `wp_fractional_scale_v1.preferred_scale` for one
-    /// with — and `scale_factor_received` gates startup. Two spellings of it
-    /// would be two chances for a surface to be believed ready before it is.
+    /// One writer, because the scale arrives through two events —
+    /// `preferred_buffer_scale` for a surface without a viewport and
+    /// `wp_fractional_scale_v1.preferred_scale` for one with — and two
+    /// spellings of it would be two chances to floor it differently.
     ///
     /// The rule itself is [`crate::surface::adopted_scale`], where a test can
-    /// reach it; what is here is the pair of fields it writes.
+    /// reach it; what is here is the field it writes.
     pub(super) fn adopt_scale(&mut self, scale: f32) -> bool {
-        let held = self.scale_factor_received.then_some(self.scale_factor);
-        let (scale, moved) = crate::surface::adopted_scale(held, scale);
+        let (scale, moved) = crate::surface::adopted_scale(self.scale_factor, scale);
         self.scale_factor = scale;
-        self.scale_factor_received = true;
         moved
     }
 }
@@ -441,7 +431,7 @@ impl WaylandState {
     /// surface is gated until it fires.
     pub fn mark_frame_callback_pending(&mut self, id: SurfaceId) {
         if let Some(surface) = self.surfaces.get_mut(&id) {
-            surface.frame_callback_pending = true;
+            surface.pacing.committed();
         }
     }
 
@@ -785,13 +775,6 @@ impl WaylandState {
     pub fn all_surfaces_configured(&self) -> bool {
         self.surfaces.values().all(|s| s.configured)
     }
-
-    /// Check if any surface needs rendering.
-    pub fn any_surface_needs_render(&self) -> bool {
-        self.surfaces
-            .values()
-            .any(|s| !s.first_frame_presented || !s.scale_factor_received)
-    }
 }
 
 pub struct WaylandWindowWrapper {
@@ -928,14 +911,7 @@ impl CompositorHandler for WaylandState {
         if let Some(id) = self.surface_lookup.get(&surface.id()).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
-            surface_state.frame_callback_pending = false;
-            if !surface_state.first_frame_presented {
-                log::info!(
-                    "Surface {:?} first frame presented by compositor - initialization complete",
-                    id
-                );
-                surface_state.first_frame_presented = true;
-            }
+            surface_state.pacing.callback_done();
             // Wake the loop so a dirty surface renders promptly
             crate::jobs::wake_loop();
         }
