@@ -137,8 +137,10 @@ container()
 
 A box reports no baseline of its own, so it is aligned by its bottom edge,
 which is what CSS does with it. A container takes the baseline of its
-content, so wrapping a text for styling does not lose the alignment. In a
-column there is no shared line to sit on, and `Baseline` behaves as `Start`.
+content, so wrapping a text for styling does not lose the alignment. The row
+is deep enough for what the alignment moves down: a label pushed down beside
+a tall icon keeps its descenders inside the row. In a column there is no
+shared line to sit on, and `Baseline` behaves as `Start`.
 
 ### Visual Example (Row)
 

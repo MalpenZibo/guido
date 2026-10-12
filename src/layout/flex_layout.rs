@@ -278,6 +278,26 @@ impl Flex {
             Axis::Vertical => (constraints.min_height, constraints.min_width),
         };
 
+        // Baseline alignment needs the deepest baseline in the row before it
+        // can place anything: every child shifts down by the difference
+        // between it and its own. A child shifted down takes its depth below
+        // its baseline with it, so the row is as deep as the deepest baseline
+        // plus the greatest of those depths, which is how CSS sizes a line box.
+        let max_baseline = if cross_align == CrossAlignment::Baseline && axis == Axis::Horizontal {
+            let mut max_depth = 0.0f32;
+            let mut max_baseline = 0.0f32;
+            for (i, &id) in children.iter().enumerate() {
+                let child_cross = self.child_sizes[i].cross_axis(axis);
+                let baseline = baseline_of(ctx.tree_ref(), id, child_cross);
+                max_baseline = max_baseline.max(baseline);
+                max_depth = max_depth.max(child_cross - baseline);
+            }
+            max_cross = max_cross.max(max_baseline + max_depth);
+            max_baseline
+        } else {
+            0.0
+        };
+
         let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
 
         // For Stretch: if we didn't have a known cross size before, re-layout children
@@ -360,21 +380,6 @@ impl Flex {
             Axis::Horizontal => origin.0,
             Axis::Vertical => origin.1,
         } + initial_offset;
-
-        // Baseline alignment needs the deepest baseline in the row before it
-        // can place anything: every child shifts down by the difference
-        // between it and its own.
-        let max_baseline = if cross_align == CrossAlignment::Baseline && axis == Axis::Horizontal {
-            children
-                .iter()
-                .enumerate()
-                .map(|(i, &id)| {
-                    baseline_of(ctx.tree_ref(), id, self.child_sizes[i].cross_axis(axis))
-                })
-                .fold(0.0f32, f32::max)
-        } else {
-            0.0
-        };
 
         let mut prev_nonzero = false;
         for (i, &child_id) in children.iter().enumerate() {
@@ -460,8 +465,52 @@ mod tests {
     use crate::reactive::create_signal;
     use crate::widgets::container;
 
-    fn frame(tree: &mut Tree, root: WidgetId) {
-        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 400.0));
+    fn frame(tree: &mut Tree, root: WidgetId) -> Size {
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 400.0))
+            .expect("the root is registered")
+    }
+
+    /// A label that is hidden takes its baseline with it.
+    ///
+    /// A big label beside a box 10 tall sets the row's baseline well below the
+    /// box's top. Once the label is hidden the box is all the row holds, so the
+    /// row is the box's height and the box sits at its top. A baseline kept
+    /// from the label's last layout would hold both where the label put them.
+    #[test]
+    fn a_hidden_label_leaves_no_baseline_behind() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let shown = create_signal(true);
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(Flex::row().cross_alignment(CrossAlignment::Baseline))
+                .child(
+                    container().visible(shown).child(
+                        crate::widgets::text("Ag")
+                            .font_size(24.0)
+                            .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono")),
+                    ),
+                )
+                .child(container().width(20.0).height(10.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        frame(&mut tree, root);
+        let swatch = tree.get_children(root)[1];
+        assert!(
+            tree.get_origin(swatch).expect("laid out").1 > 0.0,
+            "while the label shows, the box is pushed down to its baseline"
+        );
+
+        shown.set(false);
+        let row = frame(&mut tree, root);
+        assert_eq!(row.height, 10.0, "the box is all the row holds");
+        assert_eq!(
+            tree.get_origin(swatch).expect("laid out").1,
+            0.0,
+            "with nothing else on the line, the box sits at the top"
+        );
     }
 
     /// A row becomes a column on a write, with the same widgets in the tree.

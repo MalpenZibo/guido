@@ -900,6 +900,10 @@ impl Tree {
         );
 
         let laid_out = self.with_widget_mut(id, |widget, id, tree| {
+            // A baseline is an answer of this layout, like the size: one the
+            // widget does not give again — hidden, or its text gone — is one
+            // it no longer has.
+            tree.forget_baseline(id);
             let mut ctx = LayoutCtx {
                 tree,
                 id,
@@ -1076,6 +1080,14 @@ impl Tree {
     pub fn set_baseline(&mut self, id: WidgetId, baseline: f32) {
         if let Some(idx) = self.get_dense_index(id) {
             self.dense[idx].baseline = Some(baseline);
+        }
+    }
+
+    /// Drop what the widget reported last time, ahead of a layout that may
+    /// report nothing.
+    fn forget_baseline(&mut self, id: WidgetId) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].baseline = None;
         }
     }
 
