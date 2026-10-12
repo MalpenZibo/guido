@@ -266,6 +266,8 @@ struct EffectSlot {
     paused: bool,
     /// A dependency changed while it was paused; it runs once on resume.
     missed: bool,
+    /// The effect is a memo's: it is queued with the memos, which run first.
+    memo: bool,
 }
 
 /// Which effects read each signal.
@@ -351,11 +353,57 @@ impl EffectSubscribers {
     }
 }
 
+/// Effects waiting to run, in notification order and deduplicated — most
+/// frames have 0–5.
+///
+/// Memos wait apart from plain effects, and a flush takes every memo before
+/// any plain effect. A memo that changes queues the memos reading it behind
+/// those still pending, so an effect never runs before a memo it reads has
+/// caught up with the write that queued both.
+///
+/// Among memos the order is still the order they were notified in. A memo that
+/// reads a signal and another memo of that signal can run once with the new
+/// signal and the old memo, then again; the effects reading it run after both
+/// and see only the second.
+#[derive(Default)]
+struct PendingEffects {
+    memos: VecDeque<EffectId>,
+    effects: VecDeque<EffectId>,
+}
+
+impl PendingEffects {
+    fn queue(&mut self, memo: bool) -> &mut VecDeque<EffectId> {
+        if memo {
+            &mut self.memos
+        } else {
+            &mut self.effects
+        }
+    }
+
+    /// Queue an effect, unless it is queued already.
+    fn push(&mut self, effect_id: EffectId, memo: bool) {
+        let queue = self.queue(memo);
+        if !queue.contains(&effect_id) {
+            queue.push_back(effect_id);
+        }
+    }
+
+    /// The next effect to run: a memo while any is queued.
+    fn pop(&mut self) -> Option<EffectId> {
+        self.memos.pop_front().or_else(|| self.effects.pop_front())
+    }
+
+    fn remove(&mut self, effect_id: EffectId, memo: bool) {
+        let queue = self.queue(memo);
+        if let Some(pos) = queue.iter().position(|e| *e == effect_id) {
+            queue.remove(pos);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Runtime {
-    /// Pending effects to run, in notification order. Deduplicated —
-    /// most frames have 0–5 pending effects.
-    pending_effects: VecDeque<EffectId>,
+    pending: PendingEffects,
     /// Effect slots, indexed by `EffectId::index`.
     effects: Vec<EffectSlot>,
     /// Vacant effect slot indices available for reuse.
@@ -398,7 +446,13 @@ impl Runtime {
         }
     }
 
-    pub fn allocate_effect(&mut self, callback: Box<dyn FnMut()>, scope: OwnerId) -> EffectId {
+    /// `memo` says the effect is a memo's (see `PendingEffects`).
+    pub fn allocate_effect(
+        &mut self,
+        callback: Box<dyn FnMut()>,
+        scope: OwnerId,
+        memo: bool,
+    ) -> EffectId {
         let paused = super::owner::current_owner_is_paused();
         // Reuse a freed slot if available, bumping its generation so stale
         // ids for the previous occupant can never act on this effect
@@ -411,6 +465,7 @@ impl Runtime {
             slot.state = EffectState::Idle;
             slot.paused = paused;
             slot.missed = false;
+            slot.memo = memo;
             return EffectId {
                 index,
                 generation: slot.generation,
@@ -426,6 +481,7 @@ impl Runtime {
             state: EffectState::Idle,
             paused,
             missed: false,
+            memo,
         });
         EffectId {
             index,
@@ -436,28 +492,19 @@ impl Runtime {
     /// Queue all effects subscribed to a signal. Does NOT run them — the
     /// caller decides when to flush (immediately, or at batch end).
     fn enqueue_subscribers(&mut self, signal_id: SignalId) {
-        let Some(subs) = self.signal_subscribers.get(signal_id) else {
+        let Self {
+            effects,
+            signal_subscribers,
+            pending,
+            ..
+        } = self;
+        let Some(subs) = signal_subscribers.get(signal_id) else {
             return;
         };
-        // `enqueue`'s body, over the field: the method would borrow the whole
-        // runtime while `subs` borrows the index.
         for &effect_id in subs {
-            if !self.pending_effects.contains(&effect_id) {
-                self.pending_effects.push_back(effect_id);
-            }
+            let memo = effects[effect_id.index()].memo;
+            pending.push(effect_id, memo);
         }
-    }
-
-    /// Queue one effect, unless it is queued already.
-    fn enqueue(&mut self, effect_id: EffectId) {
-        if !self.pending_effects.contains(&effect_id) {
-            self.pending_effects.push_back(effect_id);
-        }
-    }
-
-    /// Pop the next pending effect, if any.
-    fn pop_pending_effect(&mut self) -> Option<EffectId> {
-        self.pending_effects.pop_front()
     }
 
     /// Pause or resume `effects`. Resuming queues each one that missed a run
@@ -467,7 +514,8 @@ impl Runtime {
             if let Some(slot) = self.effect_slot_mut(effect_id) {
                 slot.paused = paused;
                 if !paused && std::mem::take(&mut slot.missed) {
-                    self.enqueue(effect_id);
+                    let memo = slot.memo;
+                    self.pending.push(effect_id, memo);
                 }
             }
         }
@@ -572,6 +620,7 @@ impl Runtime {
         let Some(slot) = self.effect_slot_mut(effect_id) else {
             return;
         };
+        let memo = slot.memo;
         match slot.state {
             EffectState::Idle => {
                 slot.callback = None;
@@ -580,9 +629,7 @@ impl Runtime {
                 for signal_id in deps {
                     self.signal_subscribers.unsubscribe(signal_id, effect_id);
                 }
-                if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
-                    self.pending_effects.remove(pos);
-                }
+                self.pending.remove(effect_id, memo);
                 self.free_effect_indices.push(effect_id.index);
             }
             EffectState::Running => {
@@ -594,9 +641,7 @@ impl Runtime {
                 for signal_id in deps {
                     self.signal_subscribers.unsubscribe(signal_id, effect_id);
                 }
-                if let Some(pos) = self.pending_effects.iter().position(|e| *e == effect_id) {
-                    self.pending_effects.remove(pos);
-                }
+                self.pending.remove(effect_id, memo);
             }
             EffectState::Vacant | EffectState::DisposedWhileRunning => {
                 // Already disposed
@@ -660,7 +705,7 @@ pub(crate) fn flush_pending_effects() {
     }
     let _guard = FlushGuard;
 
-    while let Some(effect_id) = with_runtime(|rt| rt.pop_pending_effect()) {
+    while let Some(effect_id) = with_runtime(|rt| rt.pending.pop()) {
         run_effect_by_id(effect_id);
     }
 }
