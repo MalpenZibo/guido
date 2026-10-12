@@ -355,13 +355,18 @@ impl Flex {
             .count();
         let visible_spacing = gaps(spacing, visible_count);
         let visible_total_main = children_main + visible_spacing;
+        // The spacing alignments fill the main axis, unless it has no maximum
+        // — a scrolled one — and then there is no free space to share: they
+        // take their content's size, as `Start` does.
         let main_size = match main_align {
             MainAlignment::SpaceBetween
             | MainAlignment::SpaceAround
-            | MainAlignment::SpaceEvenly => main_max,
-            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
-                visible_total_main.max(main_min).min(main_max)
+            | MainAlignment::SpaceEvenly
+                if main_max.is_finite() =>
+            {
+                main_max
             }
+            _ => visible_total_main.max(main_min).min(main_max),
         };
 
         let (width, height) = match axis {
@@ -463,7 +468,7 @@ mod tests {
     use super::*;
     use crate::jobs;
     use crate::reactive::create_signal;
-    use crate::widgets::container;
+    use crate::widgets::{Container, Scroll, container};
 
     fn frame(tree: &mut Tree, root: WidgetId) -> Size {
         jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 400.0))
@@ -560,5 +565,107 @@ mod tests {
             second.1 > 0.0 && second.0 == 0.0,
             "a column puts the second child below, got {second:?}"
         );
+    }
+
+    const SPACINGS: [MainAlignment; 3] = [
+        MainAlignment::SpaceBetween,
+        MainAlignment::SpaceAround,
+        MainAlignment::SpaceEvenly,
+    ];
+
+    fn two_boxes() -> Vec<Container> {
+        vec![
+            container().width(10.0).height(10.0),
+            container().width(10.0).height(10.0),
+        ]
+    }
+
+    /// Lays out one root per alignment, side by side in one tree, and returns
+    /// each root. One tree, because a tree that is dropped leaves jobs behind
+    /// for ids the next one would reuse.
+    fn laid_out(
+        tree: &mut Tree,
+        root: impl Fn(MainAlignment) -> Container,
+    ) -> Vec<(MainAlignment, WidgetId)> {
+        SPACINGS
+            .into_iter()
+            .map(|align| {
+                let id = tree.register(Box::new(root(align)));
+                tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
+                frame(tree, id);
+                (align, id)
+            })
+            .collect()
+    }
+
+    /// Where the two boxes under `id` landed. A scroller's own scrollbar parts
+    /// come after its content, so they are past the first two.
+    fn two_origins(tree: &Tree, id: WidgetId) -> Vec<(f32, f32)> {
+        tree.get_children(id)[..2]
+            .iter()
+            .map(|&child| tree.get_origin(child).expect("laid out"))
+            .collect()
+    }
+
+    /// A scrolled axis has no maximum, so there is no free space to share:
+    /// the spacing alignments place their children as `Start` would.
+    #[test]
+    fn a_scrolled_column_spaces_its_children_as_start_would() {
+        let mut tree = Tree::new();
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column().main_alignment(align))
+                .children(two_boxes())
+        });
+        for (align, root) in laid {
+            assert_eq!(
+                two_origins(&tree, root),
+                [(0.0, 0.0), (0.0, 10.0)],
+                "{align:?} in a scrolled column"
+            );
+        }
+    }
+
+    /// What a scrolled container measures as its content is the column's own
+    /// size: its children, not the infinity it was offered.
+    #[test]
+    fn a_column_on_an_unbounded_axis_is_as_tall_as_its_children() {
+        let mut tree = Tree::new();
+        let laid = laid_out(&mut tree, |align| {
+            container().height(100.0).scroll(Scroll::vertical()).child(
+                container()
+                    .layout(Flex::column().main_alignment(align))
+                    .children(two_boxes()),
+            )
+        });
+        for (align, root) in laid {
+            let column = tree.get_children(root)[0];
+            let height = tree.get_bounds(column).expect("laid out").height;
+            assert_eq!(height, 20.0, "{align:?} column on an unbounded axis");
+        }
+    }
+
+    /// A column with a height still shares out what its children leave free.
+    #[test]
+    fn a_bounded_column_shares_its_free_space() {
+        let mut tree = Tree::new();
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .layout(Flex::column().main_alignment(align))
+                .children(two_boxes())
+        });
+        // SpaceEvenly's share, added up in the order layout adds it.
+        let even = 80.0 / 3.0;
+        let expected = [[0.0, 90.0], [20.0, 70.0], [even, even + 10.0 + even]];
+        for ((align, root), [first, second]) in laid.into_iter().zip(expected) {
+            assert_eq!(
+                two_origins(&tree, root),
+                [(0.0, first), (0.0, second)],
+                "{align:?} in a column 100 tall"
+            );
+        }
     }
 }
