@@ -797,8 +797,15 @@ Shapes are batched into vertex/index buffers for efficient GPU submission. Text 
 
 ### Relayout Boundaries
 Widgets with fixed width and height (e.g., `width(100.0).height(100.0)`) are automatically
-marked as relayout boundaries. Layout changes inside a boundary don't propagate to the
-parent, reducing layout recalculation scope.
+marked as relayout boundaries, and so is a hidden container. Layout changes inside a
+boundary don't propagate to the parent, reducing layout recalculation scope.
+
+A boundary's own changes do. Its size does not depend on its children, but it does depend
+on its own `width`, `height` and `visible`, and placing it is its parent's job — so
+`mark_needs_layout` starts looking for a boundary at the parent of the widget that changed,
+never at the widget itself, as Blink's `MarkContainerChainForLayout` does (#670). The cost is
+that a boundary's own change that leaves its size alone, such as its padding, lays its
+parent out too.
 
 ### Paint-Only Scrolling
 Scroll is implemented as a paint-only transform operation. When content scrolls, the layout

@@ -1684,7 +1684,8 @@ impl Widget for Container {
     fn layout_hints(&self) -> LayoutHints {
         // The parent asks this while laying out; snapshots are right here,
         // because the child's own layout subscribes to the same signals and a
-        // change re-runs it (and bubbles to the parent) anyway.
+        // change re-runs it and its parent anyway — even when the child is a
+        // relayout boundary, which absorbs only what changes below it.
         if !self.visible.get_or_untracked(true) {
             return LayoutHints::default();
         }
