@@ -157,6 +157,9 @@ impl<T: Animatable> AnimationState<T> {
     /// child leaves only when the change that removes it happens. Forward
     /// whichever way it travels, for the reason [`begin_enter`](Self::begin_enter)
     /// gives, and from wherever the property is — a spring keeps its momentum.
+    /// An exit to where the property already is has nothing to play, at rest
+    /// or in flight — a segment of no length gives momentum no direction to
+    /// carry — and leaves it at rest there.
     /// A sequence playing stops speaking for the property: it is leaving.
     pub(crate) fn begin_exit(&mut self, now: FrameInstant) -> bool {
         let Some(exit_to) = self.exit_to.as_deref() else {
@@ -170,11 +173,19 @@ impl<T: Animatable> AnimationState<T> {
             timeline.playing = None;
         }
         self.using_reverse = false;
-        if to == self.current && self.spring_state.is_none() {
-            // Declared, but already there: nothing to wait for.
+        if to == self.current {
+            // Declared, but already there: nothing to wait for, whatever the
+            // timing. A spring in flight has no momentum to carry into a
+            // segment of no length — `carry_velocity` answers 0 for one — so
+            // playing it would only hold the property still until it settled
+            // (#691). Left with no spring, as a settled one is: one left in
+            // flight here would be stepped again by the next `advance` while
+            // another property keeps the row, and report itself moving until
+            // it settled.
             self.target = to;
             self.start = to;
             self.progress = 1.0;
+            self.spring_state = None;
             return true;
         }
         let carried = self.carried_velocity(&to);
@@ -1008,6 +1019,42 @@ mod tests {
             "still travelling away from the new target, so the new segment \
              starts with the spring having to turn around, got {velocity}"
         );
+    }
+
+    /// A spring whose exit is where it is has nothing to play, at rest or in
+    /// flight: there is no momentum to carry into a segment of no length, so
+    /// a segment would only hold it still until it settled (#691).
+    #[test]
+    fn a_spring_exit_to_where_it_is_has_nothing_to_play() {
+        use crate::animation::SpringConfig;
+
+        let mut tree = Tree::new();
+        let at_rest = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
+        let mut at_rest = at_rest.with_exit_to(Some(Box::new(|| 0.0)));
+        at_rest.set_immediate(&mut laying_out(&mut tree), 0.0);
+        assert!(at_rest.begin_exit(FrameInstant::from(Instant::now())));
+        assert!(!at_rest.is_animating(), "at rest");
+
+        let mut moving = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
+        moving.set_immediate(&mut laying_out(&mut tree), 0.0);
+        moving.animate_to(1.0, FrameInstant::from(Instant::now()));
+        run(&mut moving, 40);
+        let here = *moving.current();
+        assert!(moving.is_animating(), "in flight");
+        let mut moving = moving.with_exit_to(Some(Box::new(move || here)));
+        // Removed on the next frame after the last one it was stepped to.
+        let started = moving.start_time.expect("in flight");
+        let removed = started + std::time::Duration::from_millis(48);
+        assert!(moving.begin_exit(removed));
+        assert!(!moving.is_animating(), "in flight, but already there");
+        assert_eq!(*moving.current(), here, "and left where it was");
+        // Advanced a frame on, as it is while another property keeps the row,
+        // it stays at rest: no spring left in flight to step. A spring left
+        // in flight would be stepped from its last frame here, and report
+        // itself moving again.
+        at(&mut moving, 56);
+        assert!(!moving.is_animating(), "and stays at rest");
+        assert_eq!(*moving.current(), here);
     }
 
     /// And that momentum is what a wobble is made of: sent back to where it
