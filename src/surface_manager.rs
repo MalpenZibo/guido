@@ -269,11 +269,12 @@ impl SurfaceManager {
             }
 
             // A surface with no confirmed size has nothing to build a target
-            // at, and one with no confirmed scale would build it at the wrong
-            // one.
+            // at. One with no scale yet is built at 1, the scale it has until
+            // the compositor sends one, and its target is resized when one
+            // comes.
             let facts = wayland_state
                 .surface(*id)
-                .and_then(|s| Some((s.configured_size()?, s.scale_factor()?)));
+                .and_then(|s| Some((s.configured_size()?, s.scale_factor())));
             let Some(((width, height), scale)) = facts else {
                 continue;
             };
