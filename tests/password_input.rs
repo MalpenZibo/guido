@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use common::Harness;
 use guido::prelude::*;
+use guido::reactive::clipboard::{SelectionKind, answer_pastes, deliver_pastes};
 
 const WIDTH: f32 = 400.0;
 const HEIGHT: f32 = 40.0;
@@ -122,6 +123,26 @@ fn enter_can_take_the_secret_and_leave_the_field_empty() {
     // And it goes on working from empty.
     field.type_str("ok");
     assert_eq!(field.held(), "ok");
+}
+
+/// A password field is one line too, and a password copied with its line
+/// break is where it hurts most: the mask hides the break, and the password is
+/// refused with it.
+#[test]
+fn a_pasted_line_break_never_enters_the_password() {
+    let got = Rc::new(RefCell::new(None));
+    let sink = got.clone();
+    let mut field = Field::new(move |f, password| {
+        f.on_submit(move || *sink.borrow_mut() = Some(password.take()))
+    });
+
+    field.ctrl('v');
+    answer_pastes(SelectionKind::Clipboard, Some("hunter2\r\n"));
+    deliver_pastes(&mut field.harness.tree);
+    field.key(Key::Enter);
+
+    let secret = got.borrow_mut().take().expect("on_submit was not called");
+    assert_eq!(secret.expose(), "hunter2");
 }
 
 /// A lock screen that shows its dots while the password is checked hands over

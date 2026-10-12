@@ -1071,6 +1071,19 @@ impl<C: Content> TextInput<C> {
         if self.refuses_edits() {
             return;
         }
+        // The field is one line, and a line copied from a terminal brings its
+        // line break: removed, as HTML strips newlines from an `<input
+        // type=text>`'s value. Wiped, because a paste is often a password, and
+        // sized up front so no regrowth frees an unwiped buffer.
+        const LINE_BREAKS: [char; 2] = ['\n', '\r'];
+        let mut one_line;
+        let text = if text.contains(LINE_BREAKS) {
+            one_line = Zeroizing::new(String::with_capacity(text.len()));
+            one_line.extend(text.split(LINE_BREAKS));
+            &one_line
+        } else {
+            text
+        };
         // Save state before modification
         self.save_to_history(EditType::Insert, edit.at);
 
