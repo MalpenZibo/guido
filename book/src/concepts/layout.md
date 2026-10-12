@@ -85,6 +85,11 @@ The three spacing alignments share out the space the flex is given. Along a
 scrolled axis there is no limit and so nothing to share: the children sit
 together as with `Start`, and the content is as long as they are.
 
+A child that is hidden, or half a pixel or less along the flex's direction,
+keeps no space around it. When no child keeps space, `SpaceAround` and
+`SpaceEvenly` centre what they hold, and `SpaceBetween` places what it
+holds at the start.
+
 ### Visual Examples
 
 ```text

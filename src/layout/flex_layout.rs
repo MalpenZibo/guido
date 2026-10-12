@@ -38,8 +38,8 @@ use crate::{
     tree::{LayoutCtx, Tree, WidgetId},
 };
 
-/// Children with main-axis size below this threshold are treated as invisible
-/// for spacing purposes (no gap is added on either side).
+/// Children with main-axis size at or below this threshold are treated as
+/// invisible for spacing purposes (no gap is added on either side).
 pub(crate) const MIN_VISIBLE_SIZE: f32 = 0.5;
 
 /// Whether a child this long on the main axis keeps a gap beside it. One
@@ -143,12 +143,16 @@ impl Flex {
                     (0.0, spacing)
                 }
             }
+            // With no child that keeps a gap — no child at all, or every child
+            // hidden or half a pixel or less along the axis — `SpaceAround`
+            // and `SpaceEvenly` divide as if there were one, so what they hold
+            // is centred in the free space, as CSS centres a lone item (#697).
             MainAlignment::SpaceAround => {
-                let space = free_space / child_count as f32;
+                let space = free_space / child_count.max(1) as f32;
                 (space / 2.0, space + spacing)
             }
             MainAlignment::SpaceEvenly => {
-                let space = free_space / (child_count + 1) as f32;
+                let space = free_space / (child_count.max(1) + 1) as f32;
                 (space, space + spacing)
             }
         }
@@ -625,6 +629,113 @@ mod tests {
                 [(0.0, 0.0), (0.0, 10.0)],
                 "{align:?} in a scrolled column"
             );
+        }
+    }
+
+    /// With no child that keeps a gap there is nothing to space (#697).
+    /// `SpaceAround` divided its free space by those no children, so it
+    /// placed what it held at infinity, or at NaN where there was no free
+    /// space, as on a scrolled axis; `SpaceEvenly` placed it at the far end.
+    /// Both now centre it in the free space, as CSS centres a lone item:
+    /// hidden children in a column and in a row, hairlines in a column.
+    /// `SpaceBetween` starts it, as it did.
+    #[test]
+    fn a_spacing_alignment_with_nothing_to_space_places_in_reach() {
+        let mut tree = Tree::new();
+        let hidden = || container().visible(false).width(10.0).height(10.0);
+
+        // Scrolled: no free space, so at the start.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column().main_alignment(align))
+                .child(hidden())
+        });
+        for (align, root) in laid {
+            let origin = tree.get_origin(tree.get_children(root)[0]);
+            assert_eq!(origin, Some((0.0, 0.0)), "{align:?} scrolled");
+        }
+
+        // Bounded, all hidden: 100 free, nothing to put it around.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .layout(Flex::column().main_alignment(align))
+                .child(hidden())
+        });
+        for (align, root) in laid {
+            let origin = tree.get_origin(tree.get_children(root)[0]);
+            let centred = align != MainAlignment::SpaceBetween;
+            let expected = if centred { 50.0 } else { 0.0 };
+            assert_eq!(origin, Some((0.0, expected)), "{align:?} bounded");
+        }
+
+        // In a row the same.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .width(100.0)
+                .layout(Flex::row().main_alignment(align))
+                .child(hidden())
+        });
+        for (align, root) in laid {
+            let origin = tree.get_origin(tree.get_children(root)[0]);
+            let centred = align != MainAlignment::SpaceBetween;
+            let expected = if centred { 50.0 } else { 0.0 };
+            assert_eq!(origin, Some((expected, 0.0)), "{align:?} row");
+        }
+
+        // A hairline in a scrolled column: no free space, so at the start.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column().main_alignment(align))
+                .child(container().width(10.0).height(MIN_VISIBLE_SIZE))
+        });
+        for (align, root) in laid {
+            let origin = tree.get_origin(tree.get_children(root)[0]);
+            assert_eq!(origin, Some((0.0, 0.0)), "{align:?} scrolled hairline");
+        }
+
+        // Two hairlines keep no gap between them, and are centred together.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .layout(Flex::column().main_alignment(align))
+                .child(container().width(10.0).height(MIN_VISIBLE_SIZE))
+                .child(container().width(10.0).height(MIN_VISIBLE_SIZE))
+        });
+        for (align, root) in laid {
+            let centred = align != MainAlignment::SpaceBetween;
+            let first = if centred {
+                (100.0 - 2.0 * MIN_VISIBLE_SIZE) / 2.0
+            } else {
+                0.0
+            };
+            assert_eq!(
+                two_origins(&tree, root),
+                [(0.0, first), (0.0, first + MIN_VISIBLE_SIZE)],
+                "{align:?} two hairlines"
+            );
+        }
+
+        // A hairline keeps no gap either, and is centred like any lone item.
+        let laid = laid_out(&mut tree, |align| {
+            container()
+                .height(100.0)
+                .layout(Flex::column().main_alignment(align))
+                .child(container().width(10.0).height(MIN_VISIBLE_SIZE))
+        });
+        for (align, root) in laid {
+            let origin = tree.get_origin(tree.get_children(root)[0]);
+            let centred = align != MainAlignment::SpaceBetween;
+            let expected = if centred {
+                (100.0 - MIN_VISIBLE_SIZE) / 2.0
+            } else {
+                0.0
+            };
+            assert_eq!(origin, Some((0.0, expected)), "{align:?} hairline");
         }
     }
 
