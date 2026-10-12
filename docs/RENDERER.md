@@ -570,6 +570,13 @@ list itself and every ancestor of it: on `benches/scroll_list` at 5000 rows it
 is 45 commands copied per frame instead of 266, for the same 4108 replays
 across the run — seventeen a frame.
 
+The surface root never makes one either. Its node is `clear()`ed before every
+paint, which empties its entry and marks it repainted, so no frame is ever
+offered what was kept for it — and its subtree is the whole frame, so the entry
+was a copy of every command drawn, on every painted frame of a surface that
+culls nothing. `flatten_root_into` flattens the root with `replayable` off;
+everything below it is flattened as before.
+
 A clip costs a replay three cases instead, in `ClipTree::replay`. A clip the
 subtree placed itself travels with it: translated by the same offset as the
 content, then cut afresh by its parent, so a viewport resized above cuts the

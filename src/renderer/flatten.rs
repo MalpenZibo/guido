@@ -603,7 +603,8 @@ pub fn flatten_root_into(
     layers.clear();
     scratch.clear();
 
-    flatten_node(root, Transform::IDENTITY, None, 1.0, scratch);
+    // Not replayable: the root is cleared before every paint (see `replayable`).
+    flatten_node(root, Transform::IDENTITY, None, 1.0, false, scratch);
 
     let carried = scratch.carried;
     scratch.drain_into(commands, layers);
@@ -627,11 +628,16 @@ pub struct RegionsCarried {
 ///
 /// `parent_opacity` is what everything above has multiplied together, and
 /// travels down the way `parent_world_transform` does.
+///
+/// `replayable` says whether a later frame could ever be offered this node's
+/// entry. Every node below the root could; the root could not, and so is
+/// flattened without one.
 fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
     parent_clip: Option<ClipIndex>,
     parent_opacity: f32,
+    replayable: bool,
     out: &mut FlattenScratch,
 ) -> bool {
     // Compose transforms: parent first, then local about its own pivot
@@ -685,10 +691,10 @@ fn flatten_node(
     // (including its children, and including the clip it is about to place)
     // can be picked out again and kept. A subtree that did anything but
     // translate can be put back by no offset at all, so there is nothing to
-    // mark for it; whether the rest is worth keeping is decided at the bottom,
-    // once the children have said whether any of them was cut short.
-    let marks = world_transform
-        .is_translation_only()
+    // mark for it, nor for one no frame will ask to replay; whether the rest
+    // is worth keeping is decided at the bottom, once the children have said
+    // whether any of them was cut short.
+    let marks = (replayable && world_transform.is_translation_only())
         .then(|| (out.mark(), out.clips.mark()));
 
     // This node's clip, placed under the one it inherits. The intersection is
@@ -743,7 +749,7 @@ fn flatten_node(
     // Recurse to children with effective clip
     let mut subtree_partial = node.partial;
     for child in &node.children {
-        subtree_partial |= flatten_node(child, world_transform, clip_index, opacity, out);
+        subtree_partial |= flatten_node(child, world_transform, clip_index, opacity, true, out);
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.
