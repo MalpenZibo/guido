@@ -16,6 +16,10 @@
 //! - `SpaceAround` - Equal space around children (half at edges)
 //! - `SpaceEvenly` - Equal space including edges
 //!
+//! On an axis with no maximum, such as a scrolled container's content, the
+//! three spacing alignments have no room to share beyond any minimum, and
+//! place their children as `Start` does.
+//!
 //! **Cross axis** ([`CrossAlignment`]):
 //! - `Start`, `Center`, `End` - Align children along cross axis
 //! - `Stretch` - Stretch children to fill cross axis (default)
@@ -143,6 +147,9 @@ impl Flex {
                     (0.0, spacing)
                 }
             }
+            // With nothing to space there is nothing to share, and dividing by
+            // no children would make a NaN of the offsets.
+            MainAlignment::SpaceAround if child_count == 0 => (0.0, spacing),
             MainAlignment::SpaceAround => {
                 let space = free_space / child_count as f32;
                 (space / 2.0, space + spacing)
@@ -335,13 +342,19 @@ impl Flex {
             .count();
         let visible_spacing = gaps(spacing, visible_count);
         let visible_total_main = children_main + visible_spacing;
+        // The spacing alignments share out the room the axis offers. With no
+        // maximum the flex is sized as `Start` sizes it, to its children or
+        // its minimum, and shares only what a minimum leaves over: sharing an
+        // infinite maximum placed them at infinity (#690).
         let main_size = match main_align {
             MainAlignment::SpaceBetween
             | MainAlignment::SpaceAround
-            | MainAlignment::SpaceEvenly => main_max,
-            MainAlignment::Start | MainAlignment::Center | MainAlignment::End => {
-                visible_total_main.max(main_min).min(main_max)
+            | MainAlignment::SpaceEvenly
+                if main_max.is_finite() =>
+            {
+                main_max
             }
+            _ => visible_total_main.max(main_min).min(main_max),
         };
 
         let (width, height) = match axis {

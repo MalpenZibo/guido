@@ -81,6 +81,8 @@ Flex::row().main_alignment(MainAlignment::Center)
 | `SpaceAround` | Equal space around each item |
 | `SpaceEvenly` | Equal space including edges |
 
+The three spacing alignments share out the room the flex is given. A scrolled container's content has no limit along the scrolled axis, so there is nothing to share and its children sit one after another, as with `Start`.
+
 ### Visual Examples
 
 ```text

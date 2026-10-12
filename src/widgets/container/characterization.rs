@@ -371,6 +371,104 @@ fn a_hidden_sibling_takes_no_spacing_from_a_filling_one() {
     );
 }
 
+/// With no maximum on the main axis there is no room to share beyond a
+/// minimum, so the spacing alignments place their children as `Start` does
+/// (#690): a scrolled column with `SpaceBetween` placed its second child at
+/// infinity.
+#[test]
+fn the_spacing_alignments_share_no_space_on_an_unbounded_axis() {
+    use crate::layout::MainAlignment;
+
+    // Where each child starts along the flex, and how long the flex is.
+    let laid_out = |flex: Flex, column: bool, constraints: Constraints| {
+        let mut h = H::new(
+            container()
+                .layout(flex.spacing(4.0))
+                .child(box_of(10.0, 10.0))
+                .child(box_of(10.0, 10.0)),
+        );
+        let size = h.layout(constraints);
+        let starts: Vec<f32> = h
+            .children()
+            .iter()
+            .map(|&c| {
+                let r = h.tree.get_bounds(c).unwrap();
+                if column { r.y } else { r.x }
+            })
+            .collect();
+        (starts, if column { size.height } else { size.width })
+    };
+    let unbounded_down = Constraints::new(0.0, 0.0, 500.0, f32::INFINITY);
+    let unbounded_across = Constraints::new(0.0, 0.0, f32::INFINITY, 500.0);
+
+    for alignment in [
+        MainAlignment::SpaceBetween,
+        MainAlignment::SpaceAround,
+        MainAlignment::SpaceEvenly,
+    ] {
+        // Laid out as a scrolled container's content is, in a column and in
+        // a row: one after another, as long as what they take.
+        let column = Flex::column().main_alignment(alignment);
+        assert_eq!(
+            laid_out(column, true, unbounded_down),
+            (vec![0.0, 14.0], 24.0),
+            "{alignment:?} column"
+        );
+        let row = Flex::row().main_alignment(alignment);
+        assert_eq!(
+            laid_out(row, false, unbounded_across),
+            (vec![0.0, 14.0], 24.0),
+            "{alignment:?} row"
+        );
+
+        // A maximum is room to share, as before: 100 less the 24 taken.
+        let column = Flex::column().main_alignment(alignment);
+        let (starts, length) = laid_out(column, true, Constraints::new(0.0, 0.0, 500.0, 100.0));
+        assert_eq!(
+            length, 100.0,
+            "{alignment:?}: bounded, as long as its maximum"
+        );
+        assert!(starts[1] > 14.0, "{alignment:?}: and it shares the rest");
+
+        // A minimum is room to share: 60 less the 24 taken.
+        let column = Flex::column().main_alignment(alignment);
+        let (starts, length) = laid_out(
+            column,
+            true,
+            Constraints::new(0.0, 60.0, 500.0, f32::INFINITY),
+        );
+        assert_eq!(length, 60.0, "{alignment:?}: as long as its minimum");
+        assert!(starts[1] > 14.0, "{alignment:?}: and it shares the rest");
+
+        // And inside a scroller, which is where an application meets it.
+        let mut h = H::new(
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column().main_alignment(alignment))
+                .child(box_of(10.0, 10.0))
+                .child(box_of(10.0, 10.0)),
+        );
+        h.fit(500.0, 500.0);
+        let second = h.children()[1];
+        assert_eq!(
+            h.tree.get_bounds(second).unwrap().y,
+            10.0,
+            "{alignment:?}: in reach in a scroller"
+        );
+    }
+
+    // Nothing to space: no offset is a NaN.
+    let mut h = H::new(
+        container()
+            .layout(Flex::column().main_alignment(MainAlignment::SpaceAround))
+            .child(container().visible(false).width(10.0).height(10.0)),
+    );
+    h.layout(unbounded_down);
+    let hidden = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert!(hidden.y.is_finite(), "got {}", hidden.y);
+}
+
 #[test]
 fn fraction_resolves_against_the_incoming_max() {
     let mut h = H::new(container().width(fraction(0.5)).child(box_of(40.0, 20.0)));
