@@ -40,7 +40,18 @@ use crate::{
 
 /// Children with main-axis size below this threshold are treated as invisible
 /// for spacing purposes (no gap is added on either side).
-const MIN_VISIBLE_SIZE: f32 = 0.5;
+pub(crate) const MIN_VISIBLE_SIZE: f32 = 0.5;
+
+/// Whether a child this long on the main axis keeps a gap beside it. One
+/// predicate for the fill share and for placement, which have to agree on it.
+fn takes_a_gap(main: f32) -> bool {
+    main > MIN_VISIBLE_SIZE
+}
+
+/// The spacing between `count` children that each keep a gap.
+fn gaps(spacing: f32, count: usize) -> f32 {
+    spacing * count.saturating_sub(1) as f32
+}
 
 /// Flex layout for rows and columns
 pub struct Flex {
@@ -198,6 +209,7 @@ impl Flex {
 
         // Pass 1: layout non-fill children and collect fill child indices
         let mut non_fill_main = 0.0f32;
+        let mut non_fill_kept = 0usize;
         let mut max_cross = 0.0f32;
         self.fill_indices.clear();
 
@@ -214,17 +226,18 @@ impl Flex {
                 self.fill_indices.push(i);
             } else if let Some(size) = ctx.layout_child(child_id, child_constraints) {
                 non_fill_main += size.main_axis(axis);
+                non_fill_kept += usize::from(takes_a_gap(size.main_axis(axis)));
                 max_cross = max_cross.max(size.cross_axis(axis));
                 self.child_sizes[i] = size;
             }
         }
 
-        // Compute fill distribution
-        let total_spacing = if children.len() > 1 {
-            spacing * (children.len() - 1) as f32
-        } else {
-            0.0
-        };
+        // Compute fill distribution. The gaps counted are the ones placement
+        // keeps: none beside a child that measured nothing, such as a hidden
+        // one. Every fill child is counted as keeping its gap. Placement drops
+        // that gap only for a fill child given half a pixel or less, which
+        // happens only when the row has next to no room left.
+        let total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
         let per_fill = if !self.fill_indices.is_empty() {
             let remaining = (main_max - non_fill_main - total_spacing).max(0.0);
             remaining / self.fill_indices.len() as f32
@@ -318,13 +331,9 @@ impl Flex {
         let visible_count = self
             .child_sizes
             .iter()
-            .filter(|s| s.main_axis(axis) > MIN_VISIBLE_SIZE)
+            .filter(|s| takes_a_gap(s.main_axis(axis)))
             .count();
-        let visible_spacing = if visible_count > 1 {
-            spacing * (visible_count - 1) as f32
-        } else {
-            0.0
-        };
+        let visible_spacing = gaps(spacing, visible_count);
         let visible_total_main = children_main + visible_spacing;
         let main_size = match main_align {
             MainAlignment::SpaceBetween
@@ -374,7 +383,7 @@ impl Flex {
             let child_cross = child_size.cross_axis(axis);
 
             // Add spacing only between consecutive non-zero-sized children
-            if prev_nonzero && child_main > MIN_VISIBLE_SIZE {
+            if prev_nonzero && takes_a_gap(child_main) {
                 main_pos += between_spacing;
             }
 
@@ -412,7 +421,7 @@ impl Flex {
             ctx.tree().set_origin(child_id, x, y);
             main_pos += child_main;
 
-            if child_main > MIN_VISIBLE_SIZE {
+            if takes_a_gap(child_main) {
                 prev_nonzero = true;
             }
         }
