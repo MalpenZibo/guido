@@ -74,6 +74,12 @@ impl<T> DeferredQueue<T> {
         std::mem::take(&mut *self.items.borrow_mut())
     }
 
+    /// Look at what is queued without taking it — the loop asking about work
+    /// it has not reached yet, such as which surfaces have a close waiting.
+    pub(crate) fn peek<U>(&self, f: impl FnOnce(&[T]) -> U) -> U {
+        f(&self.items.borrow())
+    }
+
     /// Whether anything is waiting. Nobody outside asks any more — the loop
     /// drains unconditionally rather than deciding whether to — so this is
     /// what the tests below assert against.

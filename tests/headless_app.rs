@@ -498,6 +498,173 @@ fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
     assert_eq!(app.surfaces_live(), [replacement.id()]);
 }
 
+/// A surface whose root counts the actions it takes and closes itself on the
+/// first one, as a dialog does on Enter or on its button. `alive` is held by
+/// the widget, so its strong count says whether the widget is still there.
+struct ClosingDialog {
+    actions: Rc<Cell<u32>>,
+    alive: Rc<()>,
+}
+
+impl ClosingDialog {
+    fn new() -> Self {
+        Self {
+            actions: Rc::new(Cell::new(0)),
+            alive: Rc::new(()),
+        }
+    }
+
+    /// Open it as a surface of its own. What closes it is its own handle, so
+    /// the id is handed to the widget once the surface has one.
+    fn open(&self, app: &mut Headless) -> SurfaceId {
+        let actions = self.actions.clone();
+        let alive = self.alive.clone();
+        let own: Rc<Cell<Option<SurfaceId>>> = Rc::new(Cell::new(None));
+        let handed = own.clone();
+        let id = app.surface(SurfaceConfig::new().height(40), move || {
+            let act = Rc::new(move || {
+                let _held = &alive;
+                actions.set(actions.get() + 1);
+                surface_handle(own.get().expect("opened")).close();
+            });
+            let on_key = act.clone();
+            container()
+                .width(160.0)
+                .height(40.0)
+                .on_click(move || act())
+                .on_key_down(move |key, _, repeat| {
+                    if key == Key::Enter && !repeat {
+                        on_key();
+                        EventResponse::Handled
+                    } else {
+                        EventResponse::Ignored
+                    }
+                })
+        });
+        handed.set(Some(id));
+        app.configure(id, 160, 40, 1.0);
+        app.step();
+        id
+    }
+
+    fn widget_alive(&self) -> bool {
+        Rc::strong_count(&self.alive) > 1
+    }
+}
+
+fn enter_down() -> Event {
+    Event::KeyDown {
+        key: Key::Enter,
+        modifiers: Modifiers::default(),
+        repeat: false,
+    }
+}
+
+fn enter_up() -> Event {
+    Event::KeyUp {
+        key: Key::Enter,
+        modifiers: Modifiers::default(),
+    }
+}
+
+/// A key press that closes its surface is the last input that surface's
+/// widgets see: the second Enter, already queued in the same batch, would be a
+/// second action from a dialog that has been dismissed (#675). Destruction
+/// still waits for the command pass, as it did.
+#[test]
+fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_keys() {
+    let Some(mut app) = headless() else { return };
+    let dialog = ClosingDialog::new();
+    let id = dialog.open(&mut app);
+
+    let now = Instant::now();
+    for event in [enter_down(), enter_up(), enter_down()] {
+        app.event_at(id, event, now);
+    }
+    app.step();
+    assert_eq!(dialog.actions.get(), 1, "one action, then nothing");
+
+    app.step();
+    assert_eq!(app.surfaces_destroyed(), [id], "and the close went through");
+    assert!(!dialog.widget_alive(), "taking its widget with it");
+}
+
+/// The same for the pointer: a double click on a button that closes its
+/// surface acts once.
+#[test]
+fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_clicks() {
+    let Some(mut app) = headless() else { return };
+    let dialog = ClosingDialog::new();
+    let id = dialog.open(&mut app);
+
+    app.click(id, 20.0, 20.0);
+    app.click(id, 20.0, 20.0);
+    app.step();
+    assert_eq!(dialog.actions.get(), 1, "one action, then nothing");
+
+    app.step();
+    assert_eq!(app.surfaces_destroyed(), [id]);
+    assert!(!dialog.widget_alive());
+}
+
+/// What stops is the closing surface's input, not the batch's: a second
+/// dialog, clicked twice in the same step, acts once as well rather than not
+/// at all.
+///
+/// Both close themselves because the order the loop visits surfaces in is not
+/// the test's to choose. Whichever runs second is the one a close that stopped
+/// every surface's input would have silenced.
+#[test]
+fn a_surface_closing_does_not_stop_the_input_of_another() {
+    let Some(mut app) = headless() else { return };
+    let first = ClosingDialog::new();
+    let second = ClosingDialog::new();
+    let a = first.open(&mut app);
+    let b = second.open(&mut app);
+
+    for _ in 0..2 {
+        app.click(a, 20.0, 20.0);
+        app.click(b, 20.0, 20.0);
+    }
+    app.step();
+
+    assert_eq!(first.actions.get(), 1);
+    assert_eq!(second.actions.get(), 1, "each took its own first click");
+}
+
+/// An item in a submenu closes the whole menu, which is how a menu is
+/// dismissed: the close names the menu, and the submenu goes because it hangs
+/// from it. So the submenu is closing too, and the second click queued on its
+/// item is not a second pick.
+#[test]
+fn a_popup_whose_menu_asked_to_close_takes_no_more_of_its_queued_clicks() {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), measuring_24);
+    app.configure(parent, 200, 24, 1.0);
+    app.step();
+
+    let menu = spawn_popup(parent, PopupConfig::new(80).height(40), measuring_24);
+    app.step();
+    let picks = create_signal(0u32);
+    let submenu = spawn_popup(menu.id(), PopupConfig::new(60).height(30), move || {
+        container().width(60.0).height(30.0).on_click(move || {
+            picks.update(|n| *n += 1);
+            menu.close();
+        })
+    });
+    app.step();
+    app.configure(submenu.id(), 60, 30, 1.0);
+    app.step();
+
+    app.click(submenu.id(), 10.0, 10.0);
+    app.click(submenu.id(), 10.0, 10.0);
+    app.step();
+
+    assert_eq!(picks.get(), 1, "one pick, then nothing");
+    app.step();
+    assert_eq!(app.surfaces_live(), [parent], "and the whole menu went");
+}
+
 /// A resident program — a polkit agent, an OSD — shows a surface when asked
 /// and closes it when done, and is still there to be asked again.
 ///

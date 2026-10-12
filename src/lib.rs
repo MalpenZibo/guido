@@ -681,13 +681,25 @@ pub fn cache_paint_results(tree: &mut Tree, node: &std::rc::Rc<renderer::RenderN
 /// Jobs the handlers push (hover and pressed state changes, clicks) land in
 /// the inbox, and distributing them here is what keeps hover from lagging a
 /// frame behind the pointer: the drain later in this same frame picks them up.
+///
+/// `closing` is asked before each event. Once it says yes — a handler asked
+/// for this surface to close — the rest of the batch is dropped, leave and
+/// focus-out included: the widgets go with the surface on the next command
+/// pass, and an action taken in between is one taken by a dialog the user has
+/// already dismissed (#675). GTK drops events for a surface it has unmapped in
+/// the same way; it lets a crossing through because GDK keeps crossing state
+/// per seat, which nothing here does.
 fn dispatch_events(
     events: &[(std::time::Instant, widgets::Event)],
     root: WidgetId,
     tree: &mut Tree,
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
+    closing: impl Fn() -> bool,
 ) {
     for (at, event) in events {
+        if closing() {
+            break;
+        }
         if matches!(event, widgets::Event::MouseEnter { .. }) {
             reactive::cursor::resend_cursor();
         }
@@ -2149,6 +2161,20 @@ fn loop_timeout<P: Platform>(
     wait_for(&pending, now)
 }
 
+/// Whether a close is queued for this surface, or for a popup it hangs from:
+/// closing a popup takes its descendants down with it.
+///
+/// Asked before every event, so the common answers are the cheap ones: with
+/// nothing queued the list is empty and allocates nothing, and the surface's
+/// own close is found before any popup tree is walked.
+fn close_requested<P: Platform>(platform: &P, id: SurfaceId) -> bool {
+    let closing = surface::closes_requested();
+    closing.contains(&id)
+        || closing
+            .into_iter()
+            .any(|root| platform.popup_descendants_bottom_up(root).contains(&id))
+}
+
 /// Ask one surface for something, if it is still there.
 ///
 /// Nine call sites want exactly this, and none has anything to say about a
@@ -2173,7 +2199,10 @@ fn render_surface<P: Platform>(
     };
 
     let root = ctx.surface.widget_id;
-    dispatch_events(&frame.events, root, ctx.tree, active_roots);
+    let (id, platform) = (ctx.id, &*ctx.wayland_state);
+    dispatch_events(&frame.events, root, ctx.tree, active_roots, move || {
+        close_requested(platform, id)
+    });
 
     let geometry = resolve_geometry(ctx, &frame);
 
@@ -3389,7 +3418,7 @@ mod dispatch_declares_the_moment {
         let happened_on_the_event_clock = crate::clock::EventInstant::from(happened);
         let events = [(happened, Event::mouse_move(10.0, 10.0))];
 
-        dispatch_events(&events, root, &mut tree, &Default::default());
+        dispatch_events(&events, root, &mut tree, &Default::default(), || false);
 
         assert_eq!(
             seen.get(),
@@ -3473,12 +3502,12 @@ mod a_press_nothing_claimed_takes_the_focus_with_it {
                 std::time::Instant::now(),
                 Event::mouse_up(x, y, MouseButton::Left),
             )];
-            dispatch_events(&events, root, &mut self.tree, &Default::default());
+            dispatch_events(&events, root, &mut self.tree, &Default::default(), || false);
         }
 
         fn press_button(&mut self, root: WidgetId, x: f32, y: f32, button: MouseButton) {
             let events = [(std::time::Instant::now(), Event::mouse_down(x, y, button))];
-            dispatch_events(&events, root, &mut self.tree, &Default::default());
+            dispatch_events(&events, root, &mut self.tree, &Default::default(), || false);
         }
     }
 

@@ -371,7 +371,8 @@ The `SurfaceHandle` allows controlling a surface after creation:
 ```rust,ignore
 # // not compiled: a signature listing — these declarations have no bodies.
 impl SurfaceHandle {
-    /// Close and destroy the surface
+    /// Close and destroy the surface. Input already queued for it is
+    /// not delivered once this is called
     pub fn close(&self);
 
     /// Get the surface ID
@@ -818,7 +819,10 @@ create_effect(move || {
 # }
 ```
 
-`popup.close()` closes it programmatically. Popups render their own
+`popup.close()` closes it programmatically, and from that call on
+neither it nor a popup hanging from it is handed any more input — a
+second click already queued on the item that closed the menu picks
+nothing. Popups render their own
 widget tree and share the app's reactive state like any surface;
 anchoring a popup to another popup creates a nested popup (submenus).
 A handle outlives its popup: reading `dismissed()` is safe after the
