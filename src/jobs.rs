@@ -1078,6 +1078,28 @@ mod tests {
         assert!(!has_pending_jobs() || drain_orphan_jobs().is_empty());
     }
 
+    /// A job sorted to its surface can run unless that surface is waiting on a
+    /// frame callback — and only its own surface's wait holds it back.
+    #[test]
+    fn a_sorted_job_is_runnable_unless_its_surface_waits() {
+        clear_pending_jobs();
+        let (tree, roots, children) = two_surface_tree();
+        let active = roots_set(&roots);
+
+        push(children[0], JobType::Paint);
+        distribute_jobs(&tree, &active);
+
+        assert!(has_runnable_jobs(|_| false), "nobody waits: it can run");
+        assert!(
+            !has_runnable_jobs(|root| root == roots[0]),
+            "its surface waits: it cannot"
+        );
+        assert!(
+            has_runnable_jobs(|root| root == roots[1]),
+            "another surface waiting holds nothing of this one's"
+        );
+    }
+
     #[test]
     fn gated_surface_animations_survive_other_surfaces_drains() {
         // The core invariant behind the pacing fix: draining surface B can

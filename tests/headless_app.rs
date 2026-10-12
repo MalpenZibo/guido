@@ -394,6 +394,33 @@ fn work_waiting_on_a_frame_callback_does_not_keep_the_loop_polling() {
     );
 }
 
+/// The other side of the test above: a surface with nothing on screen yet, or a
+/// change nothing is waiting on, keeps the loop polling. A loop that slept
+/// through either would leave it undrawn until something else woke it.
+#[test]
+fn work_the_loop_can_run_keeps_it_polling() {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(20.0);
+    let surface = app.surface(fixed_bar(), move || filling(height));
+    app.configure(surface, 200, 50, 1.0);
+    assert_eq!(
+        app.next_wait(),
+        Some(std::time::Duration::from_millis(16)),
+        "a surface with nothing presented yet"
+    );
+
+    app.step();
+    app.step();
+    assert_eq!(app.next_wait(), None, "an idle application blocks");
+
+    height.set(30.0);
+    assert_eq!(
+        app.next_wait(),
+        Some(std::time::Duration::from_millis(16)),
+        "a change nothing is waiting on"
+    );
+}
+
 /// A surface whose output is off never hears a frame callback, and on a
 /// compositor without fractional scaling at scale 1 it is never told a scale
 /// either. Neither is a reason to keep repainting it: once it has presented,
