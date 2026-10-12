@@ -51,8 +51,10 @@ impl Container {
     ///
     /// A size target is content-driven, so unlike every other animated
     /// property it is recomputed from scratch at each layout and needs no
-    /// subscription. Retargeting also invalidates the *parent*: a child whose
-    /// width is moving makes its siblings move too.
+    /// subscription. Retargeting queues a layout of the container, which
+    /// reaches its parent like any change to a widget's own size (see
+    /// `Tree::mark_needs_layout`): a child whose width is moving makes its
+    /// siblings move too.
     pub(super) fn update_size_targets(
         &mut self,
         ctx: &mut LayoutCtx,
@@ -80,7 +82,6 @@ impl Container {
         if self.is_leaving() {
             return;
         }
-        let parent = ctx.tree_ref().get_parent(id);
         let frame_instant = ctx.tree_ref().frame_instant();
         let Some(ref mut anims) = self.anims else {
             return;
@@ -127,9 +128,6 @@ impl Container {
         if retargeted {
             // A size animation moves layout, not just paint.
             request_job(id, JobRequest::Animation(RequiredJob::Layout));
-            if let Some(parent_id) = parent {
-                request_job(parent_id, JobRequest::Layout);
-            }
         }
     }
 }
