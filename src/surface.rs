@@ -874,6 +874,10 @@ pub struct SurfaceHandle {
 
 impl SurfaceHandle {
     /// Close this surface (removes from screen, destroys widget tree).
+    ///
+    /// The surface goes on the loop's next pass, but its widgets take no
+    /// further input from the moment this is called: a key press or a click
+    /// already queued behind the one that closed it is not delivered.
     pub fn close(&self) {
         push_surface_command(SurfaceCommand::Close(self.id));
     }
@@ -1015,6 +1019,21 @@ pub(crate) fn drain_surface_commands() -> Vec<SurfaceCommand> {
     with_app_state(|app| app.surface_commands.drain())
 }
 
+/// The surfaces a close is queued for and not yet carried out.
+pub(crate) fn closes_requested() -> Vec<SurfaceId> {
+    with_app_state(|app| {
+        app.surface_commands.peek(|queued| {
+            queued
+                .iter()
+                .filter_map(|cmd| match cmd {
+                    SurfaceCommand::Close(id) => Some(*id),
+                    _ => None,
+                })
+                .collect()
+        })
+    })
+}
+
 /// Spawn a new surface at runtime.
 ///
 /// This function can be called from anywhere in widget code (e.g., event handlers)
@@ -1087,6 +1106,10 @@ impl PopupHandle {
     /// Dismissal is announced when the loop closes it, not here: closing walks
     /// the popup's descendants first, so a submenu is reported gone before the
     /// menu it hangs from — the order the compositor's own dismissal gives.
+    ///
+    /// Input stops sooner: from the moment this is called, the popup and every
+    /// popup hanging from it take none of what is still queued for them, so a
+    /// second click on a menu item that closed the menu picks nothing.
     pub fn close(&self) {
         push_surface_command(SurfaceCommand::Close(self.id));
     }
