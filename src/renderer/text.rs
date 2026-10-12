@@ -1893,6 +1893,29 @@ pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
         entry
     }
 
+    /// Asserts that drawing every page, one per pass, leaves no more texture
+    /// memory than drawing one: what `atlas_after` measures is a fresh
+    /// renderer's growth.
+    pub(in crate::renderer) fn holds_one_page(
+        atlas_after: impl Fn(&GpuContext, &[String]) -> isize,
+    ) {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let pages = pages();
+        let one = atlas_after(&gpu, &pages[..1]);
+        // An atlas is made for the first page, so a count of nothing is a
+        // device that is not counting — wgpu's `counters` feature off — and
+        // every comparison below would hold for the wrong reason.
+        assert!(one > 0, "the device counted no texture memory at all");
+        let every = atlas_after(&gpu, &pages);
+        assert!(
+            every <= one,
+            "one page's glyphs need {one} bytes of atlas; {} new pages left {every}",
+            pages.len()
+        );
+    }
+
     /// The texture memory a fresh renderer holds after drawing `frames`, one
     /// frame each.
     fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
@@ -1913,16 +1936,6 @@ pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
 
     #[test]
     fn a_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
-        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
-            return;
-        };
-        let pages = pages();
-        let one = atlas_after(&gpu, &pages[..1]);
-        let every = atlas_after(&gpu, &pages);
-        assert!(
-            every <= one,
-            "one frame's glyphs need {one} bytes of atlas; {} frames of new ones left {every}",
-            pages.len()
-        );
+        holds_one_page(atlas_after);
     }
 }

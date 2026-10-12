@@ -168,6 +168,67 @@ impl Shaper {
             viewport,
         }
     }
+
+    /// Draw one text into `view`, cleared first, and submit it. Answers
+    /// whether the text could be prepared at all.
+    ///
+    /// Ends by trimming: this atlas draws one text at a time, and that text is
+    /// drawn now, so its glyphs stop being in use and the next text may evict
+    /// them rather than grow the atlas around them. After the submit and not
+    /// before, because the next text's glyph uploads would otherwise overwrite
+    /// slots this one's pass still reads.
+    pub(super) fn draw(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        area: glyphon::TextArea<'_>,
+        view: &wgpu::TextureView,
+        label: &str,
+    ) -> bool {
+        if let Err(e) = self.text_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            [area],
+            &mut self.swash_cache,
+        ) {
+            log::error!("{label} prepare failed: {e:?}");
+            return false;
+        }
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            match self
+                .text_renderer
+                .render(&self.atlas, &self.viewport, &mut pass)
+            {
+                Ok(()) => render_stats::record_draw_calls(Pipeline::Text, 1),
+                Err(e) => log::error!("{label} render failed: {e:?}"),
+            }
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+        self.atlas.trim();
+        true
+    }
 }
 
 /// Rasterizes glyph coverage, and remembers it.
@@ -305,52 +366,9 @@ impl TextMaskRenderer {
             custom_glyphs: &[],
         };
 
-        if let Err(e) = shaper.text_renderer.prepare(
-            device,
-            queue,
-            &mut shaper.font_system,
-            &mut shaper.atlas,
-            &shaper.viewport,
-            vec![area],
-            &mut shaper.swash_cache,
-        ) {
-            log::error!("text mask prepare failed: {e:?}");
+        if !shaper.draw(device, queue, area, &view, "Text Mask") {
             return None;
         }
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Text Mask Encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Text Mask Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            match shaper
-                .text_renderer
-                .render(&shaper.atlas, &shaper.viewport, &mut pass)
-            {
-                Ok(()) => render_stats::record_draw_calls(Pipeline::Text, 1),
-                Err(e) => log::error!("text mask render failed: {e:?}"),
-            }
-        }
-        queue.submit(std::iter::once(encoder.finish()));
-        // This atlas draws one mask at a time, and that mask is drawn now: its
-        // glyphs stop being in use, so the next mask may evict them rather
-        // than grow the atlas around them.
-        shaper.atlas.trim();
 
         let view = Rc::new(view);
         self.masks.insert(
@@ -366,13 +384,15 @@ impl TextMaskRenderer {
 }
 
 /// The glyph atlas behind the masks holds one text's glyphs, not every
-/// text's — see the module of the same name in `text.rs`, whose pages this
+/// text's — see `the_glyph_atlas_holds_a_frame_not_a_history` in `text.rs`, whose pages this
 /// frosts.
 #[cfg(test)]
 mod the_glyph_atlas_holds_a_text_not_a_history {
     use super::{MaskSpec, Shaper, TextMaskRenderer};
     use crate::renderer::GpuContext;
-    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{page, pages};
+    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{
+        holds_one_page, page,
+    };
     use crate::transform::Transform;
 
     /// The atlas a fresh renderer holds after frosting `frames`, one frame
@@ -414,16 +434,6 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
 
     #[test]
     fn a_frosted_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
-        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
-            return;
-        };
-        let pages = pages();
-        let one = atlas_after(&gpu, &pages[..1]);
-        let every = atlas_after(&gpu, &pages);
-        assert!(
-            every <= one,
-            "one text's glyphs need {one} bytes of atlas; {} new ones left {every}",
-            pages.len()
-        );
+        holds_one_page(atlas_after);
     }
 }

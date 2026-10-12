@@ -20,7 +20,7 @@ use super::text_mask::Shaper;
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
-use crate::render_stats::{self, Pipeline};
+use crate::render_stats::Pipeline;
 use crate::widgets::font::FontWeight;
 use crate::widgets::{Rect, TextAlign};
 
@@ -298,53 +298,7 @@ impl TextQuadRenderer {
             custom_glyphs: &[],
         };
 
-        // Prepare and render text to texture
-        if let Err(e) = shaper.text_renderer.prepare(
-            device,
-            queue,
-            &mut shaper.font_system,
-            &mut shaper.atlas,
-            &shaper.viewport,
-            vec![text_area],
-            &mut shaper.swash_cache,
-        ) {
-            log::error!("Text texture prepare failed: {:?}", e);
-        }
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Text Texture Encoder"),
-        });
-
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Text Texture Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            shaper
-                .text_renderer
-                .render(&shaper.atlas, &shaper.viewport, &mut render_pass)
-                .expect("Failed to render text to texture");
-            render_stats::record_draw_calls(Pipeline::Text, 1);
-        }
-
-        queue.submit(std::iter::once(encoder.finish()));
-        // This atlas draws one text at a time, and that text is drawn now: its
-        // glyphs stop being in use, so the next text may evict them rather
-        // than grow the atlas around them.
-        shaper.atlas.trim();
+        shaper.draw(device, queue, text_area, &view, "Text Texture");
 
         // Create bind group
         let bind_group = self
@@ -511,13 +465,15 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
 }
 
 /// The glyph atlas behind the textures holds one text's glyphs, not every
-/// text's — see the module of the same name in `text.rs`, whose pages this
+/// text's — see `the_glyph_atlas_holds_a_frame_not_a_history` in `text.rs`, whose pages this
 /// draws turned instead of upright.
 #[cfg(test)]
 mod the_glyph_atlas_holds_a_text_not_a_history {
     use super::{Shaper, TextQuadRenderer};
     use crate::renderer::GpuContext;
-    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{page, pages};
+    use crate::renderer::text::the_glyph_atlas_holds_a_frame_not_a_history::{
+        holds_one_page, page,
+    };
     use crate::transform::Transform;
 
     /// The atlas a fresh renderer holds after drawing `frames`, one frame
@@ -546,17 +502,7 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
 
     #[test]
     fn a_turned_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
-        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
-            return;
-        };
-        let pages = pages();
-        let one = atlas_after(&gpu, &pages[..1]);
-        let every = atlas_after(&gpu, &pages);
-        assert!(
-            every <= one,
-            "one text's glyphs need {one} bytes of atlas; {} new ones left {every}",
-            pages.len()
-        );
+        holds_one_page(atlas_after);
     }
 }
 
