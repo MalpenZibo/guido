@@ -1181,6 +1181,36 @@ impl Widget for Box<dyn Widget> {
 mod tests {
     use crate::widgets::Corners;
 
+    /// Two rects share an area only where they overlap on both axes: edges
+    /// that touch share none, and neither does an overlap along one axis
+    /// with a gap along the other.
+    #[test]
+    fn an_intersection_is_an_area_both_rects_hold() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+
+        let inside = a.intersection(&Rect::new(5.0, 2.0, 10.0, 4.0));
+        assert_eq!(
+            inside.map(|r| (r.x, r.y, r.width, r.height)),
+            Some((5.0, 2.0, 5.0, 4.0))
+        );
+        assert!(
+            a.intersection(&Rect::new(10.0, 0.0, 5.0, 10.0)).is_none(),
+            "touching on the right"
+        );
+        assert!(
+            a.intersection(&Rect::new(0.0, 10.0, 10.0, 5.0)).is_none(),
+            "touching below"
+        );
+        assert!(
+            a.intersection(&Rect::new(2.0, 20.0, 4.0, 4.0)).is_none(),
+            "overlapping across, apart down"
+        );
+        assert!(
+            a.intersection(&Rect::new(20.0, 2.0, 4.0, 4.0)).is_none(),
+            "overlapping down, apart across"
+        );
+    }
+
     /// The shape that is drawn is the shape that answers a click: a corner
     /// rounded only at the top must let a point through at the bottom, where
     /// the box is square.
