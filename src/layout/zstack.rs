@@ -40,6 +40,10 @@ use super::{Constraints, Layout, Size};
 /// takes all the space it was offered on that axis — or, on an axis with no
 /// maximum, the size of its largest child.
 ///
+/// A hidden child takes no part in any of this, as it takes no space in a
+/// [`Flex`](super::Flex): a stack whose only leader is hidden has nothing to
+/// follow either.
+///
 /// # Positioning
 ///
 /// Every child is placed at the stack's origin. To align a follower inside
@@ -96,9 +100,10 @@ impl Layout for ZStack {
         let (mut led_width, mut led_height) = (false, false);
         // An axis with no maximum and nothing to lead it has no space to take
         // either, and the stack is as big as its children there — so a child
-        // that fills both axes has to be measured after all.
+        // that fills both axes has to be measured after all. A hidden child
+        // leads nothing.
         let unled = |max: f32, leads: fn(&LayoutHints) -> bool| {
-            !max.is_finite() && !self.hints.iter().any(leads)
+            !max.is_finite() && !self.hints.iter().any(|h| !h.hidden && leads(h))
         };
         let measure_followers = unled(constraints.max_width, |h| !h.fill_width)
             || unled(constraints.max_height, |h| !h.fill_height);
@@ -112,6 +117,11 @@ impl Layout for ZStack {
             let Some(child_size) = ctx.layout_child(child_id, constraints) else {
                 continue;
             };
+            // Laid out all the same, so it hears its visibility change; but
+            // hidden is `display: none`, and it leads nothing.
+            if hints.hidden {
+                continue;
+            }
             largest.width = largest.width.max(child_size.width);
             largest.height = largest.height.max(child_size.height);
             if !hints.fill_width {
@@ -286,6 +296,81 @@ mod tests {
         assert_eq!(tree.cached_size(id), Some(Size::new(400.0, 200.0)));
         assert_eq!(child_size(&tree, id, 0), Size::new(400.0, 200.0));
         assert_eq!(child_size(&tree, id, 1), Size::new(400.0, 200.0));
+    }
+
+    /// A hidden child takes no space, as `display: none` takes none: it does
+    /// not lead the stack, so the stack and its follower keep what was offered.
+    #[test]
+    fn a_hidden_child_takes_no_part_in_the_size() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(container().width(fill()).height(fill()))
+            .child(container().visible(false).width(10).height(10));
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 0.0, 400.0, 200.0));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(400.0, 200.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(400.0, 200.0));
+    }
+
+    /// On an axis with no maximum a hidden child is no leader either, so the
+    /// follower is measured and the stack is as tall as its content.
+    #[test]
+    fn a_hidden_child_does_not_lead_an_unbounded_axis() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .child(container().width(20).height(30)),
+            )
+            .child(container().visible(false).width(10).height(10));
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 0.0, 400.0, f32::INFINITY));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(400.0, 30.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(400.0, 30.0));
+    }
+
+    /// The hidden child is still laid out, so showing it is heard: the stack
+    /// follows the overlay while it shows, and the space offered while not.
+    #[test]
+    fn an_overlay_shown_and_hidden_again_leads_only_while_shown() {
+        let shown = crate::reactive::create_signal(false);
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(fill()).height(fill()))
+                .child(container().visible(shown).width(10).height(10)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let frame = |tree: &mut Tree| {
+            crate::jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 200.0))
+                .expect("the root is registered")
+        };
+
+        assert_eq!(frame(&mut tree), Size::new(400.0, 200.0));
+        shown.set(true);
+        assert_eq!(frame(&mut tree), Size::new(10.0, 10.0));
+        shown.set(false);
+        assert_eq!(frame(&mut tree), Size::new(400.0, 200.0));
+    }
+
+    /// A visible child that measures nothing still leads: being empty is not
+    /// being hidden, and the stack follows it down to zero.
+    #[test]
+    fn a_visible_empty_child_still_leads() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(container().width(fill()).height(fill()))
+            .child(container().width(0).height(0));
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 0.0, 400.0, 200.0));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(0.0, 0.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(0.0, 0.0));
     }
 
     /// A follower that fills both axes can position content inside the stack
