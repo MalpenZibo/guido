@@ -1688,11 +1688,15 @@ impl Widget for Container {
         // change re-runs it and its parent anyway — even when the child is a
         // relayout boundary, which absorbs only what changes below it.
         if !self.visible.get_or_untracked(true) {
-            return LayoutHints::default();
+            return LayoutHints {
+                hidden: true,
+                ..LayoutHints::default()
+            };
         }
         LayoutHints {
             fill_width: self.width.get_or_untracked(Length::default()).is_fill(),
             fill_height: self.height.get_or_untracked(Length::default()).is_fill(),
+            hidden: false,
         }
     }
 
