@@ -271,6 +271,16 @@ pub fn write_if_blessed(path: &std::path::Path, blessing: Blessing, write: impl 
     }
 }
 
+/// The lines of a benchmark report between its counts header and the phases
+/// that follow it: the part `scripted::report` promises repeats.
+pub fn counts_table(report: &str) -> Vec<&str> {
+    report
+        .lines()
+        .skip_while(|line| !line.starts_with("counts ("))
+        .take_while(|line| !line.starts_with("cpu phases"))
+        .collect()
+}
+
 /// One scripted play at a time in this binary.
 ///
 /// The heap counter a benchmark run reports is the whole process's, because a

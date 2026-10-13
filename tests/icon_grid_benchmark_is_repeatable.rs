@@ -51,8 +51,8 @@ fn two_runs_of_the_same_script_agree_on_every_count() {
         "the same script over the same grid did two different amounts of work"
     );
     assert_eq!(
-        counts_table(&scripted::report(&first, ROWS)),
-        counts_table(&scripted::report(&second, ROWS)),
+        common::counts_table(&scripted::report(&first, ROWS)),
+        common::counts_table(&scripted::report(&second, ROWS)),
         "a column under the header that promises to repeat did not"
     );
 }
@@ -77,13 +77,4 @@ fn every_painted_frame_draws_icons_and_the_gesture_stays_inside_the_grid() {
         run.counts.frames_pinned, 0,
         "the gesture ran off the end of the grid"
     );
-}
-
-/// The lines of the report between the counts header and the phases after it.
-fn counts_table(report: &str) -> Vec<&str> {
-    report
-        .lines()
-        .skip_while(|line| !line.starts_with("counts ("))
-        .take_while(|line| !line.starts_with("cpu phases"))
-        .collect()
 }

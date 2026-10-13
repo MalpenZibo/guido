@@ -244,22 +244,12 @@ fn the_table_that_says_it_repeats_repeats() {
         let second = play(ROWS, panels).expect("the first run had an adapter");
 
         assert_eq!(
-            counts_table(&scripted::report(&first, ROWS)),
-            counts_table(&scripted::report(&second, ROWS)),
+            common::counts_table(&scripted::report(&first, ROWS)),
+            common::counts_table(&scripted::report(&second, ROWS)),
             "a column under the header that promises to repeat did not, with {} panels",
             panels.name()
         );
     }
-}
-
-/// The lines of the report between the counts header and the phases that
-/// follow it.
-fn counts_table(report: &str) -> Vec<&str> {
-    report
-        .lines()
-        .skip_while(|line| !line.starts_with("counts ("))
-        .take_while(|line| !line.starts_with("cpu phases"))
-        .collect()
 }
 
 /// A GPU number is only comparable against the same adapter, so the line that
