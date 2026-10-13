@@ -42,6 +42,12 @@ dynamic-children segment rather than the whole of it.
 asked about its exit, `begin_exit`, `is_exiting` and `cancel_exit` — has a
 default.
 
+A row that cannot fit its children shrinks the ones that can be narrower, and
+it learns how narrow from what each recorded during its layout. A widget that
+records nothing is never shrunk. One that can give room up — it ellipsizes,
+or scales what it draws — says how far with `ctx.set_minimum(size)` in its
+`layout`, on both axes.
+
 `event` is only called with what was routed to your widget: a pointer event
 when the widget can be under its point or the pointer still owes it one, a key
 when it holds the focus or is on the way to what does. It is not offered every
@@ -216,6 +222,13 @@ you opening one.
 wants to fill an axis, which is what lets a layout give the remaining space to
 the children that asked for it — `ZStack` in the guido source is the short
 example to read.
+
+A layout can record the least its children can be arranged in the same way,
+with `ctx.set_minimum`, reading each child's with
+`ctx.tree_ref().minimum(child_id)`. That is what lets the container holding it
+give room up in a crowded row. One that records nothing keeps its container
+at the size it was laid out — the stagger above never shrinks — and `ZStack`'s,
+which records the largest of its children's, is the short one to copy.
 
 ## Checking your work
 

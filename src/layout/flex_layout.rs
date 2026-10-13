@@ -22,6 +22,17 @@
 //!
 //! [`Flex::center`] sets both to `Center`.
 //!
+//! ## Children That Do Not Fit
+//!
+//! When the children that do not `fill()` are longer than the main axis, those
+//! that can be shorter give the overflow up in proportion to their natural
+//! sizes, none below the minimum its layout recorded
+//! ([`LayoutCtx::set_minimum`](crate::tree::LayoutCtx::set_minimum)): an exact
+//! length at any depth keeps it, a text that ellipsizes goes down to its mark.
+//! A child held at its minimum leaves the rest to the others, as CSS Flexbox
+//! §9.7 resolves flexible lengths. Children that fit are laid out at their
+//! natural sizes, once.
+//!
 //! ## Usage
 //!
 //! ```no_run
