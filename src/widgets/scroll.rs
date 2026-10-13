@@ -76,7 +76,9 @@ pub enum ScrollbarVisibility {
 pub struct ScrollbarMetrics {
     /// Width of the scrollbar track and handle (normal state)
     pub width: f32,
-    /// Width of the scrollbar when hovered (expanded state)
+    /// Width of the scrollbar when hovered (expanded state). Resolved from a
+    /// [`Scroll`] that leaves [`Scroll::hover_width`] undeclared, it follows
+    /// `width` in this default's proportion, 6 to 10.
     pub hover_width: f32,
     /// Margin from the edge of the container
     pub margin: f32,
@@ -179,13 +181,20 @@ impl Scroll {
         self
     }
 
-    /// The width of the track and handle at rest.
+    /// The width of the track and handle at rest. 6 unless declared.
+    ///
+    /// An undeclared [`hover_width`](Self::hover_width) follows it, so a
+    /// widened bar still grows under the pointer.
     pub fn width<M>(mut self, width: impl IntoSignal<f32, M>) -> Self {
         self.width = width.into_prop();
         self
     }
 
     /// The width the handle grows to under the pointer.
+    ///
+    /// Undeclared, it is [`width`](Self::width) × 10/6 — 10 for the default 6 —
+    /// so the hover always widens the bar. Declared, it is used as given, and
+    /// one narrower than `width` narrows the bar under the pointer.
     ///
     /// Not a `when_hovered(|s| s.width(..))`: the growth is a scale animation on
     /// the handle, so it belongs to the geometry rather than to the styling.
