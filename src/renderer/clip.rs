@@ -35,6 +35,12 @@ use crate::widgets::Rect;
 /// The end of a chain: a clip with nothing above it left to test.
 pub const NO_CHAIN: u32 = u32::MAX;
 
+/// The most links a shader walks down one chain — `MAX_CHAIN` in the shared
+/// clip-chain block, which stops there so a broken chain cannot hang the GPU.
+/// A chain deeper than this is cut by its first `MAX_CHAIN` links only, and
+/// the tree says so when it builds one.
+pub(crate) const MAX_CHAIN: u32 = 64;
+
 /// What a clip cuts, once every clip above it has had its say.
 ///
 /// **Exactly, not one shape that approximates the lot.** Two clips merge into
@@ -76,6 +82,8 @@ pub(crate) struct ClipLink {
     pub(crate) shape: PlacedShape,
     /// The next link, or [`NO_CHAIN`].
     pub(crate) next: u32,
+    /// How many links a walk from this one takes, this one included.
+    depth: u32,
 }
 
 /// The chains one frame's clips hang from, as one persistent cons-list.
@@ -117,8 +125,20 @@ impl ClipChains {
 
     fn push(&mut self, shape: PlacedShape, next: u32) -> u32 {
         let index = self.links.len() as u32;
-        self.links.push(ClipLink { shape, next });
+        let depth = 1 + self.depth(next);
+        if depth == MAX_CHAIN + 1 {
+            log::warn!(
+                "clips nested {depth} deep without merging: the shaders walk {MAX_CHAIN} \
+                 of them, and the outermost are not cut by"
+            );
+        }
+        self.links.push(ClipLink { shape, next, depth });
         index
+    }
+
+    /// How many links a walk from `rest` takes.
+    pub(crate) fn depth(&self, rest: u32) -> u32 {
+        self.links.get(rest as usize).map_or(0, |link| link.depth)
     }
 }
 
@@ -970,6 +990,37 @@ mod tests {
         assert_ne!(resolved.rest, NO_CHAIN, "chained, so the box is a question");
         assert_eq!(resolved.open, Rect::new(10.0, 10.0, 90.0, 80.0));
         assert_eq!(tree.chains().shapes(&resolved).count(), 2);
+    }
+
+    /// A chain knows how deep it is, so one deeper than the shaders walk is
+    /// said when it is built rather than cut short in silence.
+    #[test]
+    fn a_chain_counts_its_links() {
+        let mut tree = ClipTree::default();
+        // Each clip inset from the last by less than its corners reach, so
+        // none merges and every one adds a link.
+        let mut parent = None;
+        let mut last = None;
+        for step in 0..=MAX_CHAIN + 1 {
+            let inset = step as f32;
+            let shape = clip(square(inset, inset, 1000.0 - 2.0 * inset), 400.0, 1.0);
+            let index = tree.place(shape, parent);
+            parent = Some(index);
+            last = Some(index);
+        }
+        let rest = tree.reference(last.unwrap()).resolved().rest;
+        assert_eq!(tree.chains().depth(rest), MAX_CHAIN + 1);
+        assert_eq!(tree.chains().depth(NO_CHAIN), 0);
+    }
+
+    /// The cap the tree warns past is the one the shaders stop at.
+    #[test]
+    fn the_cap_is_the_shaders() {
+        let shader = include_str!("shader.wgsl");
+        assert!(
+            shader.contains(&format!("const MAX_CHAIN: u32 = {MAX_CHAIN}u;")),
+            "shader.wgsl walks a different number of links than MAX_CHAIN says"
+        );
     }
 
     /// Clearing keeps the room the links took, as it keeps the clips'.
