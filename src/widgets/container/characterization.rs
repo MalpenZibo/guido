@@ -4911,6 +4911,104 @@ fn a_key_that_comes_back_mid_exit_reclaims_its_row() {
     assert_eq!(painted_x(&h.paint(), second), Some(0.0), "home");
 }
 
+/// A keyed column of `leaving_card`s, or of cards with no exit for the keys
+/// `still` names, laid out once. Returns the harness and each row's key by id.
+fn keyed_cards(
+    items: RwSignal<Vec<u32>>,
+    still: &'static [u32],
+    t0: std::time::Instant,
+) -> (H, rustc_hash::FxHashMap<WidgetId, u32>) {
+    let mut h = H::new(container().children(crate::widgets::keyed(
+        move || items.get(),
+        |k| *k,
+        move |k| {
+            if still.contains(&k) {
+                container().width(100.0).height(50.0)
+            } else {
+                leaving_card()
+            }
+        },
+    )));
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let ids = h
+        .children()
+        .into_iter()
+        .zip(items.get_untracked())
+        .collect();
+    (h, ids)
+}
+
+/// The rows by key, with their tops, top to bottom; a row not in `ids` is
+/// `None`.
+fn row_order(h: &H, ids: &rustc_hash::FxHashMap<WidgetId, u32>) -> Vec<(Option<u32>, f32)> {
+    let mut rows: Vec<_> = h
+        .children()
+        .into_iter()
+        .map(|child| {
+            let key = ids.get(&child).copied();
+            (key, h.tree.get_bounds(child).unwrap().y)
+        })
+        .collect();
+    rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+    rows
+}
+
+/// The newest row in front and the oldest dropped, in one change: the one
+/// leaving stood after 2, and plays its exit there rather than between 1 and 2.
+#[test]
+fn a_leaving_row_stays_after_the_rows_that_stood_before_it() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let t0 = std::time::Instant::now();
+    let (mut h, ids) = keyed_cards(items, &[], t0);
+
+    items.set(vec![9, 1, 2]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(
+        row_order(&h, &ids),
+        [
+            (None, 0.0),
+            (Some(1), 50.0),
+            (Some(2), 100.0),
+            (Some(3), 150.0)
+        ],
+        "9, 1, 2, then 3 leaving"
+    );
+}
+
+/// A row removed ahead of a leaving one with nothing to play is gone at once,
+/// and the leaving one stays ahead of the row that stood after it.
+#[test]
+fn a_row_removed_without_an_exit_does_not_move_a_leaving_one_past_its_neighbour() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let t0 = std::time::Instant::now();
+    let (mut h, ids) = keyed_cards(items, &[1], t0);
+
+    items.set(vec![3, 4]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(
+        row_order(&h, &ids),
+        [(Some(2), 0.0), (Some(3), 50.0), (None, 100.0)],
+        "2 leaving, then 3, then 4"
+    );
+}
+
+/// A reorder that leaves a row behind puts it after the nearest row that
+/// stood before it and stays, wherever that row went: 3 follows 2.
+#[test]
+fn a_leaving_row_follows_its_nearest_predecessor_through_a_reorder() {
+    let items = create_signal(vec![1u32, 2, 3]);
+    let t0 = std::time::Instant::now();
+    let (mut h, ids) = keyed_cards(items, &[], t0);
+
+    items.set(vec![2, 1]);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(
+        row_order(&h, &ids),
+        [(Some(2), 0.0), (Some(3), 50.0), (Some(1), 100.0)],
+        "2, 3 leaving, then 1"
+    );
+}
+
 /// A keyed list whose rows each build an effect that counts its runs and reads
 /// `watched`, and slide out when removed. Returns the harness and row 2's count.
 fn rows_with_an_effect(
