@@ -73,11 +73,16 @@ struct H {
 
 impl H {
     fn vertical() -> Self {
+        Self::vertical_with(Scroll::vertical())
+    }
+
+    /// The vertical scroller, with its scrollbar measured by `scroll`.
+    fn vertical_with(scroll: Scroll) -> Self {
         Self::new(
             container()
                 .width(VIEWPORT)
                 .height(VIEWPORT)
-                .scroll(Scroll::vertical())
+                .scroll(scroll)
                 .child(
                     container()
                         .layout(Flex::column().spacing(8.0))
@@ -1010,4 +1015,50 @@ fn presses_that_do_not_acquire_a_scrollbar_leave_the_flick_running() {
             );
         }
     }
+}
+
+/// How wide the vertical handle is painted once the pointer has rested on it
+/// long enough for the widening to settle.
+fn settled_hover_width(scroll: Scroll, width: f32) -> f32 {
+    let mut h = H::vertical_with(scroll);
+    let hovered = Instant::now();
+    h.dispatch(Event::mouse_move(
+        VIEWPORT - TRACK_START - width / 2.0,
+        TRACK_START + V_HANDLE / 2.0,
+    ));
+    for step in 1..=120 {
+        h.frame(hovered + Duration::from_millis(16 * step));
+    }
+    let painted = h.handle_node().local_transform;
+    painted.transform_point(width, V_HANDLE / 2.0).0
+        - painted.transform_point(0.0, V_HANDLE / 2.0).0
+}
+
+/// A scrollbar widened past the default hover width still grows under the
+/// pointer.
+///
+/// The hover is a scale of `hover_width / width`, and `hover_width` defaulted
+/// to a fixed 10 — so a bar declared 14 wide was scaled to 10/14 and narrowed
+/// when hovered. Left unset, the hover width follows the width in the default
+/// proportion, 6 to 10; set, it is what was asked for.
+#[test]
+fn an_unset_hover_width_follows_the_width_and_a_set_one_is_kept() {
+    let default = settled_hover_width(Scroll::vertical(), BAR_WIDTH);
+    assert!(
+        (default - HOVER_WIDTH).abs() < 0.05,
+        "the default bar hovers at {default}, not {HOVER_WIDTH}"
+    );
+
+    let wide = settled_hover_width(Scroll::vertical().width(14.0), 14.0);
+    let follows = 14.0 * HOVER_WIDTH / BAR_WIDTH;
+    assert!(
+        (wide - follows).abs() < 0.05,
+        "a 14-wide bar hovers at {wide}, not {follows}: the hover width did not follow the width"
+    );
+
+    let set = settled_hover_width(Scroll::vertical().width(14.0).hover_width(12.0), 14.0);
+    assert!(
+        (set - 12.0).abs() < 0.05,
+        "a 14-wide bar asked to hover at 12 hovers at {set}"
+    );
 }

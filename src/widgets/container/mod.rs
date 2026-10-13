@@ -594,20 +594,17 @@ impl Container {
         };
         let scroll = &data.scroll;
         let defaults = ScrollbarMetrics::default();
-        let (metrics, visibility) = {
-            (
-                ScrollbarMetrics {
-                    width: scroll.width.get_or(defaults.width),
-                    hover_width: scroll.hover_width.get_or(defaults.hover_width),
-                    margin: scroll.margin.get_or(defaults.margin),
-                    min_handle_size: scroll.min_handle_size.get_or(defaults.min_handle_size),
-                    reserve_gutter: scroll.reserve_gutter.get_or(defaults.reserve_gutter),
-                },
-                scroll.visibility.get_or(ScrollbarVisibility::Always),
-            )
+        let width = scroll.width.get_or(defaults.width);
+        data.metrics = ScrollbarMetrics {
+            width,
+            hover_width: scroll
+                .hover_width
+                .get_or(width * defaults.hover_width / defaults.width),
+            margin: scroll.margin.get_or(defaults.margin),
+            min_handle_size: scroll.min_handle_size.get_or(defaults.min_handle_size),
+            reserve_gutter: scroll.reserve_gutter.get_or(defaults.reserve_gutter),
         };
-        data.metrics = metrics;
-        data.scrollbar_visibility = visibility;
+        data.scrollbar_visibility = scroll.visibility.get_or(ScrollbarVisibility::Always);
         data.fill_viewport = scroll.fill_viewport.get_or(false);
     }
 
