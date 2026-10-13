@@ -314,6 +314,33 @@ mid-drag keeps the gesture rather than passing what is left of it outward, as
 Flutter's nested scrollables do; CSS calls the other behaviour scroll chaining,
 and there is no `overscroll-behavior` here to ask for it.
 
+### Filling the Viewport
+
+A scrolled axis has no end, so a `fill()` child of the content has nothing to
+fill there and is as big as its own content. `fill_viewport` gives the content
+the visible size as a minimum, and a fill child then takes what the rest of the
+content leaves of it — a footer that sits at the bottom of a short list:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .height(300)
+    .scroll(Scroll::vertical().fill_viewport(true))
+    .child(text("a short list"))
+    .child(container().height(fill()))
+    .child(text("footer"))
+# ;
+# }
+```
+
+Once the content is taller than the viewport the minimum is met, the fill child
+is back to its content size, and the content scrolls. Content nested a level
+down has to fill too — `container().height(fill())` around the column — since
+a child that does not fill is as big as it is, minimum or not. Android calls
+this `fillViewport`.
+
 ### Custom Scrollbars
 
 ```rust
@@ -436,7 +463,7 @@ Declared on the value, not beside it:
   and say what the scrollbar looks like. One value: the parts cannot be declared
   apart from the thing they configure
 - `Scroll::width`, `hover_width`, `margin`, `min_handle_size`, `reserve_gutter` /
-  `overlay()`, `visibility(..)` - the measurements the container's layout needs,
-  each taking a static value, a signal or a closure
+  `overlay()`, `visibility(..)`, `fill_viewport(..)` - the measurements the
+  container's layout needs, each taking a static value, a signal or a closure
 - `Scroll::track(|t| ..)` and `Scroll::handle(|h| ..)` - the scrollbar is two
   containers, so these take everything a container takes
