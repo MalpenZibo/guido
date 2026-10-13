@@ -816,3 +816,53 @@ fn a_dynamic_flex_child_fills_like_a_static_one() {
         "the dynamic fill child laid out differently from the static one"
     );
 }
+
+/// A row 200 wide whose children and gaps come to 276: two clipping panels
+/// that give the overflow up in proportion to their widths, a padded one held
+/// at its padding, and a button whose icon has an exact width and so keeps it
+/// — the button is never narrower than the icon and its padding. Under it a
+/// column 100 tall, where a scroller under a header takes what the header
+/// leaves instead of running past the column.
+#[test]
+fn children_that_do_not_fit_share_the_overflow() {
+    let clipped = |w: f32, c: Color| {
+        container()
+            .overflow(Overflow::Hidden)
+            .background(c)
+            .child(box_of(w, 20.0))
+    };
+    let row = container()
+        .width(200.0)
+        .layout(Flex::row().spacing(4.0))
+        .child(clipped(120.0, Color::RED))
+        .child(clipped(60.0, Color::GREEN))
+        .child(
+            container()
+                .padding([2.0, 25.0])
+                .background(Color::BLUE)
+                .child(clipped(10.0, Color::BLACK)),
+        )
+        .child(
+            container()
+                .padding(4.0)
+                .background(Color::WHITE)
+                .child(swatch(16.0, 16.0, Color::CYAN)),
+        );
+    let column = container()
+        .height(100.0)
+        .layout(Flex::column())
+        .child(swatch(40.0, 30.0, Color::RED))
+        .child(
+            container()
+                .scroll(Scroll::vertical())
+                .background(Color::GREEN)
+                .child(box_of(40.0, 200.0)),
+        );
+    let view = container()
+        .layout(Flex::column().spacing(10.0))
+        .padding(8.0)
+        .child(row)
+        .child(column);
+
+    assert_snapshot("children_that_do_not_fit", render(view, 400.0, 200.0));
+}
