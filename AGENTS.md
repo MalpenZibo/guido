@@ -132,8 +132,8 @@ every run for months.
 | --- | --- |
 | layout geometry, what gets drawn and where | `tests/render_snapshots.rs` — the render tree, as text |
 | shaders, corners, borders, shadows, gradients, clipping, HiDPI, text | `tests/golden_images.rs` — the pixels, on lavapipe |
-| the corner geometry four places each carry a copy of, because WGSL has no include | `tests/shader_sdf_is_one_definition.rs` — the three shader blocks character for character, and the Rust one that hit-tests against the geometry |
-| the per-instance struct the shape pipeline declares in Rust and again in WGSL | the unit test beside `ShapeInstance` — the shader's offsets, computed from WGSL's layout rules, against `offset_of!` |
+| the corner geometry four places each carry a copy of, because WGSL has no include, and the walk down a clip chain every shader carries beside it | `tests/shader_sdf_is_one_definition.rs` — each block, character for character, across the three shaders, that every shader calls both, and the Rust one that hit-tests against the geometry |
+| the structs a shader reads that Rust declares again — the shape pipeline's instance, a clip chain's record, the backdrop pass's uniform | the unit tests beside `ShapeInstance`, `ClipRecord` and the backdrop `Params` — the shader's offsets, computed from WGSL's layout rules, against `offset_of!` |
 | the reactive system | unit tests beside the code in `src/reactive/` |
 | widget behaviour and public API | integration tests in `tests/` |
 | the paint cache and incremental flatten, which only exist across frames | `tests/paint_cache_across_frames.rs` — one retained root node, frame after frame |

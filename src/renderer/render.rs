@@ -11,9 +11,11 @@ use wgpu::{
 };
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask};
+use super::clip::ClipChains;
+use super::clip_records::ClipRecords;
 use super::commands::{CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
-use super::flatten::{CommandLayer, FlattenedCommand};
+use super::flatten::{CommandLayer, FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
@@ -47,6 +49,10 @@ pub struct Renderer {
     // Instance buffer (resized as needed)
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
+
+    /// The frame's clip chains, bound at group 1 by every pipeline that cuts
+    /// by a clip.
+    clip_records: ClipRecords,
 
     // Text rendering via glyphon
     text_state: TextRenderState,
@@ -115,8 +121,16 @@ impl Renderer {
             ],
         });
 
+        let clip_records = ClipRecords::new(&device);
+
         // Create pipeline
-        let pipeline = Self::create_pipeline(&device, &shader, &bind_group_layout, format);
+        let pipeline = Self::create_pipeline(
+            &device,
+            &shader,
+            &bind_group_layout,
+            clip_records.layout(),
+            format,
+        );
 
         // Create vertex buffer (unit quad)
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -160,13 +174,13 @@ impl Renderer {
         let text_state = TextRenderState::new(&device, &queue, format);
 
         // Initialize transformed text renderer
-        let text_quad_renderer = TextQuadRenderer::new(&device, format);
+        let text_quad_renderer = TextQuadRenderer::new(&device, format, clip_records.layout());
         let text_mask = TextMaskRenderer::new(format);
 
         // Initialize image renderer
-        let image_quad_renderer = ImageQuadRenderer::new(&device, format);
+        let image_quad_renderer = ImageQuadRenderer::new(&device, format, clip_records.layout());
 
-        let backdrop = BackdropRenderer::new(&device, format);
+        let backdrop = BackdropRenderer::new(&device, format, clip_records.layout());
 
         Self {
             device,
@@ -179,6 +193,7 @@ impl Renderer {
             uniform_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
+            clip_records,
             text_state,
             text_quad_renderer,
             text_mask,
@@ -200,11 +215,12 @@ impl Renderer {
         device: &Device,
         shader: &ShaderModule,
         bind_group_layout: &BindGroupLayout,
+        clip_records: &BindGroupLayout,
         format: wgpu::TextureFormat,
     ) -> RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Renderer Pipeline Layout"),
-            bind_group_layouts: &[Some(bind_group_layout)],
+            bind_group_layouts: &[Some(bind_group_layout), Some(clip_records)],
             immediate_size: 0,
         });
 
@@ -339,8 +355,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         target: &mut RenderTarget,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
+        frame: &FlatFrame<'_>,
         clear_color: Color,
     ) -> bool {
         // Two spellings of one dispatch, and both are the only one clippy
@@ -356,7 +371,7 @@ impl Renderer {
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let width = offscreen.texture.width();
                 let height = offscreen.texture.height();
-                self.render_to_view(&view, width, height, commands, layers, clear_color);
+                self.render_to_view(&view, width, height, frame, clear_color);
                 return true;
             }
             RenderTarget::Swapchain(surface) => surface,
@@ -380,14 +395,7 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render_to_view(
-            &view,
-            surface.width(),
-            surface.height(),
-            commands,
-            layers,
-            clear_color,
-        );
+        self.render_to_view(&view, surface.width(), surface.height(), frame, clear_color);
 
         self.queue.present(output);
         true
@@ -407,17 +415,21 @@ impl Renderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
+        frame: &FlatFrame<'_>,
         clear_color: Color,
     ) {
+        let FlatFrame {
+            commands,
+            layers,
+            clips,
+        } = *frame;
         // Update uniform buffer with current screen size (in logical pixels)
         let uniforms =
             ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        self.prepare_layers(commands, layers);
+        self.prepare_layers(commands, layers, clips);
 
         // A backdrop effect reads pixels already drawn, which a pass cannot do
         // to its own attachment: the frame goes to an offscreen target and is
@@ -430,6 +442,9 @@ impl Renderer {
         } else {
             self.backdrop.note_unused();
         }
+
+        self.clip_records
+            .upload(&self.device, &self.queue, clips, self.scale_factor);
 
         // Instances for every group live in one buffer; the groups address it
         // by range, which is what keeps their draws in order.
@@ -471,9 +486,11 @@ impl Renderer {
                     // The effect samples the target, so the pass has to end
                     // and its contents be stored before it can run.
                     drop(render_pass);
+                    let clip_records = self.clip_records.bind_group();
                     for command in &commands[layers[index].backdrop.clone()] {
                         if let Some(region) = command_to_backdrop_region(command, scale) {
-                            self.backdrop.apply(&self.device, &mut encoder, &region);
+                            self.backdrop
+                                .apply(&self.device, &mut encoder, &region, clip_records);
                         } else if let Some(frost) = command_to_text_backdrop(command, scale) {
                             // The mask is rasterized and submitted on its own
                             // encoder, so it is ready by the time this frame's
@@ -489,18 +506,19 @@ impl Renderer {
                                     &self.device,
                                     &mut encoder,
                                     &frost.region,
+                                    clip_records,
                                     mask,
                                 );
                                 // After the blur and before the glyphs: a
                                 // contour on the glass, not under it.
-                                if let Some((color, width)) = frost.outline {
+                                if let Some(outline) = frost.outline {
                                     self.backdrop.apply_outline(
                                         &self.device,
                                         &mut encoder,
                                         &frost.region,
+                                        clip_records,
                                         mask,
-                                        color,
-                                        width,
+                                        outline,
                                     );
                                 }
                             }
@@ -516,8 +534,11 @@ impl Renderer {
                 }
 
                 if !layer.images.is_empty() {
-                    self.image_quad_renderer
-                        .render(&mut render_pass, &self.image_quads[layer.images.clone()]);
+                    self.image_quad_renderer.render(
+                        &mut render_pass,
+                        &self.image_quads[layer.images.clone()],
+                        self.clip_records.bind_group(),
+                    );
                 }
 
                 if let Some(slot) = layer.text_slot {
@@ -525,8 +546,11 @@ impl Renderer {
                 }
 
                 if !layer.text_quads.is_empty() {
-                    self.text_quad_renderer
-                        .render(&mut render_pass, &self.text_quads[layer.text_quads.clone()]);
+                    self.text_quad_renderer.render(
+                        &mut render_pass,
+                        &self.text_quads[layer.text_quads.clone()],
+                        self.clip_records.bind_group(),
+                    );
                 }
 
                 if !layer.overlay.is_empty() {
@@ -547,6 +571,7 @@ impl Renderer {
     fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(1, self.clip_records.bind_group(), &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
     }
@@ -556,7 +581,12 @@ impl Renderer {
     ///
     /// Uploads cannot happen inside a render pass, so all shaping, atlas
     /// packing and buffer writes are done here and the pass only issues draws.
-    fn prepare_layers(&mut self, commands: &[FlattenedCommand], layers: &[CommandLayer]) {
+    fn prepare_layers(
+        &mut self,
+        commands: &[FlattenedCommand],
+        layers: &[CommandLayer],
+        clips: &ClipChains,
+    ) {
         let scale = self.scale_factor;
 
         self.shape_instance_buf.clear();
@@ -614,6 +644,7 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &self.text_entry_buf,
+                    clips,
                     (self.screen_width as u32, self.screen_height as u32),
                     scale,
                 );
@@ -1163,7 +1194,7 @@ mod tests {
         cmd.clip = Some(crate::renderer::clip::ClipRef::placed(clip));
 
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
-        let arrived = frost.region.clip.expect("a clip");
+        let arrived = frost.region.clip.expect("a clip").first;
         assert_eq!(arrived.rect, clip.rect, "logical, like the shape beside it");
         assert_eq!(
             arrived.radii.top_left, 16.0,
@@ -1311,8 +1342,11 @@ mod tests {
         let mut frame = |renderer: &mut Renderer, layers: &[CommandLayer]| {
             renderer.render(
                 &mut target,
-                &commands,
-                layers,
+                &FlatFrame {
+                    commands: &commands,
+                    layers,
+                    clips: &Default::default(),
+                },
                 crate::widgets::Color::TRANSPARENT,
             );
         };

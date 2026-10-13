@@ -301,6 +301,16 @@ impl Rect {
         .fold(0.0f32, f32::max)
     }
 
+    /// The area two rects share, or `None` where they share none — touching
+    /// edges included, which share no area.
+    pub fn intersection(&self, other: &Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        (right > x && bottom > y).then(|| Rect::new(x, y, right - x, bottom - y))
+    }
+
     pub fn intersects(&self, other: &Rect) -> bool {
         self.x < other.x + other.width
             && self.x + self.width > other.x
@@ -346,7 +356,7 @@ impl Rect {
 
     /// Distance from the point to the shape's edge: negative inside, positive
     /// outside. Mirrors `rounded_rect_sdf` in `shader.wgsl`.
-    fn shape_distance(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> f32 {
+    pub(crate) fn shape_distance(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> f32 {
         let (cx, cy) = (self.x + self.width * 0.5, self.y + self.height * 0.5);
         let (hx, hy) = (self.width * 0.5, self.height * 0.5);
         let (rx, ry) = (x - cx, y - cy);
@@ -1170,6 +1180,36 @@ impl Widget for Box<dyn Widget> {
 #[cfg(test)]
 mod tests {
     use crate::widgets::Corners;
+
+    /// Two rects share an area only where they overlap on both axes: edges
+    /// that touch share none, and neither does an overlap along one axis
+    /// with a gap along the other.
+    #[test]
+    fn an_intersection_is_an_area_both_rects_hold() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+
+        let inside = a.intersection(&Rect::new(5.0, 2.0, 10.0, 4.0));
+        assert_eq!(
+            inside.map(|r| (r.x, r.y, r.width, r.height)),
+            Some((5.0, 2.0, 5.0, 4.0))
+        );
+        assert!(
+            a.intersection(&Rect::new(10.0, 0.0, 5.0, 10.0)).is_none(),
+            "touching on the right"
+        );
+        assert!(
+            a.intersection(&Rect::new(0.0, 10.0, 10.0, 5.0)).is_none(),
+            "touching below"
+        );
+        assert!(
+            a.intersection(&Rect::new(2.0, 20.0, 4.0, 4.0)).is_none(),
+            "overlapping across, apart down"
+        );
+        assert!(
+            a.intersection(&Rect::new(20.0, 2.0, 4.0, 4.0)).is_none(),
+            "overlapping down, apart across"
+        );
+    }
 
     /// The shape that is drawn is the shape that answers a click: a corner
     /// rounded only at the top must let a point through at the bottom, where

@@ -93,29 +93,40 @@ renderer refused the job outright for anything but a translation.
 
 A draw command *names* its clip rather than carrying one: `cmd.clip` is a
 `ClipRef` into the frame's clip tree (`src/renderer/clip.rs`) and `cmd.clip()`
-resolves it, at the half dozen reads in `render.rs` and `region.rs` and nowhere
-else. That is what lets a cached subtree be replayed somewhere else without
-dragging its scroller's viewport along (#441).
+resolves it, at the reads in `render.rs` and `region.rs` and nowhere else. That
+is what lets a cached subtree be replayed somewhere else without dragging its
+scroller's viewport along (#441).
 
-What it resolves to is unchanged. `PlacedShape` (`src/shape.rs`) holds a rounded
-rect as its widget declared it plus the transform that places it, and every
-consumer that can invert the placement and test in the clip's own space does:
+What it resolves to is a `ResolvedClip`: a first `PlacedShape` (`src/shape.rs`)
+— a rounded rect as its widget declared it plus the transform that places it —
+and the rest of a chain. A clip under another is **merged only where one
+rounded rect is exactly their intersection** (`merge_exact`, Skia's
+`ConservativeIntersect`), and everything else keeps its own shape with the
+clips above it chained in the frame's `ClipChains` (#698). Nothing is ever
+folded into an approximation, so a square scroller filling a rounded card
+keeps the card's corners, and two clips turned apart cut as two.
+
+Every consumer that can invert the placement tests in each clip's own space:
 the shape shader, both quad pipelines — images and transformed text draw the
-same quad and take the same `QuadClip::shape` — and the region tessellator, and
+same quad and take the same `QuadClip::resolved` — the region tessellator, and
 the backdrop pass, whose viewport is a box but whose fragments are tested
-against the clip's shape.
-`world_aabb()` is left for glyphon alone, whose `TextBounds` is four integers
-— and it is exact there, because a text the box would cut differently from the
-shape is routed to the quad instead. `PlacedShape::box_cuts_like_the_shape` is
-what decides: a turned clip always differs, an upright one only inside its
-corner boxes, and a label in the middle of a rounded card is cut the same
-either way and stays with glyphon (#405).
+against the shapes. The shaders walk a chain from one storage buffer of
+`ClipRecord`s bound at group 1, combining by the largest pixel-normalised
+distance; an instance with no chain takes the path it always did. Glyphon
+alone takes a box — the one every shape of the chain leaves open, since
+`TextBounds` is four integers — and it is exact there, because a text any of
+those boxes would cut differently from its shape is routed to the quad instead.
+`PlacedShape::box_cuts_like_the_shape` is what decides, per shape: a turned
+clip always differs, an upright one only inside its corner boxes, and a label
+in the middle of a rounded card is cut the same either way and stays with
+glyphon (#405).
 
 Five pipelines, so a change to clipping has to be checked in all of them.
 `clipped_images`, `clipped_text`, `backdrop_blur_is_cut_by_its_scroller` and
-`frosted_text_is_cut_by_its_scroller` are the goldens; before each existed,
-nothing drew an image, a clipped text, or a clipped effect of either kind at
-all.
+`frosted_text_is_cut_by_its_scroller` are the goldens for one clip;
+`nested_clips_cut_exactly`, `nested_clips_cut_images_exactly`,
+`nested_clips_cut_text_exactly` and `backdrop_blur_is_cut_by_a_chain_of_clips`
+for clips inside clips. Before each existed, nothing drew that case at all.
 
 ## Regions
 
@@ -123,11 +134,9 @@ A `wl_region` is a union of rectangles, and `src/region.rs` is where a shape
 becomes one — for the compositor's blur and for the input region, from the same
 function. It takes the shape and its transform and cuts bands out of the
 transformed outline, so a turned container claims what it drew rather than the
-box around it. The clip is a shape too and is intersected scanline by scanline
-rather than as a box — but what arrives is the one shape `cmd.clip()` resolves
-to, already collapsed by `intersect_clips` — exactly when the two spaces are a
-scale, a quarter turn or a mirror apart, and to the box around both at any
-other angle.
+box around it. The clips are shapes too — every one `cmd.clip()` resolves to,
+the first and each down its chain — and each is intersected scanline by
+scanline rather than as a box.
 
 A scanline's answer is a *list* of spans, not one. Every curvature but the
 scoop bounds a convex region, which a horizontal line meets once; a scoop is
@@ -162,8 +171,10 @@ never allocate it.
 
 ## Rendering somewhere other than a screen
 
-`Renderer::render(target, commands, layers, clear)` takes a `RenderTarget`, and
-a frame lands in one of two places. `RenderTarget::Swapchain` is the
+`Renderer::render(target, frame, clear)` takes a `RenderTarget` and a
+`FlatFrame` — the commands, their groups and the clip chains the commands'
+clips hang from, which only mean something together — and a frame lands in one
+of two places. `RenderTarget::Swapchain` is the
 compositor's: acquired per frame, presented after, and able to fail — `render`
 returns `false` for a lost or outdated swapchain, which is common right after a
 resize. `RenderTarget::Offscreen` is an `OffscreenTarget`, a texture the caller
@@ -176,7 +187,7 @@ with `OffscreenTarget::read_pixel(x, y)`, which owns the row padding wgpu
 requires and the map-then-poll order — written correctly once here rather than
 copied wrongly per caller.
 
-`Renderer::render_to_view(view, width, height, commands, layers, clear)` is the
+`Renderer::render_to_view(view, width, height, frame, clear)` is the
 layer under both: it draws into a texture view and knows nothing about where the
 view came from. `tests/golden_images.rs` still calls it and builds its own
 target. Everything since goes through `RenderTarget::offscreen(&gpu, width,

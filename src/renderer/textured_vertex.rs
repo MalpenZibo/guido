@@ -33,16 +33,20 @@ pub struct TexturedVertex {
     /// Clip corner radii [top_left, top_right, bottom_right, bottom_left], in
     /// that same space. The shader reads all four — a rect clip passes zeros.
     pub clip_params: [f32; 4],
-    /// `[clip curvature, opacity, _, _]`. One 16-byte slot for the two
-    /// scalars, because a `Float32x4` is the narrowest attribute that keeps the
-    /// rest of the struct aligned and a slot of its own per scalar would widen
-    /// every vertex.
+    /// `[clip curvature, opacity]`.
     ///
     /// The opacity is multiplied into the alpha of every texel the quad
     /// samples: the fade an ancestor asks for, carried on the vertex rather
     /// than into the texture, so a text or an image that fades is not
     /// rasterised again on every frame of it.
-    pub curvature_opacity: [f32; 4],
+    pub curvature_opacity: [f32; 2],
+    /// Where the clip continues in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN) — see
+    /// [`ResolvedClip`](super::clip::ResolvedClip). Eight bytes that used to
+    /// pad the two scalars above out to a `Float32x4` hold this and the
+    /// padding beside it, so the vertex stays 88 bytes.
+    pub clip_chain: u32,
+    pub _pad: u32,
     /// `[r, g, b, amount]`: the colour every texel takes, keeping its alpha,
     /// and how much of it — `1.0` for a tinted image, `0.0` for everything
     /// else, which leaves the texel as it was. Carried on the vertex for the
@@ -58,8 +62,8 @@ pub struct TexturedVertex {
 ///
 /// There used to be a second spelling — a plain box in physical world pixels —
 /// because text was cut by the box around its clip rather than the clip. Both
-/// quad pipelines now take [`shape`](Self::shape), so a turned clip cuts the
-/// turned shape whichever of them is drawing.
+/// quad pipelines now take [`resolved`](Self::resolved), so a turned clip cuts
+/// the turned shape whichever of them is drawing.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadClip {
     /// `[x, y, width, height]`. Negative width/height is the no-clip sentinel.
@@ -76,6 +80,9 @@ pub struct QuadClip {
     /// "no map needed" and "no clip" are different facts, and `rect`'s sentinel
     /// is the one that answers the second.
     pub to_clip_space: Transform,
+    /// Where the clip continues in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN).
+    pub chain: u32,
 }
 
 impl QuadClip {
@@ -85,27 +92,22 @@ impl QuadClip {
         radii: [0.0; 4],
         curvature: 1.0,
         to_clip_space: Transform::IDENTITY,
+        chain: super::clip::NO_CHAIN,
     };
 
-    /// Everything is cut — a clip whose placement collapsed has no inside.
-    pub(crate) const EMPTY: Self = Self {
-        rect: crate::renderer::gpu::EMPTY_CLIP_RECT,
-        radii: [0.0; 4],
-        curvature: 1.0,
-        to_clip_space: Transform::IDENTITY,
-    };
-
-    /// Cut to the clip's shape, in the coordinates the widget declared it in.
-    pub fn shape(clip: &crate::shape::PlacedShape, scale: f32) -> Self {
-        let Some(to_clip_space) = clip.to_local(scale) else {
-            return Self::EMPTY;
-        };
-        let r = clip.rect;
+    /// Cut to the clip's first shape, in the coordinates the widget declared
+    /// it in, and down its chain. A placement that collapsed has no inside and
+    /// cuts everything.
+    pub fn resolved(clip: &super::clip::ResolvedClip, scale: f32) -> Self {
+        let record = super::clip_records::ClipRecord::new(&clip.first, clip.rest, scale);
         Self {
-            rect: [r.x, r.y, r.width, r.height],
-            radii: clip.radii.to_array(),
-            curvature: clip.curvature,
-            to_clip_space,
+            rect: record.rect,
+            radii: record.radii,
+            curvature: record.curvature,
+            to_clip_space: Transform {
+                data: record.inverse,
+            },
+            chain: record.next,
         }
     }
 
@@ -139,7 +141,9 @@ impl TexturedVertex {
             clip_pos: clip.place(screen.0, screen.1),
             clip_rect: clip.rect,
             clip_params: clip.radii,
-            curvature_opacity: [clip.curvature, opacity, 0.0, 0.0],
+            curvature_opacity: [clip.curvature, opacity],
+            clip_chain: clip.chain,
+            _pad: 0,
             tint,
         }
     }
@@ -183,7 +187,13 @@ impl TexturedVertex {
                 VertexAttribute {
                     offset: 56,
                     shader_location: 5,
-                    format: VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x2,
+                },
+                // clip_chain
+                VertexAttribute {
+                    offset: 64,
+                    shader_location: 7,
+                    format: VertexFormat::Uint32,
                 },
                 // tint
                 VertexAttribute {
@@ -223,13 +233,13 @@ mod tests {
     fn a_clip_is_scaled_by_its_map_and_not_by_its_rect() {
         let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
 
-        let shaped = QuadClip::shape(
-            &PlacedShape {
+        let shaped = QuadClip::resolved(
+            &crate::renderer::clip::ResolvedClip::alone(PlacedShape {
                 rect,
                 radii: CornerRadii::uniform(4.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::IDENTITY,
-            },
+            }),
             2.0,
         );
         assert_eq!(
@@ -245,17 +255,73 @@ mod tests {
         assert_eq!(shaped.radii, [4.0; 4], "radii travel with the rect");
     }
 
+    /// Every attribute the layout declares reads the field it names, and the
+    /// chain head fits in what used to be padding.
+    #[test]
+    fn the_layout_reads_every_field_where_it_is() {
+        use std::mem::offset_of;
+        let fields = [
+            offset_of!(TexturedVertex, position),
+            offset_of!(TexturedVertex, uv),
+            offset_of!(TexturedVertex, clip_pos),
+            offset_of!(TexturedVertex, clip_rect),
+            offset_of!(TexturedVertex, clip_params),
+            offset_of!(TexturedVertex, curvature_opacity),
+            offset_of!(TexturedVertex, tint),
+            offset_of!(TexturedVertex, clip_chain),
+        ];
+        let layout = TexturedVertex::desc();
+        for attribute in layout.attributes {
+            assert_eq!(
+                attribute.offset as usize, fields[attribute.shader_location as usize],
+                "location {}",
+                attribute.shader_location
+            );
+        }
+        assert_eq!(layout.attributes.len(), fields.len());
+        assert_eq!(size_of::<TexturedVertex>(), 88);
+    }
+
+    /// A resolved clip hands its chain to every corner.
+    #[test]
+    fn a_chained_clip_reaches_the_vertex() {
+        let resolved = crate::renderer::clip::ResolvedClip {
+            rest: 5,
+            ..crate::renderer::clip::ResolvedClip::alone(PlacedShape::placed(
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                CornerRadii::uniform(0.0),
+                1.0,
+                crate::transform::Transform::IDENTITY,
+            ))
+        };
+        let clip = QuadClip::resolved(&resolved, 1.0);
+        let vertex = TexturedVertex::corner([0.0; 2], [0.0; 2], (0.0, 0.0), &clip, 1.0, NO_TINT);
+        assert_eq!(vertex.clip_chain, 5);
+        assert_eq!(
+            TexturedVertex::corner(
+                [0.0; 2],
+                [0.0; 2],
+                (0.0, 0.0),
+                &QuadClip::NONE,
+                1.0,
+                NO_TINT
+            )
+            .clip_chain,
+            crate::renderer::clip::NO_CHAIN
+        );
+    }
+
     /// A clip whose placement collapses lets nothing through, rather than
     /// everything.
     #[test]
     fn a_collapsed_clip_cuts_it_all() {
-        let collapsed = QuadClip::shape(
-            &PlacedShape {
+        let collapsed = QuadClip::resolved(
+            &crate::renderer::clip::ResolvedClip::alone(PlacedShape {
                 rect: Rect::new(0.0, 0.0, 100.0, 50.0),
                 radii: CornerRadii::uniform(0.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::scale(0.0),
-            },
+            }),
             1.0,
         );
         assert_eq!(collapsed.rect, crate::renderer::gpu::EMPTY_CLIP_RECT);

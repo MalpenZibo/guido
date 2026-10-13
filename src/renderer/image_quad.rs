@@ -301,9 +301,13 @@ fn texture_bytes(texture: &Texture) -> usize {
 }
 
 impl ImageQuadRenderer {
-    pub fn new(device: &Device, format: TextureFormat) -> Self {
+    pub fn new(
+        device: &Device,
+        format: TextureFormat,
+        clip_records: &wgpu::BindGroupLayout,
+    ) -> Self {
         Self {
-            quad: TexturedQuadPipeline::new(device, format, "ImageQuad"),
+            quad: TexturedQuadPipeline::new(device, format, clip_records, "ImageQuad"),
             atlas: ImageAtlas::default(),
             texture_cache: FxHashMap::default(),
             texture_limit: device.limits().max_texture_dimension_2d,
@@ -699,9 +703,9 @@ impl ImageQuadRenderer {
 
         // An image is cut in the clip's own space, so a turned clip cuts the
         // turned shape.
-        let clip = cmd
-            .clip()
-            .map_or(QuadClip::NONE, |clip| QuadClip::shape(&clip, scale_factor));
+        let clip = cmd.clip().map_or(QuadClip::NONE, |clip| {
+            QuadClip::resolved(&clip, scale_factor)
+        });
 
         let corners = self.compute_vertices(
             &display_rect,
@@ -837,8 +841,14 @@ impl ImageQuadRenderer {
     }
 
     /// Render the prepared image quads.
-    pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedImageQuad]) {
-        self.quad.draw(render_pass, quads, Pipeline::Images);
+    pub fn render<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        quads: &'a [PreparedImageQuad],
+        clip_records: &'a wgpu::BindGroup,
+    ) {
+        self.quad
+            .draw(render_pass, quads, clip_records, Pipeline::Images);
     }
 }
 
@@ -1013,7 +1023,11 @@ mod limit_tests {
         let Some(gpu) = crate::or_skip(crate::renderer::GpuContext::try_new()) else {
             return;
         };
-        let mut renderer = ImageQuadRenderer::new(&gpu.device, TextureFormat::Rgba8Unorm);
+        let mut renderer = ImageQuadRenderer::new(
+            &gpu.device,
+            TextureFormat::Rgba8Unorm,
+            super::super::clip_records::ClipRecords::new(&gpu.device).layout(),
+        );
         let limit = gpu.device.limits().max_texture_dimension_2d;
         for (width, height) in [(limit - 1, 1), (1, limit - 1)] {
             let pixels = vec![255; (width * height * 4) as usize];

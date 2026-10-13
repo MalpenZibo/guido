@@ -8,8 +8,8 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::clip::{ClipIndex, ClipRef, ClipTree, Under};
-use super::commands::{CornerRadii, DrawCommand};
+use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip};
+use super::commands::DrawCommand;
 use super::tree::{CachedFlatten, RenderNode};
 use crate::shape::PlacedShape;
 
@@ -57,14 +57,29 @@ pub struct FlattenedCommand {
 }
 
 impl FlattenedCommand {
-    /// The shape this command is cut to, where it is this frame.
+    /// What this command is cut to, where it is this frame: a shape, and the
+    /// chain of shapes it could not be merged with, in the frame's
+    /// [`ClipChains`].
     ///
-    /// The one step between a command and every pipeline that draws one: the
-    /// clip arrives here as a [`PlacedShape`] exactly as it did when each
-    /// command carried its own copy.
-    pub fn clip(&self) -> Option<PlacedShape> {
-        self.clip.as_ref().map(ClipRef::shape)
+    /// The one step between a command and every pipeline that draws one.
+    pub fn clip(&self) -> Option<ResolvedClip> {
+        self.clip.as_ref().map(ClipRef::resolved)
     }
+}
+
+/// One flattened frame, as the renderer is handed it: the commands, the
+/// groups they are drawn in, and the chains their clips hang from.
+///
+/// Three things that are only meaningful together — a command's clip names a
+/// link in `clips` by index, and `layers` addresses `commands` by range — so
+/// they travel as one rather than as three arguments in a row that a caller
+/// could take from two different frames.
+#[derive(Clone, Copy)]
+pub struct FlatFrame<'a> {
+    pub commands: &'a [FlattenedCommand],
+    pub layers: &'a [CommandLayer],
+    /// [`FlattenScratch::clip_chains`] of the scratch `commands` came out of.
+    pub clips: &'a ClipChains,
 }
 
 /// Where one frame's draw commands are grouped, before they are handed on as
@@ -309,6 +324,8 @@ pub struct ScratchCapacity {
     pub rects: usize,
     /// Clips its clip tree can hold.
     pub clips: usize,
+    /// Links the chains those clips hang from can hold.
+    pub clip_links: usize,
 }
 
 impl FlattenScratch {
@@ -327,7 +344,16 @@ impl FlattenScratch {
                 .map(LayerBounds::heap_rects)
                 .sum(),
             clips: self.clips.capacity(),
+            clip_links: self.clips.link_capacity(),
         }
+    }
+
+    /// The chains the clips of the frame just flattened hang from, which the
+    /// [`ResolvedClip`](super::clip::ResolvedClip) each command's clip resolves
+    /// to points into. Good until the next frame is flattened through this
+    /// scratch, and no longer.
+    pub fn clip_chains(&self) -> &ClipChains {
+        self.clips.chains()
     }
 
     /// Empty every buffer, keeping what each one is holding.
@@ -704,7 +730,7 @@ fn flatten_node(
     let (clip_index, effective_clip) = match &node.clip {
         Some(clip) => {
             let own = PlacedShape::from_clip(clip, world_transform);
-            let index = out.clips.place(own, Under::Inherited(parent_clip));
+            let index = out.clips.place(own, parent_clip);
             (Some(index), Some(out.clips.reference(index)))
         }
         None => (parent_clip, inherited.clone()),
@@ -760,14 +786,17 @@ fn flatten_node(
     // "test this one in local coordinates"; now every clip says where its
     // coordinates are and the flag has nothing left to distinguish.
     //
-    // It narrows nothing, which is why it is placed under no parent: what a
-    // replay must do with it is carry it, not cut it again by an ancestor it
-    // never answered to.
+    // And it is cut by every clip above it, as everything else this node draws
+    // is: a ripple in a scrollbar handle stops at its scroller's rounded
+    // corner, not at the handle's pill (#708). It used to be placed under no
+    // parent at all, which was the only answer while two clips could only be
+    // folded into one by taking the smaller corner — the handle's pill would
+    // have lost the scroller's arc. They meet exactly now.
     if !node.overlay_commands.is_empty() {
         let overlay_clip = match node.overlay_clip {
             Some(ref clip) => {
                 let own = PlacedShape::from_clip(clip, world_transform);
-                let index = out.clips.place(own, Under::Nothing);
+                let index = out.clips.place(own, clip_index);
                 Some(out.clips.reference(index))
             }
             None => effective_clip,
@@ -903,109 +932,10 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
     ))
 }
 
-/// The two clips, as one.
-///
-/// **In a shared space where there is one, the enclosing box where there is
-/// not.** Both clips describe a rounded rect, and where the second can be
-/// written in the first's coordinates the intersection is another rounded rect
-/// in those coordinates — exact, and still turned with whatever turned the
-/// first. Where it cannot, one rect and one matrix are not enough to say what
-/// the overlap of two differently-turned shapes is, and both fall back to
-/// [`flattened`](PlacedShape::flattened): the box around each, in world space.
-/// Over-generous, and exactly what every case here produced before any of this
-/// carried a transform.
-///
-/// The fork is the one GTK draws too — `gsk_gpu_clip_transform` folds a clip
-/// through a translation or an axis-aligned scale and refuses anything else,
-/// leaving its caller to rasterise a mask. There is no mask here; there is the
-/// box.
-pub(super) fn intersect_clips(a: &PlacedShape, b: &PlacedShape) -> PlacedShape {
-    match rebase(b, a) {
-        Some(b) => tighten(a, &b),
-        None => tighten(&a.flattened(), &b.flattened()),
-    }
-}
-
-/// `clip` rewritten in `onto`'s coordinates, when that can be done without
-/// losing the shape.
-///
-/// It can when the transform between the two spaces sends a rect to a rect,
-/// which is [`Transform::rect_stays_rect`]. A shared placement — two clips
-/// under the one transformed node, or the ordinary case of two untransformed
-/// ones — is the identity and passes trivially; a scroller inside a scroller
-/// differs by a translation and passes too.
-///
-/// A quarter turn and a mirror also send a rect to a rect. They used to be
-/// refused because each moves the top-left corner somewhere else and nothing
-/// permuted the radii to follow; the corners are permuted now, so the answer is
-/// exact there as well rather than the box around both (#397). What is still
-/// refused is a turn that is not a quarter of one, and a skew: the image is not
-/// an axis-aligned rect at all, and no reordering makes it one.
-fn rebase(clip: &PlacedShape, onto: &PlacedShape) -> Option<PlacedShape> {
-    if clip.placement == onto.placement {
-        return Some(*clip);
-    }
-    let between = onto.placement.inverse()?.then(&clip.placement);
-    if !between.rect_stays_rect() {
-        return None;
-    }
-    Some(PlacedShape {
-        rect: between.map_rect(clip.rect),
-        // One radius per corner, so an unevenly scaled corner — an ellipse —
-        // is approximated by the geometric mean of its two axes. Exactly what
-        // this did before a clip carried a transform, and the one place in
-        // this type where "the radii stay circles" is not true.
-        //
-        // The permutation is the other half: a quarter turn leaves the corner
-        // sizes alone and moves which corner each belongs to.
-        radii: clip
-            .radii
-            .scaled(between.extract_scale())
-            .permuted(between.corner_permutation()),
-        curvature: clip.curvature,
-        placement: onto.placement,
-    })
-}
-
-/// `base`, cut down by a second clip written in the same coordinates.
-fn tighten(base: &PlacedShape, other: &PlacedShape) -> PlacedShape {
-    let min_x = base.rect.x.max(other.rect.x);
-    let min_y = base.rect.y.max(other.rect.y);
-    let max_x = (base.rect.x + base.rect.width).min(other.rect.x + other.rect.width);
-    let max_y = (base.rect.y + base.rect.height).min(other.rect.y + other.rect.height);
-
-    // Corner by corner, the smaller radius: an intersection can only be
-    // rounded where both clips are.
-    let radii = CornerRadii {
-        top_left: base.radii.top_left.min(other.radii.top_left),
-        top_right: base.radii.top_right.min(other.radii.top_right),
-        bottom_right: base.radii.bottom_right.min(other.radii.bottom_right),
-        bottom_left: base.radii.bottom_left.min(other.radii.bottom_left),
-    };
-    // The curvature of whichever clip rounds the least, for the same reason.
-    let curvature = if base.radii.max() <= other.radii.max() {
-        base.curvature
-    } else {
-        other.curvature
-    };
-
-    PlacedShape {
-        // Clamped to non-negative: two clips that miss each other leave nothing.
-        rect: Rect::new(
-            min_x,
-            min_y,
-            (max_x - min_x).max(0.0),
-            (max_y - min_y).max(0.0),
-        ),
-        radii,
-        curvature,
-        placement: base.placement,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::renderer::CornerRadii;
     use crate::renderer::NodeId;
     use crate::renderer::tree::ClipRegion;
     use crate::widgets::Color;
@@ -1560,7 +1490,7 @@ mod tests {
         );
         let placed = 10;
         for _ in 0..placed {
-            scratch.clips.place(clip, Under::Nothing);
+            scratch.clips.place(clip, None);
         }
 
         assert_eq!(
@@ -1762,6 +1692,7 @@ mod tests {
 #[cfg(test)]
 mod world_geometry_tests {
     use super::*;
+    use crate::renderer::CornerRadii;
     use crate::renderer::tree::ClipRegion;
     use crate::widgets::Color;
     // -- the clip as a shape, not as the box around it ------------------
@@ -1905,38 +1836,6 @@ mod world_geometry_tests {
         }
     }
 
-    /// The intersection is curved by whichever clip rounds the *least*.
-    ///
-    /// Every other test here uses a curvature of 1.0 on both sides, so the
-    /// comparison that picks between them could be reversed and none of them
-    /// would move. A squircle clip inside a circular one draws the circular
-    /// corner, because that is the corner that is actually there.
-    #[test]
-    fn the_flatter_corner_supplies_the_curve() {
-        let circular = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            radii: CornerRadii::uniform(8.0),
-            curvature: 1.0,
-            placement: Transform::IDENTITY,
-        };
-        let squircular = PlacedShape {
-            radii: CornerRadii::uniform(24.0),
-            curvature: 2.0,
-            ..circular
-        };
-
-        assert_eq!(
-            intersect_clips(&circular, &squircular).curvature,
-            1.0,
-            "the rounder clip cuts less deeply, so its curve is the one on show"
-        );
-        assert_eq!(
-            intersect_clips(&squircular, &circular).curvature,
-            1.0,
-            "and the answer does not depend on which was asked first"
-        );
-    }
-
     /// A placement that collapses has no inverse, and a clip with no inside is
     /// not a clip that lets everything through.
     #[test]
@@ -1988,7 +1887,7 @@ mod world_geometry_tests {
             .iter()
             .find(|c| c.layer == RenderLayer::Overlay)
             .expect("the ripple is in the frame");
-        let clip = overlay.clip().expect("and it is clipped");
+        let clip = overlay.clip().expect("and it is clipped").first;
 
         assert_eq!(
             clip.rect,
@@ -2059,7 +1958,7 @@ mod world_geometry_tests {
                 &mut FlattenScratch::default(),
             );
             let cmd = commands.first().expect("the child draws");
-            let clip = cmd.clip().expect("the child clips");
+            let clip = cmd.clip().expect("the child clips").first;
             (
                 (clip.placement.tx(), clip.placement.ty()),
                 (cmd.world_transform.tx(), cmd.world_transform.ty()),
@@ -2156,6 +2055,7 @@ mod world_geometry_tests {
                 .expect("the box draws")
                 .clip()
                 .expect("under three clips")
+                .first
         };
 
         let mut replayed = scene(10.0, 20.0);
@@ -2195,24 +2095,18 @@ mod world_geometry_tests {
         );
     }
 
-    /// A replayed overlay is cut to the shape it belongs to and to nothing
-    /// above it.
+    /// An overlay is cut by the clip above it as well as by its own, rounded
+    /// corners included — flattened in full, and replayed (#708).
     ///
-    /// The other half of what a replay has to know about a clip, and the one
-    /// with no second witness anywhere else. A cached clip that recorded no
-    /// parent means one of two things, and they differ only a frame later:
-    /// *nothing was above me then*, which a replay must ask again because
-    /// something may be above the subtree now, and *nothing is ever above me*,
-    /// which is what an overlay's clip is — a ripple is cut to the shape it
-    /// belongs to, and the full-flatten path has always replaced the inherited
-    /// clip with it rather than narrowing it. `Under::Nothing` is the second,
-    /// and reading it as the first would narrow a replayed ripple by a
-    /// scroller it never answered to.
-    ///
-    /// So the overlay sits under a clip that would cut it in half, in a subtree
-    /// that is replayed rather than flattened, and comes out whole.
+    /// A ripple used to be cut to the shape it belongs to and to nothing
+    /// else, so a scrollbar handle's press ripple in a rounded scroller drew
+    /// past the scroller's arc. Here the clip above is a rounded rect half the
+    /// overlay's height whose four corners are the intersection's, so the
+    /// overlay comes out as that rect — merged exactly, with its corners —
+    /// whichever path placed it. The replayed half is the one that asks
+    /// whether the cache remembers the parent rather than the shape.
     #[test]
-    fn a_replayed_overlay_answers_to_no_clip_above_it() {
+    fn an_overlay_is_cut_by_the_clip_above_it() {
         let mut child = RenderNode::new(3);
         child.bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
         child.overlay_clip = Some(ClipRegion {
@@ -2238,7 +2132,7 @@ mod world_geometry_tests {
         // rect below would be 20 tall rather than 40.
         root.clip = Some(ClipRegion {
             rect: Rect::new(0.0, 0.0, 40.0, 20.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            corner_radius: CornerRadii::uniform(10.0),
             curvature: 1.0,
         });
         root.children.push(Rc::new(middle));
@@ -2257,14 +2151,18 @@ mod world_geometry_tests {
                 .expect("the ripple is in the frame")
                 .clip()
                 .expect("and it is clipped")
-                .rect
+        };
+        let cut_by_both = |clip: ResolvedClip| {
+            clip.rest == crate::renderer::NO_CHAIN
+                && clip.first.rect == Rect::new(0.0, 0.0, 40.0, 20.0)
+                && clip.first.radii == CornerRadii::uniform(10.0)
         };
 
-        assert_eq!(
-            overlay_clip(&root),
-            Rect::new(0.0, 0.0, 40.0, 40.0),
-            "flattened in full, the overlay takes its own clip and not the \
-             one above it"
+        let flattened = overlay_clip(&root);
+        assert!(
+            cut_by_both(flattened),
+            "flattened in full, the overlay is cut by the rounded clip above \
+             it as well as its own: {flattened:?}"
         );
 
         // The subtree below the clip is clean and the clip's own node is not,
@@ -2274,305 +2172,15 @@ mod world_geometry_tests {
             c.repainted.set(false);
         }
 
-        assert_eq!(
-            overlay_clip(&root),
-            Rect::new(0.0, 0.0, 40.0, 40.0),
-            "replayed, the overlay came back cut by the clip above it, which \
-             it never answered to when it was flattened"
-        );
-    }
-
-    // -- two clips ------------------------------------------------------
-
-    /// Two clips under one transform intersect in that transform's space, and
-    /// come out still turned.
-    ///
-    /// Falling back to the world box here would undo the fix for every
-    /// scroller that happens to sit inside another one.
-    #[test]
-    fn two_clips_in_one_space_stay_in_it() {
-        let placement = Transform::rotate_degrees(30.0);
-        let outer = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            radii: CornerRadii::uniform(8.0),
-            curvature: 1.0,
-            placement,
-        };
-        let inner = PlacedShape {
-            rect: Rect::new(20.0, 0.0, 100.0, 60.0),
-            radii: CornerRadii::uniform(16.0),
-            curvature: 1.0,
-            placement,
-        };
-
-        let both = intersect_clips(&outer, &inner);
-        assert_eq!(both.placement, placement, "still turned by the same thing");
-        assert_eq!(
-            (both.rect.x, both.rect.width, both.rect.height),
-            (20.0, 80.0, 60.0),
-            "the overlap, exactly, in the space they were both written in"
-        );
-        assert_eq!(
-            both.radii.top_left, 8.0,
-            "an intersection is only as round as its rounder edge allows"
-        );
-    }
-
-    /// A clip inside a scroller inside a scroller: the two spaces differ by a
-    /// translation, which keeps the axes, so the overlap is still exact.
-    #[test]
-    fn a_clip_is_rebased_through_a_translation() {
-        let outer = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::IDENTITY,
-        };
-        let inner = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::translate(40.0, 0.0),
-        };
-
-        let both = intersect_clips(&outer, &inner);
-        assert_eq!(
-            both.placement,
-            Transform::IDENTITY,
-            "rebased onto the first"
-        );
-        assert_eq!(
-            (both.rect.x, both.rect.width),
-            (40.0, 60.0),
-            "the inner one, moved into the outer's coordinates, and cut there"
-        );
-    }
-
-    /// A pixel is covered by the published region.
-    fn covers(rects: &[crate::region::RegionRect], x: i32, y: i32) -> bool {
-        rects
-            .iter()
-            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
-    }
-
-    /// What the compositor is told a surface covers follows the clip chain, and
-    /// the chain is collapsed before it gets here. So widening that collapse
-    /// changes the published region, not only the pixels — and for a quarter
-    /// turn it changes *only* the corners, since the rect survives the turn
-    /// either way. A rounded corner on the wrong side is a wedge of the surface
-    /// that stops being ours: the compositor sends the click to whatever is
-    /// behind, which from inside the application looks like nothing happening.
-    #[test]
-    fn a_region_under_two_clips_a_quarter_turn_apart_rounds_the_right_corner() {
-        let outer = PlacedShape::placed(
-            Rect::new(0.0, 0.0, 100.0, 100.0),
-            CornerRadii::uniform(40.0),
-            1.0,
-            Transform::IDENTITY,
-        );
-        // The same square, a quarter turn round and moved back over the outer,
-        // rounded at one corner only.
-        let inner = PlacedShape::placed(
-            Rect::new(0.0, 0.0, 100.0, 100.0),
-            CornerRadii {
-                top_left: 40.0,
-                top_right: 0.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            },
-            1.0,
-            Transform::translate(100.0, 0.0).then(&Transform::rotate_degrees(90.0)),
-        );
-
-        let both = intersect_clips(&outer, &inner);
+        let replayed = overlay_clip(&root);
         assert!(
-            (both.rect.width - 100.0).abs() < 0.01 && (both.rect.height - 100.0).abs() < 0.01,
-            "the square survives the turn whichever way this is answered: {:?}",
-            both.rect
-        );
-
-        let rects = crate::region::placed_shape_to_rects(both, None);
-        // A rounded corner is the one cut *away*, so the square corner is the
-        // covered one. Without the permutation these two swap: the rounding
-        // stays on the top-left and the region gives up the wrong wedge.
-        assert!(
-            covers(&rects, 3, 3),
-            "the inner's rounding turned a quarter clockwise off the top-left, \
-             so this corner is square and the surface still claims it"
-        );
-        assert!(
-            !covers(&rects, 96, 3),
-            "and the top-right is where the rounding landed, so the region \
-             gives that wedge up — claim it instead and a click there is sent \
-             to a surface that does not draw it"
+            cut_by_both(replayed),
+            "replayed, the overlay is cut by the clip above it just the same: \
+             {replayed:?}"
         );
     }
 
-    /// A quarter turn sends a rect to a rect — the axes swap rather than lean —
-    /// so the overlap is still exact, and the corners follow the turn.
-    #[test]
-    fn a_clip_a_quarter_turn_away_is_rebased_not_boxed() {
-        // Rounded generously, because `tighten` takes the smaller radius per
-        // corner: against a square outer clip the intersection is square
-        // whatever the inner one does, and the permutation would be invisible.
-        let outer = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 60.0),
-            radii: CornerRadii::uniform(20.0),
-            curvature: 1.0,
-            placement: Transform::rotate_degrees(30.0),
-        };
-        let inner = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 60.0, 100.0),
-            radii: CornerRadii {
-                top_left: 12.0,
-                top_right: 0.0,
-                bottom_right: 0.0,
-                bottom_left: 0.0,
-            },
-            curvature: 1.0,
-            // A further quarter turn, so `between` swaps the axes.
-            placement: Transform::rotate_degrees(30.0).then(&Transform::rotate_degrees(90.0)),
-        };
-
-        let both = intersect_clips(&outer, &inner);
-        assert_eq!(
-            both.placement, outer.placement,
-            "rebased onto the first, not flattened to the box around both"
-        );
-        assert!(
-            (both.radii.top_right - 12.0).abs() < 1e-3,
-            "the inner's top-left corner turned a quarter clockwise, so it is \
-             the top-right one now: {:?}",
-            both.radii
-        );
-        assert_eq!(
-            (
-                both.radii.top_left,
-                both.radii.bottom_right,
-                both.radii.bottom_left
-            ),
-            (0.0, 0.0, 0.0),
-            "and nothing else picked up a radius"
-        );
-    }
-
-    /// A mirror sends a rect to a rect too, and `Container::scale` takes a
-    /// negative factor, so this is reachable rather than hypothetical.
-    #[test]
-    fn a_mirrored_clip_is_rebased_not_boxed() {
-        // Turned, so that "rebased onto the first" is a claim the flattening
-        // fallback cannot also satisfy — it would answer the identity.
-        let outer = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
-            radii: CornerRadii::uniform(20.0),
-            curvature: 1.0,
-            placement: Transform::rotate_degrees(20.0),
-        };
-        let inner = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            radii: CornerRadii {
-                top_left: 9.0,
-                top_right: 0.0,
-                bottom_right: 0.0,
-                bottom_left: 5.0,
-            },
-            curvature: 1.0,
-            placement: outer
-                .placement
-                .then(&Transform::scale_xy(-1.0, 1.0).then_translate(100.0, 0.0)),
-        };
-
-        let both = intersect_clips(&outer, &inner);
-        assert_eq!(
-            both.placement, outer.placement,
-            "rebased onto the first, not flattened to the box around both"
-        );
-        assert!(
-            (both.radii.top_right - 9.0).abs() < 1e-3
-                && (both.radii.bottom_right - 5.0).abs() < 1e-3,
-            "mirrored across x: the left corners are the right ones now, {:?}",
-            both.radii
-        );
-        assert_eq!((both.radii.top_left, both.radii.bottom_left), (0.0, 0.0));
-    }
-
-    /// Two clips turned differently cannot both be a rect in one space, so the
-    /// answer is the box around each — over-generous, and what every case here
-    /// produced before any of this carried a transform.
-    ///
-    /// The wall [`intersect_clips`] documents at length.
-    /// And the corners of those boxes cut at least as deep as the ellipses they
-    /// stand for, so the fallback stays inside the shape rather than reaching
-    /// past it. The larger axis, not the mean of the two — under a uniform
-    /// scale they agree, which is why every other test here cannot tell.
-    #[test]
-    fn a_flattened_clip_rounds_by_the_larger_axis() {
-        let clip = PlacedShape::placed(
-            Rect::new(0.0, 0.0, 100.0, 100.0),
-            CornerRadii::uniform(10.0),
-            1.0,
-            Transform::scale_xy(3.0, 1.0),
-        );
-
-        assert_eq!(
-            clip.world_radii().top_left,
-            30.0,
-            "the corner is 30 wide and 10 tall; cutting 30 stays inside it, and \
-             cutting the mean of 17.3 would round less than the shape does"
-        );
-    }
-
-    #[test]
-    fn two_clips_turned_differently_fall_back_to_their_boxes() {
-        let a = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::rotate_degrees(45.0),
-        };
-        let b = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 80.0, 80.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::rotate_degrees(10.0),
-        };
-
-        let both = intersect_clips(&a, &b);
-        assert_eq!(
-            both.placement,
-            Transform::IDENTITY,
-            "world coordinates, where a box is a box"
-        );
-        let (a_box, b_box) = (a.world_aabb(), b.world_aabb());
-        let expected_right = (a_box.x + a_box.width).min(b_box.x + b_box.width);
-        assert!(
-            (both.rect.x + both.rect.width - expected_right).abs() < 0.01,
-            "the two boxes, intersected"
-        );
-    }
-
-    /// A clip that misses its parent's entirely leaves nothing, not a rect of
-    /// negative width that would read as covering the plane.
-    #[test]
-    fn two_clips_that_miss_leave_nothing() {
-        let here = PlacedShape {
-            rect: Rect::new(0.0, 0.0, 50.0, 50.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::IDENTITY,
-        };
-        let far = PlacedShape {
-            rect: Rect::new(500.0, 500.0, 50.0, 50.0),
-            radii: CornerRadii::uniform(0.0),
-            curvature: 1.0,
-            placement: Transform::IDENTITY,
-        };
-
-        let both = intersect_clips(&here, &far);
-        assert_eq!((both.rect.width, both.rect.height), (0.0, 0.0));
-    }
-
-    /// A translation moves the box it is cut from and changes nothing else.
+    /// A translation moves the box and changes nothing else.
     #[test]
     fn a_translation_only_moves_it() {
         let clip = PlacedShape {
@@ -2585,7 +2193,6 @@ mod world_geometry_tests {
         let world = clip.world_aabb();
         assert_eq!((world.x, world.y), (20.0, 30.0));
         assert_eq!((world.width, world.height), (100.0, 60.0));
-        assert_eq!(clip.world_radii().max(), 8.0, "and the corners with it");
     }
 }
 

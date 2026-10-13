@@ -122,6 +122,80 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
     assert_eq!(calls.total(), 1 + 1 + 9);
 }
 
+/// A label under a chain of clips is drawn by glyphon while every clip's box
+/// cuts it as the clip would, and by the quad as soon as one of them does not.
+///
+/// The inner clip is a square inset from a rounded card by less than the
+/// card's corners reach, so the card's curve crosses the square's sides and
+/// the two cannot be merged: the square is the chain's first shape and the
+/// card hangs from it. Asking only the first whether its box will do says yes
+/// for both labels, and the one reaching the card's corner is drawn across it.
+#[test]
+fn a_label_under_a_chain_goes_to_the_quad_only_when_a_clip_in_it_cuts() {
+    let chained = |centred: bool| {
+        move || {
+            let inner = container()
+                .width(fill())
+                .height(fill())
+                .overflow(Overflow::Hidden)
+                .layout(Flex::row().main_alignment(if centred {
+                    MainAlignment::Center
+                } else {
+                    MainAlignment::Start
+                }))
+                .child(text("label"));
+            container()
+                .width(120.0)
+                .height(20.0)
+                .corners(10.0)
+                .padding(2.0)
+                .overflow(Overflow::Hidden)
+                .child(inner)
+        }
+    };
+
+    let Some(centred) = draw_calls_of_one_frame(chained(true)) else {
+        return;
+    };
+    assert_eq!(
+        (centred.text, centred.text_quads),
+        (1, 0),
+        "in the middle of the card no clip's box cuts differently from it"
+    );
+
+    let Some(cornered) = draw_calls_of_one_frame(chained(false)) else {
+        return;
+    };
+    assert_eq!(
+        cornered.text_quads, 1,
+        "the label reaches the card's corner, which only the chain says"
+    );
+}
+
+/// A label reaching the corner of a square clip is cut there by the clip's
+/// box, which is the clip — so it stays with glyphon.
+///
+/// A square corner used to count as a corner box of zero size, which still
+/// "overlapped" any ink covering the corner point, and every such label was
+/// rasterized into a texture of its own for a cut glyphon makes exactly.
+#[test]
+fn a_label_reaching_a_square_clip_s_corner_stays_with_glyphon() {
+    let Some(calls) = draw_calls_of_one_frame(|| {
+        container()
+            .width(120.0)
+            .height(20.0)
+            .overflow(Overflow::Hidden)
+            .child(text("label"))
+    }) else {
+        return;
+    };
+    assert_eq!(
+        (calls.text, calls.text_quads),
+        (1, 0),
+        "one glyphon call and no text quad"
+    );
+}
+
 /// What preparing those seven images made on the GPU: one bind group, for the
 /// atlas page all seven were packed onto, and the vertex and index buffers
 /// every quad of the frame shares.

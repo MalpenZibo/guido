@@ -7,7 +7,7 @@
 //! the axis-aligned rectangles that stand in for a shape the protocol has no
 //! way to describe. That translation lives here so there is one of it.
 
-use crate::renderer::{CornerRadii, DrawCommand, FlattenedCommand};
+use crate::renderer::{ClipChains, CornerRadii, DrawCommand, FlattenedCommand};
 use crate::shape::{Outline, PlacedShape, Spans};
 use smallvec::SmallVec;
 
@@ -63,9 +63,10 @@ impl RegionRect {
 /// not. The merging is what keeps an upright panel at a handful of rectangles
 /// instead of one per band.
 ///
-/// **The clip is a shape too.** At any scanline the overlap is the overlap of
-/// the two shapes' spans — which is exact, turned clip or not, and gets the
-/// corners right for free. A card filling a rounded scroller is cornered by
+/// **The clips are shapes too** — every one a command is cut by, the first
+/// and each down its chain. At any scanline the overlap is the overlap of all
+/// their spans — which is exact, turned clips or not, and gets the corners
+/// right for free. A card filling a rounded scroller is cornered by
 /// the scroller: publishing the scroller's square box instead blurs the
 /// desktop in the four corners where the panel is not drawn, and squaring off
 /// the card's own corners along a cut edge is the same mistake the other way.
@@ -81,16 +82,13 @@ impl RegionRect {
 ///
 /// The coordinates are logical surface pixels, which is what `wl_region`
 /// expects.
-pub(crate) fn placed_shape_to_rects(
-    shape: PlacedShape,
-    clip: Option<PlacedShape>,
-) -> Vec<RegionRect> {
+pub(crate) fn placed_shape_to_rects(shape: PlacedShape, clips: &[PlacedShape]) -> Vec<RegionRect> {
     if shape.rect.width <= 0.0 || shape.rect.height <= 0.0 {
         return Vec::new();
     }
 
     let (mut top, mut bottom) = shape.y_bounds();
-    if let Some(clip) = clip {
+    for clip in clips {
         let (clip_top, clip_bottom) = clip.y_bounds();
         top = top.max(clip_top);
         bottom = bottom.min(clip_bottom);
@@ -108,29 +106,27 @@ pub(crate) fn placed_shape_to_rects(
     // would take about six microseconds to do it, against twenty nanoseconds
     // here. That is per region, per frame, and a bar of thirty pills declaring
     // input regions pays it thirty times. Worth a branch.
-    if shape.is_a_box() && clip.is_none_or(|c| c.is_a_box()) {
-        let boxed = shape.world_aabb();
-        let boxed = match clip {
-            Some(clip) => intersection(boxed, clip.world_aabb()),
-            None => Some(boxed),
-        };
+    if shape.is_a_box() && clips.iter().all(PlacedShape::is_a_box) {
+        let boxed = clips.iter().try_fold(shape.world_aabb(), |boxed, clip| {
+            boxed.intersection(&clip.world_aabb())
+        });
         return boxed.and_then(to_region_rect).into_iter().collect();
     }
 
     let outline = shape.outline();
-    let clip_outline = clip.map(|clip| clip.outline());
+    let clip_outlines: SmallVec<[Outline; 2]> = clips.iter().map(PlacedShape::outline).collect();
     // Whether anything is subtracted from a span, which only a scoop does.
     // Asked once, because the answer decides the shape of every band below:
     // an unbitten shape puts out one rectangle per band, and the band above
     // it is therefore the last one out. A bitten one can split, and then it
     // is not.
-    let bitten = outline.is_bitten() || clip_outline.as_ref().is_some_and(Outline::is_bitten);
+    let bitten = outline.is_bitten() || clip_outlines.iter().any(Outline::is_bitten);
 
     // The outer bounds at a scanline: where the shape is before any bite is
-    // taken out, narrowed to where the clip is. Convex, so one interval.
+    // taken out, narrowed to where every clip is. Convex, so one interval.
     let bounds = |y: f32| -> Option<(f32, f32)> {
         let (mut left, mut right) = outline.bounds_at(y)?;
-        if let Some(ref clip) = clip_outline {
+        for clip in &clip_outlines {
             let (clip_left, clip_right) = clip.bounds_at(y)?;
             left = left.max(clip_left);
             right = right.min(clip_right);
@@ -194,7 +190,7 @@ pub(crate) fn placed_shape_to_rects(
         let mut spans = Spans::new();
         spans.push(band);
         outline.take_bites_from(&mut spans, y0, y1);
-        if let Some(ref clip) = clip_outline {
+        for clip in &clip_outlines {
             clip.take_bites_from(&mut spans, y0, y1);
         }
 
@@ -250,15 +246,6 @@ fn place(
     })
 }
 
-/// The overlap of two rects, or `None` where there is none.
-fn intersection(a: Rect, b: Rect) -> Option<Rect> {
-    let x = a.x.max(b.x);
-    let y = a.y.max(b.y);
-    let right = (a.x + a.width).min(b.x + b.width);
-    let bottom = (a.y + a.height).min(b.y + b.height);
-    (right > x && bottom > y).then(|| Rect::new(x, y, right - x, bottom - y))
-}
-
 /// Round-to-nearest on all four edges so adjacent slabs tile without gaps
 /// (inward rounding would drop sub-pixel slabs). `None` when the rounding
 /// collapses the rectangle to nothing.
@@ -307,7 +294,10 @@ pub(crate) struct InputRegionRequest {
 ///
 /// Not sorted, unlike a blur region: these compose, and the order they compose
 /// in is the order they were painted in.
-pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<InputRegionOp> {
+pub(crate) fn input_ops_from_commands(
+    commands: &[FlattenedCommand],
+    chains: &ClipChains,
+) -> Vec<InputRegionOp> {
     let mut out = Vec::new();
     for cmd in commands {
         let DrawCommand::InputRegion {
@@ -320,7 +310,7 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
             continue;
         };
         out.extend(
-            shape_of(cmd, *rect, *corner_radii, *curvature)
+            shape_of(cmd, chains, *rect, *corner_radii, *curvature)
                 .into_iter()
                 .map(|rect| InputRegionOp {
                     takes: *takes,
@@ -339,25 +329,25 @@ pub(crate) fn input_ops_from_commands(commands: &[FlattenedCommand]) -> Vec<Inpu
 /// around it — a rotated container takes clicks where it is, and blurs the
 /// desktop where it is, rather than over the square it happens to sit inside.
 ///
-/// The clip is a shape here too, and intersected scanline by scanline rather
-/// than as a box — so a card inside a rounded scroller is cornered by the
-/// scroller, and a turned clip cuts what it actually covers.
-///
-/// One clip, though. `cmd.clip()` resolves to one shape, which
-/// `intersect_clips` has already collapsed from the chain above it. Since #397
-/// that collapse is exact whenever the two spaces are a quarter turn or a
-/// mirror apart as well as a scale; what still arrives as the box around both
-/// is a pair turned by some other angle. What is escaped here is the *shape
-/// against clip* box intersection, not the chain's own.
+/// The clips are shapes here too, every one of them, and intersected scanline
+/// by scanline rather than as boxes — so a card inside a rounded scroller is
+/// cornered by the scroller, a turned clip cuts what it actually covers, and a
+/// clip that could not be merged with the ones above it is met by each of them
+/// in turn. `chains` is the frame's, which the command's clip hangs from.
 pub(crate) fn shape_of(
     cmd: &FlattenedCommand,
+    chains: &ClipChains,
     rect: Rect,
     corner_radii: CornerRadii,
     curvature: f32,
 ) -> Vec<RegionRect> {
+    let clips: SmallVec<[PlacedShape; 2]> = match cmd.clip() {
+        Some(clip) => chains.shapes(&clip).copied().collect(),
+        None => SmallVec::new(),
+    };
     placed_shape_to_rects(
         PlacedShape::placed(rect, corner_radii, curvature, cmd.world_transform),
-        cmd.clip(),
+        &clips,
     )
 }
 
@@ -390,7 +380,7 @@ mod tests {
 
     /// The commonest shape there is: no transform at all.
     fn upright(rect: Rect, radii: CornerRadii) -> Vec<RegionRect> {
-        placed_shape_to_rects(shape(rect, radii, Transform::IDENTITY), None)
+        placed_shape_to_rects(shape(rect, radii, Transform::IDENTITY), &[])
     }
 
     fn shape(rect: Rect, radii: CornerRadii, placement: Transform) -> PlacedShape {
@@ -498,7 +488,7 @@ mod tests {
                     1.0,
                     Transform::IDENTITY,
                 );
-                let rects = placed_shape_to_rects(shape, None);
+                let rects = placed_shape_to_rects(shape, &[]);
                 assert!(
                     !rects.is_empty(),
                     "{w}x{h} r={r}: the shape has an area and the region has none"
@@ -581,7 +571,7 @@ mod tests {
                 round(16.0),
                 Transform::scale_xy(2.0, 1.0),
             ),
-            None,
+            &[],
         );
 
         assert!(!covers(&rects, 0, 0), "the corner itself is outside");
@@ -629,7 +619,7 @@ mod tests {
                 1.0,
                 Transform::scale_xy(sx, sy),
             ),
-            None,
+            &[],
         );
         assert!(!rects.is_empty());
 
@@ -753,7 +743,7 @@ mod tests {
                 1.0,
                 Transform::scale(8.0),
             ),
-            None,
+            &[],
         );
         assert!(
             !covers(&scaled, 0, 0),
@@ -769,7 +759,7 @@ mod tests {
                 1.0,
                 Transform::IDENTITY,
             ),
-            None,
+            &[],
         );
         assert_eq!(tiny.len(), 1, "one rectangle, as it has always been");
     }
@@ -798,7 +788,7 @@ mod tests {
                 2.0,
                 placement,
             );
-            let rects = placed_shape_to_rects(shape, None);
+            let rects = placed_shape_to_rects(shape, &[]);
             let local = Rect::new(0.0, 0.0, 120.0, 120.0);
             let corners = Corners::superellipse(40.0, 2.0);
             let to_local = placement.inverse().expect("invertible");
@@ -855,7 +845,7 @@ mod tests {
                     k,
                     Transform::IDENTITY,
                 ),
-                None,
+                &[],
             )
             .len()
         };
@@ -924,7 +914,7 @@ mod tests {
             for (degrees, placement) in placements {
                 let shape =
                     PlacedShape::placed(Rect::new(0.0, 0.0, size, size), round(40.0), k, placement);
-                let rects = placed_shape_to_rects(shape, None);
+                let rects = placed_shape_to_rects(shape, &[]);
                 let local = Rect::new(0.0, 0.0, size, size);
                 let corners = Corners::superellipse(40.0, k);
                 let to_local = placement.inverse().expect("invertible");
@@ -1043,7 +1033,7 @@ mod tests {
             for k in [-1.0_f32, 0.0, 0.5, 1.0, 2.0] {
                 let shape =
                     PlacedShape::placed(WRect::new(0.0, 0.0, w, h), radii, k, Transform::IDENTITY);
-                let rects = placed_shape_to_rects(shape, None);
+                let rects = placed_shape_to_rects(shape, &[]);
                 let local = WRect::new(0.0, 0.0, w, h);
                 let corners = Corners {
                     radii,
@@ -1106,7 +1096,7 @@ mod tests {
                     curvature,
                     Transform::IDENTITY,
                 ),
-                None,
+                &[],
             )
         };
 
@@ -1194,7 +1184,7 @@ mod tests {
                 -1.0,
                 Transform::IDENTITY,
             ),
-            None,
+            &[],
         );
         assert!(!rects.is_empty(), "a scooped box is not empty");
 
@@ -1246,7 +1236,7 @@ mod tests {
                 1.0,
                 Transform::IDENTITY,
             ),
-            None,
+            &[],
         );
         assert!(
             tall.len() < 80,
@@ -1267,7 +1257,7 @@ mod tests {
                 // merge is what is being asked about rather than the fast path.
                 Transform::rotate_degrees(90.0).center_at(100.0, 450.0),
             ),
-            None,
+            &[],
         );
         assert!(
             square.len() < 80,
@@ -1290,7 +1280,7 @@ mod tests {
         assert_eq!(
             placed_shape_to_rects(
                 boxed(0.0, 0.0, 100.0, 100.0),
-                Some(boxed(40.0, 30.0, 200.0, 200.0))
+                &[boxed(40.0, 30.0, 200.0, 200.0)]
             ),
             vec![RegionRect {
                 x: 40,
@@ -1302,17 +1292,14 @@ mod tests {
         );
 
         assert!(
-            placed_shape_to_rects(
-                boxed(0.0, 0.0, 50.0, 50.0),
-                Some(boxed(50.0, 0.0, 50.0, 50.0))
-            )
-            .is_empty(),
+            placed_shape_to_rects(boxed(0.0, 0.0, 50.0, 50.0), &[boxed(50.0, 0.0, 50.0, 50.0)])
+                .is_empty(),
             "boxes that touch along an edge share no area"
         );
         assert!(
             placed_shape_to_rects(
                 boxed(0.0, 0.0, 50.0, 50.0),
-                Some(boxed(500.0, 0.0, 50.0, 50.0))
+                &[boxed(500.0, 0.0, 50.0, 50.0)]
             )
             .is_empty(),
             "and ones that miss entirely leave nothing"
@@ -1336,7 +1323,7 @@ mod tests {
         let cut = |w: f32, h: f32, radii: CornerRadii| {
             placed_shape_to_rects(
                 PlacedShape::placed(Rect::new(0.0, 0.0, w, h), radii, 1.0, Transform::IDENTITY),
-                None,
+                &[],
             )
         };
         let pair = |a: f32, b: f32, c: f32, d: f32| CornerRadii {
@@ -1412,7 +1399,7 @@ mod tests {
             Transform::IDENTITY,
         );
 
-        let rects = placed_shape_to_rects(square_card, Some(rounded_scroller));
+        let rects = placed_shape_to_rects(square_card, &[rounded_scroller]);
         assert!(
             !covers(&rects, 0, 0) && !covers(&rects, 99, 99),
             "the card declares square corners and the scroller cuts them anyway"
@@ -1440,7 +1427,7 @@ mod tests {
             Transform::IDENTITY,
         );
 
-        let rects = placed_shape_to_rects(card, Some(cuts_the_right));
+        let rects = placed_shape_to_rects(card, &[cuts_the_right]);
         assert!(
             covers(&rects, 39, 0) && covers(&rects, 39, 99),
             "the cut edge is straight, so its corners reach it"
@@ -1458,12 +1445,12 @@ mod tests {
         let same = Rect::new(0.0, 0.0, 100.0, 100.0);
         let rounded = |r: f32| PlacedShape::placed(same, round(r), 1.0, Transform::IDENTITY);
 
-        let sharp_clip = placed_shape_to_rects(rounded(4.0), Some(rounded(24.0)));
+        let sharp_clip = placed_shape_to_rects(rounded(4.0), &[rounded(24.0)]);
         assert!(
             !covers(&sharp_clip, 2, 2),
             "the clip rounds harder, so the clip's corner is what is left"
         );
-        let sharp_shape = placed_shape_to_rects(rounded(24.0), Some(rounded(4.0)));
+        let sharp_shape = placed_shape_to_rects(rounded(24.0), &[rounded(4.0)]);
         assert!(
             !covers(&sharp_shape, 2, 2),
             "and the other way round gives the same answer"
@@ -1487,7 +1474,7 @@ mod tests {
             Transform::translate(500.0, 300.0),
         );
 
-        let rects = placed_shape_to_rects(card, Some(clip));
+        let rects = placed_shape_to_rects(card, &[clip]);
         assert!(
             covers(&rects, 550, 350),
             "the clip covers the whole card, so nothing is cut"
@@ -1500,7 +1487,7 @@ mod tests {
             placement: Transform::IDENTITY,
             ..clip
         };
-        assert!(placed_shape_to_rects(card, Some(unplaced)).is_empty());
+        assert!(placed_shape_to_rects(card, &[unplaced]).is_empty());
     }
 
     // -- turned shapes --------------------------------------------------
@@ -1519,7 +1506,7 @@ mod tests {
                 round(0.0),
                 Transform::rotate_degrees(45.0).center_at(50.0, 50.0),
             ),
-            None,
+            &[],
         );
         assert!(!rects.is_empty());
 
@@ -1550,7 +1537,7 @@ mod tests {
                 curvature: 1.0,
                 placement: transform,
             },
-            None,
+            &[],
         );
         assert!(!rects.is_empty());
 
@@ -1583,7 +1570,7 @@ mod tests {
                 round(0.0),
                 Transform::rotate_degrees(20.0).center_at(w / 2.0, h / 2.0),
             ),
-            None,
+            &[],
         );
         let covered: i64 = rects.iter().map(|r| r.width as i64 * r.height as i64).sum();
         let shape = (w * h) as i64;
@@ -1636,7 +1623,7 @@ mod tests {
                     curvature: 1.0,
                     placement: transform,
                 },
-                None,
+                &[],
             );
             assert!(!rects.is_empty(), "at {degrees}°");
 
@@ -1682,9 +1669,9 @@ mod tests {
             round(0.0),
             Transform::rotate_degrees(45.0).center_at(50.0, 50.0),
         );
-        let box_clip = |r: Rect| Some(shape(r, round(0.0), Transform::IDENTITY));
+        let box_clip = |r: Rect| [shape(r, round(0.0), Transform::IDENTITY)];
         let clipped =
-            placed_shape_to_rects(diamond, box_clip(Rect::new(50.0, -50.0, 100.0, 200.0)));
+            placed_shape_to_rects(diamond, &box_clip(Rect::new(50.0, -50.0, 100.0, 200.0)));
 
         assert!(
             clipped.iter().all(|r| r.x >= 50),
@@ -1695,8 +1682,84 @@ mod tests {
             "and what is on show is still there"
         );
         assert!(
-            placed_shape_to_rects(diamond, box_clip(Rect::new(500.0, 0.0, 10.0, 10.0))).is_empty(),
+            placed_shape_to_rects(diamond, &box_clip(Rect::new(500.0, 0.0, 10.0, 10.0))).is_empty(),
             "a clip that misses leaves nothing to publish"
+        );
+    }
+
+    /// Every clip down a chain narrows the region, each as the shape it is:
+    /// a circle over a square inset from its corners, which no one rounded
+    /// rect describes.
+    #[test]
+    fn every_clip_in_a_chain_narrows_the_region() {
+        let card = shape(
+            Rect::new(0.0, 0.0, 200.0, 200.0),
+            round(0.0),
+            Transform::IDENTITY,
+        );
+        let circle = shape(
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            round(50.0),
+            Transform::IDENTITY,
+        );
+        let inset = shape(
+            Rect::new(10.0, 10.0, 80.0, 80.0),
+            round(0.0),
+            Transform::IDENTITY,
+        );
+        let rects = placed_shape_to_rects(card, &[inset, circle]);
+
+        assert!(covers(&rects, 50, 50), "inside both");
+        assert!(
+            covers(&rects, 50, 12),
+            "the inset's top edge, inside the circle"
+        );
+        assert!(
+            !covers(&rects, 12, 12),
+            "the inset's corner, which the circle has cut away"
+        );
+        assert!(!covers(&rects, 50, 5), "inside the circle, above the inset");
+    }
+
+    /// A clip turned 25° from the one it is under is no longer folded into the
+    /// box around both: the region follows each clip's own edges, through the
+    /// chain the frame keeps for them.
+    #[test]
+    fn a_region_under_clips_turned_apart_follows_both() {
+        use crate::renderer::clip::ClipTree;
+        use crate::renderer::{FlattenedCommand, RenderLayer};
+
+        let square = |placement| shape(Rect::new(0.0, 0.0, 100.0, 100.0), round(0.0), placement);
+        let turned = Transform::rotate_degrees(25.0).center_at(50.0, 50.0);
+        let mut tree = ClipTree::default();
+        let outer = tree.place(square(turned), None);
+        let inner = tree.place(square(Transform::IDENTITY), Some(outer));
+
+        let rect = Rect::new(-50.0, -50.0, 200.0, 200.0);
+        let cmd = FlattenedCommand {
+            command: std::rc::Rc::new(DrawCommand::InputRegion {
+                rect,
+                corner_radii: round(0.0),
+                curvature: 1.0,
+                takes: true,
+            }),
+            world_transform: Transform::IDENTITY,
+            layer: RenderLayer::Shapes,
+            opacity: 1.0,
+            clip: Some(tree.reference(inner)),
+        };
+        let rects = shape_of(&cmd, tree.chains(), rect, round(0.0), 1.0);
+
+        assert!(covers(&rects, 50, 50), "the middle, inside both");
+        assert!(
+            !covers(&rects, 2, 2),
+            "the upright square's corner, which the turned one does not reach"
+        );
+        assert!(
+            rects
+                .iter()
+                .all(|r| r.x >= 0 && r.y >= 0 && r.x + r.width <= 100),
+            "and nothing outside the upright square"
         );
     }
 }

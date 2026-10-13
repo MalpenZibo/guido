@@ -119,9 +119,13 @@ pub struct TextQuadRenderer {
 }
 
 impl TextQuadRenderer {
-    pub fn new(device: &Device, format: TextureFormat) -> Self {
+    pub fn new(
+        device: &Device,
+        format: TextureFormat,
+        clip_records: &wgpu::BindGroupLayout,
+    ) -> Self {
         Self {
-            quad: TexturedQuadPipeline::new(device, format, "TextQuad"),
+            quad: TexturedQuadPipeline::new(device, format, clip_records, "TextQuad"),
             text_cache: rustc_hash::FxHashMap::default(),
             frame_gen: 0,
             shaper: None,
@@ -372,12 +376,11 @@ impl TextQuadRenderer {
         // The clip's own space, like the image quad beside it: a turned clip
         // cuts the turned shape, and a rounded or squircle one cuts its corners
         // rather than the box they sit in. The corners above are in physical
-        // world pixels and this is not — `QuadClip::shape` folds the scale into
+        // world pixels and this is not — `QuadClip::resolved` folds the scale into
         // its map, which is what keeps the rect in the units the widget wrote.
-        let clip = entry
-            .clip
-            .as_ref()
-            .map_or(QuadClip::NONE, |clip| QuadClip::shape(clip, scale_factor));
+        let clip = entry.clip.as_ref().map_or(QuadClip::NONE, |clip| {
+            QuadClip::resolved(clip, scale_factor)
+        });
 
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
         let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {
@@ -399,8 +402,14 @@ impl TextQuadRenderer {
     }
 
     /// Render the prepared text quads.
-    pub fn render<'a>(&'a self, render_pass: &mut RenderPass<'a>, quads: &'a [PreparedTextQuad]) {
-        self.quad.draw(render_pass, quads, Pipeline::TextQuads);
+    pub fn render<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        quads: &'a [PreparedTextQuad],
+        clip_records: &'a wgpu::BindGroup,
+    ) {
+        self.quad
+            .draw(render_pass, quads, clip_records, Pipeline::TextQuads);
     }
 }
 
@@ -432,7 +441,11 @@ mod the_texture_cache_gives_back_what_a_frame_stopped_asking_for {
         let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
             return;
         };
-        let mut renderer = TextQuadRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut renderer = TextQuadRenderer::new(
+            &gpu.device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            super::super::clip_records::ClipRecords::new(&gpu.device).layout(),
+        );
         renderer.set_screen_size(200.0, 100.0);
 
         // Small enough that a texture apiece is cheap; the count is the point.
@@ -482,7 +495,11 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
     fn atlas_after(gpu: &GpuContext, frames: &[String]) -> isize {
         let before = gpu.texture_bytes();
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let mut renderer = TextQuadRenderer::new(&gpu.device, format);
+        let mut renderer = TextQuadRenderer::new(
+            &gpu.device,
+            format,
+            super::super::clip_records::ClipRecords::new(&gpu.device).layout(),
+        );
         let mut shaper = Shaper::new(&gpu.device, &gpu.queue, format);
         shaper.font_system = crate::renderer::text::vendored_font_system();
         renderer.shaper = Some(shaper);
@@ -521,7 +538,11 @@ mod nothing_turned_nothing_built {
             return;
         };
         let before = gpu.texture_bytes();
-        let mut renderer = TextQuadRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut renderer = TextQuadRenderer::new(
+            &gpu.device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            super::super::clip_records::ClipRecords::new(&gpu.device).layout(),
+        );
         let mut quads = Vec::new();
         for _ in 0..3 {
             renderer.begin_frame();

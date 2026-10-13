@@ -13,7 +13,7 @@
 
 use crate::backdrop::BackdropSources;
 use crate::region::{RegionRect, shape_of};
-use crate::renderer::{DrawCommand, FlattenedCommand};
+use crate::renderer::{ClipChains, DrawCommand, FlattenedCommand};
 
 /// The region to hand `ext-background-effect-v1`, read off the frame that was
 /// just drawn.
@@ -28,7 +28,10 @@ use crate::renderer::{DrawCommand, FlattenedCommand};
 /// no command in it; one served from the paint cache carries its command along
 /// unchanged; a culled one is absent. Ordering stops mattering too, since the
 /// list only exists after the paint that built it.
-pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<RegionRect> {
+pub(crate) fn regions_from_commands(
+    commands: &[FlattenedCommand],
+    chains: &ClipChains,
+) -> Vec<RegionRect> {
     let mut out = Vec::new();
     for cmd in commands {
         let DrawCommand::BackdropBlur {
@@ -50,7 +53,7 @@ pub(crate) fn regions_from_commands(commands: &[FlattenedCommand]) -> Vec<Region
         // describe different shapes. A card half out of a viewport is filtered
         // only where it is on show, and a region published for the whole card
         // blurs the desktop beside a panel that is not there.
-        out.extend(shape_of(cmd, *rect, *corner_radii, *curvature));
+        out.extend(shape_of(cmd, chains, *rect, *corner_radii, *curvature));
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
     out
@@ -78,7 +81,7 @@ mod tests {
             clip: None,
         };
         assert_eq!(
-            regions_from_commands(&[command]),
+            regions_from_commands(&[command], &Default::default()),
             vec![RegionRect {
                 x: 0,
                 y: 0,

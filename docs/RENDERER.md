@@ -400,11 +400,11 @@ apart — and adjacent bands that round to the same span merge back into one
 rectangle. That is what keeps an upright panel at a handful of
 rects instead of one per band.
 
-**The clip is a shape here too**, and the only consumer where it is. At any
-scanline the overlap is the overlap of the two shapes' spans — exact, turned
-clip or not, and it gets the corners right for free: a card filling a rounded
-scroller is cornered by the scroller, where a box intersection would publish
-the scroller's square corners.
+**The clips are shapes here too** — every one a command is cut by, its first
+and each down its chain. At any scanline the overlap is the overlap of all
+their spans — exact, turned clips or not, and it gets the corners right for
+free: a card filling a rounded scroller is cornered by the scroller, where a box
+intersection would publish the scroller's square corners.
 
 **A span is a list, and the scoop is why.** Every other curvature bounds a
 convex region, which a horizontal line meets in one interval. A scoop does not:
@@ -417,12 +417,6 @@ the convex part and `take_bites_from` removes what each disc covers. A band is c
 *every* height in it, so each disc is taken at its widest across the band: the
 widest part of a bite can sit strictly between two scanlines, which is not
 something a convex boundary can do.
-
-**One clip, though.** What arrives is one resolved shape, which
-`intersect_clips` has already collapsed from the chain the clip tree holds.
-That collapse is exact when the two spaces differ by a scale, a quarter turn or
-a mirror, and is the box around both for any other angle. What this consumer escapes is the *shape against clip* box intersection,
-not the clip chain's own.
 
 **`clamp_radii` is the shader's clamp**, each corner cut to at most half the
 smaller side. It used to be the proportional CSS `border-radius` rule instead,
@@ -450,10 +444,10 @@ pub struct FlattenedCommand {
 ```
 
 `clip` is a reference into the frame's clip tree, and
-`FlattenedCommand::clip()` is what resolves it to the `PlacedShape` every
-pipeline takes. The half dozen reads in `render.rs` are the only places that
-resolution happens, which is why nothing below them changed when the
-representation did.
+`FlattenedCommand::clip()` is what resolves it to the `ResolvedClip` every
+pipeline takes: a first `PlacedShape`, and the index of the rest of its chain
+in the frame's `ClipChains` — see "Clips inside clips" below. The reads in
+`render.rs` and `region.rs` are the only places that resolution happens.
 
 ### PlacedShape
 
@@ -487,27 +481,68 @@ Keeping the declaration answers every consumer:
 | --- | --- |
 | the shape shader | `PlacedShape::to_local` inverts the placement, and the *vertex* stage carries each corner into the clip's own space — the map is affine, so the fragment gets an interpolated `clip_pos` and no matrix at all. There the shape is a rounded rect again and the radii are circles rather than ellipses |
 | images (`image_quad.rs`) | the same map, applied on the CPU to the quad's four corners, for the same reason |
-| transformed text (`text_quad.rs`) | the same map again, on the same quad — it is the image pipeline with a glyph texture in it, and it takes the same `QuadClip::shape` |
-| upright text (glyphon) | `world_aabb()` — `TextBounds` is four integers and glyphon has nowhere to put a shape. Exact all the same: a text the box would cut differently from the shape is routed to the quad above instead, which is what `PlacedShape::box_cuts_like_the_shape` decides (#405) |
-| the backdrop pass | both: `world_aabb()` narrows the viewport, because a viewport is four integers, and then each fragment is carried into the clip's own space and tested there, so a rounded scroller keeps its corners |
-| compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is the clip, intersected scanline by scanline rather than as a box. The clip *chain* is still collapsed before it arrives (#397) |
+| transformed text (`text_quad.rs`) | the same map again, on the same quad — it is the image pipeline with a glyph texture in it, and it takes the same `QuadClip::resolved` |
+| upright text (glyphon) | the box every clip of the chain leaves open — `TextBounds` is four integers and glyphon has nowhere to put a shape. Exact all the same: a text that any one of those boxes would cut differently from its shape is routed to the quad above instead, which is what `PlacedShape::box_cuts_like_the_shape` decides (#405) |
+| the backdrop pass | both: the box every clip leaves open narrows the viewport, because a viewport is four integers, and then each fragment is carried into each clip's own space and tested there, so a rounded scroller keeps its corners |
+| compositor blur and input regions | the *shape*, tessellated by `region::placed_shape_to_rects` — and so is every clip, intersected scanline by scanline rather than as a box |
 
-What one rect and one matrix cannot express is **two clips in two different
-rotated spaces**. `intersect_clips` rebases the second onto the first when
-`Transform::rect_stays_rect` holds between them — a shared placement, or a
-translation, an axis-aligned scale, a quarter turn or a mirror — so nested
-scrollers stay exact, and so does a child turned square-on to its parent — and
-falls back to the enclosing box in world space for any other angle.
+What one rect and one matrix cannot express is **the intersection of most
+pairs of clips** — which is why a clip under another is kept as two shapes
+unless one is exactly enough. That is the next section.
 
-A quarter turn and a mirror send a rect to a rect, and used to be refused with
-the rest because each also moves the top-left corner somewhere else and
-`CornerRadii` is four numbers in a fixed order. `Transform::corner_permutation`
-reads off where each corner lands and `CornerRadii::permuted` follows it, which
-is what Skia's `SkRRect::transform` does under `rectStaysRect` (#397). The
-remaining fallback is what *every* case produced before the clip carried a
-transform, so nothing is worse than it was. GTK's GSK meets the same wall with
-the same single-rounded-rect clip and answers it by rasterising a clip mask;
-that is the door out if the fallback is ever seen.
+### Clips inside clips
+
+A clip placed under another meets it in `ClipTree::cut`, and the two are
+**merged only when one rounded rect is exactly their intersection** —
+`merge_exact` in `src/renderer/clip.rs`, which is Skia's
+`SkRRectPriv::ConservativeIntersect`. The inner clip has to be rewritten in the
+outer's space by a map that sends a rect to a rect and a circle to a circle: a
+shared placement, a translation, a uniform scale, a quarter turn or a mirror,
+with `Transform::corner_permutation` moving the radii the way Skia's
+`SkRRect::transform` does (#397). Then the merge is the two boxes intersected,
+and each corner of that box is read off its corner point. A clip whose shape
+contains the point does not cut there; a clip that does not must own the
+corner — its own corner sits on the point — or the cut is a curve no corner can
+draw. Where both own it, one has to nest in the other, a radius no smaller and
+a curve no rounder, and that one is the corner; a scoop nests only in a larger
+scoop. The corners that end up rounded have to share one curvature, and none
+can be larger than half the intersection's shorter side, where the shader
+would clamp it.
+
+**Everything else is chained.** The clip keeps its own shape as `first`, and
+the parent's resolved first shape is pushed onto the front of the parent's
+chain as a `ClipLink`; the clip's `rest` names that link. The links of a frame
+are one persistent cons-list in `ClipChains`: a parent is pushed once however
+many of its children chain to it, and they all share its tail. It is rebuilt
+every frame on both flatten paths, as the clips are: a chain index means
+something in the frame that made it and in no other. The box every shape of a
+chain leaves open is worked out there too, as `ResolvedClip::open`, for the
+consumers that can take only a box.
+
+| consumer | how it walks a chain |
+| --- | --- |
+| the shape shader | `ShapeInstance::clip_chain`, in the four bytes that padded `gradient_start`, names the first link. The renderer uploads the frame's links as `ClipRecord`s — rect, radii, the physical-to-clip map, curvature and the next index, 64 bytes — into one storage buffer bound at group 1, and the fragment walks it from `@builtin(position)` only when the chain is not empty |
+| images and transformed text | the same, through a `Uint32` vertex attribute in what used to pad the curvature and opacity to a `Float32x4` — the vertex stays 88 bytes — and the same records bound at group 1 |
+| upright text (glyphon) | the box all the shapes leave open, and the quad as soon as any one of them would cut the text differently from its box |
+| the backdrop pass | the viewport is the box all the shapes leave open; the chain head rides in what was padding in `Params`, and the composites walk it |
+| compositor regions | every shape, a scanline at a time |
+
+The shaders combine a chain by the **largest distance, each in pixels of its
+own gradient**, and smooth once: `max(d / fwidth(d))`. A product of coverages
+would darken every edge two clips share, which is every edge a scroller shares
+with the card it fills. An instance with no chain takes the code path it always
+did, so a frame without one costs a branch. The walk is a block every shader
+carries word for word, held there by `tests/shader_sdf_is_one_definition.rs`,
+and capped at 64 links so a broken chain cannot hang the GPU.
+
+The alternatives, and why not: a stencil clip (Flutter's Impeller) needs a
+depth-stencil attachment and breaks batching across clips; a fixed number of
+clips inline in the instance is exact only up to that number and widens every
+instance; a rasterised clip mask (GTK's GSK) is a pass and a texture per
+clipped subtree. `nested_clips_cut_exactly` (at 1x and 2x),
+`nested_clips_cut_images_exactly`, `nested_clips_cut_text_exactly` and
+`backdrop_blur_is_cut_by_a_chain_of_clips` are the goldens; the unit tests
+beside `merge_exact` hold the merge, both ways round.
 
 What nesting costs a frame is `benches/nested_clip`: rounded cards whose child
 clips again, both where the two clips merge exactly and where they do not.
@@ -526,9 +561,9 @@ its own, what it cuts under its parent, and which entry that parent is — the
 shape of Chromium's clip tree, where draw commands reference clip nodes and
 scrolling moves a transform node rather than every clip below it.
 
-Resolution is `FlattenedCommand::clip()`, called at the half dozen places
-`render.rs` and `region.rs` read a clip. The five pipelines and every shader are
-handed the `PlacedShape` they always were.
+Resolution is `FlattenedCommand::clip()`, called at the places `render.rs` and
+`region.rs` read a clip, and what it returns is the `ResolvedClip` the section
+above describes.
 
 ### Incremental Flatten
 
@@ -580,13 +615,14 @@ was a copy of every command drawn, on every painted frame of a surface that
 culls nothing. `flatten_root_into` flattens the root with `replayable` off;
 everything below it is flattened as before.
 
-A clip costs a replay three cases instead, in `ClipTree::replay`. A clip the
+A clip costs a replay two cases instead, in `ClipTree::replay`. A clip the
 subtree placed itself travels with it: translated by the same offset as the
 content, then cut afresh by its parent, so a viewport resized above cuts the
 new intersection rather than the old one shifted. A clip it inherited is not
 its to carry and is looked up where the subtree now finds itself — that is how
-a row scrolls while its scroller does not. An overlay's clip answers to no
-ancestor and is only carried. The references are the ones the cached commands
+a row scrolls while its scroller does not. An overlay's clip is the first kind:
+a ripple is cut by its own node's shape and by every clip above it, so it
+stops at a rounded scroller's arc (#708). The references are the ones the cached commands
 already hold, so a replay writes the shapes through them and touches no
 command.
 
@@ -622,7 +658,7 @@ pub struct ShapeInstance {
     pub clip_radii: [f32; 4],     // in the clip's own space, logical units
     pub clip_inverse: [f32; 6],   // world to clip space, the same 2x3 shape
     pub clip_curvature: f32,
-    pub _pad_clip: f32,
+    pub clip_chain: u32,          // the rest of the clip's chain, or NO_CHAIN
     pub gradient_start: [f32; 4],
     pub gradient_end: [f32; 4],
     pub border_width: f32,

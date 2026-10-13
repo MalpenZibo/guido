@@ -10,11 +10,9 @@
 //!
 //! Now the geometry lives here and both are it. That is what lets a region be
 //! narrowed by a *shape* rather than by a box — the corners of a rounded
-//! scroller cut the card inside it, and a turned clip cuts what it covers. It
-//! does not undo the clip chain's own collapse: a region is narrowed by one
-//! clip, and the chain that produced it was reduced before it arrived — exactly
-//! where the spaces are a quarter turn, a mirror or a scale apart, and to the
-//! box around both otherwise.
+//! scroller cut the card inside it, and a turned clip cuts what it covers. A
+//! chain of clips is a list of these, one per clip that could not be merged
+//! with the one above it — see `src/renderer/clip.rs`.
 
 use crate::layout::Axis;
 use crate::renderer::CornerRadii;
@@ -41,22 +39,19 @@ use smallvec::SmallVec;
 /// rounded rect again and the radii are circles rather than the ellipses a
 /// scaled box would need. The region tessellator cuts bands out of the
 /// transformed outline. Whatever still wants a box asks
-/// [`world_aabb`](Self::world_aabb) for one, and `world_radii` to cut it
-/// with.
+/// [`world_aabb`](Self::world_aabb) for one.
 ///
 /// **Equality is representational.** Two shapes covering the same area with a
 /// different split between `rect` and `placement` compare unequal — which is
 /// the conservative answer wherever the question is "is this the same clip as
 /// last frame", and not an answer about geometry.
 ///
-/// **What it cannot express is two shapes in two different rotated spaces.**
-/// One rect and one matrix describe one parallelogram, and the intersection of
-/// two that are turned differently is not one — unless the turn between them is
-/// a quarter of one, or a mirror, where the image of a rect is still a rect and
-/// `intersect_clips` rewrites one in the other's space. For any other angle it
-/// falls back to the box around both. The tessellator is the exception: it
-/// never writes the intersection down, so it can take both shapes and meet them
-/// a scanline at a time.
+/// **What it cannot express is the intersection of most pairs.** One rect and
+/// one matrix describe one rounded parallelogram, and two of them meet in one
+/// only where `merge_exact` says so: one space up to a quarter turn, a mirror
+/// or a uniform scale, and corners that each belong to one clip or nest.
+/// Every other pair is kept as two shapes, chained, and met by each consumer
+/// as two.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlacedShape {
     /// The rect, in the space of the widget that declared it.
@@ -114,9 +109,10 @@ impl PlacedShape {
     ///
     /// What a clip used to be, and still is for the consumers that cannot take
     /// a shape: glyphon clips text to an integer rect and a viewport is four
-    /// integers. Neither is an approximation any more — a text the box would
-    /// cut differently from the shape is sent down the quad path instead
-    /// (#405), and the backdrop cuts the difference back off per fragment.
+    /// integers — each given the box every clip of a chain leaves open. Neither
+    /// is an approximation any more — a text any of those boxes would cut
+    /// differently from its shape is sent down the quad path instead (#405),
+    /// and the backdrop cuts the difference back off per fragment.
     ///
     /// It is also how a *viewport* is found, which is a different thing and not
     /// an approximation — the backdrop pass narrows the box it may write to and
@@ -125,46 +121,6 @@ impl PlacedShape {
     #[inline]
     pub fn world_aabb(&self) -> Rect {
         self.placement.map_rect(self.rect)
-    }
-
-    /// The corner radii that box is cut with.
-    ///
-    /// Beside [`world_aabb`](Self::world_aabb) because they are one answer:
-    /// the box and the corners of the box.
-    ///
-    /// One radius per corner, so an unevenly scaled corner — an ellipse — has
-    /// to be approximated. **The larger axis, not the mean of the two**: a
-    /// corner that cuts at least as much as the ellipse leaves a region inside
-    /// the shape it stands for, and blurs slightly less than it should. The
-    /// other way round it blurs where nothing is drawn, which is the whole
-    /// class of bug this type exists to close.
-    ///
-    /// The mean is what the geometric `extract_scale` gives and what this
-    /// briefly returned when the elliptical radii were deleted — a direction
-    /// change nobody asked for, in the one place still allowed to approximate.
-    ///
-    /// Nothing that has a choice reads this: the shader tests in the shape's
-    /// own space where the corner is a circle again, and the tessellator cuts
-    /// the placed shape rather than a box with radii bolted on. It is the
-    /// fallback's approximation and nothing else.
-    #[inline]
-    pub(crate) fn world_radii(&self) -> CornerRadii {
-        let (sx, sy) = self.placement.extract_scale_components();
-        self.radii.scaled(sx.max(sy))
-    }
-
-    /// This shape reduced to its world box — what a clip would have been
-    /// before it carried a transform.
-    ///
-    /// The shape is lost here, deliberately: this is the fallback for the one
-    /// case a rect and a matrix cannot describe.
-    pub(crate) fn flattened(&self) -> Self {
-        Self {
-            rect: self.world_aabb(),
-            radii: self.world_radii(),
-            curvature: self.curvature,
-            placement: Transform::IDENTITY,
-        }
     }
 
     /// The map into this shape's space, from the *physical* pixels a shader
@@ -180,6 +136,20 @@ impl PlacedShape {
         clamp_radii(self.radii, self.rect.width, self.rect.height)
     }
 
+    /// How far `(x, y)`, in this shape's own space, is from its edge: negative
+    /// inside. The distance the shaders cut with, through the one Rust copy of
+    /// it that `tests/shader_sdf_is_one_definition.rs` holds to them.
+    pub(crate) fn distance(&self, x: f32, y: f32) -> f32 {
+        self.rect.shape_distance(
+            x,
+            y,
+            crate::widgets::Corners {
+                radii: self.radii,
+                curvature: self.curvature,
+            },
+        )
+    }
+
     /// Where the shape starts and stops, vertically, on the surface.
     #[inline]
     pub(crate) fn y_bounds(&self) -> (f32, f32) {
@@ -187,13 +157,13 @@ impl PlacedShape {
     }
 
     /// Whether this shape is simply a rectangle on the surface: no turn, no
-    /// skew, and corners too small to round away a whole pixel.
+    /// skew, and corners of half a pixel or less (see `is_square`).
     ///
     /// Half a pixel is a *surface* measurement and the radii are in the
     /// widget's own space, so the two only mean the same thing at a scale of
     /// one: a corner of 0.4 under a `scale(8.0)` is three pixels of curve.
     pub(crate) fn is_a_box(&self) -> bool {
-        self.placement.keeps_axes() && self.largest_corner_on_surface() <= 0.5
+        self.placement.keeps_axes() && is_square(self.largest_corner_on_surface())
     }
 
     /// Whether cutting `ink` to this shape's box cuts it the way the shape
@@ -233,6 +203,13 @@ impl PlacedShape {
         ]
         .into_iter()
         .all(|(radius, cx, cy, dx, dy)| {
+            // A square corner has no wedge: the box is the shape there. As a
+            // box of no size it still overlapped any ink covering the corner
+            // point, and sent a text the box cuts exactly to the quad path.
+            // Square by the rule `is_a_box` uses, measured on the surface.
+            if is_square(radius * sx.max(sy)) {
+                return true;
+            }
             let (w, h) = (radius * sx * dx, radius * sy * dy);
             let wedge = Rect::new(cx.min(cx + w), cy.min(cy + h), w.abs(), h.abs());
             !overlaps(wedge, ink)
@@ -798,6 +775,14 @@ impl Arc {
     }
 }
 
+/// Whether a corner of this radius, measured on the surface, is square: too
+/// small to round away half a pixel. The one threshold both
+/// [`PlacedShape::is_a_box`] and [`PlacedShape::box_cuts_like_the_shape`]
+/// read, so a shape that is a box for one is cut like a box by the other.
+fn is_square(radius_on_surface: f32) -> bool {
+    radius_on_surface <= 0.5
+}
+
 /// Whether two rects share any area at all. Touching edges do not count: a
 /// corner box and an ink box that meet exactly are cut the same by either.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -1151,6 +1136,20 @@ mod tests {
         // A square clip is its own box, wherever the ink is.
         let square = card(0.0, Transform::IDENTITY);
         assert!(square.box_cuts_like_the_shape(Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert!(
+            square.box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 220.0, 120.0)),
+            "ink running past every corner point is still cut by the box, which \
+             is the shape — a square corner has no wedge to reach into"
+        );
+        // Under half a pixel is square, as `is_a_box` counts it; past it, a
+        // corner rounds a pixel away and the box would not cut like it.
+        let hairline = card(0.3, Transform::IDENTITY);
+        assert!(hairline.is_a_box());
+        assert!(hairline.box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 220.0, 120.0)));
+        assert!(
+            !card(0.3, Transform::scale(4.0))
+                .box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 900.0, 500.0))
+        );
 
         let rounded = card(30.0, Transform::IDENTITY);
         // Down the middle, clear of all four corner boxes.

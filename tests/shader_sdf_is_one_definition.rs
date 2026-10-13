@@ -1,4 +1,5 @@
 //! The corner geometry is written three times, and the three have to agree.
+//! So is the walk down a clip chain that cuts with it.
 //!
 //! WGSL has no include. A clip is one shape and a corner is one curve, but the
 //! pipelines that cut them are three — the shape shader, the textured quad
@@ -47,23 +48,30 @@ const SHADERS: [&str; 3] = [
     "src/renderer/textured_quad_shader.wgsl",
     "src/renderer/backdrop_shader.wgsl",
 ];
-const START: &str = "// === SHARED SDF";
-const END: &str = "// === END SHARED SDF ===";
+/// The corner geometry, and the walk down a clip chain that cuts with it.
+/// Each pair delimits a block every shader carries word for word.
+const BLOCKS: [(&str, &str); 2] = [
+    ("// === SHARED SDF", "// === END SHARED SDF ==="),
+    (
+        "// === SHARED CLIP CHAIN",
+        "// === END SHARED CLIP CHAIN ===",
+    ),
+];
 
-fn block(path: &str) -> String {
+fn block(path: &str, (open, close): (&str, &str)) -> String {
     let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
         .unwrap_or_else(|e| panic!("{path}: {e}"));
     let start = source
-        .find(START)
-        .unwrap_or_else(|| panic!("{path} has no `{START}` marker — every shader that cuts a corner carries the shared block"));
-    let end = source.find(END).unwrap_or_else(|| {
-        panic!("{path} opens the shared block and never closes it with `{END}`")
+        .find(open)
+        .unwrap_or_else(|| panic!("{path} has no `{open}` marker — every shader that cuts a corner carries the shared block"));
+    let end = source.find(close).unwrap_or_else(|| {
+        panic!("{path} opens the shared block and never closes it with `{close}`")
     });
     assert!(
         end > start,
         "{path}: the shared block's markers are inverted"
     );
-    source[start..end + END.len()].to_owned()
+    source[start..end + close.len()].to_owned()
 }
 
 /// Character for character, comments included — because a comment that drifts
@@ -71,9 +79,16 @@ fn block(path: &str) -> String {
 /// comparison is the only one nobody has to maintain.
 #[test]
 fn every_shader_that_cuts_a_corner_cuts_the_same_one() {
-    let reference = block(SHADERS[0]);
+    for markers in BLOCKS {
+        every_shader_carries_the_same(markers);
+    }
+}
+
+fn every_shader_carries_the_same(markers: (&str, &str)) {
+    let (open, close) = markers;
+    let reference = block(SHADERS[0], markers);
     for path in &SHADERS[1..] {
-        let other = block(path);
+        let other = block(path, markers);
         if other != reference {
             let mismatch = reference
                 .lines()
@@ -83,7 +98,7 @@ fn every_shader_that_cuts_a_corner_cuts_the_same_one() {
                 .unwrap_or_else(|| "one is a prefix of the other".to_owned());
             panic!(
                 "{path} and {} have drifted apart: {mismatch}.\n\
-                 Copy the block between `{START}` and `{END}` from one to the other — \
+                 Copy the block between `{open}` and `{close}` from one to the other — \
                  every shader cuts the same corner, and #403 is what happens when they do not. \
                  `Rect::shape_distance` in src/widgets/widget.rs is a fourth copy in Rust; \
                  if the curve itself is changing, it changes too.",
@@ -100,11 +115,18 @@ fn every_shader_calls_the_shared_function_it_carries() {
     for path in &SHADERS {
         let source =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        // The definition, the call down the chain, and the shader's own.
         let calls = source.matches("rounded_rect_sdf(").count();
         assert!(
-            calls >= 2,
+            calls >= 3,
             "{path} defines `rounded_rect_sdf` and never calls it — \
              the shared block is carried but some other corner is being cut"
+        );
+        let walks = source.matches("chain_distance(").count();
+        assert!(
+            walks >= 2,
+            "{path} carries the clip-chain walk and never takes it — \
+             a clip that could not be merged is cut by its first shape alone"
         );
     }
 }

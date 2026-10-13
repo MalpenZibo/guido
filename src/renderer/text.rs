@@ -14,6 +14,8 @@ use crate::render_stats::{self, Pipeline};
 use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
 use crate::widgets::{Rect, TextAlign, TextOverflow};
 
+use super::clip::ClipChains;
+
 use super::text_measurer::LineFit;
 use super::types::TextEntry;
 
@@ -606,12 +608,14 @@ impl TextRenderState {
     /// Returns the indices, within `texts`, that need the textured-quad path —
     /// borrowed from the scratch they were sorted into, so the group's own
     /// prepare is the one that reads them.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_layer(
         &mut self,
         slot: usize,
         device: &Device,
         queue: &Queue,
         texts: &[TextEntry],
+        chains: &ClipChains,
         screen: (u32, u32),
         scale_factor: f32,
     ) -> &[usize] {
@@ -651,7 +655,7 @@ impl TextRenderState {
             let laid_out = laid_out_in(entry);
             if entry
                 .clip
-                .is_some_and(|clip| falls_outside(laid_out, clip.world_aabb()))
+                .is_some_and(|clip| falls_outside(laid_out, clip.open))
             {
                 // Text is completely outside clip - skip it entirely
                 continue;
@@ -677,9 +681,14 @@ impl TextRenderState {
             // path the box would have cut correctly, costing a rasterization;
             // too tight leaves ink outside its clip, which is the defect.
             let ink = laid_out.outset(entry.font_size * 0.5);
-            let box_will_not_do = entry
-                .clip
-                .is_some_and(|clip| !clip.box_cuts_like_the_shape(ink));
+            // Every shape the text is cut by is asked, not only the first: the
+            // box glyphon is given is all of theirs intersected, and that cuts
+            // like the shapes exactly when each one's box cuts like its shape.
+            let box_will_not_do = entry.clip.as_ref().is_some_and(|clip| {
+                chains
+                    .shapes(clip)
+                    .any(|shape| !shape.box_cuts_like_the_shape(ink))
+            });
             if moved || box_will_not_do {
                 self.transformed_indices.push(idx);
                 continue; // Skip transformed text in direct rendering
@@ -733,13 +742,13 @@ impl TextRenderState {
                 // Use clip rect if provided, otherwise use full screen
                 // Clip bounds stay in screen space - don't apply transform translation
                 // (text position is transformed, but clip region should remain fixed)
-                // The box around the clip, because `TextBounds` is four
+                // The box every clip leaves open, because `TextBounds` is four
                 // integers and glyphon has nowhere to put a shape. That is
-                // exact here rather than approximate: a text this box would
-                // cut differently from the shape never reaches this point —
+                // exact here rather than approximate: a text that box would
+                // cut differently from the shapes never reaches this point —
                 // `box_cuts_like_the_shape` sent it down the quad path
                 // instead, which tests in the clip's own space (#405).
-                let bounds = if let Some(clip_rect) = &entry.clip.map(|c| c.world_aabb()) {
+                let bounds = if let Some(clip_rect) = &entry.clip.map(|c| c.open) {
                     TextBounds {
                         left: (clip_rect.x * scale_factor) as i32,
                         top: (clip_rect.y * scale_factor) as i32,
@@ -889,8 +898,15 @@ mod scratch_survives_the_frame {
 
         let frame = |state: &mut TextRenderState, texts: &[TextEntry]| {
             state.begin_frame(&gpu.queue, (200, 100));
-            let transformed =
-                state.prepare_layer(0, &gpu.device, &gpu.queue, texts, (200, 100), 1.0);
+            let transformed = state.prepare_layer(
+                0,
+                &gpu.device,
+                &gpu.queue,
+                texts,
+                &Default::default(),
+                (200, 100),
+                1.0,
+            );
             let quads = transformed.to_vec();
             state.end_frame();
             quads
@@ -982,8 +998,15 @@ mod a_text_is_culled_only_when_an_axis_has_collapsed {
         for (transform, culled, what) in cases {
             let texts = [test_entry(box_, transform)];
             state.begin_frame(&gpu.queue, (200, 100));
-            let transformed =
-                state.prepare_layer(0, &gpu.device, &gpu.queue, &texts, (200, 100), 1.0);
+            let transformed = state.prepare_layer(
+                0,
+                &gpu.device,
+                &gpu.queue,
+                &texts,
+                &Default::default(),
+                (200, 100),
+                1.0,
+            );
             let quads = transformed.to_vec();
             let kept = state.kept.len();
             state.end_frame();
@@ -1932,7 +1955,15 @@ pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
         for text in frames {
             state.begin_frame(&gpu.queue, screen);
             let texts = [page(text, Transform::IDENTITY)];
-            state.prepare_layer(0, &gpu.device, &gpu.queue, &texts, screen, 1.0);
+            state.prepare_layer(
+                0,
+                &gpu.device,
+                &gpu.queue,
+                &texts,
+                &Default::default(),
+                screen,
+                1.0,
+            );
             state.end_frame();
             gpu.queue.submit([]);
         }

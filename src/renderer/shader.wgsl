@@ -56,6 +56,8 @@ struct InstanceInput {
     // world (physical pixels) to clip space, the same row-major 2x3
     clip_inverse: array<f32, 6>,
     clip_curvature: f32,
+    // where the clip continues in `clip_records`, or NO_CHAIN
+    clip_chain: u32,
     gradient_start: vec4<f32>,
     gradient_end: vec4<f32>,
     border_width: f32,
@@ -65,6 +67,9 @@ struct InstanceInput {
 }
 
 @group(0) @binding(1) var<storage, read> instances: array<InstanceInput>;
+
+// The frame's clip chains — see the shared clip-chain block below.
+@group(1) @binding(0) var<storage, read> clip_records: array<ClipRecord>;
 
 // === Vertex Output ===
 
@@ -105,6 +110,8 @@ struct VertexOutput {
     @location(13) @interpolate(flat) gradient_type: u32,
     // clip corner radii, in the clip's own space
     @location(14) clip_radii: vec4<f32>,
+    // where the clip continues in `clip_records`
+    @location(15) @interpolate(flat) clip_chain: u32,
 }
 
 // === Helper Functions ===
@@ -211,6 +218,7 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
     out.clip_rect = instance.clip_rect;
     out.clip_curvature = instance.clip_curvature;
     out.clip_radii = instance.clip_radii;
+    out.clip_chain = instance.clip_chain;
 
     // Pass gradient data to fragment shader
     out.gradient_start = instance.gradient_start;
@@ -322,6 +330,57 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
     return inside + corner_dist - r;
 }
 // === END SHARED SDF ===
+
+// === SHARED CLIP CHAIN — three copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// A clip that cannot be merged with the clips above it into one rounded rect
+// keeps them as a chain: `ClipChains` in `src/renderer/clip.rs` builds it,
+// and the renderer uploads it once a frame as `clip_records`, which each
+// pipeline that walks a chain declares for itself. The first shape of a chain
+// is tested as a lone clip always was; the rest are walked here.
+//
+// The shapes are combined by the largest distance, each in pixels of its own
+// gradient, and smoothed once by the caller. A product of coverages would
+// darken an edge two clips share, which is every edge a scroller shares with
+// the card it fills.
+
+struct ClipRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    // physical world pixels to the clip's own space, row-major 2x3
+    inverse: array<f32, 6>,
+    curvature: f32,
+    next: u32,
+}
+
+const NO_CHAIN: u32 = 0xffffffffu;
+
+// A broken chain cannot hang the GPU: no frame nests clips this deep.
+const MAX_CHAIN: u32 = 64u;
+
+// A distance, in pixels: the distance over how fast it changes across one.
+fn pixel_distance(d: f32) -> f32 {
+    return d / max(fwidth(d), 1e-6);
+}
+
+// The largest pixel distance down the chain from `link`, starting at
+// `nearest`, the first shape's own. `at` is the fragment in physical pixels.
+fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
+    var d = nearest;
+    var i = link;
+    for (var n = 0u; n < MAX_CHAIN && i != NO_CHAIN; n = n + 1u) {
+        let r = clip_records[i];
+        let p = vec2<f32>(
+            r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
+            r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
+        );
+        d = max(d, pixel_distance(rounded_rect_sdf(p, r.rect, r.radii, r.curvature)));
+        i = r.next;
+    }
+    return d;
+}
+// === END SHARED CLIP CHAIN ===
 
 // Compute gradient color based on local UV coordinates
 fn compute_gradient_color(
@@ -447,9 +506,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             in.clip_curvature
         );
 
-        // Smooth clip edge (anti-aliased)
-        let clip_aa = fwidth(clip_dist);
-        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+        var clip_alpha: f32;
+        if (in.clip_chain == NO_CHAIN) {
+            // Smooth clip edge (anti-aliased)
+            let clip_aa = fwidth(clip_dist);
+            clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+        } else {
+            let d = chain_distance(in.clip_position.xy, pixel_distance(clip_dist), in.clip_chain);
+            clip_alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+        }
 
         // Apply clip to final result
         final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);

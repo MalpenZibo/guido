@@ -241,10 +241,13 @@ places them, and the shader carries each fragment back into that space before
 testing it. So `Overflow::Hidden` on a container rotated 45° clips its children
 to a rounded square turned 45°, not to the 1.41× larger square around it.
 
-Two clips in two different rotated spaces are the one case a rect and a matrix
-cannot describe, and there the intersection falls back to the box around both.
-Text is the other: glyphon clips to an integer rectangle, so text under a
-rotated clip is still cut by the box.
+**A clip inside a clip is cut by both, exactly.** Where one rounded rect is
+their intersection the two are merged into it; everywhere else — clips turned
+apart, corners that cross, curvatures that differ — the inner keeps its shape
+and the outer is tested beside it, so a scroller filling a rounded card keeps
+the card's corners. Text is cut the same way: glyphon clips to an integer
+rectangle, so a text any clip would cut differently from that rectangle is
+drawn as a texture and cut in the shader instead.
 
 ## Animation Advancement
 
