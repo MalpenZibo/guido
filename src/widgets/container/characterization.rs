@@ -35,6 +35,7 @@ struct H {
     last: Option<(
         std::rc::Rc<RenderNode>,
         Vec<crate::renderer::FlattenedCommand>,
+        crate::renderer::FlattenScratch,
     )>,
 }
 
@@ -111,13 +112,17 @@ impl H {
 
         let root = self.root;
         if !self.tree.needs_paint(root)
-            && let Some((node, commands)) = self.last.clone()
+            && let Some((node, commands, scratch)) = &self.last
         {
             // The gate: nothing is dirty, so nothing repaints and the region
             // comes from the frame still on screen.
-            let blur = crate::blur::regions_from_commands(&commands);
-            let input = crate::region::input_ops_from_commands(&commands);
-            return Frame { node, blur, input };
+            let blur = crate::blur::regions_from_commands(commands, scratch.clip_chains());
+            let input = crate::region::input_ops_from_commands(commands, scratch.clip_chains());
+            return Frame {
+                node: std::rc::Rc::clone(node),
+                blur,
+                input,
+            };
         }
 
         let mut node = RenderNode::new(root.as_u64());
@@ -126,14 +131,10 @@ impl H {
         let node = std::rc::Rc::new(node);
         let mut commands = Vec::new();
         let mut layers = Vec::new();
-        let _ = crate::renderer::flatten_root_into(
-            &node,
-            &mut commands,
-            &mut layers,
-            &mut crate::renderer::FlattenScratch::default(),
-        );
-        let blur = crate::blur::regions_from_commands(&commands);
-        let input = crate::region::input_ops_from_commands(&commands);
+        let mut scratch = crate::renderer::FlattenScratch::default();
+        let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers, &mut scratch);
+        let blur = crate::blur::regions_from_commands(&commands, scratch.clip_chains());
+        let input = crate::region::input_ops_from_commands(&commands, scratch.clip_chains());
 
         // Per child of the root and then `clear_needs_paint(root)`, which is
         // what the loop does: the surface root always repaints, so it is never
@@ -143,7 +144,7 @@ impl H {
             crate::cache_paint_results(&mut self.tree, child);
         }
         self.tree.clear_needs_paint(root);
-        self.last = Some((std::rc::Rc::clone(&node), commands));
+        self.last = Some((std::rc::Rc::clone(&node), commands, scratch));
 
         Frame { node, blur, input }
     }

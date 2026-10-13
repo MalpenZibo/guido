@@ -1883,7 +1883,10 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         if let Some(mut handle) = wayland_state.surface(id)
             && handle.take_blur_resync()
         {
-            let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+            let blur_rects = blur::regions_from_commands(
+                &surface.flattened_commands,
+                surface.flatten_scratch.clip_chains(),
+            );
             handle.sync_blur_region(blur_rects, true);
         }
         render_stats::record_frame_skipped();
@@ -1928,7 +1931,10 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         && let Some(mut handle) = wayland_state.surface(id)
         && (carried.compositor_blur || handle.has_published_blur())
     {
-        let blur_rects = blur::regions_from_commands(&surface.flattened_commands);
+        let blur_rects = blur::regions_from_commands(
+            &surface.flattened_commands,
+            surface.flatten_scratch.clip_chains(),
+        );
         handle.sync_blur_region(blur_rects, false);
     }
 
@@ -1946,7 +1952,10 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
                 frame.width as f32,
                 frame.height as f32,
             ),
-            ops: region::input_ops_from_commands(&surface.flattened_commands),
+            ops: region::input_ops_from_commands(
+                &surface.flattened_commands,
+                surface.flatten_scratch.clip_chains(),
+            ),
         };
         if surface.input_region.as_ref() != Some(&request)
             && let Some(mut handle) = wayland_state.surface(id)

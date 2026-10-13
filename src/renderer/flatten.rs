@@ -2423,7 +2423,7 @@ mod world_geometry_tests {
             both.rect
         );
 
-        let rects = crate::region::placed_shape_to_rects(both, None);
+        let rects = crate::region::placed_shape_to_rects(both, &[]);
         // A rounded corner is the one cut *away*, so the square corner is the
         // covered one. Without the permutation these two swap: the rounding
         // stays on the top-left and the region gives up the wrong wedge.
