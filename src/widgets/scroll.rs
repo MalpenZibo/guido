@@ -137,6 +137,7 @@ pub struct Scroll {
     pub(crate) margin: Prop<f32>,
     pub(crate) min_handle_size: Prop<f32>,
     pub(crate) reserve_gutter: Prop<bool>,
+    pub(crate) fill_viewport: Prop<bool>,
     pub(crate) track: Option<Box<dyn Fn(Container) -> Container>>,
     pub(crate) handle: Option<Box<dyn Fn(Container) -> Container>>,
 }
@@ -151,6 +152,7 @@ impl Scroll {
             margin: Prop::Unset,
             min_handle_size: Prop::Unset,
             reserve_gutter: Prop::Unset,
+            fill_viewport: Prop::Unset,
             track: None,
             handle: None,
         }
@@ -214,6 +216,31 @@ impl Scroll {
     /// `reserve_gutter(false)`.
     pub fn overlay(self) -> Self {
         self.reserve_gutter(false)
+    }
+
+    /// Whether the content is at least as big as the viewport on the
+    /// scrolled axis.
+    ///
+    /// A scrolled axis has no maximum, so a [`fill()`](crate::layout::fill)
+    /// child of the content has nothing to fill and takes its content's size.
+    /// With this on, the content is given the visible size as a minimum, and
+    /// a fill child takes what the rest of the content leaves of it — a footer
+    /// pinned to the bottom of a short list. Content taller than the viewport
+    /// is unaffected, and scrolls. Android calls it `fillViewport`.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// container()
+    ///     .height(300)
+    ///     .scroll(Scroll::vertical().fill_viewport(true))
+    ///     .child(text("a short list"))
+    ///     // Pushes the footer to the bottom until the list outgrows the view.
+    ///     .child(container().height(fill()))
+    ///     .child(text("footer"));
+    /// ```
+    pub fn fill_viewport<M>(mut self, fill: impl IntoSignal<bool, M>) -> Self {
+        self.fill_viewport = fill.into_prop();
+        self
     }
 
     /// The track as it looks with nothing declared.

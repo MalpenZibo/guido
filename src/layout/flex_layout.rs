@@ -172,13 +172,15 @@ impl Flex {
         let cross_align = self.cross_alignment.get_or(CrossAlignment::Stretch);
 
         // Get main/cross axis constraints based on direction
-        let (main_max, cross_min, cross_max) = match axis {
+        let (main_min, main_max, cross_min, cross_max) = match axis {
             Axis::Horizontal => (
+                constraints.min_width,
                 constraints.max_width,
                 constraints.min_height,
                 constraints.max_height,
             ),
             Axis::Vertical => (
+                constraints.min_height,
                 constraints.max_height,
                 constraints.min_width,
                 constraints.max_width,
@@ -242,31 +244,31 @@ impl Flex {
         // that gap only for a fill child given half a pixel or less, which
         // happens only when the row has next to no room left.
         let total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
+        // An axis with no maximum — a scrolled one — has nothing to fill: a
+        // fill child is offered its share of the minimum, which is nothing
+        // unless the scroller fills its viewport, and grows past it to its
+        // content's size, as CSS sizes `flex-grow` in a container of
+        // indefinite size.
+        let bounded = main_max.is_finite();
+        let room = if bounded { main_max } else { main_min };
         let per_fill = if !self.fill_indices.is_empty() {
-            let remaining = (main_max - non_fill_main - total_spacing).max(0.0);
+            let remaining = (room - non_fill_main - total_spacing).max(0.0);
             remaining / self.fill_indices.len() as f32
         } else {
             0.0
         };
-        // An axis with no maximum — a scrolled one — has nothing to fill: a
-        // fill child is offered the axis as it is and takes its content's
-        // size, as CSS sizes `flex-grow` in a container of indefinite size.
-        let (fill_min, fill_max) = if main_max.is_finite() {
-            (per_fill, per_fill)
-        } else {
-            (0.0, f32::INFINITY)
-        };
+        let fill_max = if bounded { per_fill } else { f32::INFINITY };
 
         // Pass 2: layout fill children with tight main-axis constraints
         if !self.fill_indices.is_empty() {
             let fill_constraints = match axis {
                 Axis::Horizontal => Constraints {
-                    min_width: fill_min,
+                    min_width: per_fill,
                     max_width: fill_max,
                     ..child_constraints
                 },
                 Axis::Vertical => Constraints {
-                    min_height: fill_min,
+                    min_height: per_fill,
                     max_height: fill_max,
                     ..child_constraints
                 },
@@ -283,12 +285,6 @@ impl Flex {
 
         // Compute total main-axis usage
         let mut children_main: f32 = self.child_sizes.iter().map(|s| s.main_axis(axis)).sum();
-
-        // Calculate final dimensions
-        let (main_min, cross_constraint_min) = match axis {
-            Axis::Horizontal => (constraints.min_width, constraints.min_height),
-            Axis::Vertical => (constraints.min_height, constraints.min_width),
-        };
 
         // Baseline alignment needs the deepest baseline in the row before it
         // can place anything: every child shifts down by the difference
@@ -310,7 +306,7 @@ impl Flex {
             0.0
         };
 
-        let cross_size = max_cross.max(cross_constraint_min).min(cross_max);
+        let cross_size = max_cross.max(cross_min).min(cross_max);
 
         // For Stretch: if we didn't have a known cross size before, re-layout children
         // with the computed cross size. Fill children get tight main-axis constraints.
@@ -339,14 +335,14 @@ impl Flex {
                 let main_constraint = if child_is_fill { fill_max } else { main_max };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {
-                        min_width: if child_is_fill { fill_min } else { 0.0 },
+                        min_width: if child_is_fill { per_fill } else { 0.0 },
                         min_height: cross_size,
                         max_width: main_constraint,
                         max_height: cross_size,
                     },
                     Axis::Vertical => Constraints {
                         min_width: cross_size,
-                        min_height: if child_is_fill { fill_min } else { 0.0 },
+                        min_height: if child_is_fill { per_fill } else { 0.0 },
                         max_width: cross_size,
                         max_height: main_constraint,
                     },
@@ -868,6 +864,107 @@ mod tests {
         );
         let fill_child = tree.get_children(root)[1];
         assert_eq!(tree.get_origin(fill_child), Some((0.0, 10.0)));
+        assert_eq!(bounds_of(&tree, fill_child).height, 90.0);
+    }
+
+    /// A scroller that fills its viewport gives its content the visible
+    /// height as a minimum, and a fill child takes what the box leaves of it.
+    #[test]
+    fn a_fill_child_in_a_scroller_that_fills_its_viewport_takes_the_rest_of_it() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical().fill_viewport(true))
+                .layout(Flex::column())
+                .children(box_and_fill()),
+        );
+        let fill_child = tree.get_children(root)[1];
+        assert_eq!(tree.get_origin(fill_child), Some((0.0, 10.0)));
+        assert_eq!(bounds_of(&tree, fill_child).height, 90.0);
+    }
+
+    /// The same through a column nested in the scroller: a column that fills
+    /// is as tall as the viewport, and its fill child takes the rest of it.
+    #[test]
+    fn a_filling_column_in_a_scroller_that_fills_its_viewport_is_as_tall_as_it() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical().fill_viewport(true))
+                .child(
+                    container()
+                        .height(fill())
+                        .layout(Flex::column())
+                        .children(box_and_fill()),
+                ),
+        );
+        let column = tree.get_children(root)[0];
+        assert_eq!(bounds_of(&tree, column).height, 100.0);
+        assert_eq!(bounds_of(&tree, tree.get_children(column)[1]).height, 90.0);
+    }
+
+    /// Content taller than the viewport is what scrolls: the minimum is met
+    /// already, the fill child is its content size, and the column its own.
+    #[test]
+    fn content_taller_than_a_filled_viewport_still_scrolls() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical().fill_viewport(true))
+                .child(container().height(fill()).layout(Flex::column()).children([
+                    container().width(10.0).height(150.0),
+                    container().width(10.0).height(fill()),
+                ])),
+        );
+        let column = tree.get_children(root)[0];
+        assert_eq!(bounds_of(&tree, column).height, 150.0);
+        assert_eq!(bounds_of(&tree, tree.get_children(column)[1]).height, 0.0);
+    }
+
+    /// A scroller with no height inside another scroller's content has no
+    /// viewport to fill on that axis, and asking it to adds no minimum.
+    #[test]
+    fn filling_an_unbounded_viewport_adds_no_minimum() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container().height(100.0).scroll(Scroll::vertical()).child(
+                container()
+                    .scroll(Scroll::vertical().fill_viewport(true))
+                    .layout(Flex::column())
+                    .children(box_and_fill()),
+            ),
+        );
+        let inner = tree.get_children(root)[0];
+        assert_eq!(bounds_of(&tree, inner).height, 10.0);
+        assert_eq!(bounds_of(&tree, tree.get_children(inner)[1]).height, 0.0);
+    }
+
+    /// `fill_viewport` is read under layout tracking, so writing it lays the
+    /// content out again.
+    #[test]
+    fn writing_fill_viewport_lays_the_content_out_again() {
+        let fills = create_signal(false);
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .height(100.0)
+                .scroll(Scroll::vertical().fill_viewport(fills))
+                .layout(Flex::column())
+                .children(box_and_fill()),
+        );
+        let fill_child = tree.get_children(root)[1];
+        assert_eq!(bounds_of(&tree, fill_child).height, 0.0);
+
+        fills.set(true);
+        frame(&mut tree, root);
         assert_eq!(bounds_of(&tree, fill_child).height, 90.0);
     }
 }

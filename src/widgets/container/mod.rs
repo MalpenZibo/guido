@@ -399,6 +399,8 @@ pub(super) struct ScrollData {
     pub(super) metrics: ScrollbarMetrics,
     /// What `visibility` said when layout last read it.
     pub(super) scrollbar_visibility: ScrollbarVisibility,
+    /// What `fill_viewport` said when layout last read it.
+    pub(super) fill_viewport: bool,
     pub(super) scroll_state: ScrollState,
     pub(super) v_scrollbar_track_id: Option<WidgetId>,
     pub(super) v_scrollbar_handle_id: Option<WidgetId>,
@@ -420,6 +422,7 @@ impl ScrollData {
             scroll,
             metrics: ScrollbarMetrics::default(),
             scrollbar_visibility: ScrollbarVisibility::Always,
+            fill_viewport: false,
             scroll_state: ScrollState::default(),
             v_scrollbar_track_id: None,
             v_scrollbar_handle_id: None,
@@ -605,6 +608,7 @@ impl Container {
         };
         data.metrics = metrics;
         data.scrollbar_visibility = visibility;
+        data.fill_viewport = scroll.fill_viewport.get_or(false);
     }
 
     /// Where this container draws itself and its children against where it

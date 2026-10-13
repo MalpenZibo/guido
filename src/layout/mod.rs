@@ -288,6 +288,8 @@ pub fn at_most(max: impl IntoF32) -> Length {
 ///
 /// On an axis with no maximum — the scrolled axis of a scroller's content —
 /// there is no space to fill, and the length sizes to its content instead.
+/// [`Scroll::fill_viewport`](crate::widgets::Scroll::fill_viewport) is how a
+/// scroller gives it the visible area to fill.
 ///
 /// # Examples
 /// ```

@@ -231,23 +231,35 @@ impl Container {
         let viewport = Size::new(max_width, max_height);
 
         // A scrolled axis is unbounded: the content is free to exceed the
-        // viewport, which is what there is to scroll through.
+        // viewport, which is what there is to scroll through. Filling the
+        // viewport makes the visible size its minimum, so a fill child has
+        // the rest of it to take — where there is one: a scroller with no
+        // maximum of its own has no visible size to make a minimum of.
+        let fills = self.scroll_data.as_ref().is_some_and(|sd| sd.fill_viewport);
+        let floor_of = |visible: f32| {
+            if fills && visible.is_finite() {
+                visible
+            } else {
+                0.0
+            }
+        };
+        let floor = Size::new(floor_of(viewport.width), floor_of(viewport.height));
         let child = match self.scroll_axis {
             ScrollAxis::Vertical => Constraints {
                 min_width: 0.0,
-                min_height: 0.0,
+                min_height: floor.height,
                 max_width,
                 max_height: f32::INFINITY,
             },
             ScrollAxis::Horizontal => Constraints {
-                min_width: 0.0,
+                min_width: floor.width,
                 min_height: 0.0,
                 max_width: f32::INFINITY,
                 max_height,
             },
             ScrollAxis::Both => Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
+                min_width: floor.width,
+                min_height: floor.height,
                 max_width: f32::INFINITY,
                 max_height: f32::INFINITY,
             },
