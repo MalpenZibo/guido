@@ -380,8 +380,8 @@ struct Rows<'a> {
 impl Rows<'_> {
     /// The segment's rows become `new_items`, in their order: a key it had is
     /// reused (a leaving one reclaimed), a key it did not have is built, and a
-    /// row nothing asked for again leaves — from the place it held, if it
-    /// declared an exit, and in this pass if it did not.
+    /// row nothing asked for again leaves — after the nearest row that stood
+    /// before it, if it declared an exit, and in this pass if it did not.
     fn replace(&mut self, old: Vec<(u64, WidgetId)>, new_items: Vec<DynItem>) {
         let start = self.merged.len();
         for &(key, id) in &old {
@@ -417,9 +417,16 @@ impl Rows<'_> {
             self.merged.push(widget_id);
         }
 
-        // What was not asked for again, in the order it stood.
-        for (position, (key, id)) in old.into_iter().enumerate() {
+        // What was not asked for again, in the order it stood. A row that
+        // stays to play its exit goes back after the nearest row that stood
+        // before it and is still here, wherever this change moved that one —
+        // `None` is the front — so its siblings move when it is gone rather
+        // than when it starts to go.
+        let mut after: FxHashMap<Option<u64>, Vec<(u64, WidgetId)>> = FxHashMap::default();
+        let mut before = None;
+        for (key, id) in old {
             if self.cached.remove(&key).is_none() {
+                before = Some(key);
                 continue;
             }
             let was_leaving = self.leaving.contains_key(&key);
@@ -429,12 +436,8 @@ impl Rows<'_> {
                 self.begin_leaving(id)
             };
             if stays {
-                // It keeps its slot, so its siblings move when it is gone
-                // rather than when it starts to go.
                 self.leaving.insert(key, id);
-                let at = position.min(self.keys.len());
-                self.keys.insert(at, key);
-                self.merged.insert(start + at, id);
+                after.entry(before).or_default().push((key, id));
             } else if was_leaving {
                 self.leaving.remove(&key);
                 crate::jobs::teardown_widget_subtree(self.tree, id);
@@ -448,6 +451,21 @@ impl Rows<'_> {
                 // read that disposed state.
                 crate::jobs::teardown_widget_subtree(self.tree, id);
             }
+        }
+        if after.is_empty() {
+            return;
+        }
+
+        let keys = std::mem::take(self.keys);
+        let ids = self.merged.split_off(start);
+        let front = after.remove(&None).into_iter().flatten();
+        let rows = keys.into_iter().zip(ids).flat_map(|row| {
+            let behind = after.remove(&Some(row.0)).into_iter().flatten();
+            std::iter::once(row).chain(behind)
+        });
+        for (key, id) in front.chain(rows) {
+            self.keys.push(key);
+            self.merged.push(id);
         }
     }
 
