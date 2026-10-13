@@ -322,6 +322,30 @@ pub(crate) fn resize_request(config: &SurfaceConfig, live: Option<(u32, u32)>) -
     (width, height, needs_content_measure(config))
 }
 
+/// The axes the content-measure pass holds still while it measures the others:
+/// `None` for a content axis, which is what it measures.
+///
+/// A fixed axis is held at the value it was given, not at `confirmed`: a
+/// `set_size` earlier in the same pass has just asked for that value and the
+/// compositor has not confirmed it yet, so holding the confirmed size would ask
+/// for the old one last. An axis the compositor owns has no value of ours, and
+/// is held at what the compositor says.
+pub(crate) fn measure_pins(
+    config: &SurfaceConfig,
+    confirmed: (u32, u32),
+) -> (Option<u32>, Option<u32>) {
+    let (owned_w, owned_h) = compositor_owned_axes(config.anchor);
+    let pin = |extent: SurfaceExtent, owned: bool, confirmed: u32| match extent {
+        SurfaceExtent::Content => None,
+        SurfaceExtent::Fixed(_) if owned => Some(confirmed),
+        SurfaceExtent::Fixed(v) => Some(v),
+    };
+    (
+        pin(config.width, owned_w, confirmed.0),
+        pin(config.height, owned_h, confirmed.1),
+    )
+}
+
 /// What a surface declares the moment it is created.
 ///
 /// One function because there are two callers and they must not disagree — the
@@ -1237,6 +1261,21 @@ pub fn surface_handle(id: SurfaceId) -> SurfaceHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fixed axis is held at its own value, an owned one at what the
+    /// compositor confirmed, and a content axis is left to the measure.
+    #[test]
+    fn a_measure_holds_fixed_axes_at_their_value_and_owned_ones_at_the_compositors() {
+        let confirmed = (300, 32);
+        let free = SurfaceConfig::new().width(content()).height(48);
+        assert_eq!(measure_pins(&free, confirmed), (None, Some(48)));
+
+        let stretched = SurfaceConfig::new()
+            .width(200)
+            .height(content())
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+        assert_eq!(measure_pins(&stretched, confirmed), (Some(300), None));
+    }
 
     /// The doc promises "the same shorthands a `Padding` takes, in the same
     /// order". The two types are written out separately — one holds i32 for the

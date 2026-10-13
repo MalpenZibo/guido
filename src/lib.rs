@@ -1729,8 +1729,8 @@ fn layout_pass<P: Platform>(
         // clamps to the surface, so a measured rect can never exceed
         // it. The measure reads animation TARGETS, so an animated
         // growth resizes once and the animation plays inside.
-        let fixed_w = (!surface.config.width.is_content()).then_some(frame.width);
-        let fixed_h = (!surface.config.height.is_content()).then_some(frame.height);
+        let (fixed_w, fixed_h) =
+            surface::measure_pins(&surface.config, (frame.width, frame.height));
         let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
         tree.layout_widget(surface.widget_id, constraints);
         // Compared as they will be *asked for*, not as they were measured. On an
