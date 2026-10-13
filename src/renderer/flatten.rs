@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::clip::{ClipIndex, ClipRef, ClipTree, Under};
+use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, Under};
 use super::commands::{CornerRadii, DrawCommand};
 use super::tree::{CachedFlatten, RenderNode};
 use crate::shape::PlacedShape;
@@ -309,6 +309,8 @@ pub struct ScratchCapacity {
     pub rects: usize,
     /// Clips its clip tree can hold.
     pub clips: usize,
+    /// Links the chains those clips hang from can hold.
+    pub clip_links: usize,
 }
 
 impl FlattenScratch {
@@ -327,7 +329,16 @@ impl FlattenScratch {
                 .map(LayerBounds::heap_rects)
                 .sum(),
             clips: self.clips.capacity(),
+            clip_links: self.clips.link_capacity(),
         }
+    }
+
+    /// The chains the clips of the frame just flattened hang from, which the
+    /// [`ResolvedClip`](super::clip::ResolvedClip) each command's clip resolves
+    /// to points into. Good until the next frame is flattened through this
+    /// scratch, and no longer.
+    pub fn clip_chains(&self) -> &ClipChains {
+        self.clips.chains()
     }
 
     /// Empty every buffer, keeping what each one is holding.

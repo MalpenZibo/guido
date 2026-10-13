@@ -301,6 +301,16 @@ impl Rect {
         .fold(0.0f32, f32::max)
     }
 
+    /// The area two rects share, or `None` where they share none — touching
+    /// edges included, which share no area.
+    pub fn intersection(&self, other: &Rect) -> Option<Rect> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        (right > x && bottom > y).then(|| Rect::new(x, y, right - x, bottom - y))
+    }
+
     pub fn intersects(&self, other: &Rect) -> bool {
         self.x < other.x + other.width
             && self.x + self.width > other.x
@@ -346,7 +356,7 @@ impl Rect {
 
     /// Distance from the point to the shape's edge: negative inside, positive
     /// outside. Mirrors `rounded_rect_sdf` in `shader.wgsl`.
-    fn shape_distance(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> f32 {
+    pub(crate) fn shape_distance(&self, x: f32, y: f32, corners: crate::widgets::Corners) -> f32 {
         let (cx, cy) = (self.x + self.width * 0.5, self.y + self.height * 0.5);
         let (hx, hy) = (self.width * 0.5, self.height * 0.5);
         let (rx, ry) = (x - cx, y - cy);

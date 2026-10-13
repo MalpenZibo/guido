@@ -180,6 +180,20 @@ impl PlacedShape {
         clamp_radii(self.radii, self.rect.width, self.rect.height)
     }
 
+    /// How far `(x, y)`, in this shape's own space, is from its edge: negative
+    /// inside. The distance the shaders cut with, through the one Rust copy of
+    /// it that `tests/shader_sdf_is_one_definition.rs` holds to them.
+    pub(crate) fn distance(&self, x: f32, y: f32) -> f32 {
+        self.rect.shape_distance(
+            x,
+            y,
+            crate::widgets::Corners {
+                radii: self.radii,
+                curvature: self.curvature,
+            },
+        )
+    }
+
     /// Where the shape starts and stops, vertically, on the surface.
     #[inline]
     pub(crate) fn y_bounds(&self) -> (f32, f32) {
