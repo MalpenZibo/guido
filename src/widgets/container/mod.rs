@@ -1916,13 +1916,16 @@ impl Widget for Container {
         // below it (a collapsed submenu used to do exactly that).
         let clips_children = self.overflow_resolved.get() == Overflow::Hidden
             || self.scroll_axis != ScrollAxis::None;
+        // The clip is the drawn shape, corners included (#704); nested clips
+        // intersect because each tests in its own frame.
+        //
         // An event with no position falls outside nothing; it reaches the
         // children owed one, and they answer no, because their own bounds
         // test is given the same absence.
         let outside_clip = clips_children
             && local_event
                 .coords()
-                .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
+                .is_some_and(|at| !hit.contains(Some(at)));
 
         let children = self.children_source.get();
         // A pointer event goes to the children that can be under its point —
