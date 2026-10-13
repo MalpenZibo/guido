@@ -2357,6 +2357,60 @@ fn a_content_sized_surface_follows_content_that_grows() {
     );
 }
 
+/// The sizes a surface asked for, and the zones it reserved.
+type Asked = (Vec<(u32, u32)>, Vec<i32>);
+
+/// A 300x32 surface on the top edge, reserving what it is, holding a 240x32
+/// container — then turned content-wide and given `height` in one call.
+/// Returns the sizes it asked for and the zones it reserved, after one step.
+fn resize_to_content_wide(height: u32) -> Option<Asked> {
+    let mut app = headless()?;
+    let bar = app.surface(
+        SurfaceConfig::new()
+            .width(300)
+            .height(32)
+            .anchor(Anchor::TOP)
+            .exclusive_zone(ExclusiveZone::Auto),
+        || container().width(240.0).height(32.0),
+    );
+    app.configure(bar, 300, 32, 1.0);
+    app.step();
+
+    surface_handle(bar).set_size(content(), height);
+    app.step();
+    Some((
+        app.sizes_asked(bar).to_vec(),
+        app.exclusive_zones_asked(bar).to_vec(),
+    ))
+}
+
+/// A fixed axis given a new value in the call that turns the other one to
+/// content keeps that value: the measure that follows pins it to what was just
+/// asked for, not to what the compositor last confirmed — which would ask for
+/// the old height last while reserving the new one.
+#[test]
+fn a_surface_turned_content_wide_keeps_the_height_it_was_just_given() {
+    let Some((sizes, zones)) = resize_to_content_wide(48) else {
+        return;
+    };
+    assert_eq!(
+        sizes,
+        [(300, 32), (300, 48), (240, 48)],
+        "the last size asked carries the new height"
+    );
+    assert_eq!(zones, [32, 48], "and the reservation follows it");
+}
+
+/// The control: a fixed axis that did not change asks what it asked before.
+#[test]
+fn a_surface_turned_content_wide_at_its_own_height_asks_as_before() {
+    let Some((sizes, zones)) = resize_to_content_wide(32) else {
+        return;
+    };
+    assert_eq!(sizes, [(300, 32), (300, 32), (240, 32)]);
+    assert_eq!(zones, [32]);
+}
+
 /// A surface whose height follows an animating child asks for where the
 /// animation is *going*, never for a size it is passing through.
 ///
