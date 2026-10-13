@@ -144,6 +144,10 @@ pub struct Measured {
     /// justified text has lines to stretch: cosmic-text stretches every line
     /// but a paragraph's last.
     pub wraps: bool,
+    /// The widest run no line may break inside — a word, as the line breaker
+    /// finds words — for a text measured to wrap: the narrowest it can be
+    /// before a line runs past its box. Nothing for one that does not wrap.
+    pub longest_word: f32,
 }
 
 pub struct TextMeasurer {
@@ -265,8 +269,27 @@ impl TextMeasurer {
                 height = buffer.metrics().line_height;
             }
 
+            // Read off the shaping already done: cosmic-text splits each
+            // paragraph into words at the places a line may break, whatever
+            // width it then lays them out in.
+            let longest_word = if fit.wrap {
+                let font_size = buffer.metrics().font_size;
+                buffer
+                    .lines
+                    .iter()
+                    .filter_map(|line| line.shape_opt())
+                    .flat_map(|shape| &shape.spans)
+                    .flat_map(|span| &span.words)
+                    .filter(|word| !word.blank)
+                    .map(|word| word.width(font_size))
+                    .fold(0.0, f32::max)
+            } else {
+                0.0
+            };
+
             Measured {
                 size: Size::new(width, height),
+                longest_word,
                 // Empty text still sits on a line, so a lone label in a
                 // baseline row does not jump when its content clears.
                 baseline: baseline.unwrap_or(font_size),
@@ -1262,6 +1285,43 @@ mod letter_spacing_tests {
                     &format!("{text:?} at {spacing} px, boundary {i}"),
                 );
             }
+        }
+    }
+}
+
+/// How narrow a text can be, measured with the vendored font alone.
+#[cfg(test)]
+mod longest_word_tests {
+    use super::line_height_tests::measurer;
+    use super::*;
+
+    /// The narrowest a wrapping text can be is its widest word, not its
+    /// widest glyph: the line breaker breaks between words, and a word is not
+    /// broken to make the text narrower. Read off the same shaping, whatever
+    /// width it was measured at.
+    #[test]
+    fn the_longest_word_is_measured_whole() {
+        let mut m = measurer();
+        let family = FontFamily::name("DejaVu Sans Mono");
+        let mut measure = |text: &str, width: Option<f32>| {
+            m.measure_full(
+                text,
+                14.0,
+                None,
+                family,
+                FontWeight::NORMAL,
+                LineHeight::Normal,
+                0.0,
+                Some(LineFit::wrapping(width)),
+            )
+        };
+        let glyph = measure("a", None).size.width;
+        for width in [None, Some(30.0), Some(500.0)] {
+            let widest = measure("abc defghij kl", width).longest_word;
+            assert!(
+                (widest - 7.0 * glyph).abs() < 0.01,
+                "seven glyphs at {width:?}, got {widest} for a glyph of {glyph}"
+            );
         }
     }
 }

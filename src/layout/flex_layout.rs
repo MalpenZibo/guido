@@ -444,7 +444,30 @@ impl Flex {
             }
         }
 
+        let least = Self::least(ctx.tree_ref(), children, axis, spacing);
+        ctx.set_minimum(least);
         size
+    }
+
+    /// The least the children can be arranged in: along the axis, each one's
+    /// minimum and the gaps those that keep a length keep between them;
+    /// across it, the largest one's. A child's minimum is never more than
+    /// the size it was laid out at, so this is never more than the content.
+    fn least(tree: &Tree, children: &[WidgetId], axis: Axis, spacing: f32) -> Size {
+        let mut along = 0.0f32;
+        let mut across = 0.0f32;
+        let mut kept = 0usize;
+        for &child in children {
+            let least = tree.minimum(child).unwrap_or_default();
+            along += least.main_axis(axis);
+            kept += usize::from(takes_a_gap(least.main_axis(axis)));
+            across = across.max(least.cross_axis(axis));
+        }
+        along += gaps(spacing, kept);
+        match axis {
+            Axis::Horizontal => Size::new(along, across),
+            Axis::Vertical => Size::new(across, along),
+        }
     }
 }
 
@@ -524,6 +547,99 @@ mod tests {
             tree.get_origin(swatch).expect("laid out").1,
             0.0,
             "with nothing else on the line, the box sits at the top"
+        );
+    }
+
+    /// A row records the least its children can be arranged in, with the
+    /// gaps those that keep a length keep between them, and the tallest of
+    /// them across.
+    ///
+    /// The button is padding round an exact box, so it cannot be less than
+    /// both; the clipping panel can be nothing, and keeps no gap; the swatch
+    /// has an exact width.
+    #[test]
+    fn a_row_records_the_least_its_children_can_be() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(Flex::row().spacing(4.0))
+                .child(
+                    container()
+                        .padding(4.0)
+                        .child(container().width(16.0).height(16.0)),
+                )
+                .child(
+                    container()
+                        .overflow(crate::widgets::Overflow::Hidden)
+                        .child(container().width(100.0).height(40.0)),
+                )
+                .child(container().width(10.0).height(10.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+
+        assert_eq!(tree.minimum(root), Some(Size::new(24.0 + 4.0 + 10.0, 24.0)));
+    }
+
+    /// A label stretched to the height of the row it is in is as short as its
+    /// lines, not as the row: a column around the row could otherwise never
+    /// shrink it.
+    #[test]
+    fn a_stretched_label_records_the_height_of_its_lines() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(Flex::row())
+                .child(container().width(10.0).height(100.0))
+                .child(
+                    crate::widgets::text("label")
+                        .font_size(14.0)
+                        .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono")),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+
+        let label = tree.get_children(root)[1];
+        assert_eq!(tree.get_bounds(label).expect("laid out").height, 100.0);
+        let least = tree.minimum(label).expect("laid out").height;
+        assert!(least < 20.0, "one line is the least it can be, got {least}");
+    }
+
+    /// A minimum is recorded with the size it belongs to: a layout skipped as
+    /// clean answers the one it recorded, and a layout that runs again
+    /// records a new one.
+    #[test]
+    fn a_recorded_minimum_survives_a_skip_and_follows_a_change() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let label = create_signal(String::from("abc defgh"));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container().layout(Flex::row()).child(
+                crate::widgets::text(label)
+                    .font_size(14.0)
+                    .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono")),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let glyph = 168.574_22 / 20.0;
+        let least = |tree: &Tree| tree.minimum(root).expect("laid out").width;
+
+        frame(&mut tree, root);
+        assert!((least(&tree) - 5.0 * glyph).abs() < 0.01, "the widest word");
+
+        frame(&mut tree, root);
+        assert!(
+            (least(&tree) - 5.0 * glyph).abs() < 0.01,
+            "a skipped layout still answers it"
+        );
+
+        label.set(String::from("abc defghijk"));
+        frame(&mut tree, root);
+        assert!(
+            (least(&tree) - 8.0 * glyph).abs() < 0.01,
+            "the content changed, and so did the widest word"
         );
     }
 

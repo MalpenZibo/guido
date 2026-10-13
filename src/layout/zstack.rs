@@ -177,9 +177,16 @@ impl Layout for ZStack {
             ctx.layout_child(child_id, child_constraints);
         }
 
+        // The children are drawn over one another, so each needs all of its
+        // own: the stack is as small as the largest of them can be.
+        let mut least = Size::zero();
         for &child_id in children.iter() {
             ctx.tree().set_origin(child_id, origin.0, origin.1);
+            let child = ctx.tree_ref().minimum(child_id).unwrap_or_default();
+            least.width = least.width.max(child.width);
+            least.height = least.height.max(child.height);
         }
+        ctx.set_minimum(least);
 
         size
     }
@@ -206,6 +213,21 @@ mod tests {
     fn child_size(tree: &Tree, root: WidgetId, index: usize) -> Size {
         let child = tree.get_children(root)[index];
         tree.cached_size(child).expect("child was laid out")
+    }
+
+    /// A stack is as small as the least of its children allows, and no
+    /// smaller: they are drawn over one another, so each needs all of its own.
+    #[test]
+    fn a_stack_records_its_largest_minimum() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (tree, root) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(30.0).height(50.0))
+                .child(container().width(50.0).height(20.0)),
+            offered,
+        );
+        assert_eq!(tree.minimum(root), Some(Size::new(50.0, 50.0)));
     }
 
     /// A filling child follows the size its sibling established instead of

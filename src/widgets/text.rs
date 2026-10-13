@@ -453,14 +453,39 @@ impl Widget for Text {
             .max(constraints.min_width)
             .min(constraints.max_width);
         self.cached_overflows = width < measured.size.width;
-        Size::new(
+        let size = Size::new(
             width,
             measured
                 .size
                 .height
                 .max(constraints.min_height)
                 .min(constraints.max_height),
-        )
+        );
+
+        // The narrowest it can be before a line runs past its box: the mark
+        // alone for a text cut with one, its widest word for one that wraps,
+        // and the whole of its widest line for one that does neither. As tall
+        // as its lines, whatever it is offered.
+        let least = if limit.is_some() && overflow != TextOverflow::Clip {
+            measure_text_full(
+                "…",
+                self.cached_font_size,
+                None,
+                self.cached_font_family,
+                self.cached_font_weight,
+                self.cached_line_height,
+                self.cached_letter_spacing,
+                None,
+            )
+            .size
+            .width
+        } else if self.cached_wrap {
+            measured.longest_word
+        } else {
+            measured.size.width
+        };
+        ctx.set_minimum(Size::new(least, measured.size.height));
+        size
     }
 
     /// Notice the pointer, but only for a text that is its own interaction

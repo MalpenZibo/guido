@@ -822,6 +822,17 @@ Layout only recalculates when:
 - Animations are active
 - A tracked signal dependency changes (widget is marked dirty)
 
+A layout can record the least its widget can be on each axis with
+`LayoutCtx::set_minimum`, read back by a parent with `Tree::minimum`: what a
+flex whose children do not fit takes a child down to. It is cached with the
+size, in the one entry a widget's layout cache holds, so a layout skipped as
+clean still answers the minimum it recorded and a layout that runs replaces
+it — nothing is invalidated separately. `Text` records its widest word, its
+`…` or its whole width; a layout records the least its children can be
+arranged in, and the container holding it adds padding over that, keeps an
+exact length rigid, and goes to its declared minimum when it clips or
+scrolls. A widget that records nothing is as small as it was laid out.
+
 ### Partial Paint and Damage Tracking
 
 The paint system tracks which widgets need repainting:

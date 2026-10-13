@@ -220,6 +220,9 @@ struct CachedLayout {
     pass: LayoutPass,
     constraints: Constraints,
     size: Size,
+    /// The least it could be, as the layout recorded it with
+    /// [`LayoutCtx::set_minimum`] — or its size, when it recorded nothing.
+    minimum: Size,
     /// Whether this answer belongs to the pass that asked — because something
     /// below was in flight, or a measure placed a value without spending its
     /// appearance. A settled subtree is neither, and either pass may read it.
@@ -910,6 +913,7 @@ impl Tree {
                 tree,
                 id,
                 clips_children: false,
+                minimum: None,
             };
             // The scope is the widget's own, so what it reads while laying out
             // belongs to it — including a widget from outside the crate, which
@@ -920,7 +924,12 @@ impl Tree {
                     widget.layout(&mut ctx, constraints)
                 });
             let clips = ctx.clips_children;
-            tree.cache_layout(id, constraints, size);
+            // Never more than the size: a box held under its content by a
+            // declared maximum is as small as it is.
+            let minimum = ctx.minimum.map_or(size, |least| {
+                Size::new(least.width.min(size.width), least.height.min(size.height))
+            });
+            tree.cache_answer(id, constraints, size, minimum);
             tree.clear_needs_layout(id);
             // What its children paint, and how far past its own box this one
             // does — both measured against the size it has just answered with,
@@ -2272,6 +2281,12 @@ impl Tree {
     /// When the size changes, the damage covers both the rectangle the
     /// widget used to occupy and the one it occupies now.
     pub fn cache_layout(&mut self, id: WidgetId, constraints: Constraints, size: Size) {
+        self.cache_answer(id, constraints, size, size);
+    }
+
+    /// [`cache_layout`](Self::cache_layout), with the minimum the layout
+    /// recorded beside the size.
+    fn cache_answer(&mut self, id: WidgetId, constraints: Constraints, size: Size, minimum: Size) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
@@ -2293,6 +2308,7 @@ impl Tree {
             pass,
             constraints,
             size,
+            minimum,
             pass_dependent,
         });
         self.dense[idx].cached_size = Some(size);
@@ -2334,6 +2350,19 @@ impl Tree {
             .cached
             .filter(|entry| entry.pass == LayoutPass::Layout)
             .map(|entry| entry.constraints)
+    }
+
+    /// The least `id` can be on each axis, as its last layout recorded it:
+    /// what a flex whose children do not fit takes it down to and no further.
+    /// Never more than the size it was laid out at, and that size itself for
+    /// a widget that recorded nothing — nothing shrinks it.
+    ///
+    /// Recorded with the size, so a layout that is skipped as clean still
+    /// answers the minimum it recorded, and a layout that runs replaces it.
+    pub fn minimum(&self, id: WidgetId) -> Option<Size> {
+        self.dense[self.get_dense_index(id)?]
+            .cached
+            .map(|entry| entry.minimum)
     }
 
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
@@ -2430,6 +2459,19 @@ impl Default for Tree {
 mod tests {
 
     use super::*;
+
+    /// Every widget in every tree is a slot, so a field on it is paid by all
+    /// of them. It held a second layout-cache entry that was always empty,
+    /// and gave it back: what a minimum costs is a size inside the one entry
+    /// there is, not a field of its own.
+    #[test]
+    fn a_slot_is_no_larger_than_its_one_cache_entry_leaves_it() {
+        assert!(
+            size_of::<Slot>() <= 192,
+            "a slot is {} bytes",
+            size_of::<Slot>()
+        );
+    }
 
     /// A hover that flips and flips back within one event changed nothing, so
     /// its callback hears nothing.
@@ -3591,6 +3633,9 @@ pub struct LayoutCtx<'a> {
     /// than published, because what follows from it is measured against the
     /// size the widget has not answered with yet.
     clips_children: bool,
+    /// The least this widget can be, recorded during its layout. Cached
+    /// with the size it answers, which is why it waits here.
+    minimum: Option<Size>,
 }
 
 impl LayoutCtx<'_> {
@@ -3637,6 +3682,21 @@ impl LayoutCtx<'_> {
         self.clips_children = clips;
     }
 
+    /// Record the least this widget can be on each axis: how far a flex
+    /// whose children do not fit may take it down. A widget that records
+    /// nothing is never shrunk. A layout records the least its children can
+    /// be arranged in, which the container holding it reads back with
+    /// [`minimum`](Self::minimum) and records its own over.
+    pub fn set_minimum(&mut self, minimum: Size) {
+        self.minimum = Some(minimum);
+    }
+
+    /// What this layout has recorded with [`set_minimum`](Self::set_minimum)
+    /// so far.
+    pub fn minimum(&self) -> Option<Size> {
+        self.minimum
+    }
+
     /// A context for the tests of what a layout *reads*, which are about the
     /// values rather than about any widget: a layout pass, over a tree, with
     /// nothing in it.
@@ -3646,6 +3706,7 @@ impl LayoutCtx<'_> {
             id: WidgetId::new(0, 0),
             tree,
             clips_children: false,
+            minimum: None,
         }
     }
 
