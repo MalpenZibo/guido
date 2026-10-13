@@ -4674,6 +4674,35 @@ fn a_removed_child_without_an_exit_is_gone_in_the_same_pass() {
     assert!(!h.tree.contains(first));
 }
 
+/// An exit that begins where it is going has nothing to play, for a spring as
+/// for an easing: the row is gone in the pass that removed it (#691). A spring
+/// that never moved used to start a segment from where it was to where it was,
+/// and keep the row until that segment settled.
+#[test]
+fn a_spring_exit_that_begins_where_it_is_going_is_gone_in_the_same_pass() {
+    let step = create_signal(0u32);
+    let mut h = H::new(container().child(move || {
+        step.get();
+        container().width(100.0).height(50.0).translate(
+            Translate::NONE
+                .transition(SpringConfig::SNAPPY)
+                .exiting_to(Translate::NONE),
+        )
+    }));
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 400.0, 400.0);
+    let first = h.children()[0];
+
+    step.set(1);
+    frame_at(&mut h, after(t0, 10), 400.0, 400.0);
+    assert_eq!(
+        h.children().len(),
+        1,
+        "nothing to play, so nothing to wait for"
+    );
+    assert!(!h.tree.contains(first));
+}
+
 /// The direction is known when the change happens, not when the child was
 /// built, so the exit is read at removal.
 #[test]
