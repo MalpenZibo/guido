@@ -39,7 +39,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .width(at_least(300.0))
+                            .width(300.0)
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.8, 0.3))
@@ -65,7 +65,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .width(at_least(300.0))
+                            .width(300.0)
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.5, 0.3))
@@ -92,7 +92,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .width(at_least(250.0))
+                            .width(250.0)
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.3, 0.5, 0.8))
@@ -119,7 +119,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .width(at_least(300.0))
+                            .width(300.0)
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.8, 0.3))
@@ -146,7 +146,7 @@ fn main() {
                     )
                     .child(
                         container()
-                            .width(at_least(300.0))
+                            .width(300.0)
                             .padding(8.0)
                             .background(Color::rgb(0.18, 0.18, 0.24))
                             .border(1.0, Color::rgb(0.8, 0.3, 0.8))

@@ -57,7 +57,7 @@ fn lock_screen(output: OutputInfo) -> Container {
         )
         .child(
             container()
-                .width(at_least(280.0))
+                .width(280.0)
                 .padding(10.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corners(8.0)
