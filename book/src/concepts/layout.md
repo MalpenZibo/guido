@@ -444,6 +444,10 @@ Without this rule the background would expand to all the available space,
 and sizing it to its sibling would need a [WidgetRef](../advanced/widget-ref.md)
 round-trip — one frame behind, and zero on the first frame.
 
+A hidden child leads nothing, just as it takes no space in a flex: while an overlay
+beside a `fill()` background is hidden, the stack is sized as if it were not
+there.
+
 The two axes are decided independently, which is what makes the status-bar
 case work: a child with only `.height(fill())` fills the bar height and still
 leads the width.

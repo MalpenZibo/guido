@@ -904,6 +904,9 @@ impl Event {
 pub struct LayoutHints {
     pub fill_width: bool,
     pub fill_height: bool,
+    /// Hidden, as CSS's `display: none`: it takes no space, so a parent that
+    /// sizes itself from its children leaves it out.
+    pub hidden: bool,
 }
 
 /// Where a widget draws itself and its children, against where it was laid

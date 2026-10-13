@@ -220,8 +220,8 @@ you opening one.
 
 `ctx.tree_ref().with_widget(child_id, |w| w.layout_hints())` reports whether a child
 wants to fill an axis, which is what lets a layout give the remaining space to
-the children that asked for it — `ZStack` in the guido source is the short
-example to read.
+the children that asked for it, and whether it is hidden, which takes no space
+at all — `ZStack` in the guido source is the short example to read.
 
 A layout can record the least its children can be arranged in the same way,
 with `ctx.set_minimum`, reading each child's with
