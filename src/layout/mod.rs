@@ -92,7 +92,8 @@ pub enum Extent {
     Auto,
     /// A size in logical pixels.
     Exact(f32),
-    /// Every pixel the parent offers.
+    /// Every pixel the parent offers. On an axis with no maximum — a
+    /// scrolled one — there is nothing to fill, and it sizes to its content.
     Fill,
     /// A share (0.0..=1.0) of the available space, resolved against the
     /// incoming constraints at layout time. Behaves like an [`Exact`] length
@@ -177,9 +178,14 @@ impl Length {
     /// What the layout asks before passing a minimum down: an exact length and
     /// a fill are both as big as they are going to get, so the children can be
     /// told the whole of the box. The two other extents depend on what is
-    /// inside.
-    pub(crate) fn settled_without_content(&self) -> bool {
-        matches!(self.extent, Extent::Exact(_) | Extent::Fill)
+    /// inside — and so does a fill when `available` has no maximum, because
+    /// there is nothing to fill and it sizes to its content.
+    pub(crate) fn settled_without_content(&self, available: f32) -> bool {
+        match self.extent {
+            Extent::Exact(_) => true,
+            Extent::Fill => available.is_finite(),
+            Extent::Auto | Extent::Fraction(_) => false,
+        }
     }
 
     /// The minimum, where one was declared.
@@ -279,6 +285,9 @@ pub fn at_most(max: impl IntoF32) -> Length {
 }
 
 /// Create a length that fills all available space.
+///
+/// On an axis with no maximum — the scrolled axis of a scroller's content —
+/// there is no space to fill, and the length sizes to its content instead.
 ///
 /// # Examples
 /// ```

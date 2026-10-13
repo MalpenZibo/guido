@@ -37,7 +37,8 @@ use super::{Constraints, Layout, Size};
 /// case work: a child with only `.height(fill())` still leads the width.
 ///
 /// When *every* child fills an axis there is nothing to follow, and the stack
-/// takes all the space it was offered on that axis.
+/// takes all the space it was offered on that axis — or, on an axis with no
+/// maximum, the size of its largest child.
 ///
 /// # Positioning
 ///
@@ -93,15 +94,26 @@ impl Layout for ZStack {
         // for pass 2 — laying it out here would just be thrown away.
         let mut stack = Size::zero();
         let (mut led_width, mut led_height) = (false, false);
+        // An axis with no maximum and nothing to lead it has no space to take
+        // either, and the stack is as big as its children there — so a child
+        // that fills both axes has to be measured after all.
+        let unled = |max: f32, leads: fn(&LayoutHints) -> bool| {
+            !max.is_finite() && !self.hints.iter().any(leads)
+        };
+        let measure_followers = unled(constraints.max_width, |h| !h.fill_width)
+            || unled(constraints.max_height, |h| !h.fill_height);
+        let mut largest = Size::zero();
 
         for (i, &child_id) in children.iter().enumerate() {
             let hints = self.hints[i];
-            if hints.fill_width && hints.fill_height {
+            if hints.fill_width && hints.fill_height && !measure_followers {
                 continue;
             }
             let Some(child_size) = ctx.layout_child(child_id, constraints) else {
                 continue;
             };
+            largest.width = largest.width.max(child_size.width);
+            largest.height = largest.height.max(child_size.height);
             if !hints.fill_width {
                 stack.width = stack.width.max(child_size.width);
                 led_width = true;
@@ -113,12 +125,21 @@ impl Layout for ZStack {
         }
 
         // Nothing leads this axis: there is no sibling size to follow, so the
-        // stack takes the space it was offered.
+        // stack takes the space it was offered — or, with none to offer, the
+        // size of its children.
         if !led_width {
-            stack.width = constraints.max_width;
+            stack.width = if constraints.max_width.is_finite() {
+                constraints.max_width
+            } else {
+                largest.width
+            };
         }
         if !led_height {
-            stack.height = constraints.max_height;
+            stack.height = if constraints.max_height.is_finite() {
+                constraints.max_height
+            } else {
+                largest.height
+            };
         }
         let size = constraints.constrain(stack);
 
@@ -270,5 +291,47 @@ mod tests {
             Some((46.0, 0.0)),
             "the badge should sit at the right edge of the 50px leader"
         );
+    }
+
+    /// With no leader on an axis that has no maximum there is no space to
+    /// take either, so the stack is as big as its children on that axis — and
+    /// every follower is then laid out at that size.
+    #[test]
+    fn all_followers_on_an_unbounded_axis_take_their_childrens_size() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .child(container().width(20).height(30)),
+            )
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .child(container().width(10).height(40)),
+            );
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 0.0, 400.0, f32::INFINITY));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(400.0, 40.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(400.0, 40.0));
+        assert_eq!(child_size(&tree, id, 1), Size::new(400.0, 40.0));
+    }
+
+    /// A leader on an unbounded axis is still followed: a background behind a
+    /// label in scrolled content is as tall as the label, not its own content.
+    #[test]
+    fn a_follower_on_an_unbounded_axis_still_follows_its_leader() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(container().width(fill()).height(fill()))
+            .child(container().width(80).height(20));
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 0.0, 400.0, f32::INFINITY));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(80.0, 20.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(80.0, 20.0));
     }
 }

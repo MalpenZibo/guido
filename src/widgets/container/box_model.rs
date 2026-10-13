@@ -202,7 +202,7 @@ impl Container {
 
         // Pass the effective minimum down so alignments like Center and End
         // know how much room they actually have to place children in.
-        let min_width = if lengths.width.settled_without_content() {
+        let min_width = if lengths.width.settled_without_content(max_width) {
             max_width
         } else {
             let effective = lengths
@@ -214,7 +214,7 @@ impl Container {
                 .max(0.0)
                 .min(max_width)
         };
-        let min_height = if lengths.height.settled_without_content() {
+        let min_height = if lengths.height.settled_without_content(max_height) {
             max_height
         } else {
             let effective = lengths
@@ -335,7 +335,10 @@ impl Container {
         } else {
             match length.extent() {
                 Extent::Exact(exact) => exact,
-                Extent::Fill => parent_max,
+                // An axis with no maximum has nothing to fill, so a fill
+                // length sizes to its content there, as a fraction does.
+                Extent::Fill if parent_max.is_finite() => parent_max,
+                Extent::Fill => content,
                 // A fraction was made exact by `resolve_fraction` before this
                 // ran, so reaching here means the constraints were unbounded
                 // and there was no share to take — which sizes to content, as

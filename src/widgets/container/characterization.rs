@@ -7676,7 +7676,8 @@ fn a_container_declaring_no_decoration_allocates_no_decoration() {
 /// `INFINITY.min(f32::MAX)` is `f32::MAX`, so a sentinel chosen to make the
 /// clamp branch-free turns an unbounded axis into a very large finite one, and
 /// a `fill` or a `fraction` underneath lays out at 3.4e38 — a number that goes
-/// on to be vertex coordinates and a scroll extent.
+/// on to be vertex coordinates and a scroll extent. Both size to their content
+/// on an axis that really is unbounded, so 0 here says the infinity arrived.
 ///
 /// No golden and no snapshot noticed when that happened, because no scenario
 /// laid a container out under an unbounded axis. This is that scenario.
@@ -7691,10 +7692,10 @@ fn an_unbounded_axis_survives_a_length_that_declares_no_maximum() {
 
     let bar = h.children()[0];
     let width = h.tree.cached_size(bar).unwrap().width;
-    assert!(
-        width.is_infinite(),
-        "a fill of an unbounded axis is unbounded; got {width}, so the \
-         infinity became a finite number on the way down"
+    assert_eq!(
+        width, 0.0,
+        "a fill of an unbounded axis sizes to content; any other number means \
+         the infinity became a finite one on the way down"
     );
 
     // And a fraction, which is the other reader of that same `is_finite`.
