@@ -120,10 +120,12 @@ struct Slot {
     needs_paint: bool,
     /// Whether this widget is a relayout boundary
     is_relayout_boundary: bool,
-    /// What each pass last asked for, and what it answered — one entry per
-    /// [`LayoutPass`], because a measure and a layout can want different
-    /// answers from the same widget and neither may be handed the other's.
-    cached: [Option<CachedLayout>; LayoutPass::COUNT],
+    /// What the last layout that ran was asked for, and what it answered,
+    /// with the pass it ran in — because a measure and a layout can want
+    /// different answers from the same widget and neither may be handed the
+    /// other's. One entry, not one per pass: a layout that runs replaces what
+    /// either pass left, so a second entry was only ever empty.
+    cached: Option<CachedLayout>,
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -204,8 +206,6 @@ pub enum LayoutPass {
 }
 
 impl LayoutPass {
-    pub(crate) const COUNT: usize = 2;
-
     /// Whether this pass reads where an animation is going rather than where
     /// it is now.
     pub fn is_measure(self) -> bool {
@@ -216,6 +216,8 @@ impl LayoutPass {
 /// What one pass asked a widget for, and what it answered.
 #[derive(Clone, Copy)]
 struct CachedLayout {
+    /// The pass that ran it.
+    pass: LayoutPass,
     constraints: Constraints,
     size: Size,
     /// Whether this answer belongs to the pass that asked — because something
@@ -755,7 +757,7 @@ impl Tree {
             needs_layout: false,
             needs_paint: true,
             is_relayout_boundary: false,
-            cached: [None; LayoutPass::COUNT],
+            cached: None,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -2287,8 +2289,8 @@ impl Tree {
         // whole subtree's, and there is nothing to walk.
         let pass_dependent = self.pass_dependent;
         let pass = self.pass;
-        self.dense[idx].cached = [None; LayoutPass::COUNT];
-        self.dense[idx].cached[pass as usize] = Some(CachedLayout {
+        self.dense[idx].cached = Some(CachedLayout {
+            pass,
             constraints,
             size,
             pass_dependent,
@@ -2308,20 +2310,16 @@ impl Tree {
     /// spent in one. One shared entry meant a skip across the passes handed
     /// back the other pass's size, or never placed what a measure declined to.
     fn cached_for_pass(&self, id: WidgetId, constraints: Constraints) -> Option<CachedLayout> {
-        let cached = &self.dense[self.get_dense_index(id)?].cached;
         // This pass's own answer, or the other pass's — which may be read only
         // where nothing below would have answered differently. Without that, a
         // measure re-lays out a settled tree it could have read off the layout
         // before it; with it, a value in flight, or an enter a measure declined
         // to spend, is never handed across.
-        cached[self.pass as usize]
-            .filter(|entry| entry.constraints == constraints)
-            .or_else(|| {
-                cached
-                    .iter()
-                    .flatten()
-                    .find(|entry| !entry.pass_dependent && entry.constraints == constraints)
-                    .copied()
+        self.dense[self.get_dense_index(id)?]
+            .cached
+            .filter(|entry| {
+                entry.constraints == constraints
+                    && (entry.pass == self.pass || !entry.pass_dependent)
             })
     }
 
@@ -2332,7 +2330,9 @@ impl Tree {
     /// constraints that boundary was placed under — a question about the tree
     /// on screen rather than about the pass asking.
     pub(crate) fn last_layout_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.dense[self.get_dense_index(id)?].cached[LayoutPass::Layout as usize]
+        self.dense[self.get_dense_index(id)?]
+            .cached
+            .filter(|entry| entry.pass == LayoutPass::Layout)
             .map(|entry| entry.constraints)
     }
 
