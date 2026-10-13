@@ -509,6 +509,9 @@ transform, so nothing is worse than it was. GTK's GSK meets the same wall with
 the same single-rounded-rect clip and answers it by rasterising a clip mask;
 that is the door out if the fallback is ever seen.
 
+What nesting costs a frame is `benches/nested_clip`: rounded cards whose child
+clips again, both where the two clips merge exactly and where they do not.
+
 ### Clips, and why a command only names one
 
 A clip belongs to the node that declared it. Flatten used to resolve the chain
