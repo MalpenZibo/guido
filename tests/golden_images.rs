@@ -1694,6 +1694,32 @@ fn nested_clips_cut_images_exactly() {
     );
 }
 
+/// A text is cut by every clip above it, as a shape is.
+///
+/// Text has two paths and both have to hear about a chain. Glyphon takes four
+/// integers, so it is given the box every clip leaves open, and a text any one
+/// of the clips would cut differently from its box goes to the quad, which
+/// walks the chain in its shader. The same seven pairs as
+/// `nested_clips_cut_exactly`, each holding four lines that run out of it on
+/// the right and reach its corners on the left — so every cell is cut by a
+/// shape, and every cell goes to the quad.
+#[test]
+fn nested_clips_cut_text_exactly() {
+    let lines = || {
+        container().layout(Flex::column()).children(
+            ["MMMMMMMMMM", "WWWWWWWWWW", "MMMMMMMMMM", "WWWWWWWWWW"]
+                .map(|line| box_of(200.0, NESTED_CARD / 4.0).child(label(line, 20.0).nowrap())),
+        )
+    };
+    golden(
+        "nested_clips_cut_text_exactly",
+        NESTED_CLIPS_SIZE,
+        1.0,
+        BACKDROP,
+        nested_clips_of(&lines, lines()),
+    );
+}
+
 /// A text is clipped by the same shape a rectangle is, and follows it through
 /// a rotation.
 ///

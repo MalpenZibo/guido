@@ -11,6 +11,7 @@ use wgpu::{
 };
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask};
+use super::clip::ClipChains;
 use super::clip_records::ClipRecords;
 use super::commands::{CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
@@ -428,7 +429,7 @@ impl Renderer {
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
-        self.prepare_layers(commands, layers);
+        self.prepare_layers(commands, layers, clips);
 
         // A backdrop effect reads pixels already drawn, which a pass cannot do
         // to its own attachment: the frame goes to an offscreen target and is
@@ -577,7 +578,12 @@ impl Renderer {
     ///
     /// Uploads cannot happen inside a render pass, so all shaping, atlas
     /// packing and buffer writes are done here and the pass only issues draws.
-    fn prepare_layers(&mut self, commands: &[FlattenedCommand], layers: &[CommandLayer]) {
+    fn prepare_layers(
+        &mut self,
+        commands: &[FlattenedCommand],
+        layers: &[CommandLayer],
+        clips: &ClipChains,
+    ) {
         let scale = self.scale_factor;
 
         self.shape_instance_buf.clear();
@@ -635,6 +641,7 @@ impl Renderer {
                     &self.device,
                     &self.queue,
                     &self.text_entry_buf,
+                    clips,
                     (self.screen_width as u32, self.screen_height as u32),
                     scale,
                 );
@@ -1001,7 +1008,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             fit: *fit,
             align: *align,
             opacity: cmd.opacity,
-            clip: cmd.clip(),
+            clip: cmd.resolved_clip(),
             transform: cmd.world_transform,
         }),
         _ => None,

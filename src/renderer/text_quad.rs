@@ -378,10 +378,9 @@ impl TextQuadRenderer {
         // rather than the box they sit in. The corners above are in physical
         // world pixels and this is not — `QuadClip::shape` folds the scale into
         // its map, which is what keeps the rect in the units the widget wrote.
-        let clip = entry
-            .clip
-            .as_ref()
-            .map_or(QuadClip::NONE, |clip| QuadClip::shape(clip, scale_factor));
+        let clip = entry.clip.as_ref().map_or(QuadClip::NONE, |clip| {
+            QuadClip::resolved(clip, scale_factor)
+        });
 
         let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
         let vertices: [TexturedVertex; 4] = std::array::from_fn(|i| {

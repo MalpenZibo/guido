@@ -91,6 +91,14 @@ impl ClipChains {
         &self.links
     }
 
+    /// Every shape `clip` is cut by: its first, then down its chain.
+    pub fn shapes<'a>(
+        &'a self,
+        clip: &'a ResolvedClip,
+    ) -> impl Iterator<Item = &'a PlacedShape> + 'a {
+        std::iter::once(&clip.first).chain(self.chain(clip.rest))
+    }
+
     /// The shapes down the chain starting at `rest`, nearest first.
     pub fn chain(&self, rest: u32) -> impl Iterator<Item = &PlacedShape> + '_ {
         let mut at = rest;
@@ -872,6 +880,21 @@ mod tests {
             .collect();
         assert_eq!(rests, vec![0, 0, 0]);
         assert_eq!(tree.chains().links().len(), 1);
+    }
+
+    /// What a consumer that takes only a box is given is the box every shape
+    /// down the chain leaves open, not the first shape's alone.
+    #[test]
+    fn a_chain_leaves_open_the_box_all_its_shapes_do() {
+        let mut tree = ClipTree::default();
+        let card = clip(square(0.0, 0.0, 100.0), 50.0, 1.0);
+        let wide = clip(Rect::new(10.0, 10.0, 200.0, 80.0), 12.0, 2.0);
+        let outer = tree.place(card, Under::Inherited(None));
+        let inner = tree.place(wide, Under::Inherited(Some(outer)));
+        let resolved = tree.reference(inner).resolved();
+        assert_ne!(resolved.rest, NO_CHAIN, "chained, so the box is a question");
+        assert_eq!(resolved.open, Rect::new(10.0, 10.0, 90.0, 80.0));
+        assert_eq!(tree.chains().shapes(&resolved).count(), 2);
     }
 
     /// Clearing keeps the room the links took, as it keeps the clips'.

@@ -184,10 +184,12 @@ pub struct TextEntry {
     pub opacity: f32,
     /// The lines it is cut to, when it is cut.
     pub fit: Option<super::text_measurer::LineFit>,
-    /// The clip this text was flattened under, as the shape it is rather than
-    /// the box around it. The quad path cuts in the clip's own space; the
-    /// glyphon path asks for the box, because `TextBounds` is four integers.
-    pub clip: Option<crate::shape::PlacedShape>,
+    /// The clip this text was flattened under, as the shapes it is rather
+    /// than the box around them: a first shape, and the chain of those it
+    /// could not be merged with in the frame's clip chains. The quad path cuts
+    /// in each shape's own space; the glyphon path asks for the box they all
+    /// leave open, because `TextBounds` is four integers.
+    pub clip: Option<super::clip::ResolvedClip>,
     /// Transform to apply to this text
     pub transform: Transform,
 }
