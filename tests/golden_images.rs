@@ -1476,7 +1476,7 @@ fn fractional_svg_fills_a_standalone_texture() {
 
 /// Two clips a quarter turn apart still cut exactly.
 ///
-/// `intersect_clips` rewrites the inner clip in the outer's coordinates when
+/// `merge_exact` rewrites the inner clip in the outer's coordinates when
 /// the map between them sends a rect to a rect. A quarter turn does — the axes
 /// swap rather than lean — but it also sends the top-left corner to the
 /// top-right, and `CornerRadii` is four numbers in a fixed order. So the pair

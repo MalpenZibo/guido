@@ -703,7 +703,7 @@ impl ImageQuadRenderer {
 
         // An image is cut in the clip's own space, so a turned clip cuts the
         // turned shape.
-        let clip = cmd.resolved_clip().map_or(QuadClip::NONE, |clip| {
+        let clip = cmd.clip().map_or(QuadClip::NONE, |clip| {
             QuadClip::resolved(&clip, scale_factor)
         });
 

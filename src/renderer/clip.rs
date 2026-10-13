@@ -11,8 +11,15 @@
 //! So a command names its clip and the renderer asks where it is. The names
 //! are [`ClipRef`]s, the frame's clips live in a [`ClipTree`] that records what
 //! each one cuts and whose child it is, and resolution happens at the half
-//! dozen places `render.rs` reads `cmd.clip()`. Every pipeline and every shader
-//! is handed the same `PlacedShape` it was handed before.
+//! dozen places `render.rs` and `region.rs` read `cmd.clip()`.
+//!
+//! **What a clip resolves to is exact.** Two clips are merged into one rounded
+//! rect only where that rect is their intersection ([`merge_exact`]); a clip
+//! that cannot be merged keeps its own shape and the clips above it hang from
+//! it as a chain ([`ClipChains`]), which every pipeline walks — the shape and
+//! quad shaders and the backdrop composite per fragment, glyphon through the
+//! box all of them leave open, and the region tessellator a scanline at a time
+//! (#698).
 //!
 //! Chromium's clip tree is this, grown up: four property trees, clips among
 //! them, and draw commands referencing nodes in them rather than carrying
@@ -22,7 +29,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use super::flatten::intersect_clips;
 use crate::shape::PlacedShape;
 use crate::widgets::Rect;
 
@@ -66,10 +72,10 @@ impl ResolvedClip {
 
 /// One link of a chain: a shape, and the link after it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClipLink {
-    pub shape: PlacedShape,
+pub(crate) struct ClipLink {
+    pub(crate) shape: PlacedShape,
     /// The next link, or [`NO_CHAIN`].
-    pub next: u32,
+    pub(crate) next: u32,
 }
 
 /// The chains one frame's clips hang from, as one persistent cons-list.
@@ -87,12 +93,12 @@ pub struct ClipChains {
 impl ClipChains {
     /// Every link this frame pushed, in index order — what the renderer
     /// uploads for its shaders to walk.
-    pub fn links(&self) -> &[ClipLink] {
+    pub(crate) fn links(&self) -> &[ClipLink] {
         &self.links
     }
 
     /// Every shape `clip` is cut by: its first, then down its chain.
-    pub fn shapes<'a>(
+    pub(crate) fn shapes<'a>(
         &'a self,
         clip: &'a ResolvedClip,
     ) -> impl Iterator<Item = &'a PlacedShape> + 'a {
@@ -100,7 +106,7 @@ impl ClipChains {
     }
 
     /// The shapes down the chain starting at `rest`, nearest first.
-    pub fn chain(&self, rest: u32) -> impl Iterator<Item = &PlacedShape> + '_ {
+    fn chain(&self, rest: u32) -> impl Iterator<Item = &PlacedShape> + '_ {
         let mut at = rest;
         std::iter::from_fn(move || {
             let link = self.links.get(at as usize)?;
@@ -113,27 +119,6 @@ impl ClipChains {
         let index = self.links.len() as u32;
         self.links.push(ClipLink { shape, next });
         index
-    }
-}
-
-/// What a clip reference holds for one frame.
-///
-/// `collapsed` is the whole chain folded into one shape, the way every clip was
-/// before chains existed. It stands in for `resolved` at every consumer that
-/// does not walk a chain yet, so no pixel moves before the pipeline drawing it
-/// is ready to.
-#[derive(Debug, Clone, Copy)]
-struct Held {
-    resolved: ResolvedClip,
-    collapsed: PlacedShape,
-}
-
-impl Held {
-    fn alone(shape: PlacedShape) -> Self {
-        Self {
-            resolved: ResolvedClip::alone(shape),
-            collapsed: shape,
-        }
     }
 }
 
@@ -161,33 +146,27 @@ impl Held {
 /// commands name was placed by that frame, so the `rest` it holds points into
 /// that frame's [`ClipChains`] and not the last one's.
 #[derive(Debug, Clone)]
-pub struct ClipRef(Rc<Cell<Held>>);
+pub struct ClipRef(Rc<Cell<ResolvedClip>>);
 
 impl ClipRef {
-    /// Where this clip cuts, in the coordinates it was declared in plus the
-    /// transform that places it — already cut down by its ancestors.
-    pub fn shape(&self) -> PlacedShape {
-        self.0.get().collapsed
-    }
-
-    /// What this clip cuts, exactly: its own shape, or its exact merge with
+    /// What this clip cuts, this frame: its own shape, or its exact merge with
     /// the ones above it, and the chain of those it could not be merged with.
     pub fn resolved(&self) -> ResolvedClip {
-        self.0.get().resolved
+        self.0.get()
     }
 
     /// A clip standing where it was put, named by nobody else yet.
     #[cfg(test)]
     pub(crate) fn placed(shape: PlacedShape) -> Self {
-        Self::holding(Held::alone(shape))
+        Self::holding(ResolvedClip::alone(shape))
     }
 
-    fn holding(held: Held) -> Self {
-        Self(Rc::new(Cell::new(held)))
+    fn holding(resolved: ResolvedClip) -> Self {
+        Self(Rc::new(Cell::new(resolved)))
     }
 
-    fn place(&self, held: Held) {
-        self.0.set(held);
+    fn place(&self, resolved: ResolvedClip) {
+        self.0.set(resolved);
     }
 
     /// Whether two references name the same clip, rather than two clips that
@@ -290,30 +269,27 @@ impl ClipTree {
     /// Merged into the parent's first shape where [`merge_exact`] can, and
     /// otherwise kept as it is, with the parent's first shape pushed onto the
     /// front of the parent's chain — which is the whole of what a link is for.
-    fn cut(&mut self, own: PlacedShape, under: Under) -> Held {
+    fn cut(&mut self, own: PlacedShape, under: Under) -> ResolvedClip {
         let Under::Inherited(Some(parent)) = under else {
-            return Held::alone(own);
+            return ResolvedClip::alone(own);
         };
         let above = &mut self.placed[parent.0];
-        let parent = above.reference.0.get();
+        let parent = above.reference.resolved();
         let open = parent
-            .resolved
             .open
             .intersection(&own.world_aabb())
             .unwrap_or_default();
-        let resolved = match merge_exact(&parent.resolved.first, &own) {
+        match merge_exact(&parent.first, &own) {
             Some(first) => ResolvedClip {
                 first,
-                rest: parent.resolved.rest,
+                rest: parent.rest,
                 open,
             },
             None => {
                 // One link per parent, however many of its children chain to
                 // it: the first pushes it and the rest find it here.
                 if above.link == NO_CHAIN {
-                    above.link = self
-                        .chains
-                        .push(parent.resolved.first, parent.resolved.rest);
+                    above.link = self.chains.push(parent.first, parent.rest);
                 }
                 ResolvedClip {
                     first: own,
@@ -321,10 +297,6 @@ impl ClipTree {
                     open,
                 }
             }
-        };
-        Held {
-            resolved,
-            collapsed: intersect_clips(&parent.collapsed, &own),
         }
     }
 
@@ -760,6 +732,134 @@ mod tests {
             (merged.radii.top_right - 20.0).abs() < 1e-3,
             "turned a quarter clockwise and doubled: {:?}",
             merged.radii
+        );
+    }
+
+    /// Two clips under one transform merge in that transform's space and come
+    /// out still turned — and each corner is rounded by the clip that makes
+    /// it, which here is a different clip at each end of the same edge.
+    ///
+    /// The rule this replaced took the smaller radius everywhere, so the inner
+    /// clip's 16 came out as the outer's 8.
+    #[test]
+    fn two_clips_in_one_turned_space_merge_in_it() {
+        let placement = Transform::rotate_degrees(30.0);
+        let outer = PlacedShape {
+            placement,
+            ..clip(square(0.0, 0.0, 100.0), 8.0, 1.0)
+        };
+        let inner = PlacedShape {
+            placement,
+            ..clip(Rect::new(20.0, 0.0, 100.0, 60.0), 16.0, 1.0)
+        };
+
+        let both = merge_exact(&outer, &inner).expect("one space, one rounded rect");
+        assert_eq!(both.placement, placement, "still turned by the same thing");
+        assert_eq!(both.rect, Rect::new(20.0, 0.0, 80.0, 60.0));
+        assert_eq!(
+            both.radii,
+            CornerRadii {
+                top_left: 16.0,
+                top_right: 8.0,
+                bottom_right: 0.0,
+                bottom_left: 16.0,
+            },
+            "the inner clip's own corners on the left, the outer's on the right, \
+             and a square corner where an edge of each meets"
+        );
+    }
+
+    /// A clip in a scroller in a scroller: the two spaces differ by a
+    /// translation, and the inner is rewritten in the outer's coordinates.
+    #[test]
+    fn a_clip_is_merged_through_a_translation() {
+        let outer = clip(square(0.0, 0.0, 100.0), 0.0, 1.0);
+        let inner = PlacedShape {
+            placement: Transform::translate(40.0, 0.0),
+            ..outer
+        };
+        let both = merge_exact(&outer, &inner).expect("a translation loses nothing");
+        assert_eq!(
+            both.placement,
+            Transform::IDENTITY,
+            "rebased onto the first"
+        );
+        assert_eq!((both.rect.x, both.rect.width), (40.0, 60.0));
+    }
+
+    /// A mirror sends a rect to a rect too, and `Container::scale` takes a
+    /// negative factor, so this is reachable rather than hypothetical. The
+    /// left corners land on the right.
+    #[test]
+    fn a_mirrored_clip_is_merged_with_its_corners_moved() {
+        let outer = PlacedShape {
+            placement: Transform::rotate_degrees(20.0),
+            ..clip(square(0.0, 0.0, 100.0), 20.0, 1.0)
+        };
+        let inner = PlacedShape {
+            radii: CornerRadii {
+                top_left: 9.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 5.0,
+            },
+            placement: outer
+                .placement
+                .then(&Transform::translate(100.0, 0.0).then(&Transform::scale_xy(-1.0, 1.0))),
+            ..clip(square(0.0, 0.0, 80.0), 0.0, 1.0)
+        };
+
+        let both = merge_exact(&outer, &inner).expect("a mirror loses nothing");
+        assert_eq!(both.placement, outer.placement);
+        assert!(
+            (both.radii.bottom_right - 5.0).abs() < 1e-3,
+            "the inner's bottom-left, mirrored: {:?}",
+            both.radii
+        );
+        assert!(
+            (both.radii.top_right - 20.0).abs() < 1e-3,
+            "and where the inner's mirrored 9 shares a corner with the outer's \
+             20, the 20 cuts deeper: {:?}",
+            both.radii
+        );
+    }
+
+    /// What the compositor is told a surface covers is tessellated from the
+    /// merged shape, so a corner that follows a quarter turn to the wrong side
+    /// is a wedge of the surface that stops being ours: the click goes to
+    /// whatever is behind.
+    #[test]
+    fn a_region_under_two_clips_a_quarter_turn_apart_rounds_the_right_corner() {
+        let covers = |rects: &[crate::region::RegionRect], x: i32, y: i32| {
+            rects
+                .iter()
+                .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
+        };
+        let outer = clip(square(0.0, 0.0, 100.0), 0.0, 1.0);
+        // The same square, a quarter turn round and moved back over the outer,
+        // rounded at its top-left only.
+        let inner = PlacedShape {
+            radii: CornerRadii {
+                top_left: 40.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            placement: Transform::translate(100.0, 0.0).then(&Transform::rotate_degrees(90.0)),
+            ..outer
+        };
+
+        let both = merge_exact(&outer, &inner).expect("a quarter turn loses nothing");
+        let rects = crate::region::placed_shape_to_rects(both, &[]);
+        assert!(
+            covers(&rects, 3, 3),
+            "the rounding turned a quarter clockwise off the top-left, so this \
+             corner is square and the surface still claims it"
+        );
+        assert!(
+            !covers(&rects, 96, 3),
+            "and the top-right is where it landed, so the region gives that \
+             wedge up"
         );
     }
 

@@ -32,7 +32,7 @@ pub(crate) mod tree;
 mod types;
 
 pub use crate::image_decode::DecodedImage;
-pub use clip::{ClipChains, ClipLink, ClipRef, NO_CHAIN, ResolvedClip};
+pub use clip::{ClipChains, ClipRef, NO_CHAIN, ResolvedClip};
 pub use commands::{Border, CornerRadii, DrawCommand};
 // `RenderLayer` is exported because `FlattenScratch`'s documentation links to
 // it and rustdoc runs with warnings denied, a link the type has carried since

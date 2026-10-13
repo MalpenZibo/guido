@@ -747,7 +747,7 @@ fn backdrop_region(
         // The clip itself, not the box around it: the pass narrows its viewport
         // by the box and then cuts the difference back off per fragment, the
         // same two steps it already takes for the shape.
-        clip: cmd.resolved_clip(),
+        clip: cmd.clip(),
         opacity: cmd.opacity,
     }
 }
@@ -943,7 +943,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             if let Some(g) = gradient {
                 instance = instance.with_gradient(g);
             }
-            if let Some(clip) = cmd.resolved_clip() {
+            if let Some(clip) = cmd.clip() {
                 instance = instance.with_clip(&clip, scale);
             }
 
@@ -967,7 +967,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             )
             .with_transform(&cmd.world_transform, scale);
 
-            if let Some(clip) = cmd.resolved_clip() {
+            if let Some(clip) = cmd.clip() {
                 instance = instance.with_clip(&clip, scale);
             }
 
@@ -1011,7 +1011,7 @@ fn command_to_text_entry(cmd: &FlattenedCommand) -> Option<TextEntry> {
             fit: *fit,
             align: *align,
             opacity: cmd.opacity,
-            clip: cmd.resolved_clip(),
+            clip: cmd.clip(),
             transform: cmd.world_transform,
         }),
         _ => None,

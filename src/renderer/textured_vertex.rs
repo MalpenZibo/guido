@@ -62,8 +62,8 @@ pub struct TexturedVertex {
 ///
 /// There used to be a second spelling — a plain box in physical world pixels —
 /// because text was cut by the box around its clip rather than the clip. Both
-/// quad pipelines now take [`shape`](Self::shape), so a turned clip cuts the
-/// turned shape whichever of them is drawing.
+/// quad pipelines now take [`resolved`](Self::resolved), so a turned clip cuts
+/// the turned shape whichever of them is drawing.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadClip {
     /// `[x, y, width, height]`. Negative width/height is the no-clip sentinel.
@@ -95,35 +95,19 @@ impl QuadClip {
         chain: super::clip::NO_CHAIN,
     };
 
-    /// Everything is cut — a clip whose placement collapsed has no inside.
-    pub(crate) const EMPTY: Self = Self {
-        rect: crate::renderer::gpu::EMPTY_CLIP_RECT,
-        radii: [0.0; 4],
-        curvature: 1.0,
-        to_clip_space: Transform::IDENTITY,
-        chain: super::clip::NO_CHAIN,
-    };
-
-    /// Cut to the clip's shape, in the coordinates the widget declared it in.
-    pub fn shape(clip: &crate::shape::PlacedShape, scale: f32) -> Self {
-        let Some(to_clip_space) = clip.to_local(scale) else {
-            return Self::EMPTY;
-        };
-        let r = clip.rect;
-        Self {
-            rect: [r.x, r.y, r.width, r.height],
-            radii: clip.radii.to_array(),
-            curvature: clip.curvature,
-            to_clip_space,
-            chain: super::clip::NO_CHAIN,
-        }
-    }
-
-    /// Cut to the clip's first shape, and down its chain.
+    /// Cut to the clip's first shape, in the coordinates the widget declared
+    /// it in, and down its chain. A placement that collapsed has no inside and
+    /// cuts everything.
     pub fn resolved(clip: &super::clip::ResolvedClip, scale: f32) -> Self {
+        let record = super::clip_records::ClipRecord::new(&clip.first, clip.rest, scale);
         Self {
-            chain: clip.rest,
-            ..Self::shape(&clip.first, scale)
+            rect: record.rect,
+            radii: record.radii,
+            curvature: record.curvature,
+            to_clip_space: Transform {
+                data: record.inverse,
+            },
+            chain: record.next,
         }
     }
 
@@ -249,13 +233,13 @@ mod tests {
     fn a_clip_is_scaled_by_its_map_and_not_by_its_rect() {
         let rect = Rect::new(10.0, 20.0, 100.0, 50.0);
 
-        let shaped = QuadClip::shape(
-            &PlacedShape {
+        let shaped = QuadClip::resolved(
+            &crate::renderer::clip::ResolvedClip::alone(PlacedShape {
                 rect,
                 radii: CornerRadii::uniform(4.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::IDENTITY,
-            },
+            }),
             2.0,
         );
         assert_eq!(
@@ -331,13 +315,13 @@ mod tests {
     /// everything.
     #[test]
     fn a_collapsed_clip_cuts_it_all() {
-        let collapsed = QuadClip::shape(
-            &PlacedShape {
+        let collapsed = QuadClip::resolved(
+            &crate::renderer::clip::ResolvedClip::alone(PlacedShape {
                 rect: Rect::new(0.0, 0.0, 100.0, 50.0),
                 radii: CornerRadii::uniform(0.0),
                 curvature: 1.0,
                 placement: crate::transform::Transform::scale(0.0),
-            },
+            }),
             1.0,
         );
         assert_eq!(collapsed.rect, crate::renderer::gpu::EMPTY_CLIP_RECT);

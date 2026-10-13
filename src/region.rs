@@ -341,7 +341,7 @@ pub(crate) fn shape_of(
     corner_radii: CornerRadii,
     curvature: f32,
 ) -> Vec<RegionRect> {
-    let clips: SmallVec<[PlacedShape; 2]> = match cmd.resolved_clip() {
+    let clips: SmallVec<[PlacedShape; 2]> = match cmd.clip() {
         Some(clip) => chains.shapes(&clip).copied().collect(),
         None => SmallVec::new(),
     };

@@ -493,6 +493,7 @@ impl Surface {
         self.command_of(fill)
             .clip()
             .expect("the box was drawn under a clip")
+            .first
     }
 
     /// The top of what the nth column's scroller draws, in surface
@@ -508,7 +509,7 @@ impl Surface {
             .iter()
             .filter(|cmd| {
                 cmd.clip()
-                    .is_some_and(|clip| (clip.world_aabb().x - column_x).abs() < 0.01)
+                    .is_some_and(|clip| (clip.first.world_aabb().x - column_x).abs() < 0.01)
             })
             .map(|cmd| cmd.world_transform.ty())
             .fold(f32::INFINITY, f32::min)
