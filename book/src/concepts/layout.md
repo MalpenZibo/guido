@@ -300,6 +300,12 @@ container()
 # }
 ```
 
+A minimum is a floor, never a cap, as CSS `min-width` is: content wider than
+200 makes the container wider. A child that takes everything it is offered —
+a `fill()` child, or a text input — takes everything the container is offered
+too, so a field meant to be a set width says so with an exact length, or
+bounds it with `at_least(200.0).at_most(400.0)`.
+
 ### Fill Available Space
 
 Make a container expand to fill all available space:

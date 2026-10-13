@@ -669,6 +669,39 @@ fn text_input_clips_overflowing_content() {
     );
 }
 
+/// After `examples/simple_lock.rs`: a password field in a centred column on a
+/// wide surface (#714). `at_least` is a floor and never a cap, so a field
+/// declared at least 280 wide takes everything its column offers, as an input
+/// with a CSS `min-width` does; the field the example now declares at exactly
+/// 280 stays 280, centred.
+#[test]
+fn at_least_around_a_text_input_grows_to_what_it_is_offered() {
+    let field = |width: Length| {
+        container()
+            .width(width)
+            .padding(10.0)
+            .background(Color::rgb(0.15, 0.15, 0.2))
+            .corners(8.0)
+            .child(
+                text_input(create_signal(String::new()))
+                    .font_size(14.0)
+                    .line_height(FIXED_LINE),
+            )
+    };
+
+    let view = container()
+        .width(fill())
+        .layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Center),
+        )
+        .child(field(at_least(280.0)))
+        .child(field(Length::from(280.0)));
+
+    assert_snapshot("at_least_around_a_text_input", render(view, 800.0, 120.0));
+}
+
 /// Texts of different sizes in a row, aligned on their baselines.
 ///
 /// `Start` puts every child's top edge on the same line, so a 24px label and

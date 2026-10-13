@@ -320,24 +320,27 @@ impl Flex {
             ),
         };
 
-        // For Stretch alignment, use min constraint if set
-        let stretch_cross = if cross_align == CrossAlignment::Stretch && cross_min > 0.0 {
-            Some(cross_min)
-        } else {
-            None
-        };
+        // A stretch offers the cross minimum as the children's floor, never as
+        // their cap: content wider than it makes the line wider, and the
+        // re-layout below stretches the rest to the line, as CSS sizes a flex
+        // line's cross axis before `align-items: stretch` fills it. Only a
+        // tight cross axis is the line's size before any child is measured.
+        let stretches = cross_align == CrossAlignment::Stretch;
+        let cross_floor = if stretches { cross_min } else { 0.0 };
+        let stretch_cross = (stretches && cross_min >= cross_max).then_some(cross_min);
+        let cross_cap = stretch_cross.unwrap_or(cross_max);
 
         let child_constraints = match axis {
             Axis::Horizontal => Constraints {
                 min_width: 0.0,
-                min_height: stretch_cross.unwrap_or(0.0),
+                min_height: cross_floor,
                 max_width: main_max,
-                max_height: stretch_cross.unwrap_or(cross_max),
+                max_height: cross_cap,
             },
             Axis::Vertical => Constraints {
-                min_width: stretch_cross.unwrap_or(0.0),
+                min_width: cross_floor,
                 min_height: 0.0,
-                max_width: stretch_cross.unwrap_or(cross_max),
+                max_width: cross_cap,
                 max_height: main_max,
             },
         };
@@ -452,8 +455,8 @@ impl Flex {
 
         let cross_size = max_cross.max(cross_min).min(cross_max);
 
-        // For Stretch: if we didn't have a known cross size before, re-layout children
-        // with the computed cross size. Fill children get tight main-axis constraints.
+        // For Stretch on a loose cross axis, re-layout children to the line's
+        // cross size, now that it is known. Fill children get tight main-axis constraints.
         //
         // Skip children that already match cross_size — re-constraining them to their
         // own size is a no-op for sizing but creates tight constraints that turn them
@@ -648,7 +651,7 @@ fn baseline_of(tree: &Tree, id: WidgetId, cross_size: f32) -> f32 {
 mod tests {
     use super::*;
     use crate::jobs;
-    use crate::layout::fill;
+    use crate::layout::{at_least, fill};
     use crate::reactive::create_signal;
     use crate::widgets::{Container, Scroll, container};
 
@@ -1256,6 +1259,42 @@ mod tests {
         let inner = tree.get_children(root)[0];
         assert_eq!(bounds_of(&tree, inner).height, 10.0);
         assert_eq!(bounds_of(&tree, tree.get_children(inner)[1]).height, 0.0);
+    }
+
+    /// A scroller on both axes that fills its viewport gives the content the
+    /// visible width as a minimum, and content wider than that is as wide as
+    /// it is: that is what there is to scroll through (#714).
+    #[test]
+    fn content_wider_than_a_filled_viewport_keeps_its_width() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(200.0)
+                .height(200.0)
+                .scroll(Scroll::both().fill_viewport(true))
+                .child(container().child(container().width(300.0).height(10.0))),
+        );
+        let content = tree.get_children(root)[0];
+        assert_eq!(bounds_of(&tree, content).width, 300.0);
+    }
+
+    /// A container with a minimum width records the width of its content
+    /// when that is more, so a row that runs short of room does not squash
+    /// it below what it holds (#714).
+    #[test]
+    fn a_minimum_width_records_the_content_wider_than_it() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container().layout(Flex::row()).child(
+                container()
+                    .width(at_least(55.0))
+                    .child(container().width(100.0).height(10.0)),
+            ),
+        );
+        let holder = tree.get_children(root)[0];
+        assert_eq!(tree.minimum(holder).expect("laid out").width, 100.0);
     }
 
     /// `fill_viewport` is read under layout tracking, so writing it lays the

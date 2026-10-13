@@ -384,6 +384,30 @@ fn at_least_raises_a_smaller_content() {
     assert_eq!(h.fit(500.0, 500.0).width, 100.0);
 }
 
+/// A minimum is a floor, not a cap: content wider than it is as wide as it is,
+/// and the container grows to hold it (#714).
+#[test]
+fn at_least_grows_to_a_larger_content() {
+    let mut h = H::new(container().width(at_least(55.0)).child(box_of(100.0, 10.0)));
+    assert_eq!(h.fit(400.0, 400.0).width, 100.0);
+    let inner = h.children()[0];
+    assert_eq!(h.tree.get_bounds(inner).unwrap().width, 100.0);
+}
+
+/// Content narrower than the minimum is stretched across it, as the default
+/// column stretches every child to its width.
+#[test]
+fn at_least_stretches_a_smaller_content_across_it() {
+    let mut h = H::new(
+        container()
+            .width(at_least(55.0))
+            .child(container().height(10.0)),
+    );
+    assert_eq!(h.fit(400.0, 400.0).width, 55.0);
+    let inner = h.children()[0];
+    assert_eq!(h.tree.get_bounds(inner).unwrap().width, 55.0);
+}
+
 #[test]
 fn at_most_caps_a_larger_content() {
     let mut h = H::new(container().width(at_most(30.0)).child(box_of(40.0, 20.0)));
