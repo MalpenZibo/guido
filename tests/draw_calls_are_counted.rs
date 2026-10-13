@@ -143,11 +143,6 @@ fn a_label_under_a_chain_goes_to_the_quad_only_when_a_clip_in_it_cuts() {
                 } else {
                     MainAlignment::Start
                 }))
-                // Far enough in that the ink, outset as the router outsets it,
-                // stays clear of the square's own corner points — which
-                // `box_cuts_like_the_shape` counts even at a radius of zero —
-                // and still reaches into the card's corner.
-                .child(container().width(if centred { 0.0 } else { 8.0 }))
                 .child(text("label"));
             container()
                 .width(120.0)
@@ -174,6 +169,30 @@ fn a_label_under_a_chain_goes_to_the_quad_only_when_a_clip_in_it_cuts() {
     assert_eq!(
         cornered.text_quads, 1,
         "the label reaches the card's corner, which only the chain says"
+    );
+}
+
+/// A label reaching the corner of a square clip is cut there by the clip's
+/// box, which is the clip — so it stays with glyphon.
+///
+/// A square corner used to count as a corner box of zero size, which still
+/// "overlapped" any ink covering the corner point, and every such label was
+/// rasterized into a texture of its own for a cut glyphon makes exactly.
+#[test]
+fn a_label_reaching_a_square_clip_s_corner_stays_with_glyphon() {
+    let Some(calls) = draw_calls_of_one_frame(|| {
+        container()
+            .width(120.0)
+            .height(20.0)
+            .overflow(Overflow::Hidden)
+            .child(text("label"))
+    }) else {
+        return;
+    };
+    assert_eq!(
+        (calls.text, calls.text_quads),
+        (1, 0),
+        "one glyphon call and no text quad"
     );
 }
 

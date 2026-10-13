@@ -157,13 +157,13 @@ impl PlacedShape {
     }
 
     /// Whether this shape is simply a rectangle on the surface: no turn, no
-    /// skew, and corners too small to round away a whole pixel.
+    /// skew, and corners of half a pixel or less (see `is_square`).
     ///
     /// Half a pixel is a *surface* measurement and the radii are in the
     /// widget's own space, so the two only mean the same thing at a scale of
     /// one: a corner of 0.4 under a `scale(8.0)` is three pixels of curve.
     pub(crate) fn is_a_box(&self) -> bool {
-        self.placement.keeps_axes() && self.largest_corner_on_surface() <= 0.5
+        self.placement.keeps_axes() && is_square(self.largest_corner_on_surface())
     }
 
     /// Whether cutting `ink` to this shape's box cuts it the way the shape
@@ -203,6 +203,13 @@ impl PlacedShape {
         ]
         .into_iter()
         .all(|(radius, cx, cy, dx, dy)| {
+            // A square corner has no wedge: the box is the shape there. As a
+            // box of no size it still overlapped any ink covering the corner
+            // point, and sent a text the box cuts exactly to the quad path.
+            // Square by the rule `is_a_box` uses, measured on the surface.
+            if is_square(radius * sx.max(sy)) {
+                return true;
+            }
             let (w, h) = (radius * sx * dx, radius * sy * dy);
             let wedge = Rect::new(cx.min(cx + w), cy.min(cy + h), w.abs(), h.abs());
             !overlaps(wedge, ink)
@@ -768,6 +775,14 @@ impl Arc {
     }
 }
 
+/// Whether a corner of this radius, measured on the surface, is square: too
+/// small to round away half a pixel. The one threshold both
+/// [`PlacedShape::is_a_box`] and [`PlacedShape::box_cuts_like_the_shape`]
+/// read, so a shape that is a box for one is cut like a box by the other.
+fn is_square(radius_on_surface: f32) -> bool {
+    radius_on_surface <= 0.5
+}
+
 /// Whether two rects share any area at all. Touching edges do not count: a
 /// corner box and an ink box that meet exactly are cut the same by either.
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -1121,6 +1136,20 @@ mod tests {
         // A square clip is its own box, wherever the ink is.
         let square = card(0.0, Transform::IDENTITY);
         assert!(square.box_cuts_like_the_shape(Rect::new(0.0, 0.0, 200.0, 100.0)));
+        assert!(
+            square.box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 220.0, 120.0)),
+            "ink running past every corner point is still cut by the box, which \
+             is the shape — a square corner has no wedge to reach into"
+        );
+        // Under half a pixel is square, as `is_a_box` counts it; past it, a
+        // corner rounds a pixel away and the box would not cut like it.
+        let hairline = card(0.3, Transform::IDENTITY);
+        assert!(hairline.is_a_box());
+        assert!(hairline.box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 220.0, 120.0)));
+        assert!(
+            !card(0.3, Transform::scale(4.0))
+                .box_cuts_like_the_shape(Rect::new(-10.0, -10.0, 900.0, 500.0))
+        );
 
         let rounded = card(30.0, Transform::IDENTITY);
         // Down the middle, clear of all four corner boxes.
