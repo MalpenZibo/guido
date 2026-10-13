@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip, Under};
+use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip};
 use super::commands::DrawCommand;
 use super::tree::{CachedFlatten, RenderNode};
 use crate::shape::PlacedShape;
@@ -730,7 +730,7 @@ fn flatten_node(
     let (clip_index, effective_clip) = match &node.clip {
         Some(clip) => {
             let own = PlacedShape::from_clip(clip, world_transform);
-            let index = out.clips.place(own, Under::Inherited(parent_clip));
+            let index = out.clips.place(own, parent_clip);
             (Some(index), Some(out.clips.reference(index)))
         }
         None => (parent_clip, inherited.clone()),
@@ -786,14 +786,17 @@ fn flatten_node(
     // "test this one in local coordinates"; now every clip says where its
     // coordinates are and the flag has nothing left to distinguish.
     //
-    // It narrows nothing, which is why it is placed under no parent: what a
-    // replay must do with it is carry it, not cut it again by an ancestor it
-    // never answered to.
+    // And it is cut by every clip above it, as everything else this node draws
+    // is: a ripple in a scrollbar handle stops at its scroller's rounded
+    // corner, not at the handle's pill (#708). It used to be placed under no
+    // parent at all, which was the only answer while two clips could only be
+    // folded into one by taking the smaller corner — the handle's pill would
+    // have lost the scroller's arc. They meet exactly now.
     if !node.overlay_commands.is_empty() {
         let overlay_clip = match node.overlay_clip {
             Some(ref clip) => {
                 let own = PlacedShape::from_clip(clip, world_transform);
-                let index = out.clips.place(own, Under::Nothing);
+                let index = out.clips.place(own, clip_index);
                 Some(out.clips.reference(index))
             }
             None => effective_clip,
@@ -1487,7 +1490,7 @@ mod tests {
         );
         let placed = 10;
         for _ in 0..placed {
-            scratch.clips.place(clip, Under::Nothing);
+            scratch.clips.place(clip, None);
         }
 
         assert_eq!(
@@ -2092,24 +2095,18 @@ mod world_geometry_tests {
         );
     }
 
-    /// A replayed overlay is cut to the shape it belongs to and to nothing
-    /// above it.
+    /// An overlay is cut by the clip above it as well as by its own, rounded
+    /// corners included — flattened in full, and replayed (#708).
     ///
-    /// The other half of what a replay has to know about a clip, and the one
-    /// with no second witness anywhere else. A cached clip that recorded no
-    /// parent means one of two things, and they differ only a frame later:
-    /// *nothing was above me then*, which a replay must ask again because
-    /// something may be above the subtree now, and *nothing is ever above me*,
-    /// which is what an overlay's clip is — a ripple is cut to the shape it
-    /// belongs to, and the full-flatten path has always replaced the inherited
-    /// clip with it rather than narrowing it. `Under::Nothing` is the second,
-    /// and reading it as the first would narrow a replayed ripple by a
-    /// scroller it never answered to.
-    ///
-    /// So the overlay sits under a clip that would cut it in half, in a subtree
-    /// that is replayed rather than flattened, and comes out whole.
+    /// A ripple used to be cut to the shape it belongs to and to nothing
+    /// else, so a scrollbar handle's press ripple in a rounded scroller drew
+    /// past the scroller's arc. Here the clip above is a rounded rect half the
+    /// overlay's height whose four corners are the intersection's, so the
+    /// overlay comes out as that rect — merged exactly, with its corners —
+    /// whichever path placed it. The replayed half is the one that asks
+    /// whether the cache remembers the parent rather than the shape.
     #[test]
-    fn a_replayed_overlay_answers_to_no_clip_above_it() {
+    fn an_overlay_is_cut_by_the_clip_above_it() {
         let mut child = RenderNode::new(3);
         child.bounds = Rect::new(0.0, 0.0, 40.0, 40.0);
         child.overlay_clip = Some(ClipRegion {
@@ -2135,7 +2132,7 @@ mod world_geometry_tests {
         // rect below would be 20 tall rather than 40.
         root.clip = Some(ClipRegion {
             rect: Rect::new(0.0, 0.0, 40.0, 20.0),
-            corner_radius: CornerRadii::uniform(0.0),
+            corner_radius: CornerRadii::uniform(10.0),
             curvature: 1.0,
         });
         root.children.push(Rc::new(middle));
@@ -2154,15 +2151,18 @@ mod world_geometry_tests {
                 .expect("the ripple is in the frame")
                 .clip()
                 .expect("and it is clipped")
-                .first
-                .rect
+        };
+        let cut_by_both = |clip: ResolvedClip| {
+            clip.rest == crate::renderer::NO_CHAIN
+                && clip.first.rect == Rect::new(0.0, 0.0, 40.0, 20.0)
+                && clip.first.radii == CornerRadii::uniform(10.0)
         };
 
-        assert_eq!(
-            overlay_clip(&root),
-            Rect::new(0.0, 0.0, 40.0, 40.0),
-            "flattened in full, the overlay takes its own clip and not the \
-             one above it"
+        let flattened = overlay_clip(&root);
+        assert!(
+            cut_by_both(flattened),
+            "flattened in full, the overlay is cut by the rounded clip above \
+             it as well as its own: {flattened:?}"
         );
 
         // The subtree below the clip is clean and the clip's own node is not,
@@ -2172,11 +2172,11 @@ mod world_geometry_tests {
             c.repainted.set(false);
         }
 
-        assert_eq!(
-            overlay_clip(&root),
-            Rect::new(0.0, 0.0, 40.0, 40.0),
-            "replayed, the overlay came back cut by the clip above it, which \
-             it never answered to when it was flattened"
+        let replayed = overlay_clip(&root);
+        assert!(
+            cut_by_both(replayed),
+            "replayed, the overlay is cut by the clip above it just the same: \
+             {replayed:?}"
         );
     }
 

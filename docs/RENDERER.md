@@ -615,13 +615,14 @@ was a copy of every command drawn, on every painted frame of a surface that
 culls nothing. `flatten_root_into` flattens the root with `replayable` off;
 everything below it is flattened as before.
 
-A clip costs a replay three cases instead, in `ClipTree::replay`. A clip the
+A clip costs a replay two cases instead, in `ClipTree::replay`. A clip the
 subtree placed itself travels with it: translated by the same offset as the
 content, then cut afresh by its parent, so a viewport resized above cuts the
 new intersection rather than the old one shifted. A clip it inherited is not
 its to carry and is looked up where the subtree now finds itself — that is how
-a row scrolls while its scroller does not. An overlay's clip answers to no
-ancestor and is only carried. The references are the ones the cached commands
+a row scrolls while its scroller does not. An overlay's clip is the first kind:
+a ripple is cut by its own node's shape and by every clip above it, so it
+stops at a rounded scroller's arc (#708). The references are the ones the cached commands
 already hold, so a replay writes the shapes through them and touches no
 command.
 

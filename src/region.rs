@@ -1726,14 +1726,14 @@ mod tests {
     /// chain the frame keeps for them.
     #[test]
     fn a_region_under_clips_turned_apart_follows_both() {
-        use crate::renderer::clip::{ClipTree, Under};
+        use crate::renderer::clip::ClipTree;
         use crate::renderer::{FlattenedCommand, RenderLayer};
 
         let square = |placement| shape(Rect::new(0.0, 0.0, 100.0, 100.0), round(0.0), placement);
         let turned = Transform::rotate_degrees(25.0).center_at(50.0, 50.0);
         let mut tree = ClipTree::default();
-        let outer = tree.place(square(turned), Under::Inherited(None));
-        let inner = tree.place(square(Transform::IDENTITY), Under::Inherited(Some(outer)));
+        let outer = tree.place(square(turned), None);
+        let inner = tree.place(square(Transform::IDENTITY), Some(outer));
 
         let rect = Rect::new(-50.0, -50.0, 200.0, 200.0);
         let cmd = FlattenedCommand {

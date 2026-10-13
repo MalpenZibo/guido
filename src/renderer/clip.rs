@@ -186,26 +186,14 @@ struct Placed {
     /// The clip's own shape, before its ancestors cut it — which is what a
     /// replay translates, and what it is re-intersected from.
     own: PlacedShape,
-    under: Under,
+    /// The clip in effect where this one was placed, if any. A replay asks
+    /// again rather than trusting it: a clip that inherits nothing *today*
+    /// still inherits once its subtree is put back under an
+    /// `Overflow::Hidden` that has since been switched on.
+    under: Option<ClipIndex>,
     /// The link this clip's resolved shape was pushed as for the children that
     /// chain to it, or [`NO_CHAIN`] until one does.
     link: u32,
-}
-
-/// What a clip answers to besides itself.
-///
-/// The two are not the same thing and the difference only shows a frame later.
-/// A clip that inherits nothing *today* still inherits: put its subtree back
-/// under an `Overflow::Hidden` that has since been switched on, and the clip is
-/// cut by it. A clip that answers to nothing never is, whatever appears above
-/// it — which is a ripple, cut to the shape it belongs to and to nothing else.
-/// Reading the first as the second is a clip that stops cutting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Under {
-    /// Whatever clip is in effect where this one is placed, if any.
-    Inherited(Option<ClipIndex>),
-    /// Nothing, on any frame.
-    Nothing,
 }
 
 /// The clips one frame placed, in the order flatten met them.
@@ -269,8 +257,8 @@ impl ClipTree {
     /// Merged into the parent's first shape where [`merge_exact`] can, and
     /// otherwise kept as it is, with the parent's first shape pushed onto the
     /// front of the parent's chain — which is the whole of what a link is for.
-    fn cut(&mut self, own: PlacedShape, under: Under) -> ResolvedClip {
-        let Under::Inherited(Some(parent)) = under else {
+    fn cut(&mut self, own: PlacedShape, under: Option<ClipIndex>) -> ResolvedClip {
+        let Some(parent) = under else {
             return ResolvedClip::alone(own);
         };
         let above = &mut self.placed[parent.0];
@@ -300,7 +288,12 @@ impl ClipTree {
         }
     }
 
-    fn push(&mut self, reference: ClipRef, own: PlacedShape, under: Under) -> ClipIndex {
+    fn push(
+        &mut self,
+        reference: ClipRef,
+        own: PlacedShape,
+        under: Option<ClipIndex>,
+    ) -> ClipIndex {
         let index = ClipIndex(self.placed.len());
         self.placed.push(Placed {
             reference,
@@ -312,21 +305,21 @@ impl ClipTree {
     }
 
     /// Place a clip this frame met for the first time.
-    pub(crate) fn place(&mut self, own: PlacedShape, under: Under) -> ClipIndex {
+    pub(crate) fn place(&mut self, own: PlacedShape, under: Option<ClipIndex>) -> ClipIndex {
         let held = self.cut(own, under);
         self.push(ClipRef::holding(held), own, under)
     }
 
     /// Place the clips a cached subtree carries, where the subtree now is.
     ///
-    /// Three kinds, and the difference between them is the whole of what a
-    /// clip costs a replay. One the subtree placed for itself travels with it,
+    /// Two kinds, and the difference between them is the whole of what a clip
+    /// costs a replay. One the subtree placed for itself travels with it,
     /// so it is translated by the same offset as the content and cut afresh by
     /// its parent — a resized viewport above cuts the new intersection, not
     /// the old one shifted. One it inherited is not its to carry: it is looked
     /// up where the subtree now finds itself, which is how a row scrolls while
-    /// its scroller does not. And an overlay's clip answers to nobody, so it
-    /// is only carried.
+    /// its scroller does not. An overlay's clip is one of the first kind, cut
+    /// by whatever its node is under like any other (#708).
     ///
     /// Writing through the kept reference is what moves the clip for every
     /// command that names it at once. None of them is touched.
@@ -344,9 +337,8 @@ impl ClipTree {
         for clip in clips {
             let own = clip.own.translated(dx, dy);
             let under = match clip.parent {
-                CachedParent::Within(offset) => Under::Inherited(Some(ClipIndex(start + offset))),
-                CachedParent::Inherited => Under::Inherited(inherited),
-                CachedParent::Nothing => Under::Nothing,
+                CachedParent::Within(offset) => Some(ClipIndex(start + offset)),
+                CachedParent::Inherited => inherited,
             };
             let held = self.cut(own, under);
             clip.reference.place(held);
@@ -371,11 +363,8 @@ impl ClipTree {
                 reference: placed.reference.clone(),
                 own: placed.own,
                 parent: match placed.under {
-                    Under::Inherited(Some(ClipIndex(index))) if index >= mark => {
-                        CachedParent::Within(index - mark)
-                    }
-                    Under::Inherited(_) => CachedParent::Inherited,
-                    Under::Nothing => CachedParent::Nothing,
+                    Some(ClipIndex(index)) if index >= mark => CachedParent::Within(index - mark),
+                    _ => CachedParent::Inherited,
                 },
             })
             .collect()
@@ -409,10 +398,6 @@ pub(crate) enum CachedParent {
     /// are read by the two halves of one replay and have to mean the same
     /// thing.
     Inherited,
-    /// Nothing, on this frame or any other: an overlay clip replaces what it
-    /// inherits rather than narrowing it, the way a ripple is cut to the shape
-    /// it belongs to and to nothing above it.
-    Nothing,
 }
 
 /// How near two points have to be to be one corner, and how far outside a
@@ -883,9 +868,9 @@ mod tests {
         let inset = clip(square(10.0, 10.0, 80.0), 12.0, 2.0);
         let row = clip(Rect::new(10.0, 40.0, 80.0, 20.0), 0.0, 1.0);
 
-        let outer = tree.place(card, Under::Inherited(None));
-        let middle = tree.place(inset, Under::Inherited(Some(outer)));
-        let inner = tree.place(row, Under::Inherited(Some(middle)));
+        let outer = tree.place(card, None);
+        let middle = tree.place(inset, Some(outer));
+        let inner = tree.place(row, Some(middle));
 
         assert_eq!(tree.reference(outer).resolved(), ResolvedClip::alone(card));
         let chained = tree.reference(middle).resolved();
@@ -906,18 +891,14 @@ mod tests {
         assert_eq!(tree.chains().links().len(), 1, "one link, shared");
     }
 
-    /// An overlay's clip answers to nothing, so it hangs from no chain.
+    /// A clip under nothing is its own shape, and hangs from no chain.
     #[test]
-    fn an_overlay_clip_has_no_chain() {
+    fn a_clip_under_nothing_has_no_chain() {
         let mut tree = ClipTree::default();
-        tree.place(
-            clip(square(0.0, 0.0, 100.0), 50.0, 1.0),
-            Under::Inherited(None),
-        );
         let ripple = clip(square(10.0, 10.0, 80.0), 12.0, 2.0);
-        let overlay = tree.place(ripple, Under::Nothing);
+        let alone = tree.place(ripple, None);
         assert_eq!(
-            tree.reference(overlay).resolved(),
+            tree.reference(alone).resolved(),
             ResolvedClip::alone(ripple)
         );
         assert!(tree.chains().links().is_empty());
@@ -932,9 +913,9 @@ mod tests {
         let inset = clip(square(10.0, 10.0, 80.0), 12.0, 2.0);
 
         let mut tree = ClipTree::default();
-        let outer = tree.place(card, Under::Inherited(None));
+        let outer = tree.place(card, None);
         let mark = tree.mark();
-        let inner = tree.place(inset, Under::Inherited(Some(outer)));
+        let inner = tree.place(inset, Some(outer));
         let reference = tree.reference(inner);
         let cached = tree.since(mark);
 
@@ -942,10 +923,10 @@ mod tests {
         assert!(tree.chains().links().is_empty());
         // Something else chains first this frame, so last frame's index is
         // somebody else's link now.
-        let other = tree.place(card, Under::Inherited(None));
-        tree.place(inset, Under::Inherited(Some(other)));
+        let other = tree.place(card, None);
+        tree.place(inset, Some(other));
         let moved = card.translated(5.0, 0.0);
-        let outer = tree.place(moved, Under::Inherited(None));
+        let outer = tree.place(moved, None);
         tree.replay(&cached, 5.0, 0.0, Some(outer));
 
         let resolved = reference.resolved();
@@ -965,16 +946,10 @@ mod tests {
     #[test]
     fn siblings_chained_to_one_clip_share_its_link() {
         let mut tree = ClipTree::default();
-        let card = tree.place(
-            clip(square(0.0, 0.0, 100.0), 50.0, 1.0),
-            Under::Inherited(None),
-        );
+        let card = tree.place(clip(square(0.0, 0.0, 100.0), 50.0, 1.0), None);
         let rests: Vec<u32> = (0..3)
             .map(|_| {
-                let inset = tree.place(
-                    clip(square(10.0, 10.0, 80.0), 12.0, 2.0),
-                    Under::Inherited(Some(card)),
-                );
+                let inset = tree.place(clip(square(10.0, 10.0, 80.0), 12.0, 2.0), Some(card));
                 tree.reference(inset).resolved().rest
             })
             .collect();
@@ -989,8 +964,8 @@ mod tests {
         let mut tree = ClipTree::default();
         let card = clip(square(0.0, 0.0, 100.0), 50.0, 1.0);
         let wide = clip(Rect::new(10.0, 10.0, 200.0, 80.0), 12.0, 2.0);
-        let outer = tree.place(card, Under::Inherited(None));
-        let inner = tree.place(wide, Under::Inherited(Some(outer)));
+        let outer = tree.place(card, None);
+        let inner = tree.place(wide, Some(outer));
         let resolved = tree.reference(inner).resolved();
         assert_ne!(resolved.rest, NO_CHAIN, "chained, so the box is a question");
         assert_eq!(resolved.open, Rect::new(10.0, 10.0, 90.0, 80.0));
@@ -1002,14 +977,8 @@ mod tests {
     fn clearing_keeps_the_links_room() {
         let mut tree = ClipTree::default();
         for _ in 0..8 {
-            let outer = tree.place(
-                clip(square(0.0, 0.0, 100.0), 50.0, 1.0),
-                Under::Inherited(None),
-            );
-            tree.place(
-                clip(square(10.0, 10.0, 80.0), 12.0, 2.0),
-                Under::Inherited(Some(outer)),
-            );
+            let outer = tree.place(clip(square(0.0, 0.0, 100.0), 50.0, 1.0), None);
+            tree.place(clip(square(10.0, 10.0, 80.0), 12.0, 2.0), Some(outer));
         }
         let room = tree.link_capacity();
         assert!(room >= 8);
