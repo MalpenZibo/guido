@@ -1,0 +1,7 @@
+node 0,0 800x83.6
+  node 0,0 800x36.8
+    draw rect 0,0 800x36.8 fill=#262633ff radius=8/8/8/8
+    node 0,0 780x16.8 at 10,10 clip(0,-14 780x44.8 r=0)
+  node 0,0 280x36.8 at 260,46.8
+    draw rect 0,0 280x36.8 fill=#262633ff radius=8/8/8/8
+    node 0,0 260x16.8 at 10,10 clip(0,-14 260x44.8 r=0)
