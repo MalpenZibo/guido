@@ -1825,7 +1825,10 @@ impl Widget for Container {
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        // Hidden takes nothing, but it gives up what it held, as the disabled
+        // gate below does.
         if !self.visible.get_or(true) {
+            self.pointer_left(tree, id);
             return EventResponse::Ignored;
         }
         let bounds = tree.get_bounds(id).unwrap_or_default();
