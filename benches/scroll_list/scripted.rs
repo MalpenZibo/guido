@@ -12,8 +12,8 @@
 //! the fields it decides.
 //!
 //! The allocation figures are zero unless the binary installed
-//! [`guido::heap::CountingAllocator`] — a library may not — so each of the four
-//! binaries that compile this file does.
+//! [`guido::heap::CountingAllocator`] — a library may not — so every binary
+//! that compiles this file does.
 
 use std::time::{Duration, Instant};
 

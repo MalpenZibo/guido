@@ -4,12 +4,13 @@
 //! The benchmark exists to say what a screen of small images costs a frame —
 //! the draw calls, the GPU objects made to issue them, and the phases around
 //! them — and it is only worth pointing at two revisions if one revision gives
-//! the same counts twice. The other two benchmarks paint no images at all, so
-//! nothing else says the image columns repeat, or that the grid reaches the
-//! image pipeline in the first place.
+//! the same counts twice. Of the others, two paint no images at all and
+//! `nested_clip` eight sources over and over, so nothing else says a screen of
+//! distinct images repeats, or that the grid reaches the image pipeline in the
+//! first place.
 //!
 //! The file compiles the benchmark's own modules rather than a copy of them, as
-//! the other two repeatability tests do.
+//! the other repeatability tests do.
 
 mod common;
 #[path = "../benches/icon_grid/scene.rs"]
