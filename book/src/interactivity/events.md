@@ -66,6 +66,11 @@ top, and it is the one browsers, Flutter, GTK and Qt give.
 The hover *state* that `when_hovered` reads has already changed by the time
 any of these callbacks runs.
 
+A container that is itself hidden or disabled while the pointer is on it ends
+its hover and its press: `on_hover(false)` is called, and a press it was
+holding is dropped without a click. That happens at the next pointer event to
+reach it, not at the instant it is hidden.
+
 ### Hover with State Layer
 
 For visual hover effects, use `when_hovered` instead:

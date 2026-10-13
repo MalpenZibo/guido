@@ -108,22 +108,24 @@ impl Container {
     /// Give up the pointer: the hover, the press, and a ripple that will now
     /// never be completed.
     ///
-    /// Two events lead here and they mean the same thing. A `MouseLeave` says
-    /// the pointer went somewhere else; the gate at the top of
-    /// [`event`](Widget::event) says this container stopped accepting it. In
-    /// both cases nothing was activated, so the ripple is cancelled rather than
-    /// completed, and `on_hover(false)` is owed to whoever asked to be told.
+    /// Three things lead here and they mean the same thing. A `MouseLeave`
+    /// says the pointer went somewhere else; the two gates at the top of
+    /// [`event`](Widget::event), hidden and disabled, say this container
+    /// stopped accepting it. In every case nothing was activated, so the ripple
+    /// is cancelled rather than completed, and `on_hover(false)` is owed to
+    /// whoever asked to be told.
     ///
-    /// The gate needs this because it returns before
-    /// [`track_pointer`](Self::track_pointer): nothing else would ever take
-    /// `HOVERED` off a container the pointer left while it was switched off,
-    /// and it would light up again the moment it was switched back on with the
-    /// pointer somewhere else entirely. (The *reads* are gated too — see
-    /// [`Control::is_hovered`] — which is what makes the flip itself immediate;
-    /// this is what keeps it true afterwards.)
+    /// The gates need this because they return before
+    /// [`track_pointer`](Self::track_pointer) and before the `MouseUp` arm:
+    /// nothing else would ever take `HOVERED` or `PRESSED` off a container
+    /// while it was switched off. (For a disabled container the *reads* are
+    /// gated too — see [`Control::is_hovered`] — which is what makes the flip
+    /// itself immediate; this is what keeps it true afterwards.) It happens on
+    /// the next event that reaches the container, not at the instant it was
+    /// switched off.
     ///
     /// Every write here is change-guarded, so the events that keep arriving
-    /// over a disabled subtree cost one comparison each and wake nobody.
+    /// over a switched-off subtree cost one comparison each and wake nobody.
     ///
     /// [`Control::is_hovered`]: crate::widgets::Control::is_hovered
     pub(super) fn pointer_left(&mut self, tree: &mut Tree, id: WidgetId) {

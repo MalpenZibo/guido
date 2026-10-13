@@ -1624,15 +1624,21 @@ fn scroll_over_a_button(clicks: RwSignal<u32>, height: f32) -> Container {
         .width(fill())
         .height(fill())
         .scroll(hidden_scroll())
-        .child(
-            block(height, Color::rgb(0.0, 0.0, 1.0))
-                .when_pressed(|s: StateStyle| s.background(Color::rgb(0.0, 1.0, 0.0)))
-                .on_click(move || clicks.update(|c| *c += 1)),
-        )
+        .child(pressable(container().width(fill()).height(height), clicks))
 }
 
-/// Whether the block is drawing its pressed state this frame — green rather
-/// than blue, read where the block covers the surface whatever the offset.
+/// `shape`, blue at rest and green while it is pressed, counting what it
+/// activates — the colours [`pressed`] tells apart.
+fn pressable(shape: Container, clicks: RwSignal<u32>) -> Container {
+    shape
+        .background(Color::rgb(0.0, 0.0, 1.0))
+        .when_pressed(|s: StateStyle| s.background(Color::rgb(0.0, 1.0, 0.0)))
+        .on_click(move || clicks.update(|c| *c += 1))
+}
+
+/// Whether the [`pressable`] under (50, 10) is drawing its pressed state this
+/// frame — green rather than blue. Both scenes that read it keep one there,
+/// whatever the scroll offset.
 fn pressed(app: &Headless, surface: SurfaceId) -> bool {
     let [_, g, b, _] = app.read_pixel(surface, 50, 10);
     g > b
@@ -3977,5 +3983,103 @@ fn a_badge_that_is_shown_lays_its_row_out_again() {
         row.spans(&app),
         [Some((0, 252)), Some((260, 40))],
         "the badge was drawn over the title's end"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Hiding a container ends its hover and its press, as disabling it does (#712)
+// ---------------------------------------------------------------------------
+
+/// The pointer on a container that is then hidden, and then leaving the
+/// surface: whoever asked to hear about the hover hears that it ended.
+#[test]
+fn a_container_hidden_under_the_pointer_hears_it_leave() {
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(true);
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let record = calls.clone();
+    let surface = app.surface(fixed_bar(), move || {
+        let record = record.clone();
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .visible(shown)
+                .on_hover(move |hovered| record.borrow_mut().push(hovered)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    pointer_moves(&mut app, surface, 10.0, 10.0);
+    assert_eq!(*calls.borrow(), [true], "the pointer is on it");
+
+    shown.set(false);
+    app.step();
+    app.event_at(surface, Event::MouseLeave, Instant::now());
+    app.step();
+    assert_eq!(*calls.borrow(), [true, false], "and then it was hidden");
+}
+
+/// A pressable square that lights green while pressed and counts its clicks,
+/// beside another that takes presses of its own.
+fn pressable_beside_a_sibling(shown: RwSignal<bool>, clicks: RwSignal<u32>) -> Container {
+    container()
+        .layout(Flex::row())
+        .width(fill())
+        .height(fill())
+        .child(pressable(
+            container().width(80.0).height(fill()).visible(shown),
+            clicks,
+        ))
+        .child(container().width(80.0).height(fill()).on_click(|| {}))
+}
+
+/// Hidden between press and release, the container misses the release; shown
+/// again, it is not still pressed — neither drawn so, nor ready to take a
+/// release that belongs to a press somewhere else.
+#[test]
+fn a_container_hidden_mid_press_is_not_pressed_when_shown_again() {
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(true);
+    let clicks = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        pressable_beside_a_sibling(shown, clicks)
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let now = Instant::now();
+    app.event_at(
+        surface,
+        Event::mouse_down(10.0, 10.0, MouseButton::Left),
+        now,
+    );
+    app.step();
+    assert!(pressed(&app, surface), "the press landed on it");
+
+    shown.set(false);
+    app.step();
+    app.event_at(surface, Event::mouse_up(10.0, 10.0, MouseButton::Left), now);
+    app.step();
+    shown.set(true);
+    app.step();
+    assert!(
+        !pressed(&app, surface),
+        "the button is up, so it is not drawn down"
+    );
+
+    app.event_at(
+        surface,
+        Event::mouse_down(120.0, 10.0, MouseButton::Left),
+        now,
+    );
+    app.event_at(surface, Event::mouse_move(10.0, 10.0), now);
+    app.event_at(surface, Event::mouse_up(10.0, 10.0, MouseButton::Left), now);
+    app.step();
+    assert_eq!(
+        clicks.get(),
+        0,
+        "a press on the sibling released over it activated nothing"
     );
 }
