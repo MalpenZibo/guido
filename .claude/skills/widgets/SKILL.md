@@ -25,11 +25,11 @@ which is the next section.
 two were silent no-ops on a container that never became scrollable. Now
 `container().scroll(Scroll::vertical())`, and the parts cannot be spelled apart
 from the thing they configure. Its measurements — `width`, `hover_width`,
-`margin`, `min_handle_size`, `reserve_gutter`, `visibility` — are reactive; its
-appearance is `Container`'s own vocabulary, reached through `.track(|t| ..)`
-and `.handle(|h| ..)`, because the scrollbar *is* two containers. Styling a
-part means styling a container, so nothing has to be mirrored into a second
-vocabulary as `Container` grows.
+`margin`, `min_handle_size`, `reserve_gutter`, `visibility`, `fill_viewport`
+— are reactive; its appearance is `Container`'s own vocabulary, reached
+through `.track(|t| ..)` and `.handle(|h| ..)`, because the scrollbar *is* two
+containers. Styling a part means styling a container, so nothing has to be
+mirrored into a second vocabulary as `Container` grows.
 
 `autofocus` is the one that looks structural and is neither: it is a one-shot
 consumed at the first layout, so "take focus when this appears" is an event,

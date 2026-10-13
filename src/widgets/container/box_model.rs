@@ -202,7 +202,7 @@ impl Container {
 
         // Pass the effective minimum down so alignments like Center and End
         // know how much room they actually have to place children in.
-        let min_width = if lengths.width.settled_without_content() {
+        let min_width = if lengths.width.settled_without_content(max_width) {
             max_width
         } else {
             let effective = lengths
@@ -214,7 +214,7 @@ impl Container {
                 .max(0.0)
                 .min(max_width)
         };
-        let min_height = if lengths.height.settled_without_content() {
+        let min_height = if lengths.height.settled_without_content(max_height) {
             max_height
         } else {
             let effective = lengths
@@ -231,23 +231,35 @@ impl Container {
         let viewport = Size::new(max_width, max_height);
 
         // A scrolled axis is unbounded: the content is free to exceed the
-        // viewport, which is what there is to scroll through.
+        // viewport, which is what there is to scroll through. Filling the
+        // viewport makes the visible size its minimum, so a fill child has
+        // the rest of it to take — where there is one: a scroller with no
+        // maximum of its own has no visible size to make a minimum of.
+        let fills = self.scroll_data.as_ref().is_some_and(|sd| sd.fill_viewport);
+        let floor_of = |visible: f32| {
+            if fills && visible.is_finite() {
+                visible
+            } else {
+                0.0
+            }
+        };
+        let floor = Size::new(floor_of(viewport.width), floor_of(viewport.height));
         let child = match self.scroll_axis {
             ScrollAxis::Vertical => Constraints {
                 min_width: 0.0,
-                min_height: 0.0,
+                min_height: floor.height,
                 max_width,
                 max_height: f32::INFINITY,
             },
             ScrollAxis::Horizontal => Constraints {
-                min_width: 0.0,
+                min_width: floor.width,
                 min_height: 0.0,
                 max_width: f32::INFINITY,
                 max_height,
             },
             ScrollAxis::Both => Constraints {
-                min_width: 0.0,
-                min_height: 0.0,
+                min_width: floor.width,
+                min_height: floor.height,
                 max_width: f32::INFINITY,
                 max_height: f32::INFINITY,
             },
@@ -335,7 +347,10 @@ impl Container {
         } else {
             match length.extent() {
                 Extent::Exact(exact) => exact,
-                Extent::Fill => parent_max,
+                // An axis with no maximum has nothing to fill, so a fill
+                // length sizes to its content there, as a fraction does.
+                Extent::Fill if parent_max.is_finite() => parent_max,
+                Extent::Fill => content,
                 // A fraction was made exact by `resolve_fraction` before this
                 // ran, so reaching here means the constraints were unbounded
                 // and there was no share to take — which sizes to content, as

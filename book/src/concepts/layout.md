@@ -329,6 +329,10 @@ container()
 # }
 ```
 
+Along a scrolled axis there is no end to fill to, so `fill()` there is the
+container's content size. A scroller that should give it the visible area says
+so with `Scroll::vertical().fill_viewport(true)` — see the Container chapter.
+
 ## Layout Without Explicit Flex
 
 Containers without `.layout()` use `Flex::column()`:
@@ -424,7 +428,8 @@ container()
 ```
 
 When *every* child fills an axis there is no size to follow, and the stack
-takes all the space it was offered on that axis.
+takes all the space it was offered on that axis — or, along a scrolled axis,
+where there is no end to the space, the size of its largest child.
 
 ### Positioning Inside the Stack
 
