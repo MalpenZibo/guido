@@ -1870,13 +1870,23 @@ impl Widget for Container {
 
         let at = tree.event_instant();
 
+        // Whether the point is inside what this container clips to: its drawn
+        // shape, corners included (#704). Neither its children nor its
+        // scrollbar answer outside it, and nested clips intersect because each
+        // asks in its own frame. Asked only where there is a clip.
+        let clips_children = self.overflow_resolved.get() == Overflow::Hidden
+            || self.scroll_axis != ScrollAxis::None;
+        let in_clip = clips_children && hit.contains(local_event.coords());
+
         // Asked once for the three that run before the children, because the
         // answer is the same one and a container that does not scroll must not
         // pay for it three times on every pointer event. The fourth, after
         // them, asks `watched_content_drag` instead, which answers the same
         // question and the next one in one read.
         if self.scroll_axis != ScrollAxis::None {
-            if let Some(response) = self.handle_scrollbar_event(tree, id, &hit, &local_event) {
+            if let Some(response) =
+                self.handle_scrollbar_event(tree, id, &hit, &local_event, in_clip)
+            {
                 return response;
             }
             // Before the children, because a press has to be watched before
@@ -1914,15 +1924,10 @@ impl Widget for Container {
         // Children clipped away by hidden overflow or scrolling are invisible,
         // and an invisible child must not steal a click from a sibling drawn
         // below it (a collapsed submenu used to do exactly that).
-        let clips_children = self.overflow_resolved.get() == Overflow::Hidden
-            || self.scroll_axis != ScrollAxis::None;
         // An event with no position falls outside nothing; it reaches the
         // children owed one, and they answer no, because their own bounds
         // test is given the same absence.
-        let outside_clip = clips_children
-            && local_event
-                .coords()
-                .is_some_and(|at| !hit.bounds.contains(at.x, at.y));
+        let outside_clip = clips_children && local_event.coords().is_some() && !in_clip;
 
         let children = self.children_source.get();
         // A pointer event goes to the children that can be under its point —

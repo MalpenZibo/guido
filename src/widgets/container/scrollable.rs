@@ -509,12 +509,17 @@ impl Container {
     /// forwards it on — which is how a handle came to answer for a strip beside
     /// itself, and to ripple that far from the finger, on every scroller not
     /// sitting at its parent's origin.
+    ///
+    /// `in_clip` says whether the point is inside the scroller's own shape.
+    /// The scrollbar is drawn inside that clip, so a press or a hover outside
+    /// it, in a corner the clip cuts away, is not on the scrollbar (#704).
     pub(super) fn handle_scrollbar_event(
         &mut self,
         tree: &mut Tree,
         id: WidgetId,
         hit: &HitContext,
         event: &Event,
+        in_clip: bool,
     ) -> Option<EventResponse> {
         if self.scroll_axis == ScrollAxis::None
             || self.scroll_data().scrollbar_visibility == ScrollbarVisibility::Hidden
@@ -534,7 +539,7 @@ impl Container {
                 at: Some(at),
                 button,
                 ..
-            } if *button == MouseButton::Left => {
+            } if *button == MouseButton::Left && in_clip => {
                 // Check vertical scrollbar
                 if self.scroll_axis.allows_vertical()
                     && self.scroll_data().scroll_state.needs_vertical_scrollbar()
@@ -596,6 +601,9 @@ impl Container {
                 }
 
                 // Update hover states
+                // Drawn inside the scroller's clip, so not hovered outside it
+                // (#704); the drag above goes on wherever the pointer goes.
+                let at = at.filter(|_| in_clip);
                 let mut needs_repaint = false;
 
                 if self.scroll_axis.allows_vertical()
@@ -606,7 +614,7 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Vertical,
-                        *at,
+                        at,
                         event,
                     );
                 }
@@ -619,7 +627,7 @@ impl Container {
                         id,
                         bounds,
                         ScrollbarAxis::Horizontal,
-                        *at,
+                        at,
                         event,
                     );
                 }
