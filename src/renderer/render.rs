@@ -180,7 +180,7 @@ impl Renderer {
         // Initialize image renderer
         let image_quad_renderer = ImageQuadRenderer::new(&device, format, clip_records.layout());
 
-        let backdrop = BackdropRenderer::new(&device, format);
+        let backdrop = BackdropRenderer::new(&device, format, clip_records.layout());
 
         Self {
             device,
@@ -486,9 +486,11 @@ impl Renderer {
                     // The effect samples the target, so the pass has to end
                     // and its contents be stored before it can run.
                     drop(render_pass);
+                    let clip_records = self.clip_records.bind_group();
                     for command in &commands[layers[index].backdrop.clone()] {
                         if let Some(region) = command_to_backdrop_region(command, scale) {
-                            self.backdrop.apply(&self.device, &mut encoder, &region);
+                            self.backdrop
+                                .apply(&self.device, &mut encoder, &region, clip_records);
                         } else if let Some(frost) = command_to_text_backdrop(command, scale) {
                             // The mask is rasterized and submitted on its own
                             // encoder, so it is ready by the time this frame's
@@ -504,18 +506,19 @@ impl Renderer {
                                     &self.device,
                                     &mut encoder,
                                     &frost.region,
+                                    clip_records,
                                     mask,
                                 );
                                 // After the blur and before the glyphs: a
                                 // contour on the glass, not under it.
-                                if let Some((color, width)) = frost.outline {
+                                if let Some(outline) = frost.outline {
                                     self.backdrop.apply_outline(
                                         &self.device,
                                         &mut encoder,
                                         &frost.region,
+                                        clip_records,
                                         mask,
-                                        color,
-                                        width,
+                                        outline,
                                     );
                                 }
                             }
@@ -744,7 +747,7 @@ fn backdrop_region(
         // The clip itself, not the box around it: the pass narrows its viewport
         // by the box and then cuts the difference back off per fragment, the
         // same two steps it already takes for the shape.
-        clip: cmd.clip(),
+        clip: cmd.resolved_clip(),
         opacity: cmd.opacity,
     }
 }
@@ -1191,7 +1194,7 @@ mod tests {
         cmd.clip = Some(crate::renderer::clip::ClipRef::placed(clip));
 
         let frost = command_to_text_backdrop(&cmd, 2.0).expect("a frost");
-        let arrived = frost.region.clip.expect("a clip");
+        let arrived = frost.region.clip.expect("a clip").first;
         assert_eq!(arrived.rect, clip.rect, "logical, like the shape beside it");
         assert_eq!(
             arrived.radii.top_left, 16.0,

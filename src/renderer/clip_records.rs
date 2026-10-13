@@ -31,7 +31,10 @@ pub struct ClipRecord {
 }
 
 impl ClipRecord {
-    fn new(shape: &PlacedShape, next: u32, scale: f32) -> Self {
+    /// `shape` as a shader cuts by it, at the surface's `scale`, continuing
+    /// at `next`. The one place a clip is written for a GPU to read, beside
+    /// the instance's own `with_clip`, which is kept inline for its cost.
+    pub(crate) fn new(shape: &PlacedShape, next: u32, scale: f32) -> Self {
         let Some(inverse) = shape.to_local(scale) else {
             return Self {
                 rect: EMPTY_CLIP_RECT,

@@ -33,7 +33,8 @@ struct Params {
     // from the glyph edge in mask texels.
     stroke_color: vec4<f32>,
     stroke_width: f32,
-    _pad1: f32,
+    // Where the clip continues in `clip_records`, or NO_CHAIN.
+    clip_chain: u32,
     _pad2: f32,
     _pad3: f32,
     // The clip, in its own space, and the map from target pixels into it.
@@ -117,8 +118,13 @@ fn clip_coverage(uv: vec2<f32>) -> f32 {
         params.to_clip_0.w * on_target.x + params.to_clip_1.x * on_target.y + params.to_clip_1.y
     );
     let distance = rounded_rect_sdf(p, params.clip_rect, params.clip_radii, params.clip_curvature);
-    let aa = max(fwidth(distance) * 0.5, 0.0001);
-    return 1.0 - smoothstep(-aa, aa, distance);
+    if (params.clip_chain == NO_CHAIN) {
+        let aa = max(fwidth(distance) * 0.5, 0.0001);
+        return 1.0 - smoothstep(-aa, aa, distance);
+    }
+    // The same half-pixel ramp, over the largest distance down the chain.
+    let d = chain_distance(on_target, pixel_distance(distance), params.clip_chain);
+    return 1.0 - smoothstep(-0.5, 0.5, d);
 }
 
 // Copy the region into the working texture. Rendering into a smaller target

@@ -115,11 +115,18 @@ fn every_shader_calls_the_shared_function_it_carries() {
     for path in &SHADERS {
         let source =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        // The definition, the call down the chain, and the shader's own.
         let calls = source.matches("rounded_rect_sdf(").count();
         assert!(
-            calls >= 2,
+            calls >= 3,
             "{path} defines `rounded_rect_sdf` and never calls it — \
              the shared block is carried but some other corner is being cut"
+        );
+        let walks = source.matches("chain_distance(").count();
+        assert!(
+            walks >= 2,
+            "{path} carries the clip-chain walk and never takes it — \
+             a clip that could not be merged is cut by its first shape alone"
         );
     }
 }

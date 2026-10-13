@@ -1694,6 +1694,95 @@ fn nested_clips_cut_images_exactly() {
     );
 }
 
+/// A backdrop blur is cut by every clip above it, and so is a frosted text.
+///
+/// The pass narrows its viewport to the box every clip leaves open and walks
+/// the chain per fragment in the composite. Each cell is a pair of clips that
+/// cannot be merged, over a frost larger than both. Left: a circle over a
+/// squircle inset from its corners. Middle: an outer clip turned 25° over an
+/// upright inner one. Right: frosted, stroked lines in a square inset from a
+/// rounded card by less than the card's corners reach.
+#[test]
+fn backdrop_blur_is_cut_by_a_chain_of_clips() {
+    let card = || {
+        box_of(150.0, 150.0)
+            .background(Color::rgba(0.10, 0.10, 0.16, 0.30))
+            .translate((-30.0, -30.0))
+            .backdrop_blur(BackdropBlur::new(14.0).sources(BackdropSources::SURFACE))
+    };
+    let frosted = || {
+        label("MMMMMM", 22.0)
+            .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
+            .backdrop_blur(12.0)
+            .text_stroke(TextStroke::new(2.0, Color::BLACK))
+            .nowrap()
+    };
+    let clip = |side: f32, corners: Corners| {
+        box_of(side, side)
+            .corners(corners)
+            .overflow(Overflow::Hidden)
+            .layout(ZStack::new())
+    };
+    // A box only lays content out larger than itself along an axis it
+    // scrolls, so the inner clip scrolls and the frost overflows it.
+    let scroller = |side: f32, corners: Corners| {
+        clip(side, corners).scroll(Scroll::both().visibility(ScrollbarVisibility::Hidden))
+    };
+    let cell = |pair: Container| {
+        container()
+            .width(120.0)
+            .height(180.0)
+            .layout(Flex::row().center())
+            .child(pair)
+            .into_any()
+    };
+    let lines = container()
+        .width(200.0)
+        .translate((-10.0, -6.0))
+        .layout(Flex::column().spacing(2.0))
+        .children([frosted(), frosted(), frosted(), frosted()]);
+
+    let view = container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(360.0, 13, 14.0).into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .children([
+                    cell(
+                        clip(96.0, Corners::rounded(48.0))
+                            .padding(8.0)
+                            .child(scroller(80.0, Corners::squircle(12.0)).child(card())),
+                    ),
+                    cell(
+                        clip(96.0, Corners::rounded(22.0)).rotate(25.0).child(
+                            scroller(96.0, Corners::rounded(16.0))
+                                .rotate(-25.0)
+                                .child(card()),
+                        ),
+                    ),
+                    cell(
+                        clip(96.0, Corners::rounded(30.0))
+                            .padding(4.0)
+                            .child(scroller(88.0, Corners::rounded(0.0)).child(lines)),
+                    ),
+                ])
+                .into_any(),
+        ]);
+
+    golden(
+        "backdrop_blur_is_cut_by_a_chain_of_clips",
+        (360.0, 180.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// A text is cut by every clip above it, as a shape is.
 ///
 /// Text has two paths and both have to hear about a chain. Glyphon takes four

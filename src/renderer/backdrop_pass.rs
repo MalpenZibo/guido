@@ -26,7 +26,9 @@ use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
-use super::gpu::{EMPTY_CLIP_RECT, NO_CLIP_RECT};
+use super::clip::{NO_CHAIN, ResolvedClip};
+use super::clip_records::ClipRecord;
+use super::gpu::NO_CLIP_RECT;
 
 /// How much the working texture is shrunk before blurring.
 ///
@@ -66,7 +68,11 @@ struct Params {
     /// from the glyph edge in mask texels.
     stroke_color: [f32; 4],
     stroke_width: f32,
-    _pad4: [f32; 3],
+    /// Where the clip continues in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN) — see
+    /// [`ResolvedClip`](super::clip::ResolvedClip).
+    clip_chain: u32,
+    _pad4: [f32; 2],
     /// The clip, in its own space: `[x, y, width, height]`. Negative extents
     /// are the no-clip sentinel and zero extents the lets-nothing-through one,
     /// as in [`NO_CLIP_RECT`](super::gpu::NO_CLIP_RECT) — the same two spellings
@@ -116,11 +122,13 @@ pub struct BackdropRegion {
     /// if any. The mask says which pixels of the region are filtered; this says
     /// which of them are on show at all.
     ///
-    /// A shape, like the one above and for the same reason. It is tested per
-    /// fragment in its own space, so a rounded scroller keeps its corners and a
-    /// turned one keeps its edges; the viewport is still narrowed by the box
-    /// around it, because a viewport is four integers and narrowing it is free.
-    pub clip: Option<PlacedShape>,
+    /// Shapes, like the one above and for the same reason: the first and the
+    /// chain of those it could not be merged with. Each is tested per fragment
+    /// in its own space, so a rounded scroller keeps its corners and a turned
+    /// one keeps its edges; the viewport is still narrowed by the box they all
+    /// leave open, because a viewport is four integers and narrowing it is
+    /// free.
+    pub clip: Option<ResolvedClip>,
     /// How opaque the result is laid back over the target: what the
     /// container's own opacity and every ancestor's multiply to. A frosted
     /// panel fading out takes its frost with it.
@@ -154,11 +162,11 @@ impl BackdropRegion {
         let mut top = rect.y;
         let mut right_f = rect.x + rect.width;
         let mut bottom_f = rect.y + rect.height;
-        if let Some(clip) = self.clip {
-            // The box around the clip, which is all a viewport can be. What the
-            // box over-claims is cut back off per fragment by the shader, the
-            // same way the shape's own box is.
-            let clip = clip.world_aabb();
+        if let Some(clip) = &self.clip {
+            // The box every clip leaves open, which is all a viewport can be.
+            // What the box over-claims is cut back off per fragment by the
+            // shader, the same way the shape's own box is.
+            let clip = clip.open;
             left = left.max(clip.x * self.scale);
             top = top.max(clip.y * self.scale);
             right_f = right_f.min((clip.x + clip.width) * self.scale);
@@ -194,19 +202,14 @@ impl BackdropRegion {
         // that lets nothing through. A placement that collapses is the second —
         // it has no inverse, so there is no space to test a fragment in, and
         // the honest answer is that nothing shows rather than everything.
-        let (clip_rect, clip_radii, clip_curvature, to_clip) = match self.clip {
-            None => (NO_CLIP_RECT, [0.0; 4], 1.0, Transform::IDENTITY),
-            Some(clip) => match clip.to_local(self.scale) {
-                Some(to_clip) => {
-                    let r = clip.rect;
-                    (
-                        [r.x, r.y, r.width, r.height],
-                        clip.radii.to_array(),
-                        clip.curvature,
-                        to_clip,
-                    )
-                }
-                None => (EMPTY_CLIP_RECT, [0.0; 4], 1.0, Transform::IDENTITY),
+        let clip = match &self.clip {
+            Some(clip) => ClipRecord::new(&clip.first, clip.rest, self.scale),
+            None => ClipRecord {
+                rect: NO_CLIP_RECT,
+                radii: [0.0; 4],
+                inverse: Transform::IDENTITY.data,
+                curvature: 1.0,
+                next: NO_CHAIN,
             },
         };
         Some(Params {
@@ -216,10 +219,11 @@ impl BackdropRegion {
             viewport_origin: [origin.0 as f32, origin.1 as f32],
             to_shape: to_shape.data,
             mask_size: mask.map_or([1.0, 1.0], |m| [m.size.0 as f32, m.size.1 as f32]),
-            clip_rect,
-            clip_radii,
-            clip_curvature,
-            to_clip: to_clip.data,
+            clip_rect: clip.rect,
+            clip_radii: clip.radii,
+            clip_curvature: clip.curvature,
+            to_clip: clip.inverse,
+            clip_chain: clip.next,
             opacity: self.opacity,
             ..Params::zeroed()
         })
@@ -262,7 +266,11 @@ pub struct BackdropRenderer {
 }
 
 impl BackdropRenderer {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        clip_records: &wgpu::BindGroupLayout,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Backdrop Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("backdrop_shader.wgsl").into()),
@@ -357,14 +365,21 @@ impl BackdropRenderer {
                 ],
             });
 
+        // Group 1 is the frame's clip chains, which only the composites walk:
+        // the downsample, the blur and the blit read no clip and bind none.
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
+        let clipped_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Backdrop Clipped Pipeline Layout"),
+            bind_group_layouts: &[Some(&bind_group_layout), Some(clip_records)],
+            immediate_size: 0,
+        });
         let mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Mask Pipeline Layout"),
-            bind_group_layouts: &[Some(&mask_bind_group_layout)],
+            bind_group_layouts: &[Some(&mask_bind_group_layout), Some(clip_records)],
             immediate_size: 0,
         });
 
@@ -423,7 +438,12 @@ impl BackdropRenderer {
             sampler,
             downsample: pipeline("Backdrop Downsample", "fs_downsample", None),
             blur: pipeline("Backdrop Blur", "fs_blur", None),
-            composite: pipeline("Backdrop Composite", "fs_composite", Some(composite_blend)),
+            composite: build(
+                "Backdrop Composite",
+                "fs_composite",
+                Some(composite_blend),
+                &clipped_layout,
+            ),
             composite_mask: build(
                 "Backdrop Composite Mask",
                 "fs_composite_mask",
@@ -556,6 +576,7 @@ impl BackdropRenderer {
         target: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
         bind_group: &wgpu::BindGroup,
+        clip_records: Option<&wgpu::BindGroup>,
         viewport: (u32, u32, u32, u32),
         label: &str,
     ) {
@@ -579,6 +600,9 @@ impl BackdropRenderer {
         pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bind_group, &[]);
+        if let Some(clip_records) = clip_records {
+            pass.set_bind_group(1, clip_records, &[]);
+        }
         pass.draw(0..3, 0..1);
         render_stats::record_draw_calls(Pipeline::Backdrop, 1);
     }
@@ -590,8 +614,9 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
+        clip_records: &wgpu::BindGroup,
     ) {
-        self.filter(device, encoder, region, None);
+        self.filter(device, encoder, region, clip_records, None);
     }
 
     /// The same, cut out by `mask`'s alpha instead of the corners.
@@ -606,9 +631,10 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
+        clip_records: &wgpu::BindGroup,
         mask: CoverageMask<'_>,
     ) {
-        self.filter(device, encoder, region, Some(mask));
+        self.filter(device, encoder, region, clip_records, Some(mask));
     }
 
     /// Draw a contour just outside `mask`'s coverage.
@@ -625,9 +651,9 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
+        clip_records: &wgpu::BindGroup,
         mask: CoverageMask<'_>,
-        color: Color,
-        width: f32,
+        (color, width): (Color, f32),
     ) {
         let Some(targets) = &self.targets else {
             return;
@@ -657,6 +683,7 @@ impl BackdropRenderer {
             &targets.scene_view,
             wgpu::LoadOp::Load,
             &bind,
+            Some(clip_records),
             viewport,
             "Text Outline",
         );
@@ -667,6 +694,7 @@ impl BackdropRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         region: &BackdropRegion,
+        clip_records: &wgpu::BindGroup,
         mask: Option<CoverageMask<'_>>,
     ) {
         let Some(targets) = &self.targets else {
@@ -719,6 +747,7 @@ impl BackdropRenderer {
             &targets.working_views[0],
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &bind,
+            None,
             (0, 0, work_width, work_height),
             "Backdrop Downsample",
         );
@@ -744,6 +773,7 @@ impl BackdropRenderer {
                 &targets.working_views[1 - index],
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 &bind,
+                None,
                 (0, 0, work_width, work_height),
                 "Backdrop Blur",
             );
@@ -772,6 +802,7 @@ impl BackdropRenderer {
             &targets.scene_view,
             wgpu::LoadOp::Load,
             &bind,
+            Some(clip_records),
             (x, y, width, height),
             label,
         );
@@ -806,6 +837,7 @@ impl BackdropRenderer {
             target,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &bind,
+            None,
             (0, 0, targets.width, targets.height),
             "Backdrop Blit",
         );
@@ -860,5 +892,33 @@ impl Targets {
             working,
             working_views,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::offset_of;
+
+    /// The uniform is one layout written twice, and the chain head took four
+    /// bytes that were padding: the shader has to read it, and everything
+    /// after it, from the bytes the struct wrote them to.
+    #[test]
+    fn the_shader_reads_the_clip_where_the_params_put_it() {
+        let (wgsl, size) = super::super::gpu::instance_layout::wgsl_fields(
+            "src/renderer/backdrop_shader.wgsl",
+            "Params",
+        );
+        let at = |name: &str| {
+            wgsl.iter()
+                .find(|(field, _)| field == name)
+                .unwrap_or_else(|| panic!("`Params` in the shader has no `{name}`"))
+                .1
+        };
+        assert_eq!(at("stroke_width"), offset_of!(Params, stroke_width));
+        assert_eq!(at("clip_chain"), offset_of!(Params, clip_chain));
+        assert_eq!(at("clip_rect"), offset_of!(Params, clip_rect));
+        assert_eq!(at("opacity"), offset_of!(Params, opacity));
+        assert_eq!(size, size_of::<Params>());
     }
 }
