@@ -8,7 +8,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use guido::layout::Flex;
 use guido::prelude::*;
+use guido::renderer::DrawCommand;
 use guido::transform::Transform;
 
 mod common;
@@ -143,5 +145,92 @@ fn a_stretched_clip_cuts_in_its_own_frame() {
     assert_eq!(
         clicks_at(card, &[stretch((2.0, 2.0)), stretch((10.0, 50.0))]),
         [0, 1]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A scroller's own scrollbar is drawn inside its clip too
+// ---------------------------------------------------------------------------
+
+/// A 200×200 scroller with 40px corners over 800px of rows. Its vertical
+/// scrollbar answers across x 188..198 (hover width 10, margin 2) along the
+/// whole track; the corners are circles about (160, 40) and (160, 160), so
+/// (196, 4) and (196, 196) are 50.9 from them — cut away — while x 193 at
+/// y 45..155 is inside.
+fn rounded_scroller() -> Harness {
+    Harness::laid_out(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .corners(40.0)
+            .scroll(Scroll::vertical())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .children((0..20).map(|_| container().width(fill()).height(40.0))),
+            ),
+        200.0,
+        200.0,
+    )
+}
+
+/// How far the content has scrolled, read off its painted origin.
+fn scrolled_by(h: &mut Harness) -> f32 {
+    -h.paint().children[0].local_transform.ty()
+}
+
+/// The alpha of the handle's fill, which is all that tells resting, hovered
+/// and pressed apart. Content, track and handle are the scroller's three
+/// painted children.
+fn handle_alpha(h: &mut Harness) -> f32 {
+    let node = h.paint();
+    assert_eq!(node.children.len(), 3, "content, track and handle");
+    node.children[2]
+        .commands
+        .iter()
+        .find_map(|cmd| match &**cmd {
+            DrawCommand::RoundedRect { color, .. } => Some(color.a),
+            _ => None,
+        })
+        .expect("the handle fills itself")
+}
+
+#[test]
+fn a_press_in_a_cut_away_corner_does_not_reach_the_scrollbar() {
+    let mut h = rounded_scroller();
+    // The foot of the track, under the bottom-right corner.
+    h.send(Event::mouse_down(196.0, 196.0, MouseButton::Left));
+    h.send(Event::mouse_up(196.0, 196.0, MouseButton::Left));
+    assert_eq!(scrolled_by(&mut h), 0.0, "the track jumped from its corner");
+
+    // The same track where it is drawn.
+    h.send(Event::mouse_down(193.0, 150.0, MouseButton::Left));
+    assert!(scrolled_by(&mut h) > 0.0, "the drawn track did not answer");
+}
+
+#[test]
+fn a_hover_in_a_cut_away_corner_does_not_light_the_handle() {
+    let mut h = rounded_scroller();
+    let resting = handle_alpha(&mut h);
+    // The handle's top end, under the top-right corner.
+    h.send(Event::mouse_move(196.0, 4.0));
+    assert_eq!(handle_alpha(&mut h), resting, "lit from its corner");
+
+    h.send(Event::mouse_move(193.0, 45.0));
+    assert_ne!(
+        handle_alpha(&mut h),
+        resting,
+        "the drawn handle did not light"
+    );
+}
+
+#[test]
+fn a_handle_drag_goes_on_into_the_corner() {
+    let mut h = rounded_scroller();
+    h.send(Event::mouse_down(193.0, 45.0, MouseButton::Left));
+    h.send(Event::mouse_move(196.0, 196.0));
+    assert!(
+        scrolled_by(&mut h) > 0.0,
+        "a drag already held stopped at the clip"
     );
 }
