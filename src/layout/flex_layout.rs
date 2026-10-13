@@ -22,6 +22,17 @@
 //!
 //! [`Flex::center`] sets both to `Center`.
 //!
+//! ## Children That Do Not Fit
+//!
+//! When the children that do not `fill()` are longer than the main axis, those
+//! that can be shorter give the overflow up in proportion to their natural
+//! sizes, none below the minimum its layout recorded
+//! ([`LayoutCtx::set_minimum`](crate::tree::LayoutCtx::set_minimum)): an exact
+//! length at any depth keeps it, a text that ellipsizes goes down to its mark.
+//! A child held at its minimum leaves the rest to the others, as CSS Flexbox
+//! §9.7 resolves flexible lengths. Children that fit are laid out at their
+//! natural sizes, once.
+//!
 //! ## Usage
 //!
 //! ```no_run
@@ -62,6 +73,17 @@ pub struct Flex {
 
     child_sizes: Vec<Size>,
     fill_indices: Vec<usize>,
+}
+
+/// One child an overflow can take room from.
+#[derive(Clone, Copy)]
+struct Share {
+    index: usize,
+    natural: f32,
+    /// Its minimum, never above its natural size.
+    floor: f32,
+    target: f32,
+    frozen: bool,
 }
 
 impl Flex {
@@ -158,6 +180,117 @@ impl Flex {
         }
     }
 
+    /// Take the overflow of the children that are not filling out of those
+    /// that can give room up, in proportion to their natural sizes, and lay
+    /// each one that gave some up out again at what it kept.
+    ///
+    /// CSS Flexbox §9.7: a child whose share would take it below its minimum
+    /// is held at the minimum, and the rest share what is left, until no
+    /// share goes below one. When even the minimums do not fit, every child
+    /// ends at its minimum and the row overflows, as it did before.
+    ///
+    /// Answers the most each child may now be, by index, for the stretch that
+    /// lays the children out again. Not kept on the flex, which every
+    /// container holds: one whose children fit would carry it for nothing.
+    fn share_overflow(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        children: &[WidgetId],
+        offered: Constraints,
+        axis: Axis,
+        room: f32,
+    ) -> Vec<f32> {
+        let mut shares = Vec::new();
+        let mut held = 0.0f32;
+        for (index, &child) in children.iter().enumerate() {
+            let natural = self.child_sizes[index].main_axis(axis);
+            if self.fill_indices.binary_search(&index).is_ok() || natural <= 0.0 {
+                continue;
+            }
+            let floor = ctx
+                .tree_ref()
+                .minimum(child)
+                .map_or(natural, |least| least.main_axis(axis));
+            if floor >= natural {
+                held += natural;
+                continue;
+            }
+            shares.push(Share {
+                index,
+                natural,
+                floor,
+                target: natural,
+                frozen: false,
+            });
+        }
+
+        let mut free_natural: f32 = shares.iter().map(|share| share.natural).sum();
+        loop {
+            let overflow = held + free_natural - room;
+            if free_natural <= 0.0 || overflow <= 0.0 {
+                break;
+            }
+            // Every share of a round is taken from the same overflow, and only
+            // then are the ones under their minimums held: holding one part
+            // way through must not make the shares after it larger.
+            let (mut newly_held, mut released) = (0.0f32, 0.0f32);
+            for share in shares.iter_mut().filter(|share| !share.frozen) {
+                share.target = share.natural - overflow * share.natural / free_natural;
+                if share.target < share.floor {
+                    share.target = share.floor;
+                    share.frozen = true;
+                    newly_held += share.floor;
+                    released += share.natural;
+                }
+            }
+            if released == 0.0 {
+                break;
+            }
+            held += newly_held;
+            free_natural -= released;
+        }
+
+        let whole = match axis {
+            Axis::Horizontal => offered.max_width,
+            Axis::Vertical => offered.max_height,
+        };
+        let mut kept = vec![whole; children.len()];
+        for share in &shares {
+            if share.target >= share.natural {
+                continue;
+            }
+            kept[share.index] = share.target;
+            let constraints = match axis {
+                Axis::Horizontal => Constraints {
+                    max_width: share.target,
+                    ..offered
+                },
+                Axis::Vertical => Constraints {
+                    max_height: share.target,
+                    ..offered
+                },
+            };
+            if let Some(size) = ctx.layout_child(children[share.index], constraints) {
+                self.child_sizes[share.index] = size;
+            }
+        }
+        kept
+    }
+
+    /// The main-axis length of the children laid out so far, how many of them
+    /// keep a gap, and the longest across.
+    fn tally(&self, axis: Axis) -> (f32, usize, f32) {
+        self.child_sizes
+            .iter()
+            .fold((0.0, 0, 0.0), |(main, kept, cross), size| {
+                (
+                    main + size.main_axis(axis),
+                    kept + usize::from(takes_a_gap(size.main_axis(axis))),
+                    f32::max(cross, size.cross_axis(axis)),
+                )
+            })
+    }
+
     /// Layout children along the given axis
     fn layout_axis(
         &mut self,
@@ -214,9 +347,6 @@ impl Flex {
         self.child_sizes.resize(children.len(), Size::zero());
 
         // Pass 1: layout non-fill children and collect fill child indices
-        let mut non_fill_main = 0.0f32;
-        let mut non_fill_kept = 0usize;
-        let mut max_cross = 0.0f32;
         self.fill_indices.clear();
 
         for (i, &child_id) in children.iter().enumerate() {
@@ -231,25 +361,39 @@ impl Flex {
             if is_fill {
                 self.fill_indices.push(i);
             } else if let Some(size) = ctx.layout_child(child_id, child_constraints) {
-                non_fill_main += size.main_axis(axis);
-                non_fill_kept += usize::from(takes_a_gap(size.main_axis(axis)));
-                max_cross = max_cross.max(size.cross_axis(axis));
                 self.child_sizes[i] = size;
             }
         }
+        let (mut non_fill_main, mut non_fill_kept, mut max_cross) = self.tally(axis);
 
         // Compute fill distribution. The gaps counted are the ones placement
         // keeps: none beside a child that measured nothing, such as a hidden
         // one. Every fill child is counted as keeping its gap. Placement drops
         // that gap only for a fill child given half a pixel or less, which
         // happens only when the row has next to no room left.
-        let total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
+        let mut total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
         // An axis with no maximum — a scrolled one — has nothing to fill: a
         // fill child is offered its share of the minimum, which is nothing
         // unless the scroller fills its viewport, and grows past it to its
         // content's size, as CSS sizes `flex-grow` in a container of
         // indefinite size.
         let bounded = main_max.is_finite();
+
+        // Children that do not fit give room up, down to their minimums. Only
+        // here is any child laid out again, so a row that fits costs what it
+        // always did.
+        let mut kept = Vec::new();
+        if bounded && non_fill_main + total_spacing > main_max {
+            kept = self.share_overflow(
+                ctx,
+                children,
+                child_constraints,
+                axis,
+                main_max - total_spacing,
+            );
+            (non_fill_main, non_fill_kept, max_cross) = self.tally(axis);
+            total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
+        }
         let room = if bounded { main_max } else { main_min };
         let per_fill = if !self.fill_indices.is_empty() {
             let remaining = (room - non_fill_main - total_spacing).max(0.0);
@@ -332,7 +476,13 @@ impl Flex {
                 if child_is_fill {
                     fill_cursor += 1;
                 }
-                let main_constraint = if child_is_fill { fill_max } else { main_max };
+                // A child that gave room up is offered what it kept, or the
+                // stretch would undo the share.
+                let main_constraint = if child_is_fill {
+                    fill_max
+                } else {
+                    kept.get(i).copied().unwrap_or(main_max)
+                };
                 let stretch_constraints = match axis {
                     Axis::Horizontal => Constraints {
                         min_width: if child_is_fill { per_fill } else { 0.0 },
@@ -444,7 +594,30 @@ impl Flex {
             }
         }
 
+        let least = Self::least(ctx.tree_ref(), children, axis, spacing);
+        ctx.set_minimum(least);
         size
+    }
+
+    /// The least the children can be arranged in: along the axis, each one's
+    /// minimum and the gaps those that keep a length keep between them;
+    /// across it, the largest one's. A child's minimum is never more than
+    /// the size it was laid out at, so this is never more than the content.
+    fn least(tree: &Tree, children: &[WidgetId], axis: Axis, spacing: f32) -> Size {
+        let mut along = 0.0f32;
+        let mut across = 0.0f32;
+        let mut kept = 0usize;
+        for &child in children {
+            let least = tree.minimum(child).unwrap_or_default();
+            along += least.main_axis(axis);
+            kept += usize::from(takes_a_gap(least.main_axis(axis)));
+            across = across.max(least.cross_axis(axis));
+        }
+        along += gaps(spacing, kept);
+        match axis {
+            Axis::Horizontal => Size::new(along, across),
+            Axis::Vertical => Size::new(across, along),
+        }
     }
 }
 
@@ -524,6 +697,145 @@ mod tests {
             tree.get_origin(swatch).expect("laid out").1,
             0.0,
             "with nothing else on the line, the box sits at the top"
+        );
+    }
+
+    /// A row records the least its children can be arranged in, with the
+    /// gaps those that keep a length keep between them, and the tallest of
+    /// them across.
+    ///
+    /// The button is padding round an exact box, so it cannot be less than
+    /// both; the clipping panel can be nothing, and keeps no gap; the swatch
+    /// has an exact width.
+    #[test]
+    fn a_row_records_the_least_its_children_can_be() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(Flex::row().spacing(4.0))
+                .child(
+                    container()
+                        .padding(4.0)
+                        .child(container().width(16.0).height(16.0)),
+                )
+                .child(
+                    container()
+                        .overflow(crate::widgets::Overflow::Hidden)
+                        .child(container().width(100.0).height(40.0)),
+                )
+                .child(container().width(10.0).height(10.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+
+        assert_eq!(tree.minimum(root), Some(Size::new(24.0 + 4.0 + 10.0, 24.0)));
+    }
+
+    /// A label stretched to the height of the row it is in is as short as its
+    /// lines, not as the row: a column around the row could otherwise never
+    /// shrink it.
+    #[test]
+    fn a_stretched_label_records_the_height_of_its_lines() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .layout(Flex::row())
+                .child(container().width(10.0).height(100.0))
+                .child(
+                    crate::widgets::text("label")
+                        .font_size(14.0)
+                        .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono")),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        frame(&mut tree, root);
+
+        let label = tree.get_children(root)[1];
+        assert_eq!(tree.get_bounds(label).expect("laid out").height, 100.0);
+        let least = tree.minimum(label).expect("laid out").height;
+        assert!(least < 20.0, "one line is the least it can be, got {least}");
+    }
+
+    /// A minimum is recorded with the size it belongs to: a layout skipped as
+    /// clean answers the one it recorded, and a layout that runs again
+    /// records a new one.
+    #[test]
+    fn a_recorded_minimum_survives_a_skip_and_follows_a_change() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let label = create_signal(String::from("abc defgh"));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container().layout(Flex::row()).child(
+                crate::widgets::text(label)
+                    .font_size(14.0)
+                    .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono")),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let glyph = 168.574_22 / 20.0;
+        let least = |tree: &Tree| tree.minimum(root).expect("laid out").width;
+
+        frame(&mut tree, root);
+        assert!((least(&tree) - 5.0 * glyph).abs() < 0.01, "the widest word");
+
+        frame(&mut tree, root);
+        assert!(
+            (least(&tree) - 5.0 * glyph).abs() < 0.01,
+            "a skipped layout still answers it"
+        );
+
+        label.set(String::from("abc defghijk"));
+        frame(&mut tree, root);
+        assert!(
+            (least(&tree) - 8.0 * glyph).abs() < 0.01,
+            "the content changed, and so did the widest word"
+        );
+    }
+
+    /// A minimum is recorded again once what it was worked out from changes.
+    ///
+    /// A container that does not clip, holding a label that neither wraps nor
+    /// ellipsizes, cannot be narrower than the label, so in a row that
+    /// overflows it keeps the label's width and the title beside it gives the
+    /// room up. When the label grows, the container's minimum has to grow
+    /// with it: a minimum kept from before would let the row squash the
+    /// container below the label it now holds.
+    #[test]
+    fn a_minimum_follows_the_content_it_was_measured_from() {
+        crate::load_font(include_bytes!("../../tests/assets/DejaVuSansMono.ttf").to_vec());
+        let label = create_signal(String::from("abcdefgh"));
+        let style = |t: crate::widgets::Text| {
+            t.font_size(14.0)
+                .font_family(crate::widgets::FontFamily::name("DejaVu Sans Mono"))
+                .nowrap()
+        };
+
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .width(200.0)
+                .layout(Flex::row())
+                .child(container().child(style(crate::widgets::text(label))))
+                .child(
+                    style(crate::widgets::text("abcdefghijklmnopqrst"))
+                        .overflow(crate::widgets::TextOverflow::Ellipsis),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let holder = tree.get_children(root)[0];
+        let glyph = 168.574_22 / 20.0;
+
+        frame(&mut tree, root);
+        let before = tree.get_bounds(holder).expect("laid out").width;
+        assert!((before - 8.0 * glyph).abs() < 0.01, "got {before}");
+
+        label.set(String::from("abcdefghij"));
+        frame(&mut tree, root);
+        let after = tree.get_bounds(holder).expect("laid out").width;
+        assert!(
+            (after - 10.0 * glyph).abs() < 0.01,
+            "the container was held at a minimum it has outgrown: {after}"
         );
     }
 

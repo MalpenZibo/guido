@@ -333,6 +333,44 @@ Along a scrolled axis there is no end to fill to, so `fill()` there is the
 container's content size. A scroller that should give it the visible area says
 so with `Scroll::vertical().fill_viewport(true)` — see the Container chapter.
 
+## Children That Do Not Fit
+
+When a row's children are wider than the row, the children that can be
+narrower give the room up, in proportion to their widths — CSS's
+`flex-shrink`. None goes below its minimum:
+
+- a container with an exact `width` keeps it, however deep it sits — an icon
+  inside a padded button is not squashed by a long title beside the button
+- a text that ellipsizes can go down to the `…`, one that wraps to its widest
+  word, and one that does neither keeps its whole width
+- a container that clips (`Overflow::Hidden`) or scrolls can go down to
+  nothing, or to the minimum it declares with `at_least`; any other container
+  goes no lower than what it holds, plus its padding
+
+A child held at its minimum leaves the rest of the overflow to the others.
+When even the minimums do not fit, the row runs past its end, as it does when
+nothing in it can shrink. A row that fits is laid out at its children's natural
+sizes, exactly as before. Columns follow the same rule along their height:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn header() -> Container { container().height(30.0) }
+# fn rows() -> Container { container() }
+# fn main() {
+// The list takes what the header leaves, rather than the column's whole height.
+container()
+    .height(300.0)
+    .layout(Flex::column())
+    .child(header())
+    .child(container().scroll(Scroll::vertical()).child(rows()))
+# ;
+# }
+```
+
+`fill()` children are not part of this: they take what is left once the others
+are laid out, and nothing is left when the others overflow.
+
 ## Layout Without Explicit Flex
 
 Containers without `.layout()` use `Flex::column()`:

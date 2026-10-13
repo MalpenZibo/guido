@@ -1772,6 +1772,10 @@ impl Widget for Container {
         self.update_size_targets(ctx, id, &lengths, content_size);
 
         let size = self.resolve_size(ctx, &lengths, constraints, content_size);
+        // What the layout recorded its children can be arranged in, or — a
+        // layout that says nothing — the size they were.
+        let content_least = ctx.minimum().unwrap_or(content_size);
+        ctx.set_minimum(self.least_size(&lengths, content_least, size));
 
         self.layout_scrollbar_containers(ctx, id, size);
 

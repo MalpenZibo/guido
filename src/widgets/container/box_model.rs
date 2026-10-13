@@ -309,6 +309,67 @@ impl Container {
         )
     }
 
+    /// The least this box can be, from the least its content can be: what a
+    /// flex whose children do not fit takes it down to.
+    ///
+    /// An exact length is rigid, at any depth: an icon of a declared width
+    /// inside a button keeps it however crowded the row the button is in. A
+    /// box whose content may run past it — cut off, or scrolled to — need not
+    /// hold it, as CSS gives a scroll container no automatic minimum, and goes
+    /// down to the minimum it declares. Any other box goes no lower than its
+    /// content and padding, the rule [`resolve_axis`](Self::resolve_axis)
+    /// holds it to. A size in flight is where the animation has it.
+    pub(super) fn least_size(&self, lengths: &BoxLengths, content: Size, size: Size) -> Size {
+        let least = |axis: Axis, length: &Length, padding: f32, content: f32, size: f32| {
+            if self.size_anim(axis).is_some_and(|a| a.is_animating()) {
+                return size;
+            }
+            if let Some(exact) = length.exact_size() {
+                return length.clamp(exact);
+            }
+            let declared = length.min().unwrap_or(0.0);
+            if self.content_may_overflow(axis, lengths.overflow) {
+                declared
+            } else {
+                (content + padding).max(declared)
+            }
+        };
+        Size::new(
+            least(
+                Axis::Horizontal,
+                &lengths.width,
+                lengths.padding.horizontal_total(),
+                content.width,
+                size.width,
+            ),
+            least(
+                Axis::Vertical,
+                &lengths.height,
+                lengths.padding.vertical_total(),
+                content.height,
+                size.height,
+            ),
+        )
+    }
+
+    /// The animation declared on this box's size along `axis`, if any.
+    fn size_anim(&self, axis: Axis) -> Option<&AnimationState<f32>> {
+        self.anims.as_ref().and_then(|a| match axis {
+            Axis::Horizontal => a.width(),
+            Axis::Vertical => a.height(),
+        })
+    }
+
+    /// Whether what this box holds may run past it along `axis` — cut off, or
+    /// scrolled to — so that the box need not be as long as its content.
+    fn content_may_overflow(&self, axis: Axis, overflow: Overflow) -> bool {
+        overflow == Overflow::Hidden
+            || match axis {
+                Axis::Horizontal => self.scroll_axis.allows_horizontal(),
+                Axis::Vertical => self.scroll_axis.allows_vertical(),
+            }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn resolve_axis(
         &self,
@@ -320,22 +381,13 @@ impl Container {
         parent_min: f32,
         parent_max: f32,
     ) -> f32 {
-        let anim = self.anims.as_ref().and_then(|a| match axis {
-            Axis::Horizontal => a.width(),
-            Axis::Vertical => a.height(),
-        });
+        let anim = self.size_anim(axis);
         let animating = anim.is_some_and(|a| a.is_animating());
         let has_exact = length.exact_size().is_some();
 
         // Growing back to fit the content is the default; these are the cases
         // where the author asked for a smaller box on purpose.
-        let allow_shrink = overflow == Overflow::Hidden
-            || animating
-            || has_exact
-            || match axis {
-                Axis::Horizontal => self.scroll_axis.allows_horizontal(),
-                Axis::Vertical => self.scroll_axis.allows_vertical(),
-            };
+        let allow_shrink = self.content_may_overflow(axis, overflow) || animating || has_exact;
 
         let mut size = if let Some(anim) = anim {
             let animated = anim.displayed_in(ctx);

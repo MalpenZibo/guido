@@ -473,6 +473,29 @@ container()
 # }
 ```
 
+Beside other children in a row, the text is offered what they leave it, so a
+title next to an icon ends in `…` at the icon rather than running past the
+row:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let title = "a window title far too long for the bar";
+container()
+    .width(200.0)
+    .layout(Flex::row().spacing(8.0))
+    .child(container().width(16.0).height(16.0))
+    .child(text(title).nowrap().overflow(TextOverflow::Ellipsis))
+# ;
+# }
+```
+
+A row that does not fit takes the room from the children that can give it up —
+see [Children That Do Not Fit](../concepts/layout.md#children-that-do-not-fit).
+A text with an ellipsis can go down to the `…` alone, one that wraps to its
+widest word, and one that does neither cannot shrink at all.
+
 Both are reactive like every other text property: `max_lines` takes an
 `Option<u32>`, so a signal can lift the limit with `None`.
 
