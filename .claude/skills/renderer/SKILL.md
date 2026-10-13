@@ -205,8 +205,11 @@ hand-scrolled run of the same example polled 136714 frames one time and 83209
 the next, and neither average described the other's workload.
 
 `benches/static_clip` plays the same gesture beside a clipped panel that
-stands still, and `benches/icon_grid` over a grid of a few hundred distinct
-small images, half raster and half SVG. Each prints `draw.*` — the draw calls
+stands still, `benches/icon_grid` over a grid of a few hundred distinct
+small images, half raster and half SVG, and `benches/nested_clip` over rounded
+cards that each clip a clipped child, merged exactly in some and not in others
+— its `scene.rs` lists which — with shapes, text, text quads and images under
+both clips. Each prints `draw.*` — the draw calls
 per pipeline — and `quad.*` — the buffers and bind groups the image and
 transformed-text quads made — among its counts, so a claim about batching has
 a number that repeats.

@@ -203,8 +203,8 @@ fn the_table_that_says_it_repeats_repeats() {
     let second = play(ROWS).expect("the first run had an adapter");
 
     assert_eq!(
-        counts_table(&scripted::report(&first, ROWS)),
-        counts_table(&scripted::report(&second, ROWS)),
+        common::counts_table(&scripted::report(&first, ROWS)),
+        common::counts_table(&scripted::report(&second, ROWS)),
         "a column under the header that promises to repeat did not"
     );
 }
@@ -244,16 +244,6 @@ fn the_heap_section_prints_the_figure_each_of_its_names_promises() {
             "{name} is printed as {line:?} and the run says {value}"
         );
     }
-}
-
-/// The lines of the report between the counts header and the phases that
-/// follow it.
-fn counts_table(report: &str) -> Vec<&str> {
-    report
-        .lines()
-        .skip_while(|line| !line.starts_with("counts ("))
-        .take_while(|line| !line.starts_with("cpu phases"))
-        .collect()
 }
 
 /// A gesture longer than the list is a gesture that spends most of itself
