@@ -464,6 +464,8 @@ Declared on the value, not beside it:
   apart from the thing they configure
 - `Scroll::width`, `hover_width`, `margin`, `min_handle_size`, `reserve_gutter` /
   `overlay()`, `visibility(..)`, `fill_viewport(..)` - the measurements the
-  container's layout needs, each taking a static value, a signal or a closure
+  container's layout needs, each taking a static value, a signal or a closure.
+  The bar is 6 wide and grows to 10 under the pointer; an undeclared
+  `hover_width` keeps that proportion to `width`, so a widened bar still grows
 - `Scroll::track(|t| ..)` and `Scroll::handle(|h| ..)` - the scrollbar is two
   containers, so these take everything a container takes
