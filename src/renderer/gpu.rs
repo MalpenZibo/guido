@@ -159,8 +159,12 @@ pub struct ShapeInstance {
     /// block for the same reason: evicting it freed a whole 16-byte attribute
     /// for the matrix above.
     pub clip_curvature: f32,
-    /// Where `gradient_start` begins.
-    pub _pad_clip: f32,
+    /// The record the clip continues at, in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN) where `clip_rect` is the whole of
+    /// it — see [`ResolvedClip`](super::clip::ResolvedClip). The four bytes
+    /// were padding before `gradient_start`, so a chain costs no instance
+    /// any room.
+    pub clip_chain: u32,
 
     // === Gradient ===
     /// Gradient start color [r, g, b, a]
@@ -200,7 +204,7 @@ impl Default for ShapeInstance {
             clip_radii: [0.0; 4],
             clip_inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], // identity
             clip_curvature: 1.0,
-            _pad_clip: 0.0,
+            clip_chain: super::clip::NO_CHAIN,
             gradient_start: [0.0, 0.0, 0.0, 0.0],
             gradient_end: [0.0, 0.0, 0.0, 0.0],
             border_width: 0.0,
@@ -256,7 +260,9 @@ impl ShapeInstance {
     /// a copy of this struct, and unrelated changes elsewhere have tipped the
     /// compiler into that (`static_clip/overflow-hidden`, +40% render time).
     #[inline]
-    pub fn with_clip(mut self, clip: &crate::shape::PlacedShape, scale: f32) -> Self {
+    pub fn with_clip(mut self, resolved: &super::clip::ResolvedClip, scale: f32) -> Self {
+        let clip = &resolved.first;
+        self.clip_chain = resolved.rest;
         let Some(to_clip) = clip.to_local(scale) else {
             self.clip_rect = EMPTY_CLIP_RECT;
             return self;
@@ -425,6 +431,30 @@ mod tests {
         assert_eq!(faded.shadow_blur, 7.0, "and a fade is not a length");
     }
 
+    /// The instance carries where its clip's chain continues, and an instance
+    /// with no clip continues nowhere. The goldens that would notice skip on
+    /// every adapter but lavapipe, so this is what the mutation job sees.
+    #[test]
+    fn a_clip_hands_its_chain_to_the_instance() {
+        use crate::renderer::clip::{NO_CHAIN, ResolvedClip};
+        let shape = crate::shape::PlacedShape::placed(
+            crate::widgets::Rect::new(0.0, 0.0, 10.0, 10.0),
+            crate::renderer::CornerRadii::uniform(2.0),
+            1.0,
+            crate::transform::Transform::IDENTITY,
+        );
+        assert_eq!(ShapeInstance::default().clip_chain, NO_CHAIN);
+        let chained = ShapeInstance::default().with_clip(
+            &ResolvedClip {
+                rest: 3,
+                ..ResolvedClip::alone(shape)
+            },
+            2.0,
+        );
+        assert_eq!(chained.clip_chain, 3);
+        assert_eq!(chained.clip_rect, [0.0, 0.0, 10.0, 10.0]);
+    }
+
     #[test]
     fn test_shape_instance_size() {
         // Every instance is uploaded per draw, so growth is paid on every
@@ -479,7 +509,7 @@ mod tests {
 /// and do not appear in the list below. Everything else must line up, and the
 /// two must agree on the total size.
 #[cfg(test)]
-mod instance_layout {
+pub(super) mod instance_layout {
     use super::*;
     use std::mem::offset_of;
 
@@ -504,19 +534,23 @@ mod instance_layout {
         }
     }
 
-    /// The shader's struct, as (field name, offset), in declaration order,
-    /// and the size of the whole.
-    fn wgsl_fields() -> (Vec<(String, usize)>, usize) {
-        let source = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/renderer/shader.wgsl"),
-        )
-        .expect("shader.wgsl");
+    /// The struct `name` in the shader `file`, as (field name, offset), in
+    /// declaration order, and the size of the whole.
+    pub(in crate::renderer) fn wgsl_fields(
+        file: &str,
+        name: &str,
+    ) -> (Vec<(String, usize)>, usize) {
+        let source =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
+                .unwrap_or_else(|e| panic!("{file}: {e}"));
 
         let start = source
-            .find("struct InstanceInput {")
-            .expect("shader.wgsl declares no `InstanceInput` — the shape pipeline reads one");
+            .find(&format!("struct {name} {{"))
+            .unwrap_or_else(|| panic!("{file} declares no `{name}`"));
         let body = &source[start..];
-        let body = &body[..body.find('}').expect("`InstanceInput` is never closed")];
+        let body = &body[..body
+            .find('}')
+            .unwrap_or_else(|| panic!("`{name}` is never closed"))];
 
         let mut offset = 0usize;
         let mut align = 1usize;
@@ -559,6 +593,7 @@ mod instance_layout {
             ("clip_radii", offset_of!(ShapeInstance, clip_radii)),
             ("clip_inverse", offset_of!(ShapeInstance, clip_inverse)),
             ("clip_curvature", offset_of!(ShapeInstance, clip_curvature)),
+            ("clip_chain", offset_of!(ShapeInstance, clip_chain)),
             ("gradient_start", offset_of!(ShapeInstance, gradient_start)),
             ("gradient_end", offset_of!(ShapeInstance, gradient_end)),
             ("border_width", offset_of!(ShapeInstance, border_width)),
@@ -569,7 +604,7 @@ mod instance_layout {
             ("gradient_type", offset_of!(ShapeInstance, gradient_type)),
         ];
 
-        let (wgsl, wgsl_size) = wgsl_fields();
+        let (wgsl, wgsl_size) = wgsl_fields("src/renderer/shader.wgsl", "InstanceInput");
 
         assert_eq!(
             wgsl.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),

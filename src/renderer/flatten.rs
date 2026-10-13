@@ -8,7 +8,7 @@ use smallvec::SmallVec;
 use crate::transform::Transform;
 use crate::widgets::Rect;
 
-use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, Under};
+use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip, Under};
 use super::commands::{CornerRadii, DrawCommand};
 use super::tree::{CachedFlatten, RenderNode};
 use crate::shape::PlacedShape;
@@ -65,6 +65,27 @@ impl FlattenedCommand {
     pub fn clip(&self) -> Option<PlacedShape> {
         self.clip.as_ref().map(ClipRef::shape)
     }
+
+    /// What this command is cut to, exactly: a shape, and the chain of shapes
+    /// it could not be merged with, in the frame's [`ClipChains`].
+    pub fn resolved_clip(&self) -> Option<ResolvedClip> {
+        self.clip.as_ref().map(ClipRef::resolved)
+    }
+}
+
+/// One flattened frame, as the renderer is handed it: the commands, the
+/// groups they are drawn in, and the chains their clips hang from.
+///
+/// Three things that are only meaningful together — a command's clip names a
+/// link in `clips` by index, and `layers` addresses `commands` by range — so
+/// they travel as one rather than as three arguments in a row that a caller
+/// could take from two different frames.
+#[derive(Clone, Copy)]
+pub struct FlatFrame<'a> {
+    pub commands: &'a [FlattenedCommand],
+    pub layers: &'a [CommandLayer],
+    /// [`FlattenScratch::clip_chains`] of the scratch `commands` came out of.
+    pub clips: &'a ClipChains,
 }
 
 /// Where one frame's draw commands are grouped, before they are handed on as

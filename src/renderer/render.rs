@@ -11,9 +11,10 @@ use wgpu::{
 };
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask};
+use super::clip_records::ClipRecords;
 use super::commands::{CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
-use super::flatten::{CommandLayer, FlattenedCommand};
+use super::flatten::{CommandLayer, FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
@@ -47,6 +48,10 @@ pub struct Renderer {
     // Instance buffer (resized as needed)
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
+
+    /// The frame's clip chains, bound at group 1 by every pipeline that cuts
+    /// by a clip.
+    clip_records: ClipRecords,
 
     // Text rendering via glyphon
     text_state: TextRenderState,
@@ -115,8 +120,16 @@ impl Renderer {
             ],
         });
 
+        let clip_records = ClipRecords::new(&device);
+
         // Create pipeline
-        let pipeline = Self::create_pipeline(&device, &shader, &bind_group_layout, format);
+        let pipeline = Self::create_pipeline(
+            &device,
+            &shader,
+            &bind_group_layout,
+            clip_records.layout(),
+            format,
+        );
 
         // Create vertex buffer (unit quad)
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -179,6 +192,7 @@ impl Renderer {
             uniform_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
+            clip_records,
             text_state,
             text_quad_renderer,
             text_mask,
@@ -200,11 +214,12 @@ impl Renderer {
         device: &Device,
         shader: &ShaderModule,
         bind_group_layout: &BindGroupLayout,
+        clip_records: &BindGroupLayout,
         format: wgpu::TextureFormat,
     ) -> RenderPipeline {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Renderer Pipeline Layout"),
-            bind_group_layouts: &[Some(bind_group_layout)],
+            bind_group_layouts: &[Some(bind_group_layout), Some(clip_records)],
             immediate_size: 0,
         });
 
@@ -339,8 +354,7 @@ impl Renderer {
     pub fn render(
         &mut self,
         target: &mut RenderTarget,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
+        frame: &FlatFrame<'_>,
         clear_color: Color,
     ) -> bool {
         // Two spellings of one dispatch, and both are the only one clippy
@@ -356,7 +370,7 @@ impl Renderer {
                     .create_view(&wgpu::TextureViewDescriptor::default());
                 let width = offscreen.texture.width();
                 let height = offscreen.texture.height();
-                self.render_to_view(&view, width, height, commands, layers, clear_color);
+                self.render_to_view(&view, width, height, frame, clear_color);
                 return true;
             }
             RenderTarget::Swapchain(surface) => surface,
@@ -380,14 +394,7 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render_to_view(
-            &view,
-            surface.width(),
-            surface.height(),
-            commands,
-            layers,
-            clear_color,
-        );
+        self.render_to_view(&view, surface.width(), surface.height(), frame, clear_color);
 
         self.queue.present(output);
         true
@@ -407,10 +414,14 @@ impl Renderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
+        frame: &FlatFrame<'_>,
         clear_color: Color,
     ) {
+        let FlatFrame {
+            commands,
+            layers,
+            clips,
+        } = *frame;
         // Update uniform buffer with current screen size (in logical pixels)
         let uniforms =
             ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
@@ -430,6 +441,9 @@ impl Renderer {
         } else {
             self.backdrop.note_unused();
         }
+
+        self.clip_records
+            .upload(&self.device, &self.queue, clips, self.scale_factor);
 
         // Instances for every group live in one buffer; the groups address it
         // by range, which is what keeps their draws in order.
@@ -547,6 +561,7 @@ impl Renderer {
     fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(1, self.clip_records.bind_group(), &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
     }
@@ -912,7 +927,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             if let Some(g) = gradient {
                 instance = instance.with_gradient(g);
             }
-            if let Some(clip) = cmd.clip() {
+            if let Some(clip) = cmd.resolved_clip() {
                 instance = instance.with_clip(&clip, scale);
             }
 
@@ -936,7 +951,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             )
             .with_transform(&cmd.world_transform, scale);
 
-            if let Some(clip) = cmd.clip() {
+            if let Some(clip) = cmd.resolved_clip() {
                 instance = instance.with_clip(&clip, scale);
             }
 
@@ -1311,8 +1326,11 @@ mod tests {
         let mut frame = |renderer: &mut Renderer, layers: &[CommandLayer]| {
             renderer.render(
                 &mut target,
-                &commands,
-                layers,
+                &FlatFrame {
+                    commands: &commands,
+                    layers,
+                    clips: &Default::default(),
+                },
                 crate::widgets::Color::TRANSPARENT,
             );
         };

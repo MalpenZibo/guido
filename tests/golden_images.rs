@@ -76,7 +76,9 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into};
+use guido::renderer::{
+    FlatFrame, FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into,
+};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -167,12 +169,13 @@ fn render_pixels(
 
     let mut commands = Vec::new();
     let mut layers = Vec::new();
-    let _ = flatten_root_into(
-        &node,
-        &mut commands,
-        &mut layers,
-        &mut FlattenScratch::default(),
-    );
+    let mut scratch = FlattenScratch::default();
+    let _ = flatten_root_into(&node, &mut commands, &mut layers, &mut scratch);
+    let frame = FlatFrame {
+        commands: &commands,
+        layers: &layers,
+        clips: scratch.clip_chains(),
+    };
 
     let device = ctx.device.clone();
     let queue = ctx.queue.clone();
@@ -204,7 +207,7 @@ fn render_pixels(
     {
         let mut started = guido::testing::finish_image_decodes();
         loop {
-            renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+            renderer.render_to_view(&view, width, height, &frame, clear);
             let now = guido::testing::finish_image_decodes();
             if now == started {
                 break;
@@ -213,7 +216,7 @@ fn render_pixels(
         }
     }
     #[cfg(not(feature = "testing"))]
-    renderer.render_to_view(&view, width, height, &commands, &layers, clear);
+    renderer.render_to_view(&view, width, height, &frame, clear);
 
     // Readback. Rows in a mapped buffer are padded to 256 bytes; the copy is
     // made against the padded stride and unpadded on the way out.
@@ -1544,6 +1547,118 @@ fn clips_a_quarter_turn_apart() {
         BACKDROP,
         view,
     );
+}
+
+/// Clips inside clips cut exactly what both of them cut.
+///
+/// Two clips merge into one rounded rect only where that rect is their
+/// intersection; everywhere else the inner keeps its shape and the outer is
+/// tested beside it, down a chain (#698). Before, the two were always folded
+/// into one, taking the smaller radius at each corner — so a square scroller
+/// filling a rounded card squared the card's corners, and any pair one rounded
+/// rect cannot describe was drawn as one it could.
+///
+/// Top row: a rounded card holding a full-size scroller whose rows reach its
+/// corners, merged into the card's own shape; a circle over a squircle on the
+/// same box, at two radii, merged into the circle, which cuts deeper
+/// everywhere; and a circle over a squircle inset from its corners, chained,
+/// since the circle's curve crosses the squircle's sides. Bottom row, chained
+/// all three: a squircle over a smaller circle on one box, whose corners
+/// cross; an outer clip turned 25° over an upright inner one; and an inner
+/// clip scaled unevenly, whose corners are ellipses.
+#[test]
+fn nested_clips_cut_exactly() {
+    golden(
+        "nested_clips_cut_exactly",
+        NESTED_CLIPS_SIZE,
+        1.0,
+        BACKDROP,
+        nested_clips(),
+    );
+}
+
+/// The same cells at scale 2, where a chain's records carry the surface scale
+/// in their maps and a shape given in the wrong units would cut at half or
+/// twice its size.
+#[test]
+fn nested_clips_cut_exactly_at_scale_2x() {
+    golden(
+        "nested_clips_cut_exactly_at_scale_2x",
+        NESTED_CLIPS_SIZE,
+        2.0,
+        BACKDROP,
+        nested_clips(),
+    );
+}
+
+const NESTED_CLIPS_SIZE: (f32, f32) = (514.0, 270.0);
+
+/// One scene for both scales.
+fn nested_clips() -> Container {
+    const CARD: f32 = 96.0;
+    let navy = Color::rgb(0.20, 0.22, 0.30);
+    let fill_with = |c: Color| container().width(fill()).height(fill()).background(c);
+    let content = || fill_with(Color::rgb(0.95, 0.75, 0.25));
+    let card = |corners: Corners| {
+        box_of(CARD, CARD)
+            .corners(corners)
+            .overflow(Overflow::Hidden)
+            .background(navy)
+            .layout(ZStack::new())
+    };
+    let clip = |w: f32, h: f32, corners: Corners| {
+        box_of(w, h)
+            .corners(corners)
+            .overflow(Overflow::Hidden)
+            .layout(ZStack::new())
+            .child(content())
+    };
+
+    let rows = container()
+        .width(fill())
+        .height(fill())
+        .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+        .child(
+            container().layout(Flex::column()).children(
+                [
+                    Color::rgb(0.90, 0.35, 0.25),
+                    Color::rgb(0.95, 0.75, 0.25),
+                    Color::rgb(0.30, 0.70, 0.45),
+                    Color::rgb(0.25, 0.50, 0.90),
+                ]
+                .map(|c| swatch(CARD, CARD / 4.0, c)),
+            ),
+        );
+
+    let merged = container()
+        .layout(Flex::row().spacing(26.0))
+        .child(card(Corners::rounded(24.0)).child(rows))
+        .child(card(Corners::rounded(48.0)).child(clip(CARD, CARD, Corners::squircle(12.0))))
+        .child(card(Corners::rounded(48.0)).child(clip(CARD, CARD, Corners::squircle(40.0))))
+        .child(card(Corners::rounded(48.0)).padding(8.0).child(clip(
+            80.0,
+            80.0,
+            Corners::squircle(12.0),
+        )));
+    let chained = container()
+        .layout(Flex::row().spacing(26.0))
+        .child(card(Corners::squircle(30.0)).child(clip(CARD, CARD, Corners::rounded(20.0))))
+        .child(
+            card(Corners::rounded(22.0))
+                .rotate(25.0)
+                .child(clip(CARD, CARD, Corners::rounded(16.0)).rotate(-25.0)),
+        )
+        .child(
+            card(Corners::rounded(24.0))
+                .child(clip(CARD, CARD, Corners::rounded(20.0)).scale(Scale::new(1.0, 0.8))),
+        );
+
+    container()
+        .background(BACKDROP)
+        .padding(26.0)
+        .layout(Flex::column().spacing(26.0))
+        .child(merged)
+        .child(chained)
 }
 
 /// A text is clipped by the same shape a rectangle is, and follows it through

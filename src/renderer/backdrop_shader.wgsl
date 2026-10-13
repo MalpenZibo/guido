@@ -54,6 +54,9 @@ struct Params {
 // reads it.
 @group(0) @binding(3) var t_mask: texture_2d<f32>;
 
+// The frame's clip chains — see the shared clip-chain block below.
+@group(1) @binding(0) var<storage, read> clip_records: array<ClipRecord>;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     // 0..1 across the destination viewport.
@@ -250,6 +253,57 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
     return inside + corner_dist - r;
 }
 // === END SHARED SDF ===
+
+// === SHARED CLIP CHAIN — three copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// A clip that cannot be merged with the clips above it into one rounded rect
+// keeps them as a chain: `ClipChains` in `src/renderer/clip.rs` builds it,
+// and the renderer uploads it once a frame as `clip_records`, which each
+// pipeline that walks a chain declares for itself. The first shape of a chain
+// is tested as a lone clip always was; the rest are walked here.
+//
+// The shapes are combined by the largest distance, each in pixels of its own
+// gradient, and smoothed once by the caller. A product of coverages would
+// darken an edge two clips share, which is every edge a scroller shares with
+// the card it fills.
+
+struct ClipRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    // physical world pixels to the clip's own space, row-major 2x3
+    inverse: array<f32, 6>,
+    curvature: f32,
+    next: u32,
+}
+
+const NO_CHAIN: u32 = 0xffffffffu;
+
+// A broken chain cannot hang the GPU: no frame nests clips this deep.
+const MAX_CHAIN: u32 = 64u;
+
+// A distance, in pixels: the distance over how fast it changes across one.
+fn pixel_distance(d: f32) -> f32 {
+    return d / max(fwidth(d), 1e-6);
+}
+
+// The largest pixel distance down the chain from `link`, starting at
+// `nearest`, the first shape's own. `at` is the fragment in physical pixels.
+fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
+    var d = nearest;
+    var i = link;
+    for (var n = 0u; n < MAX_CHAIN && i != NO_CHAIN; n = n + 1u) {
+        let r = clip_records[i];
+        let p = vec2<f32>(
+            r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
+            r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
+        );
+        d = max(d, pixel_distance(rounded_rect_sdf(p, r.rect, r.radii, r.curvature)));
+        i = r.next;
+    }
+    return d;
+}
+// === END SHARED CLIP CHAIN ===
 
 // Write the blurred region back over the target, shaped by the container's
 // own corners so the effect stops where the container does.

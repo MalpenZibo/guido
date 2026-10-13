@@ -12,6 +12,7 @@
 
 mod backdrop_pass;
 pub(crate) mod clip;
+mod clip_records;
 mod commands;
 pub(crate) mod constants;
 mod flatten;
@@ -39,8 +40,8 @@ pub use commands::{Border, CornerRadii, DrawCommand};
 // always handed one out, so a caller could read the field and not name what it
 // got back.
 pub use flatten::{
-    CommandLayer, FlattenScratch, FlattenedCommand, RegionsCarried, RenderLayer, ScratchCapacity,
-    flatten_root_into,
+    CommandLayer, FlatFrame, FlattenScratch, FlattenedCommand, RegionsCarried, RenderLayer,
+    ScratchCapacity, flatten_root_into,
 };
 #[cfg(test)]
 pub(crate) use gpu_context::GPU_GRACE;

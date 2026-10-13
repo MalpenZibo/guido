@@ -2020,8 +2020,11 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     time_phase!(render_stats::Phase::GpuRender, {
         presented = renderer.render(
             surface.wgpu_surface.as_mut().unwrap(),
-            &surface.flattened_commands,
-            &surface.command_layers,
+            &renderer::FlatFrame {
+                commands: &surface.flattened_commands,
+                layers: &surface.command_layers,
+                clips: surface.flatten_scratch.clip_chains(),
+            },
             surface.config.background_color,
         );
     });
