@@ -368,7 +368,9 @@ pub(crate) struct ScrollState {
     /// Size of the content (computed during layout)
     pub content_width: f32,
     pub content_height: f32,
-    /// Viewport size (container inner size)
+    /// The box the content and its padding are seen through: the extent the
+    /// scroller was offered, less any reserved gutter. Compared with
+    /// `content_*`, which counts the padding too.
     pub viewport_width: f32,
     pub viewport_height: f32,
     /// Scrollbar interaction state
