@@ -66,7 +66,15 @@ impl TexturedQuadPipeline {
     /// `label` names the caller in wgpu's debug output ("ImageQuad",
     /// "TextQuad"), which is the only thing that ever differed between the
     /// two copies.
-    pub(super) fn new(device: &Device, format: TextureFormat, label: &str) -> Self {
+    ///
+    /// `clip_records` is the layout of group 1, the frame's clip chains, which
+    /// [`draw`](Self::draw) is handed the bind group for.
+    pub(super) fn new(
+        device: &Device,
+        format: TextureFormat,
+        clip_records: &BindGroupLayout,
+        label: &str,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&format!("{label} Shader")),
             source: wgpu::ShaderSource::Wgsl(include_str!("textured_quad_shader.wgsl").into()),
@@ -96,7 +104,7 @@ impl TexturedQuadPipeline {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&format!("{label} Pipeline Layout")),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &[Some(&bind_group_layout), Some(clip_records)],
             immediate_size: 0,
         });
 
@@ -266,6 +274,7 @@ impl TexturedQuadPipeline {
         &'a self,
         render_pass: &mut RenderPass<'a>,
         quads: &'a [Q],
+        clip_records: &'a BindGroup,
         pipeline: Pipeline,
     ) {
         let (Some(vertices), Some(indices)) = (&self.vertex_buffer, &self.index_buffer) else {
@@ -276,6 +285,7 @@ impl TexturedQuadPipeline {
         }
 
         render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(1, clip_records, &[]);
         render_pass.set_vertex_buffer(0, vertices.slice(..));
         render_pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
 

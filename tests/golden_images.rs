@@ -1595,10 +1595,31 @@ const NESTED_CLIPS_SIZE: (f32, f32) = (514.0, 270.0);
 
 /// One scene for both scales.
 fn nested_clips() -> Container {
-    const CARD: f32 = 96.0;
+    let rows = container().layout(Flex::column()).children(
+        [
+            Color::rgb(0.90, 0.35, 0.25),
+            Color::rgb(0.95, 0.75, 0.25),
+            Color::rgb(0.30, 0.70, 0.45),
+            Color::rgb(0.25, 0.50, 0.90),
+        ]
+        .map(|c| swatch(NESTED_CARD, NESTED_CARD / 4.0, c)),
+    );
+    let content = || {
+        container()
+            .width(fill())
+            .height(fill())
+            .background(Color::rgb(0.95, 0.75, 0.25))
+    };
+    nested_clips_of(&content, rows)
+}
+
+const NESTED_CARD: f32 = 96.0;
+
+/// The seven pairs of clips, each cutting `content`; the first cell scrolls
+/// `scrolled` instead.
+fn nested_clips_of(content: &dyn Fn() -> Container, scrolled: Container) -> Container {
+    const CARD: f32 = NESTED_CARD;
     let navy = Color::rgb(0.20, 0.22, 0.30);
-    let fill_with = |c: Color| container().width(fill()).height(fill()).background(c);
-    let content = || fill_with(Color::rgb(0.95, 0.75, 0.25));
     let card = |corners: Corners| {
         box_of(CARD, CARD)
             .corners(corners)
@@ -1618,17 +1639,7 @@ fn nested_clips() -> Container {
         .width(fill())
         .height(fill())
         .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
-        .child(
-            container().layout(Flex::column()).children(
-                [
-                    Color::rgb(0.90, 0.35, 0.25),
-                    Color::rgb(0.95, 0.75, 0.25),
-                    Color::rgb(0.30, 0.70, 0.45),
-                    Color::rgb(0.25, 0.50, 0.90),
-                ]
-                .map(|c| swatch(CARD, CARD / 4.0, c)),
-            ),
-        );
+        .child(scrolled);
 
     let merged = container()
         .layout(Flex::row().spacing(26.0))
@@ -1659,6 +1670,28 @@ fn nested_clips() -> Container {
         .layout(Flex::column().spacing(26.0))
         .child(merged)
         .child(chained)
+}
+
+/// An image is cut by every clip above it, as a shape is.
+///
+/// Images draw through the textured quad, which carries its clip on four
+/// vertices rather than in an instance, and walks a chain in a shader of its
+/// own. The same seven pairs as `nested_clips_cut_exactly`, a checkerboard in
+/// each, so a cut the quad gets wrong shows against the one the shapes got
+/// right.
+#[test]
+fn nested_clips_cut_images_exactly() {
+    let checks = || {
+        box_of(NESTED_CARD, NESTED_CARD)
+            .child(image(checkerboard(96, 12)).content_fit(ContentFit::Cover))
+    };
+    golden(
+        "nested_clips_cut_images_exactly",
+        NESTED_CLIPS_SIZE,
+        1.0,
+        BACKDROP,
+        nested_clips_of(&checks, checks()),
+    );
 }
 
 /// A text is clipped by the same shape a rectangle is, and follows it through

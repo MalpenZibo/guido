@@ -33,16 +33,20 @@ pub struct TexturedVertex {
     /// Clip corner radii [top_left, top_right, bottom_right, bottom_left], in
     /// that same space. The shader reads all four — a rect clip passes zeros.
     pub clip_params: [f32; 4],
-    /// `[clip curvature, opacity, _, _]`. One 16-byte slot for the two
-    /// scalars, because a `Float32x4` is the narrowest attribute that keeps the
-    /// rest of the struct aligned and a slot of its own per scalar would widen
-    /// every vertex.
+    /// `[clip curvature, opacity]`.
     ///
     /// The opacity is multiplied into the alpha of every texel the quad
     /// samples: the fade an ancestor asks for, carried on the vertex rather
     /// than into the texture, so a text or an image that fades is not
     /// rasterised again on every frame of it.
-    pub curvature_opacity: [f32; 4],
+    pub curvature_opacity: [f32; 2],
+    /// Where the clip continues in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN) — see
+    /// [`ResolvedClip`](super::clip::ResolvedClip). Eight bytes that used to
+    /// pad the two scalars above out to a `Float32x4` hold this and the
+    /// padding beside it, so the vertex stays 88 bytes.
+    pub clip_chain: u32,
+    pub _pad: u32,
     /// `[r, g, b, amount]`: the colour every texel takes, keeping its alpha,
     /// and how much of it — `1.0` for a tinted image, `0.0` for everything
     /// else, which leaves the texel as it was. Carried on the vertex for the
@@ -76,6 +80,9 @@ pub struct QuadClip {
     /// "no map needed" and "no clip" are different facts, and `rect`'s sentinel
     /// is the one that answers the second.
     pub to_clip_space: Transform,
+    /// Where the clip continues in the frame's clip records, or
+    /// [`NO_CHAIN`](super::clip::NO_CHAIN).
+    pub chain: u32,
 }
 
 impl QuadClip {
@@ -85,6 +92,7 @@ impl QuadClip {
         radii: [0.0; 4],
         curvature: 1.0,
         to_clip_space: Transform::IDENTITY,
+        chain: super::clip::NO_CHAIN,
     };
 
     /// Everything is cut — a clip whose placement collapsed has no inside.
@@ -93,6 +101,7 @@ impl QuadClip {
         radii: [0.0; 4],
         curvature: 1.0,
         to_clip_space: Transform::IDENTITY,
+        chain: super::clip::NO_CHAIN,
     };
 
     /// Cut to the clip's shape, in the coordinates the widget declared it in.
@@ -106,6 +115,15 @@ impl QuadClip {
             radii: clip.radii.to_array(),
             curvature: clip.curvature,
             to_clip_space,
+            chain: super::clip::NO_CHAIN,
+        }
+    }
+
+    /// Cut to the clip's first shape, and down its chain.
+    pub fn resolved(clip: &super::clip::ResolvedClip, scale: f32) -> Self {
+        Self {
+            chain: clip.rest,
+            ..Self::shape(&clip.first, scale)
         }
     }
 
@@ -139,7 +157,9 @@ impl TexturedVertex {
             clip_pos: clip.place(screen.0, screen.1),
             clip_rect: clip.rect,
             clip_params: clip.radii,
-            curvature_opacity: [clip.curvature, opacity, 0.0, 0.0],
+            curvature_opacity: [clip.curvature, opacity],
+            clip_chain: clip.chain,
+            _pad: 0,
             tint,
         }
     }
@@ -183,7 +203,13 @@ impl TexturedVertex {
                 VertexAttribute {
                     offset: 56,
                     shader_location: 5,
-                    format: VertexFormat::Float32x4,
+                    format: VertexFormat::Float32x2,
+                },
+                // clip_chain
+                VertexAttribute {
+                    offset: 64,
+                    shader_location: 7,
+                    format: VertexFormat::Uint32,
                 },
                 // tint
                 VertexAttribute {
@@ -243,6 +269,62 @@ mod tests {
             "so the same physical corner arrives at the logical one, got ({x}, {y})"
         );
         assert_eq!(shaped.radii, [4.0; 4], "radii travel with the rect");
+    }
+
+    /// Every attribute the layout declares reads the field it names, and the
+    /// chain head fits in what used to be padding.
+    #[test]
+    fn the_layout_reads_every_field_where_it_is() {
+        use std::mem::offset_of;
+        let fields = [
+            offset_of!(TexturedVertex, position),
+            offset_of!(TexturedVertex, uv),
+            offset_of!(TexturedVertex, clip_pos),
+            offset_of!(TexturedVertex, clip_rect),
+            offset_of!(TexturedVertex, clip_params),
+            offset_of!(TexturedVertex, curvature_opacity),
+            offset_of!(TexturedVertex, tint),
+            offset_of!(TexturedVertex, clip_chain),
+        ];
+        let layout = TexturedVertex::desc();
+        for attribute in layout.attributes {
+            assert_eq!(
+                attribute.offset as usize, fields[attribute.shader_location as usize],
+                "location {}",
+                attribute.shader_location
+            );
+        }
+        assert_eq!(layout.attributes.len(), fields.len());
+        assert_eq!(size_of::<TexturedVertex>(), 88);
+    }
+
+    /// A resolved clip hands its chain to every corner.
+    #[test]
+    fn a_chained_clip_reaches_the_vertex() {
+        let resolved = crate::renderer::clip::ResolvedClip {
+            rest: 5,
+            ..crate::renderer::clip::ResolvedClip::alone(PlacedShape::placed(
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                CornerRadii::uniform(0.0),
+                1.0,
+                crate::transform::Transform::IDENTITY,
+            ))
+        };
+        let clip = QuadClip::resolved(&resolved, 1.0);
+        let vertex = TexturedVertex::corner([0.0; 2], [0.0; 2], (0.0, 0.0), &clip, 1.0, NO_TINT);
+        assert_eq!(vertex.clip_chain, 5);
+        assert_eq!(
+            TexturedVertex::corner(
+                [0.0; 2],
+                [0.0; 2],
+                (0.0, 0.0),
+                &QuadClip::NONE,
+                1.0,
+                NO_TINT
+            )
+            .clip_chain,
+            crate::renderer::clip::NO_CHAIN
+        );
     }
 
     /// A clip whose placement collapses lets nothing through, rather than

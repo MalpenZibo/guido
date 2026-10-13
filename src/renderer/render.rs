@@ -173,11 +173,11 @@ impl Renderer {
         let text_state = TextRenderState::new(&device, &queue, format);
 
         // Initialize transformed text renderer
-        let text_quad_renderer = TextQuadRenderer::new(&device, format);
+        let text_quad_renderer = TextQuadRenderer::new(&device, format, clip_records.layout());
         let text_mask = TextMaskRenderer::new(format);
 
         // Initialize image renderer
-        let image_quad_renderer = ImageQuadRenderer::new(&device, format);
+        let image_quad_renderer = ImageQuadRenderer::new(&device, format, clip_records.layout());
 
         let backdrop = BackdropRenderer::new(&device, format);
 
@@ -530,8 +530,11 @@ impl Renderer {
                 }
 
                 if !layer.images.is_empty() {
-                    self.image_quad_renderer
-                        .render(&mut render_pass, &self.image_quads[layer.images.clone()]);
+                    self.image_quad_renderer.render(
+                        &mut render_pass,
+                        &self.image_quads[layer.images.clone()],
+                        self.clip_records.bind_group(),
+                    );
                 }
 
                 if let Some(slot) = layer.text_slot {
@@ -539,8 +542,11 @@ impl Renderer {
                 }
 
                 if !layer.text_quads.is_empty() {
-                    self.text_quad_renderer
-                        .render(&mut render_pass, &self.text_quads[layer.text_quads.clone()]);
+                    self.text_quad_renderer.render(
+                        &mut render_pass,
+                        &self.text_quads[layer.text_quads.clone()],
+                        self.clip_records.bind_group(),
+                    );
                 }
 
                 if !layer.overlay.is_empty() {

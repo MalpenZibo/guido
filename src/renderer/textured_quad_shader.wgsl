@@ -13,11 +13,13 @@ struct VertexInput {
     @location(2) clip_pos: vec2<f32>,
     @location(3) clip_rect: vec4<f32>,
     @location(4) clip_params: vec4<f32>,
-    // clip curvature, opacity, _pad, _pad — the opacity scales every texel,
-    // all four channels, since texels are premultiplied
-    @location(5) curvature_opacity: vec4<f32>,
+    // clip curvature, opacity — the opacity scales every texel, all four
+    // channels, since texels are premultiplied
+    @location(5) curvature_opacity: vec2<f32>,
     // r, g, b, amount — the colour every texel takes, keeping its coverage
     @location(6) tint: vec4<f32>,
+    // where the clip continues in `clip_records`, or NO_CHAIN
+    @location(7) clip_chain: u32,
 }
 
 // === Vertex Output ===
@@ -31,6 +33,7 @@ struct VertexOutput {
     @location(4) @interpolate(flat) clip_curvature: f32,
     @location(5) @interpolate(flat) opacity: f32,
     @location(6) @interpolate(flat) tint: vec4<f32>,
+    @location(7) @interpolate(flat) clip_chain: u32,
 }
 
 // === Texture Bindings ===
@@ -54,6 +57,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.clip_curvature = in.curvature_opacity.x;
     out.opacity = in.curvature_opacity.y;
     out.tint = in.tint;
+    out.clip_chain = in.clip_chain;
     return out;
 }
 
@@ -231,9 +235,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             in.clip_curvature
         );
 
-        // Anti-aliased clip edge
-        let clip_aa = fwidth(clip_dist);
-        let clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+        var clip_alpha: f32;
+        if (in.clip_chain == NO_CHAIN) {
+            // Anti-aliased clip edge
+            let clip_aa = fwidth(clip_dist);
+            clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+        } else {
+            let d = chain_distance(in.clip_position.xy, pixel_distance(clip_dist), in.clip_chain);
+            clip_alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+        }
 
         color = color * clip_alpha;
     }
