@@ -911,6 +911,8 @@ impl<C: Content> TextInput<C> {
             new_font_size,
             new_font_family,
             new_font_weight,
+            new_font_style,
+            new_font_features,
             new_line_height,
             new_letter_spacing,
             overflow,
@@ -928,6 +930,8 @@ impl<C: Content> TextInput<C> {
                 style.font_size(id),
                 style.font_family(),
                 style.font_weight(),
+                style.font_style(),
+                style.font_features(),
                 style.line_height(),
                 style.letter_spacing(id),
                 crate::widgets::text::decoration_overflow(style.stroke(), style.shadow()),
@@ -958,6 +962,14 @@ impl<C: Content> TextInput<C> {
         }
         if new_font_weight != self.cached_font_weight {
             self.cached_font_weight = new_font_weight;
+            self.measurements_dirty = true;
+        }
+        if new_font_style != self.cached_font_style {
+            self.cached_font_style = new_font_style;
+            self.measurements_dirty = true;
+        }
+        if new_font_features != self.cached_font_features {
+            self.cached_font_features = new_font_features;
             self.measurements_dirty = true;
         }
         if new_line_height.key() != self.cached_line_height.key() {
@@ -2947,6 +2959,69 @@ mod tests {
         assert!(has_focus(id), "the focus stayed");
         assert!(!blinking, "but the caret does not blink");
         assert_eq!(next_deadline(), None, "and asks for no wake");
+    }
+
+    /// The caret stands between the figures a feature drew, and the field is
+    /// as tall as the face its style picked — each followed through a write.
+    mod font_style_and_features {
+        use super::*;
+        use crate::widgets::{FontFamily, FontFeatures, FontStyle};
+
+        const REGULAR: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Regular.ttf");
+        const ITALIC: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Italic.ttf");
+
+        /// `make_figures_fixture.py`: a "1" of 440 units and a "0" of 400 on
+        /// a 1000 em, both 600 under `tnum`; an upright line of 1.0 of the
+        /// size and an italic one of 1.2.
+        fn figures() -> FontFamily {
+            crate::load_font(REGULAR.to_vec());
+            crate::load_font(ITALIC.to_vec());
+            FontFamily::name("Guido Figures")
+        }
+
+        fn assert_near(actual: f32, expected: f32, what: &str) {
+            assert!(
+                (actual - expected).abs() < 0.01,
+                "{what}: got {actual}, expected {expected}"
+            );
+        }
+
+        #[test]
+        fn the_caret_follows_the_figures_its_features_draw() {
+            let family = figures();
+            let features = create_signal(FontFeatures::new());
+            let (mut tree, root, id) = field_in_container(
+                text_input(create_signal("10".to_owned()))
+                    .font_family(family)
+                    .font_size(20.0)
+                    .font_features(features),
+            );
+            caret_to_end(&mut tree, id);
+            let rects = drawn_rects(&mut tree, id);
+            assert_near(rects[0].x, 16.8, "after proportional figures");
+
+            features.set(FontFeatures::new().enable(b"tnum"));
+            relayout(&mut tree, root);
+            let rects = drawn_rects(&mut tree, id);
+            assert_near(rects[0].x, 24.0, "after tabular ones");
+        }
+
+        #[test]
+        fn a_field_is_as_tall_as_the_face_its_style_picks() {
+            let family = figures();
+            let style = create_signal(FontStyle::Normal);
+            let (mut tree, root, id) = field_in_container(
+                text_input(create_signal("10".to_owned()))
+                    .font_family(family)
+                    .font_size(20.0)
+                    .font_style(style),
+            );
+            let upright = tree.cached_size(id).expect("laid out").height;
+            style.set(FontStyle::Italic);
+            relayout(&mut tree, root);
+            let italic = tree.cached_size(id).expect("laid out").height;
+            assert_near(italic - upright, 4.0, "the italic face's taller line");
+        }
     }
 
     /// What a field measures its caret, its selection and its clicks against

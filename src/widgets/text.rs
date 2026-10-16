@@ -334,6 +334,8 @@ impl Text {
             declared_color = self.animates_text_color().then(|| style.color(id));
             self.cached_font_family = style.font_family();
             self.cached_font_weight = style.font_weight();
+            self.cached_font_style = style.font_style();
+            self.cached_font_features = style.font_features();
             self.cached_line_height = style.line_height();
             self.cached_letter_spacing = style.letter_spacing(id);
             self.cached_wrap = self.wrap.get_or(true);
@@ -2277,5 +2279,120 @@ mod letter_spacing_tests {
         );
         let (_, spacings) = frame(&mut tree, root, id);
         assert_eq!(spacings, [2.0], "a bad override falls through");
+    }
+}
+
+/// A text's style and features reach every command it paints, and follow
+/// their signals and the states that override them.
+///
+/// What a style or a feature does to the glyphs is the renderer's to prove —
+/// `font_style_and_feature_tests` in `renderer::text_measurer` and the goldens
+/// do — so these read the commands, which hold whatever font the machine has.
+#[cfg(test)]
+mod font_style_and_feature_tests {
+    use super::*;
+    use crate::jobs;
+    use crate::reactive::create_signal;
+    use crate::renderer::{DrawCommand, RenderNode};
+    use crate::widgets::container;
+
+    fn tnum() -> FontFeatures {
+        FontFeatures::new().enable(b"tnum")
+    }
+
+    fn mounted(text: Text) -> (Tree, WidgetId) {
+        jobs::clear_pending_jobs();
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(container().child(text.nowrap())));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        (tree, root)
+    }
+
+    /// The style and features every text and frost command carries.
+    fn frame(tree: &mut Tree, root: WidgetId) -> Vec<(FontStyle, FontFeatures)> {
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 800.0, 600.0));
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node, 1.0);
+        fn collect(node: &RenderNode, out: &mut Vec<(FontStyle, FontFeatures)>) {
+            for cmd in &node.commands {
+                match &**cmd {
+                    DrawCommand::Text {
+                        font_style,
+                        font_features,
+                        ..
+                    }
+                    | DrawCommand::TextBackdropBlur {
+                        font_style,
+                        font_features,
+                        ..
+                    } => out.push((*font_style, *font_features)),
+                    _ => {}
+                }
+            }
+            node.children.iter().for_each(|c| collect(c, out));
+        }
+        let mut out = Vec::new();
+        collect(&node, &mut out);
+        out
+    }
+
+    #[test]
+    fn a_text_is_upright_and_featureless_until_it_is_told_otherwise() {
+        let (mut tree, root) = mounted(Text::new("12:41"));
+        assert_eq!(
+            frame(&mut tree, root),
+            [(FontStyle::Normal, FontFeatures::new())]
+        );
+    }
+
+    /// The frost, the shadow under the fill and the fill each shape the text
+    /// apart, and one shaped without the features would not sit under the
+    /// others.
+    #[test]
+    fn every_command_a_text_paints_carries_its_style_and_features() {
+        let (mut tree, root) = mounted(
+            Text::new("12:41")
+                .italic()
+                .font_features(tnum())
+                .text_shadow(TextShadow::new(1.0, 1.0, 0.0, Color::BLACK))
+                .backdrop_blur(6.0),
+        );
+        let painted = frame(&mut tree, root);
+        assert!(painted.len() >= 3, "{painted:?}");
+        assert!(
+            painted.iter().all(|p| *p == (FontStyle::Italic, tnum())),
+            "{painted:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_style_and_features_follow_their_signals() {
+        let style = create_signal(FontStyle::Normal);
+        let features = create_signal(FontFeatures::new());
+        let (mut tree, root) =
+            mounted(Text::new("12:41").font_style(style).font_features(features));
+        assert_eq!(
+            frame(&mut tree, root),
+            [(FontStyle::Normal, FontFeatures::new())]
+        );
+        style.set(FontStyle::Oblique);
+        features.set(tnum());
+        assert_eq!(frame(&mut tree, root), [(FontStyle::Oblique, tnum())]);
+    }
+
+    /// A state's set of features replaces the declared set rather than adding
+    /// to it — nearest declaration wins, as for a weight.
+    #[test]
+    fn a_state_supplies_a_style_and_features_and_takes_them_back() {
+        let hot = create_signal(true);
+        let declared = FontFeatures::new().disable(b"liga");
+        let (mut tree, root) = mounted(
+            Text::new("12:41")
+                .font_features(declared)
+                .state(hot, |s: TextStyle| s.italic().font_features(tnum())),
+        );
+        assert_eq!(frame(&mut tree, root), [(FontStyle::Italic, tnum())]);
+        hot.set(false);
+        assert_eq!(frame(&mut tree, root), [(FontStyle::Normal, declared)]);
     }
 }
