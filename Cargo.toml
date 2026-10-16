@@ -128,6 +128,13 @@ harness = false
 test = false
 required-features = ["testing", "render-stats"]
 
+[[bench]]
+name = "sparkline_ring"
+path = "benches/sparkline_ring/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
 # Asserts exact allocation counts against a process-wide counter, so it runs
 # without libtest, whose own thread would allocate into its windows.
 [[test]]

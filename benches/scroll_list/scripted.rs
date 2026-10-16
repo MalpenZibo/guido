@@ -18,7 +18,9 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-use guido::render_stats::{self, DrawCalls, PhaseTiming, QuadAllocations, StatsSnapshot};
+use guido::render_stats::{
+    self, DrawCalls, PathMeshes, PhaseTiming, QuadAllocations, StatsSnapshot,
+};
 use guido::testing::Headless;
 
 /// The gap between frames. Named rather than slept through: every instant in
@@ -107,6 +109,8 @@ pub struct Counts {
     pub draw_calls: DrawCalls,
     /// The vertex buffers and bind groups preparing textured quads created.
     pub quad_allocations: QuadAllocations,
+    /// The fills and strokes drawn, by whether they were tessellated.
+    pub path_meshes: PathMeshes,
 }
 
 impl Counts {
@@ -137,8 +141,11 @@ impl Counts {
         calls.text += drawn.text;
         calls.text_quads += drawn.text_quads;
         calls.backdrop += drawn.backdrop;
+        calls.paths += drawn.paths;
         self.quad_allocations.buffers += snapshot.quad_allocations.buffers;
         self.quad_allocations.bind_groups += snapshot.quad_allocations.bind_groups;
+        self.path_meshes.tessellated += snapshot.path_meshes.tessellated;
+        self.path_meshes.reused += snapshot.path_meshes.reused;
     }
 
     /// A delta was asked for and nothing moved.
@@ -427,11 +434,14 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("draw.text", counts.draw_calls.text),
         ("draw.text_quads", counts.draw_calls.text_quads),
         ("draw.backdrop", counts.draw_calls.backdrop),
+        ("draw.paths", counts.draw_calls.paths),
         ("quad.buffers_created", counts.quad_allocations.buffers),
         (
             "quad.bind_groups_created",
             counts.quad_allocations.bind_groups,
         ),
+        ("path.tessellated", counts.path_meshes.tessellated),
+        ("path.reused", counts.path_meshes.reused),
         ("script.deltas_pinned", counts.frames_pinned),
     ] {
         out.push_str(&format!("  {name:<26} {value}\n"));
