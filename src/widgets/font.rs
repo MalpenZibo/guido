@@ -1,10 +1,10 @@
-//! Font family and weight types for text styling.
+//! Font family, weight, style and feature types for text styling.
 //!
-//! These types allow configuring font family and weight on text widgets.
+//! These types allow configuring how text widgets pick and shape their font.
 
 use std::sync::{LazyLock, RwLock};
 
-use cosmic_text::{Family, Weight};
+use cosmic_text::{Family, Style, Weight};
 use rustc_hash::FxHashMap;
 
 /// Font family specification.
@@ -177,6 +177,173 @@ impl FontWeight {
     }
 }
 
+/// Whether the glyphs are upright or slanted, as CSS `font-style`.
+///
+/// The family's own italic or oblique face draws a slanted style where it has
+/// one, and its line height is that face's. A family with none is drawn in its
+/// upright face, sheared by the shaper — cosmic-text's synthetic italic, as
+/// CSS `font-synthesis` allows.
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// text("Quoted").font_style(FontStyle::Italic);
+/// text("Quoted").italic();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FontStyle {
+    /// Upright.
+    #[default]
+    Normal,
+    /// The family's italic face, a separately drawn slanted design.
+    Italic,
+    /// The family's oblique face, the upright design slanted.
+    Oblique,
+}
+
+impl FontStyle {
+    /// Convert to the cosmic-text style the shaper and the font database take.
+    pub fn to_cosmic(self) -> Style {
+        match self {
+            FontStyle::Normal => Style::Normal,
+            FontStyle::Italic => Style::Italic,
+            FontStyle::Oblique => Style::Oblique,
+        }
+    }
+}
+
+/// OpenType features a text is shaped with, as CSS `font-feature-settings`:
+/// four-letter tags, each with a value — `1` turns a feature on, `0` off, and
+/// a larger number picks an alternate.
+///
+/// The commonest is `tnum`, tabular figures: most interface fonts draw their
+/// digits at different widths, so a clock or a percentage that changes in
+/// place shifts sideways as it does, and `tnum` gives every digit one width.
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// let tabular = FontFeatures::new().enable(b"tnum");
+/// text("12:41").font_features(tabular);
+/// text("ffi").font_features(FontFeatures::new().disable(b"liga"));
+/// ```
+///
+/// `Copy`, and four bytes: a set is an id into a table of every distinct set
+/// this process has asked for, as a named [`FontFamily`] is an id into a table
+/// of names. Two sets of the same features are the same id however they were
+/// written, so a cache keys on the id, and the tags themselves are read only
+/// where a text is shaped. A feature the font does not have does nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct FontFeatures(u32);
+
+/// A feature set as the table keeps it: sorted by tag, each tag once.
+type FeatureList = [([u8; 4], u32)];
+
+/// Every distinct feature set this process has been asked for, and never
+/// fewer.
+///
+/// Where it lives, and why, is `FAMILIES`'s argument over again, because a
+/// `FontFeatures` is the same kind of value: `Copy` and so `Send`, held by
+/// properties an application keeps across an `App` being dropped and another
+/// built, and written from a background task through a `WriteSignal`. A table
+/// in `AppState` would be emptied by `reset` under ids still held; a table per
+/// thread would read an id minted on a worker as another set or none.
+///
+/// The sets are leaked on the way in, which is what makes reading one back a
+/// `&'static` slice. The table holds every distinct set the program asks
+/// for, and never gives one back: a builder chain interns each step, so a
+/// chain of three tags is three entries, and a set built from a signal's value
+/// leaks one entry per distinct value it ever takes. An application asks for
+/// a handful; one that spells a set from unbounded data grows the table with
+/// it.
+///
+/// The lock is not on a hot path: interning happens where a widget is built or
+/// a property's closure runs, and reading happens where a text is shaped,
+/// which is a cache miss about to run cosmic-text.
+static FEATURE_SETS: LazyLock<RwLock<FeatureTable>> =
+    LazyLock::new(|| RwLock::new(FeatureTable::default()));
+
+#[derive(Default)]
+struct FeatureTable {
+    /// The set of id `n + 1`; id 0 is the empty set, which is never stored.
+    sets: Vec<&'static FeatureList>,
+    ids: FxHashMap<&'static FeatureList, u32>,
+}
+
+impl FontFeatures {
+    /// No features: the font's defaults.
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    /// Turn `tag` on, as `set(tag, 1)`.
+    pub fn enable(self, tag: &[u8; 4]) -> Self {
+        self.set(tag, 1)
+    }
+
+    /// Turn `tag` off, as `set(tag, 0)` — `liga`, say, which a font turns on
+    /// by itself.
+    pub fn disable(self, tag: &[u8; 4]) -> Self {
+        self.set(tag, 0)
+    }
+
+    /// Give `tag` a value, replacing any it had, as CSS keeps the last of a
+    /// repeated tag.
+    pub fn set(self, tag: &[u8; 4], value: u32) -> Self {
+        let mut list = self.features().to_vec();
+        match list.binary_search_by_key(tag, |(t, _)| *t) {
+            Ok(at) => list[at].1 = value,
+            Err(at) => list.insert(at, (*tag, value)),
+        }
+        Self::intern(&list)
+    }
+
+    /// Whether the set holds no feature at all.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Each tag and its value, in the order of their tags.
+    pub fn features(self) -> &'static FeatureList {
+        match self.0 {
+            0 => &[],
+            id => FEATURE_SETS.read().expect("feature table").sets[id as usize - 1],
+        }
+    }
+
+    /// The id of `list`, which is sorted and holds each tag once.
+    fn intern(list: &FeatureList) -> Self {
+        if list.is_empty() {
+            return Self::new();
+        }
+        if let Some(&id) = FEATURE_SETS.read().expect("feature table").ids.get(list) {
+            return Self(id);
+        }
+        let mut table = FEATURE_SETS.write().expect("feature table");
+        // Read again: another thread may have interned it between the two.
+        if let Some(&id) = table.ids.get(list) {
+            return Self(id);
+        }
+        let leaked: &'static FeatureList = Box::leak(list.into());
+        table.sets.push(leaked);
+        let id = table.sets.len() as u32;
+        table.ids.insert(leaked, id);
+        Self(id)
+    }
+}
+
+/// Written as CSS writes them: `"tnum" 1, "liga" 0`.
+impl std::fmt::Debug for FontFeatures {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut list = f.debug_list();
+        for (tag, value) in self.features() {
+            list.entry(&format_args!(
+                "\"{}\" {value}",
+                String::from_utf8_lossy(tag)
+            ));
+        }
+        list.finish()
+    }
+}
+
 /// How tall each line of a text is.
 ///
 /// A bare number is a factor of the font size, as CSS's `line-height`, iced
@@ -245,6 +412,72 @@ mod tests {
     fn a_bare_number_is_a_factor() {
         assert_eq!(LineHeight::from(1.5_f32), LineHeight::Relative(1.5));
         assert_eq!(LineHeight::from(1.5_f64), LineHeight::Relative(1.5));
+    }
+
+    /// Two sets holding the same features are one set, whatever order they
+    /// were written in — they key the text caches, so an order that made a
+    /// second id would shape the same text twice.
+    #[test]
+    fn a_feature_set_is_its_features_and_not_their_order() {
+        let one = FontFeatures::new().enable(b"tnum").disable(b"liga");
+        let other = FontFeatures::new().disable(b"liga").enable(b"tnum");
+        assert_eq!(one, other);
+        assert_eq!(
+            one.features(),
+            [(*b"liga", 0), (*b"tnum", 1)],
+            "in the order of their tags"
+        );
+        assert_eq!(format!("{one:?}"), r#"["liga" 0, "tnum" 1]"#);
+    }
+
+    /// A set is an id, so a property holds one in four bytes and a text draw
+    /// command carries no list.
+    #[test]
+    fn a_feature_set_is_four_bytes() {
+        assert_eq!(std::mem::size_of::<FontFeatures>(), 4);
+    }
+
+    /// A tag written twice keeps the last value, as CSS takes the last of a
+    /// repeated `font-feature-settings` tag, and is held once.
+    #[test]
+    fn a_tag_set_again_is_given_its_new_value() {
+        let features = FontFeatures::new().enable(b"tnum").disable(b"tnum");
+        assert_eq!(features, FontFeatures::new().disable(b"tnum"));
+        assert_eq!(features.features().len(), 1);
+        assert!(FontFeatures::new().is_empty());
+        assert!(!features.is_empty());
+    }
+
+    /// There is no limit to how many tags a set holds.
+    #[test]
+    fn a_set_holds_as_many_tags_as_it_is_given() {
+        let tags = [
+            b"ss01", b"ss02", b"ss03", b"ss04", b"ss05", b"ss06", b"ss07", b"ss08", b"ss09",
+            b"tnum",
+        ];
+        let all = tags
+            .iter()
+            .fold(FontFeatures::new(), |set, tag| set.enable(tag));
+        assert_eq!(all.features().len(), tags.len());
+    }
+
+    /// A set is the same set on every thread and across an `App` being
+    /// dropped — the two invariants the table's placement exists for, which
+    /// `an_id_survives_the_application_and_the_thread_that_minted_it` pins
+    /// for families.
+    #[test]
+    fn a_set_survives_the_application_and_the_thread_that_minted_it() {
+        // A decoy first, so a worker with a table of its own would number the
+        // set differently and disagree.
+        let _decoy = FontFeatures::new().enable(b"c2sc").enable(b"smcp");
+        let before = FontFeatures::new().enable(b"zero");
+        crate::app_state::reset();
+        assert_eq!(before, FontFeatures::new().enable(b"zero"));
+        let elsewhere = std::thread::spawn(|| FontFeatures::new().enable(b"zero"))
+            .join()
+            .expect("the worker interned a set");
+        assert_eq!(elsewhere, before);
+        assert_eq!(elsewhere.features(), [(*b"zero", 1)]);
     }
 
     #[test]
