@@ -1373,11 +1373,12 @@ impl Container {
     }
 
     /// Draw the backgrounds of this container's direct children as one shape,
-    /// joined wherever two come closer than `distance` logical pixels.
+    /// reaching for each other once two come within `distance` logical pixels.
     ///
-    /// As two children close in, a concave neck grows between them; further
-    /// apart than `distance` they do not touch each other's outline at all, so
-    /// one that moves away splits off by itself. `0.0` is a plain union:
+    /// Further apart than `distance`, two children do not touch each other's
+    /// outline at all, so one that moves away splits off by itself. Closer,
+    /// their outlines lean towards each other, and a concave neck joins them
+    /// once the gap is half the distance or less. `0.0` is a plain union:
     /// overlapping children become one shape with no seam, and no neck forms.
     ///
     /// ```

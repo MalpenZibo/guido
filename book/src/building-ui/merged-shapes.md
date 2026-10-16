@@ -31,7 +31,8 @@ container()
 
 The number is a distance in logical pixels. Children further apart than that do
 not touch each other's outline at all, so one that moves away splits off by
-itself; as they close in, the neck forms and thickens. `0.0` is a plain union:
+itself. Closer than that, their outlines lean towards each other, and once the
+gap is half the distance a neck joins them and thickens as they close in. `0.0` is a plain union:
 overlapping children merge with no seam, and nothing grows between children that
 do not overlap. The distance takes a signal like any other property.
 

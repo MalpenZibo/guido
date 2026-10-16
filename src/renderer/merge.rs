@@ -29,7 +29,8 @@ pub const MAX_MEMBERS: usize = 16;
 /// What a container that merges its children declares on its render node.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MergeChildren {
-    /// How close two members come before they join, in logical pixels. `0.0`
+    /// How close two members come before their outlines reach for each other,
+    /// in logical pixels; a neck joins them once the gap is half of it. `0.0`
     /// is a plain union: overlapping members become one shape, and members
     /// apart stay apart.
     pub distance: f32,
@@ -161,7 +162,9 @@ pub(crate) fn gather(
             }
             replaced.push(Rc::as_ptr(command));
         }
-        let Some(member) = member else {
+        // A member nobody can see draws nothing, and must not pull its
+        // neighbours' outline towards where it would be.
+        let Some(member) = member.filter(|member| member.opacity > 0.0) else {
             continue;
         };
         let why = if gradient {
@@ -232,7 +235,10 @@ pub struct MergeRecord {
     pub inverse: [f32; 6],
     pub curvature: f32,
     /// One unit of the member's own space, in physical pixels — so the
-    /// members' distances are measured in one unit and can be compared.
+    /// members' distances are measured in one unit and can be compared. The
+    /// geometric mean of the two axes, so under a scale that differs between
+    /// them the distance is an approximation, as a lone shape's antialiasing
+    /// already is.
     pub to_pixels: f32,
     /// Premultiplied, so a transparent member blends towards nothing rather
     /// than towards black.
@@ -441,6 +447,29 @@ mod tests {
         assert_eq!(members(&gathered).len(), 1);
         assert_eq!(gathered.taken[0].len(), 0, "the gradient stays drawn");
         assert_eq!(gathered.taken[1].len(), 1);
+    }
+
+    /// A member at no opacity is not a member: it draws nothing, so it must
+    /// not pull its neighbour's outline towards where it would be.
+    #[test]
+    fn an_invisible_child_does_not_shape_the_outline() {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let mut group = RenderNode::new(0);
+        group
+            .children
+            .push(child((0.0, 0.0), &[background(rect, Color::GREEN, None)]));
+        let mut faded = RenderNode::with_bounds(2, rect);
+        faded.local_transform = Transform::translate(24.0, 0.0);
+        faded.opacity = 0.0;
+        faded.commands.push(background(rect, Color::GREEN, None));
+        group.children.push(Rc::new(faded));
+
+        let gathered = gather(&group, &MERGE, |_| panic!("nothing is reported")).unwrap();
+        assert_eq!(members(&gathered).len(), 1);
+        assert!(
+            gathered.taken[1].is_empty(),
+            "it is drawn as it was, at nothing"
+        );
     }
 
     /// Sixteen members merge and the seventeenth is drawn on its own.

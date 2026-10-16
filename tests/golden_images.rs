@@ -4631,3 +4631,50 @@ fn a_merged_shape_casts_every_outer_shadow() {
         ),
     );
 }
+
+/// A distance of zero is a plain union: two pills that overlap are one shape
+/// with no seam, and two that do not overlap are left exactly apart, with no
+/// neck however close.
+#[test]
+fn a_merge_at_distance_zero_is_a_plain_union() {
+    golden(
+        "a_merge_at_distance_zero_is_a_plain_union",
+        (220.0, 132.0),
+        1.0,
+        BACKDROP,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(20.0))
+            .children([-12.0, 2.0].map(|gap| {
+                pills(
+                    container().background(PILL),
+                    container().background(Color::rgb(0.30, 0.70, 0.90)),
+                    gap,
+                )
+                .merge_children(0.0)
+            })),
+    );
+}
+
+/// A merged shape is drawn in world space, unlike any other instance, and is
+/// cut by the clip its container sits under all the same: here a rounded
+/// card that hides its overflow, with the bubble half outside it.
+#[test]
+fn a_merged_shape_is_cut_by_its_clip() {
+    golden(
+        "a_merged_shape_is_cut_by_its_clip",
+        (180.0, 96.0),
+        1.0,
+        BACKDROP,
+        container().padding(10.0).child(
+            container()
+                .width(130.0)
+                .height(76.0)
+                .corners(24.0)
+                .overflow(Overflow::Hidden)
+                .background(Color::rgb(0.20, 0.20, 0.26))
+                .padding(20.0)
+                .child(pill_row(6.0, true)),
+        ),
+    );
+}

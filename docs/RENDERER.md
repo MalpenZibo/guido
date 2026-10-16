@@ -733,7 +733,17 @@ container and reason in debug builds (`merge_member_left_out`). The neck takes n
 input: hit testing still asks each child's own box. The goldens are
 `merged_pills_at_three_gaps`, `merged_pills_apart_are_the_pills_alone`,
 `merged_borders_blend_along_the_neck` (and at 2x),
-`a_gradient_member_is_drawn_unmerged` and `a_merged_shape_casts_one_shadow`.
+`a_gradient_member_is_drawn_unmerged`, `a_merged_shape_casts_one_shadow`,
+`a_merge_at_distance_zero_is_a_plain_union` and
+`a_merged_shape_is_cut_by_its_clip`. A child at no opacity is not a member: it
+draws nothing, and would otherwise pull its neighbours' outline towards where it
+would be.
+
+The reach is the distance, and the join is at half of it: at the midpoint
+between two members both distances are half the gap, and the smooth minimum
+takes at most a quarter of its reach off, so the outline meets itself there once
+the gap is half the distance. Between the two the outlines lean towards each
+other without touching.
 
 ## GPU Rendering Pipeline
 

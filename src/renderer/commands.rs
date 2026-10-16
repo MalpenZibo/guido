@@ -248,7 +248,8 @@ pub enum DrawCommand {
     MergedShape {
         /// Each member, placed in this command's own space.
         members: Vec<MergeMember>,
-        /// How close two members come before they join, in logical pixels.
+        /// How close two members come before they reach for each other, in
+        /// logical pixels; they join at half of it.
         distance: f32,
         /// Drawn along the merged outline in place of the members' own.
         border: Option<Border>,
