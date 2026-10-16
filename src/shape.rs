@@ -91,16 +91,14 @@ impl PlacedShape {
         }
     }
 
-    /// The same shape, moved across the surface by `(dx, dy)`.
-    ///
-    /// The declaration does not change — the rect and the radii are in the
-    /// shape's own space, and that space has not moved relative to whatever
-    /// declared it. What moves is where that space sits, which is the
-    /// placement.
+    /// The same shape, its whole space carried by `transform` — what a
+    /// translation is a special case of, for a subtree put back somewhere it
+    /// was not flattened, such as a layer's content drawn on the surface after
+    /// all.
     #[inline]
-    pub(crate) fn translated(&self, dx: f32, dy: f32) -> Self {
+    pub(crate) fn mapped(&self, transform: &Transform) -> Self {
         Self {
-            placement: self.placement.translated(dx, dy),
+            placement: transform.then(&self.placement),
             ..*self
         }
     }

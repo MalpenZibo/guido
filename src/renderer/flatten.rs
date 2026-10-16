@@ -751,7 +751,8 @@ fn flatten_node(
         // The clips this subtree placed for itself move with it; the one it
         // inherits is the one it finds here, wherever that has got to. Placed
         // first, because the commands below read what they name.
-        out.clips.replay(&cached.clips, dx, dy, parent_clip);
+        out.clips
+            .replay(&cached.clips, &Transform::translate(dx, dy), parent_clip);
         for cmd in &cached.commands {
             let mut replayed = cmd.clone();
             replayed.world_transform = cmd.world_transform.translated(dx, dy);

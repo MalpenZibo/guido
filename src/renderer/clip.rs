@@ -30,6 +30,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::shape::PlacedShape;
+use crate::transform::Transform;
 use crate::widgets::Rect;
 
 /// The end of a chain: a clip with nothing above it left to test.
@@ -346,16 +347,19 @@ impl ClipTree {
     ///
     /// The inverse of [`since`](Self::since), and beside it for that reason:
     /// one of them encodes the parent links and the other reads them back.
+    ///
+    /// `transform` is a translation for a cached subtree. It is anything at
+    /// all for a layer's content that is drawn on the surface after all,
+    /// which was flattened in the layer's own space.
     pub(crate) fn replay(
         &mut self,
         clips: &[CachedClip],
-        dx: f32,
-        dy: f32,
+        transform: &Transform,
         inherited: Option<ClipIndex>,
     ) {
         let start = self.placed.len();
         for clip in clips {
-            let own = clip.own.translated(dx, dy);
+            let own = clip.own.mapped(transform);
             let under = match clip.parent {
                 CachedParent::Within(offset) => Some(ClipIndex(start + offset)),
                 CachedParent::Inherited => inherited,
@@ -945,12 +949,15 @@ mod tests {
         // somebody else's link now.
         let other = tree.place(card, None);
         tree.place(inset, Some(other));
-        let moved = card.translated(5.0, 0.0);
+        let moved = card.mapped(&Transform::translate(5.0, 0.0));
         let outer = tree.place(moved, None);
-        tree.replay(&cached, 5.0, 0.0, Some(outer));
+        tree.replay(&cached, &Transform::translate(5.0, 0.0), Some(outer));
 
         let resolved = reference.resolved();
-        assert_eq!(resolved.first, inset.translated(5.0, 0.0));
+        assert_eq!(
+            resolved.first,
+            inset.mapped(&Transform::translate(5.0, 0.0))
+        );
         assert_eq!(
             tree.chains()
                 .chain(resolved.rest)
