@@ -1505,3 +1505,24 @@ fn a_double_click_on_the_last_letter_of_a_word_selects_that_word() {
 
     assert_eq!(field.text(), "X world");
 }
+
+/// A field scrolled to its end still selects the word drawn under the
+/// pointer: the press is read against the text as scrolled, not as laid out
+/// from the field's left edge.
+#[test]
+fn a_double_click_in_a_scrolled_field_selects_the_word_drawn_there() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let mut field = Field::focused(SENTENCE);
+    // Just inside the left edge of the "d": the caret position nearest it is
+    // the one before it, and the character under it is the "d".
+    let dog = field.x_after(&[(Key::End, Modifiers::default()), (Key::Left, ctrl)]) + 1.0;
+
+    field.press_number(1, dog);
+    field.press_number(2, dog);
+    field.type_text("X");
+
+    assert_eq!(field.text(), SENTENCE.replace("dog", "X"));
+}
