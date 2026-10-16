@@ -389,7 +389,7 @@ impl Surface {
             scratch,
             ..
         } = self;
-        tree.paint_widget(*root, root_node);
+        tree.paint_widget(*root, root_node, 1.0);
         let _ = flatten_root_into(root_node, commands, layers, scratch);
         for child in &root_node.children {
             guido::cache_paint_results(tree, child);

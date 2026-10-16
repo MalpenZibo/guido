@@ -175,7 +175,7 @@ impl Harness {
         let root = self.root;
         self.tree.set_frame_instant(Some(std::time::Instant::now()));
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.paint_widget(root, &mut node);
+        self.tree.paint_widget(root, &mut node, 1.0);
         self.tree.set_frame_instant(None);
         node
     }

@@ -18,7 +18,7 @@ fn draws(widget: impl Widget + 'static) -> Vec<(f32, f32, Color)> {
     tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, 1.0);
 
     let mut out = Vec::new();
     collect(&node, &mut out);

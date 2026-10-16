@@ -91,7 +91,7 @@ fn a_widget_from_outside_the_crate_lays_out_and_paints() {
     assert_eq!(size, Size::new(20.0, 20.0));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, 1.0);
     assert!(!node.commands.is_empty(), "the widget drew nothing");
 }
 
@@ -195,6 +195,22 @@ fn a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer() {
     );
 }
 
+/// An application without a compositor, or `None` where there is no adapter
+/// to draw with — which is a failure where `GUIDO_GPU_REQUIRED` says one must
+/// be there. Its own copy rather than `common`'s, because this file takes
+/// nothing but the public API.
+#[cfg(feature = "testing")]
+fn headless() -> Option<guido::testing::Headless> {
+    let app = guido::testing::Headless::new();
+    if app.is_none() {
+        if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() {
+            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found");
+        }
+        eprintln!("no GPU adapter; skipping");
+    }
+    app
+}
+
 /// A leaf written outside the crate whose `paint` reads a signal and opens no
 /// scope of its own — which is what the book tells its reader costs an
 /// over-broad repaint, and in fact costs every repaint.
@@ -204,7 +220,6 @@ fn a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer() {
 #[cfg(feature = "testing")]
 mod a_paint_that_opens_no_scope {
     use super::*;
-    use guido::testing::Headless;
 
     /// A parent written outside the crate, which paints its one child through
     /// the call the framework provides — the reason `paint_child` and the
@@ -253,13 +268,7 @@ mod a_paint_that_opens_no_scope {
 
     #[test]
     fn a_widget_that_opens_no_paint_scope_still_follows_its_signal() {
-        let Some(mut app) = Headless::new() else {
-            if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() {
-                panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found");
-            }
-            eprintln!("no GPU adapter; skipping");
-            return;
-        };
+        let Some(mut app) = headless() else { return };
 
         let colour = create_signal(Color::rgb(1.0, 0.0, 0.0));
         let surface = app.surface(
@@ -291,6 +300,122 @@ mod a_paint_that_opens_no_scope {
             "the write reached nothing: the widget still shows the colour it \
              was built with. Its paint read the signal, so the read belongs to \
              it — but no scope was open to hear it ({r} vs {b})"
+        );
+    }
+}
+
+/// A widget that rasterises its own image reads the scale its frame is painted
+/// at, so the image it builds has one pixel per device pixel (#673).
+///
+/// Needs an adapter, because the scale is the loop's: it comes from what the
+/// compositor sent the surface, and only the loop paints with it.
+#[cfg(feature = "testing")]
+mod the_scale_a_frame_is_painted_at {
+    use super::*;
+    use guido::testing::Headless;
+    use std::cell::RefCell;
+    use std::sync::Arc;
+
+    /// Builds a raster of its own at the size it is painted at, in device
+    /// pixels, and keeps the size of each one it built so the test can look.
+    struct Raster {
+        built: Built,
+    }
+
+    /// The size of each raster a widget built, in the order it built them.
+    type Built = Rc<RefCell<Vec<(u32, u32)>>>;
+
+    impl Widget for Raster {
+        fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+            constraints.constrain(Size::new(100.0, 20.0))
+        }
+
+        fn paint(&self, ctx: &mut PaintContext) {
+            let scale = ctx.scale_factor();
+            let (width, height) = (
+                (100.0 * scale).round() as u32,
+                (20.0 * scale).round() as u32,
+            );
+            self.built.borrow_mut().push((width, height));
+            ctx.draw_image(
+                ImageSource::Rgba {
+                    width,
+                    height,
+                    pixels: Arc::from(vec![255u8; width as usize * height as usize * 4]),
+                },
+                Rect::new(0.0, 0.0, 100.0, 20.0),
+                ContentFit::Fill,
+                None,
+            );
+        }
+    }
+
+    /// Under a container, so the scale has to reach it through `paint_child`
+    /// and not only through the root's context.
+    fn raster_surface(app: &mut Headless) -> (SurfaceId, Built) {
+        let built = Rc::new(RefCell::new(Vec::new()));
+        let widget = Raster {
+            built: Rc::clone(&built),
+        };
+        let surface = app.surface(SurfaceConfig::new().width(100).height(20), move || {
+            container().child(widget)
+        });
+        (surface, built)
+    }
+
+    #[test]
+    fn a_widget_rebuilds_its_raster_at_the_scale_it_is_painted_at() {
+        let Some(mut app) = headless() else { return };
+        let (surface, built) = raster_surface(&mut app);
+
+        app.configure(surface, 100, 20, 1.0);
+        app.step();
+        assert_eq!(built.borrow().last(), Some(&(100, 20)), "first frame at 1");
+
+        app.configure(surface, 100, 20, 1.5);
+        app.step();
+        assert_eq!(app.physical_size(surface), (150, 30));
+        assert_eq!(
+            built.borrow().last(),
+            Some(&(150, 30)),
+            "the frame after a fractional scale rebuilds the raster at one \
+             pixel per device pixel"
+        );
+    }
+
+    #[test]
+    fn a_surface_that_was_never_sent_a_scale_is_painted_at_one() {
+        let Some(mut app) = headless() else { return };
+        let (surface, built) = raster_surface(&mut app);
+
+        app.configure_size(surface, 100, 20);
+        app.step();
+        assert_eq!(built.borrow().as_slice(), &[(100, 20)]);
+    }
+
+    #[test]
+    fn each_surface_is_painted_at_its_own_scale() {
+        let Some(mut app) = headless() else { return };
+        let (first, first_built) = raster_surface(&mut app);
+        let (second, second_built) = raster_surface(&mut app);
+
+        app.configure(first, 100, 20, 1.0);
+        app.configure(second, 100, 20, 2.0);
+        app.step();
+        assert_eq!(first_built.borrow().last(), Some(&(100, 20)));
+        assert_eq!(second_built.borrow().last(), Some(&(200, 40)));
+
+        app.send_scale(first, 1.5);
+        app.step();
+        assert_eq!(
+            first_built.borrow().last(),
+            Some(&(150, 30)),
+            "the first follows its own"
+        );
+        assert!(
+            second_built.borrow().iter().all(|&size| size == (200, 40)),
+            "the second is never painted at the first's scale: {:?}",
+            second_built.borrow()
         );
     }
 }

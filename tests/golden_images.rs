@@ -165,7 +165,7 @@ fn render_pixels(
     );
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, scale);
 
     let mut commands = Vec::new();
     let mut layers = Vec::new();

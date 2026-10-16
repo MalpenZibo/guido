@@ -52,7 +52,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     tree.layout_widget(root, constraints);
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, 1.0);
 
     // Animations advance between layout and the next paint
     tree.with_widget_mut(root, |w, id, t| {
@@ -94,7 +94,7 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     // steady-state paths (early-outs, paint-cache reuse, target re-sync).
     tree.layout_widget(root, constraints);
     let mut node2 = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node2);
+    tree.paint_widget(root, &mut node2, 1.0);
 
     report_count() - before
 }

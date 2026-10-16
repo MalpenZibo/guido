@@ -854,7 +854,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         measured(&mut tree, root, 90.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
 
         let fit = node.commands.iter().find_map(|cmd| match &**cmd {
             DrawCommand::Text { fit, .. } => Some(*fit),
@@ -881,7 +881,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         measured(&mut tree, root, 120.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
 
         let fit = node.commands.iter().find_map(|cmd| match &**cmd {
             DrawCommand::Text { fit, .. } => Some(*fit),
@@ -907,7 +907,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         measured(&mut tree, root, width);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         node.commands
             .iter()
             .find(|cmd| matches!(&***cmd, DrawCommand::Text { .. }))
@@ -936,7 +936,7 @@ mod tests {
     fn painted_alignments(tree: &mut Tree, root: WidgetId) -> Vec<TextAlign> {
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         node.commands
             .iter()
             .filter_map(|cmd| match &**cmd {
@@ -1000,7 +1000,7 @@ mod tests {
 
         jobs::pump_and_layout(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         let drawn: Vec<TextAlign> = node
             .commands
             .iter()
@@ -1020,7 +1020,7 @@ mod tests {
         tree.set_frame_instant(Some(at));
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         tree.set_frame_instant(None);
 
         fn walk(node: &RenderNode, out: &mut Vec<(Color, f32)>) {
@@ -1720,7 +1720,7 @@ mod tests {
     fn painted_style(tree: &mut Tree, root: WidgetId) -> (FontFamily, FontWeight) {
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         fn find(node: &RenderNode) -> Option<(FontFamily, FontWeight)> {
             for cmd in &node.commands {
                 if let DrawCommand::Text {
@@ -1748,7 +1748,7 @@ mod tests {
     fn frame(tree: &mut Tree, root: WidgetId) -> (Color, f32) {
         measured(tree, root, 800.0);
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
 
         fn find(node: &RenderNode) -> Option<(Color, f32)> {
             for cmd in &node.commands {
@@ -1771,7 +1771,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         node.commands.iter().find_map(|cmd| match &**cmd {
             DrawCommand::TextBackdropBlur { stroke, .. } => *stroke,
             _ => None,
@@ -1785,7 +1785,7 @@ mod tests {
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
         tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         node.commands
             .iter()
             .map(|cmd| match &**cmd {
@@ -1877,7 +1877,7 @@ mod tests {
         let paint = |tree: &mut Tree| {
             tree.layout_widget(root, Constraints::new(0.0, 0.0, 800.0, 600.0));
             let mut node = RenderNode::new(root.as_u64());
-            tree.paint_widget(root, &mut node);
+            tree.paint_widget(root, &mut node, 1.0);
             node.commands
                 .iter()
                 .filter(|cmd| matches!(&***cmd, DrawCommand::TextBackdropBlur { .. }))
@@ -2138,7 +2138,7 @@ mod letter_spacing_tests {
     fn frame(tree: &mut Tree, root: WidgetId, id: WidgetId) -> (f32, Vec<f32>) {
         jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 800.0, 600.0));
         let mut node = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
         fn collect(node: &RenderNode, out: &mut Vec<f32>) {
             for cmd in &node.commands {
                 match &**cmd {
