@@ -122,6 +122,43 @@ animation running, so showing and hiding it is the only switch to keep in step
 done. Compose reaches the same place from the other direction: an infinite
 transition there runs for as long as the composable is in composition.
 
+## Starting late, or out of step
+
+`delay(ms)` holds the first value for `ms` and then plays. It is paid once each
+time the sequence plays, not once per run: a repeat goes straight on into the
+next one, as `animation-delay` does in CSS.
+
+`phase(f)` starts the first run `f` of the way through its cycle, which is what
+lets several elements share one looping definition and still move out of step
+— a row of equaliser bars, or loading dots:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+fn bounce(phase: f32) -> Keyframes<Scale> {
+    Keyframes::new(900.0)
+        .at_with(0.0, Scale::uniform(0.4), TimingFunction::EaseInOut)
+        .at_with(0.5, Scale::uniform(1.0), TimingFunction::EaseInOut)
+        .at(1.0, Scale::uniform(0.4))
+        .phase(phase)
+        .repeat(Repeat::Forever)
+}
+
+let bar = |phase| container().scale(Scale::NONE.timeline(bounce(phase)));
+container()
+    .layout(Flex::row().spacing(4.0))
+    .children([bar(0.0), bar(0.33), bar(0.66)])
+# ;
+# }
+```
+
+A phase is a negative `animation-delay`: the part of the cycle it skips is
+already behind it, so a sequence with a count ends that much sooner, on its
+last stop. It is read round the cycle — `1.25` is `0.25` — and with both, the
+delay holds the value the phased run begins from, so the end of the wait is not
+a jump.
+
 ## Offsets and easing
 
 An offset is a fraction of one run, `0.0` to `1.0`, and `duration` is how long
