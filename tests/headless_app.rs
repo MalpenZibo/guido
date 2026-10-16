@@ -1005,7 +1005,7 @@ fn a_field_has_the_focus_back_when_a_grabbing_popup_closes() {
 
 /// A bar whose field has the focus and the keyboard, and a grabbing popup
 /// opened from it whose field asks for `autofocus`, spawned and not yet
-/// configured.
+/// configured. The field is in the popup while `shown` says so.
 struct AutofocusPopup {
     bar: SurfaceId,
     field: WidgetRef,
@@ -1015,7 +1015,10 @@ struct AutofocusPopup {
     typed: RwSignal<String>,
 }
 
-fn an_autofocus_popup_over_a_focused_field(app: &mut Headless) -> AutofocusPopup {
+fn an_autofocus_popup_over_a_focused_field(
+    app: &mut Headless,
+    shown: RwSignal<bool>,
+) -> AutofocusPopup {
     let field = create_widget_ref();
     let value = create_signal(String::new());
     let bar = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
@@ -1029,10 +1032,11 @@ fn an_autofocus_popup_over_a_focused_field(app: &mut Headless) -> AutofocusPopup
     let suggestion = create_widget_ref();
     let typed = create_signal(String::new());
     let popup = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), move || {
-        container()
-            .width(fill())
-            .height(fill())
-            .child(text_input(typed).widget_ref(suggestion).autofocus())
+        container().width(fill()).height(fill()).children(move || {
+            shown
+                .get()
+                .then(|| text_input(typed).widget_ref(suggestion).autofocus())
+        })
     });
     app.step();
     AutofocusPopup {
@@ -1064,7 +1068,7 @@ fn a_popups_autofocus_field_takes_the_focus_from_the_bar_when_the_keyboard_reach
         popup,
         suggestion,
         typed,
-    } = an_autofocus_popup_over_a_focused_field(&mut app);
+    } = an_autofocus_popup_over_a_focused_field(&mut app, create_signal(true));
     app.configure(popup.id(), 80, 40, 1.0);
     app.step();
     assert!(
@@ -1097,29 +1101,40 @@ fn a_popups_autofocus_field_takes_the_focus_from_the_bar_when_the_keyboard_reach
     assert_eq!(value.get_untracked(), "x", "and the key is typed into it");
 }
 
-/// A popup whose keyboard enter comes before its first layout: its `autofocus`
-/// field takes the focus there and then, from the bar's field, because the
-/// keyboard is already on its surface (#731).
+/// An `autofocus` field that appears on a popup the keyboard is already on
+/// takes the focus there and then, from the bar's field (#731).
+///
+/// The keyboard entering a surface cannot come before the surface's own first
+/// layout: a compositor enters only a mapped surface. A field shown later can,
+/// and the enter it would wait for has already happened.
 #[test]
-fn a_popup_given_the_keyboard_before_its_first_layout_autofocuses_at_that_layout() {
+fn an_autofocus_field_shown_on_a_popup_holding_the_keyboard_takes_the_focus() {
     let Some(mut app) = headless() else { return };
+    let shown = create_signal(false);
     let AutofocusPopup {
         bar,
+        field,
         popup,
         suggestion,
         typed,
         ..
-    } = an_autofocus_popup_over_a_focused_field(&mut app);
-    // The enter and the configure in one batch: the loop routes the enter,
-    // then lays the popup out for the first time.
+    } = an_autofocus_popup_over_a_focused_field(&mut app, shown);
     app.configure(popup.id(), 80, 40, 1.0);
+    app.step();
     let now = Instant::now();
     app.event_at(bar, Event::FocusOut, now);
     app.event_at(popup.id(), Event::FocusIn, now);
     app.step();
     assert!(
+        field.is_focused(),
+        "the popup has nothing to focus, so the bar's field keeps the focus"
+    );
+
+    shown.set(true);
+    app.step();
+    assert!(
         suggestion.is_focused(),
-        "its first layout found the keyboard on its surface"
+        "the field appeared where the keyboard is"
     );
 
     app.event_at(popup.id(), key_down(Key::Char('a')), Instant::now());
