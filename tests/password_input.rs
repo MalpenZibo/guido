@@ -238,3 +238,25 @@ fn a_readonly_field_refuses_edits() {
     field.key(Key::Backspace);
     assert_eq!(field.held(), "ab");
 }
+
+/// A password field does not show where its words end, so a double click
+/// selects everything rather than the word under the pointer.
+#[test]
+fn a_double_click_in_a_password_selects_everything() {
+    let mut field = Field::new(|input, _| input);
+    field.type_str("hello world");
+
+    for count in 1..=2 {
+        field.now += Duration::from_millis(1);
+        field
+            .harness
+            .send_at(common::press_numbered(4.0, 5.0, count), field.now);
+        field.now += Duration::from_millis(1);
+        field
+            .harness
+            .send_at(Event::mouse_up(4.0, 5.0, MouseButton::Left), field.now);
+    }
+    field.type_str("X");
+
+    assert_eq!(field.held(), "X");
+}

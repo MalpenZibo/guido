@@ -1396,3 +1396,112 @@ fn a_drag_does_not_outlive_the_pointer_leaving_the_surface() {
         "and it would have, had the drag still been live"
     );
 }
+
+impl Field {
+    /// The `count`th press of a run at `x`, held.
+    fn press_down(&mut self, count: u32, x: f32) {
+        self.now += Duration::from_millis(1);
+        self.harness
+            .send_at(common::press_numbered(x, 5.0, count), self.now);
+    }
+
+    /// The pointer dragged to `x`, and released there.
+    fn release_at(&mut self, x: f32) {
+        self.now += Duration::from_millis(1);
+        self.harness.send_at(Event::mouse_move(x, 5.0), self.now);
+        self.harness
+            .send_at(Event::mouse_up(x, 5.0, MouseButton::Left), self.now);
+    }
+
+    /// The `count`th press of a run at `x`, released where it landed.
+    fn press_number(&mut self, count: u32, x: f32) {
+        self.press_down(count, x);
+        self.release_at(x);
+    }
+
+    /// Where the caret is drawn after `keys`, which is how a test finds a
+    /// word on screen without pinning a number that belongs to the font.
+    fn x_after(&mut self, keys: &[(Key, Modifiers)]) -> f32 {
+        for &(key, modifiers) in keys {
+            self.press(key, modifiers);
+        }
+        self.caret_x().expect("a caret with nothing selected")
+    }
+}
+
+/// A double click inside "world" selects it, and typing replaces it.
+#[test]
+fn a_double_click_selects_the_word_under_the_pointer() {
+    let mut field = Field::focused("hello world");
+    let end = field.x_after(&[(Key::End, Modifiers::default())]);
+
+    field.press_number(1, end - 4.0);
+    field.press_number(2, end - 4.0);
+    field.type_text("X");
+
+    assert_eq!(field.text(), "hello X");
+}
+
+/// A third click selects everything, whatever word it landed on.
+#[test]
+fn a_triple_click_selects_everything() {
+    let mut field = Field::focused("hello world");
+    let end = field.x_after(&[(Key::End, Modifiers::default())]);
+
+    for count in 1..=3 {
+        field.press_number(count, end - 4.0);
+    }
+    field.type_text("X");
+
+    assert_eq!(field.text(), "X");
+}
+
+/// A drag after a double click extends the selection a word at a time, from
+/// the word it started on, in either direction: a drag that ends inside a
+/// word takes all of it.
+#[test]
+fn a_drag_after_a_double_click_extends_by_words() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let mut field = Field::focused("one two three");
+    let two = field.x_after(&[(Key::Home, Modifiers::default()), (Key::Right, ctrl)]) + 3.0;
+    let three = field.x_after(&[(Key::End, Modifiers::default())]) - 4.0;
+
+    // Forwards, from "one" into "two".
+    field.press_down(2, 3.0);
+    field.release_at(two);
+    field.type_text("X");
+    assert_eq!(field.text(), "X three");
+
+    // Backwards, from "three" into "two".
+    let mut field = Field::focused("one two three");
+    field.press_down(2, three);
+    field.release_at(two);
+    field.type_text("X");
+    assert_eq!(field.text(), "one X");
+}
+
+/// A press on the right half of a word's last letter is on that word: the
+/// caret position nearest it is past the letter, before the space, and the
+/// word is chosen by the character drawn under the pointer, not by that.
+#[test]
+fn a_double_click_on_the_last_letter_of_a_word_selects_that_word() {
+    let mut field = Field::focused("hello world");
+    let right = (Key::Right, Modifiers::default());
+    let past_hello = field.x_after(&[
+        (Key::Home, Modifiers::default()),
+        right,
+        right,
+        right,
+        right,
+        right,
+    ]);
+
+    field.press_number(1, past_hello - 1.0);
+    field.press_number(2, past_hello - 1.0);
+    field.type_text("X");
+
+    assert_eq!(field.text(), "X world");
+}
