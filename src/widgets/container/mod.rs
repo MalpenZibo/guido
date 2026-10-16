@@ -236,6 +236,7 @@ bitflags::bitflags! {
 /// Only allocated when `.on_click()`, `.when_hovered()`, `.when_pressed()`, etc. are called.
 pub(super) struct InteractionState {
     pub(super) on_click: Option<ClickCallback>,
+    pub(super) on_double_click: Option<ClickCallback>,
     pub(super) on_right_click: Option<ClickCallback>,
     pub(super) on_middle_click: Option<ClickCallback>,
     pub(super) on_key_down: Option<KeyCallback>,
@@ -245,6 +246,10 @@ pub(super) struct InteractionState {
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
     pub(super) on_mouse_down: Option<MouseDownCallback>,
     pub(super) on_mouse_up: Option<MouseUpCallback>,
+    /// Which press of a run the press held now was — its
+    /// [`count`](Event::MouseDown::count) — so the release knows whether it
+    /// ends a double click.
+    pub(super) press_count: u32,
     /// Whether Tab stops here, and a press inside takes the focus.
     pub(super) focusable: bool,
     /// Hover and press, behind a signal so that *resolving a state layer
@@ -302,6 +307,7 @@ impl Default for InteractionState {
     fn default() -> Self {
         Self {
             on_click: None,
+            on_double_click: None,
             on_right_click: None,
             on_middle_click: None,
             on_key_down: None,
@@ -311,6 +317,7 @@ impl Default for InteractionState {
             on_pointer_move: None,
             on_mouse_down: None,
             on_mouse_up: None,
+            press_count: 0,
             focusable: false,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
@@ -1136,6 +1143,27 @@ impl Container {
         self
     }
 
+    /// Called on the release of a double click inside the bounds: the second
+    /// left click of a run, as the web's `dblclick` is.
+    ///
+    /// [`on_click`](Self::on_click) still fires for each of the two clicks,
+    /// before this does for the second. A third click in the run is a click
+    /// and nothing more; a widget that wants it reads the press's
+    /// [`count`](Event::MouseDown::count) from the event.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let open = || {};
+    /// container().on_click(|| println!("select")).on_double_click(open);
+    /// ```
+    pub fn on_double_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
+        let handler = callback.into_click_handler();
+        if handler.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_double_click = handler;
+        }
+        self
+    }
+
     /// Called on a right-button press inside the bounds.
     pub fn on_right_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_right_click = Some(Rc::new(callback));
@@ -1476,6 +1504,7 @@ impl Container {
             ix.declared_enabled.is_set()
                 || ix.has_any_state()
                 || ix.on_click.is_some()
+                || ix.on_double_click.is_some()
                 || ix.on_right_click.is_some()
                 || ix.on_middle_click.is_some()
                 || ix.on_hover.is_some()

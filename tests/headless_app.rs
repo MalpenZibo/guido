@@ -1960,6 +1960,86 @@ fn a_right_click_after_a_left_click_counts_one() {
     assert_eq!(counts, [1, 1]);
 }
 
+/// `on_double_click` fires on the release of the second click, as the web's
+/// `dblclick` does, and only on the second: a third click in the run is a
+/// click and nothing more. `on_click` fires for every one of them.
+#[test]
+fn a_double_click_fires_on_the_second_release_and_every_click_still_clicks() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let doubles = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .on_click(move || clicks.update(|c| *c += 1))
+                .on_double_click(move || doubles.update(|c| *c += 1)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let start = Instant::now();
+    let [first_down, first_up] = click_at(0, 10.0, MouseButton::Left);
+    let [second_down, second_up] = click_at(100, 10.0, MouseButton::Left);
+    queue(
+        &mut app,
+        surface,
+        start,
+        [first_down, first_up, second_down],
+    );
+    app.step();
+    assert_eq!(
+        (clicks.get(), doubles.get()),
+        (1, 0),
+        "not before the release"
+    );
+
+    queue(&mut app, surface, start, [second_up]);
+    app.step();
+    assert_eq!((clicks.get(), doubles.get()), (2, 1));
+
+    queue(
+        &mut app,
+        surface,
+        start,
+        click_at(200, 10.0, MouseButton::Left),
+    );
+    app.step();
+    assert_eq!(
+        (clicks.get(), doubles.get()),
+        (3, 1),
+        "a triple is not two doubles"
+    );
+}
+
+/// A container with nothing but `on_double_click` claims the press, as one
+/// with an `on_click` does, so the release that makes the double click
+/// reaches it.
+#[test]
+fn a_double_click_alone_is_heard() {
+    let Some(mut app) = headless() else { return };
+    let doubles = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .on_double_click(move || doubles.update(|c| *c += 1)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let clicks = click_at(0, 10.0, MouseButton::Left)
+        .into_iter()
+        .chain(click_at(100, 10.0, MouseButton::Left));
+    queue(&mut app, surface, Instant::now(), clicks);
+    app.step();
+    assert_eq!(doubles.get(), 1);
+}
+
 /// A block of one colour, which is what these scroll scenes are made of: the
 /// frame says where the content is by where one gives way to the next.
 fn block(height: f32, color: Color) -> Container {
