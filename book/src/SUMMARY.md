@@ -27,6 +27,7 @@
     - [Text](building-ui/text.md)
     - [Text Input](building-ui/text-input.md)
     - [Images](building-ui/images.md)
+    - [Arcs & Paths](building-ui/arcs-and-paths.md)
 
 # Interactivity
 

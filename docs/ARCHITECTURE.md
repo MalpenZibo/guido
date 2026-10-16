@@ -105,6 +105,11 @@ Text rendering with:
 - Line alignment within the text's own box (`TextAlign`)
 - A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape` in `renderer/text.rs`, in the width the text was laid out in, so every path breaks and cuts on the same lines; `paint_offset` places those lines in the text's box
 
+**Arc** (`widgets/arc.rs`)
+A ring or part of one — a progress ring, a timer, a gauge — drawn as one SDF
+shape: size, stroke, start and sweep, a track, and a colour and progress that
+animate.
+
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
 - `Widget::into_any()` method for boxing widgets in conditional branches
@@ -138,6 +143,8 @@ Hardware-accelerated rendering using wgpu.
 - `PaintContext` - Build render tree nodes during widget painting
 - `RenderNode` - Hierarchical render tree with local coordinates (one root per surface, children Rc-shared with the paint cache)
 - Custom WGSL shaders for SDF-based instanced rendering
+- `Path`, filled and stroked by `PaintContext::draw_path`: tessellated by lyon,
+  anti-aliased by a fringe of guido's own, cached by content and scale
 
 **Rendering Pipeline (per frame):**
 
@@ -946,6 +953,8 @@ duplicate was found.
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
 | `src/renderer/clip.rs` | The frame's clip tree, which draw commands name rather than copy |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
+| `src/renderer/path_pipeline.rs` | Paths: their cached tessellations and the pipeline that draws them |
+| `src/widgets/arc.rs` | The arc widget: a ring drawn as one SDF shape |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
