@@ -138,6 +138,15 @@ fn move_focus(tree: &Tree, id: WidgetId, by_keyboard: bool) {
     request_job(id, JobRequest::Paint);
 }
 
+/// Whether `id` has the focus and its surface has the keyboard: what a caret
+/// is drawn for. A surface without the keyboard keeps its focus, and a field
+/// holding it shows no live caret until the keyboard is back.
+pub(crate) fn has_focus_with_keyboard(tree: &Tree, id: WidgetId) -> bool {
+    focus().with_untracked(|path| {
+        path.widget() == Some(id) && path.root().is_some_and(|root| tree.has_keyboard(root))
+    })
+}
+
 /// Ask for the focus to move to whatever `widget_ref` names, on the next frame.
 ///
 /// The caller has no tree — see
@@ -262,6 +271,45 @@ pub fn clear_focus() {
 mod tests {
     use super::*;
     use crate::reactive::owner::{create_root_owner, dispose_owner_now, with_owner};
+
+    /// There is one keyboard: its entering another surface is its leaving
+    /// this one, whether or not this one's leave has come yet — a leave can
+    /// arrive after the enter it made way for. A field kept focused here
+    /// draws no caret until the keyboard is back.
+    #[test]
+    fn the_keyboard_entering_another_surface_leaves_this_one_without_it() {
+        use crate::layout::Constraints;
+        use crate::widgets::{Event, container, text_input};
+
+        create_root_owner();
+        clear_focus();
+        let mut tree = Tree::new();
+        let field = tree.register(Box::new(text_input(crate::reactive::create_signal(
+            String::new(),
+        ))));
+        let other = tree.register(Box::new(container()));
+        for root in [field, other] {
+            tree.layout_widget(root, Constraints::new(0.0, 0.0, 200.0, 40.0));
+        }
+        request_focus(&tree, field);
+        assert!(
+            has_focus_with_keyboard(&tree, field),
+            "nothing said otherwise yet"
+        );
+
+        tree.dispatch(other, &Event::FocusIn);
+        assert!(has_focus(field), "the focus stays");
+        assert!(!has_focus_with_keyboard(&tree, field), "the keyboard went");
+
+        tree.dispatch(field, &Event::FocusOut);
+        tree.dispatch(field, &Event::FocusIn);
+        assert!(has_focus_with_keyboard(&tree, field), "and came back");
+        tree.dispatch(other, &Event::FocusOut);
+        assert!(
+            has_focus_with_keyboard(&tree, field),
+            "a late leave from the other surface says nothing about this one"
+        );
+    }
 
     /// A request outlives a widget that comes and goes, and must not fire at
     /// whatever takes its ref next: the field it named left the tree, so the

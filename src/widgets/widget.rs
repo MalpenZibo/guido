@@ -706,9 +706,13 @@ pub enum Event {
         /// Current modifier state
         modifiers: Modifiers,
     },
-    /// Widget gained keyboard focus
+    /// The surface has the keyboard again, and the widget it had focused when
+    /// the focus went to another surface has the focus back. Sent down the
+    /// focus path, as a key is.
     FocusIn,
-    /// Widget lost keyboard focus
+    /// The surface lost the keyboard. The focus stays where it was — a text
+    /// input keeps it and draws no caret — and keys reach it again after the
+    /// next `FocusIn`.
     FocusOut,
     /// The text a paste this widget asked for brought. Sent to that widget
     /// alone, on a later iteration than the one that asked.

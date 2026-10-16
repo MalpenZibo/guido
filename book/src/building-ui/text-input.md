@@ -311,6 +311,11 @@ change cannot drag focus back from wherever the user has since put it.
 
 ## Losing Focus
 
+The surface losing the keyboard does not take the focus off the field. Switching
+to another window, or opening a popup that grabs the keyboard, leaves the field
+focused with no caret, and when the keyboard comes back the caret does too and
+the next key is typed where it was going.
+
 A press that no widget claimed takes the keyboard off the field. Clicking the
 surface behind it, or a decorative panel, or empty space in a row: nothing there
 wanted the press, so there is nothing left for the focus to belong to, and the

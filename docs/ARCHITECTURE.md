@@ -725,6 +725,11 @@ got there by Tab (#634).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).
+Losing it takes no focus away: `Tree` notes which surface has the keyboard,
+and a text input holding the focus on a surface without it draws no caret until
+the keyboard is back. GTK keeps a
+focus widget per GtkWindow the same way, and gates the caret on its window
+being active (#726).
 
 A held key travels the same way, once per repeat, as a key-down whose `repeat`
 is set (#613). Both of its producers — sctk's calloop timer and `wl_keyboard`'s

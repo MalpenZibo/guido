@@ -549,6 +549,23 @@ pub struct Tree {
     /// an animation inside one can stop and be queued again when it is shown
     /// (#666).
     declared_visible: rustc_hash::FxHashMap<WidgetId, Prop<bool>>,
+    /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
+    /// surface without it keeps its focus, and a field holding that focus
+    /// draws no caret until the keyboard is back (#726).
+    keyboard: KeyboardAt,
+}
+
+/// Where the keyboard is. One surface at most, as `wl_keyboard` has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum KeyboardAt {
+    /// Nothing has said yet. Every surface counts as having it, which is what
+    /// a tree driven without a compositor wants.
+    #[default]
+    Unknown,
+    /// On the surface with this root.
+    On(WidgetId),
+    /// Left, and not entered anywhere since.
+    Nowhere,
 }
 
 impl Tree {
@@ -574,6 +591,7 @@ impl Tree {
             tab_stops: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
+            keyboard: KeyboardAt::Unknown,
         }
     }
 
@@ -808,6 +826,9 @@ impl Tree {
         if self.dense[dense_index].parent.is_none() {
             self.pointer.last.retain(|entry| entry.root != id);
             self.pointer.pressed.retain(|entry| entry.root != id);
+            if self.keyboard == KeyboardAt::On(id) {
+                self.keyboard = KeyboardAt::Nowhere;
+            }
         }
 
         // First, remove from parent's children list (before modifying dense array)
@@ -1380,6 +1401,21 @@ impl Tree {
     ) -> Option<crate::widgets::EventResponse> {
         use crate::widgets::Event;
         if event.follows_the_focus() {
+            // The focus stays through the keyboard leaving.
+            // A leave can arrive after the enter on the surface the keyboard
+            // went to, so it speaks only for a surface that had it.
+            match event {
+                Event::FocusOut
+                    if matches!(self.keyboard, KeyboardAt::Unknown)
+                        || self.keyboard == KeyboardAt::On(root) =>
+                {
+                    self.keyboard = KeyboardAt::Nowhere;
+                }
+                Event::FocusIn => {
+                    self.keyboard = KeyboardAt::On(root);
+                }
+                _ => {}
+            }
             // A container disabled under the pointer gives up its hover to
             // whatever event reaches it, a key included.
             let response = self.dispatch_key(root, event);
@@ -1496,6 +1532,16 @@ impl Tree {
             (change.callback)(change.hovered);
         }
         self.hover_changes = changes;
+    }
+
+    /// Whether the surface rooted at `root` has the keyboard. Before the
+    /// first `FocusIn` or `FocusOut`, every surface does.
+    pub(crate) fn has_keyboard(&self, root: WidgetId) -> bool {
+        match self.keyboard {
+            KeyboardAt::Unknown => true,
+            KeyboardAt::On(at) => at == root,
+            KeyboardAt::Nowhere => false,
+        }
     }
 
     /// Route a key, or the surface gaining or losing the keyboard, the way
