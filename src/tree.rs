@@ -829,6 +829,7 @@ impl Tree {
             if self.keyboard == KeyboardAt::On(id) {
                 self.keyboard = KeyboardAt::Nowhere;
             }
+            crate::reactive::focus::forget_surface(id);
         }
 
         // First, remove from parent's children list (before modifying dense array)
@@ -1401,7 +1402,9 @@ impl Tree {
     ) -> Option<crate::widgets::EventResponse> {
         use crate::widgets::Event;
         if event.follows_the_focus() {
-            // The focus stays through the keyboard leaving.
+            // The focus stays through the keyboard leaving; coming back, the
+            // surface has whatever it had focused when the focus went to
+            // another — the popup it opened, say, whose field has since gone.
             // A leave can arrive after the enter on the surface the keyboard
             // went to, so it speaks only for a surface that had it.
             match event {
@@ -1413,6 +1416,7 @@ impl Tree {
                 }
                 Event::FocusIn => {
                     self.keyboard = KeyboardAt::On(root);
+                    crate::reactive::focus::give_back_kept_focus(self, root);
                 }
                 _ => {}
             }

@@ -134,8 +134,46 @@ fn move_focus(tree: &Tree, id: WidgetId, by_keyboard: bool) {
     if let Some(old_id) = old.widget() {
         request_job(old_id, JobRequest::Paint);
     }
-    focus().set(FocusPath::of(tree, id, by_keyboard));
+    let new = FocusPath::of(tree, id, by_keyboard);
+    // Each surface keeps what it had focused while the focus is on another,
+    // as a `GtkWindow` keeps its focus widget: the keyboard coming back gives
+    // it back, see `give_back_kept_focus`. Kept only while the focus is away,
+    // so a surface the focus is on never has an entry to go stale.
+    if old.root() != new.root() {
+        with_app_state(|app| {
+            let mut kept = app.kept_focus.borrow_mut();
+            if let (Some(root), Some(widget)) = (old.root(), old.widget()) {
+                kept.insert(root, (widget, old.by_keyboard));
+            }
+            if let Some(root) = new.root() {
+                kept.remove(&root);
+            }
+        });
+    }
+    focus().set(new);
     request_job(id, JobRequest::Paint);
+}
+
+/// The keyboard has come back to the surface rooted at `root`: give the focus
+/// back to the widget it had focused when the focus went to another surface,
+/// if that widget is still on it.
+///
+/// What a grabbing popup needs. Opened from a search field, its own field
+/// takes the focus; closing, it takes that field with it, and without this
+/// nothing would be left to give the focus back to the search field.
+pub(crate) fn give_back_kept_focus(tree: &Tree, root: WidgetId) {
+    let Some((id, by_keyboard)) = with_app_state(|app| app.kept_focus.borrow_mut().remove(&root))
+    else {
+        return;
+    };
+    if tree.surface_root_of(id) == Some(root) {
+        move_focus(tree, id, by_keyboard);
+    }
+}
+
+/// Forget what the surface rooted at `root` kept, because it is closing.
+pub(crate) fn forget_surface(root: WidgetId) {
+    with_app_state(|app| app.kept_focus.borrow_mut().remove(&root));
 }
 
 /// Whether `id` has the focus and its surface has the keyboard: what a caret
@@ -204,7 +242,16 @@ pub(crate) fn drop_pending_focus_for(widget_ref: crate::widget_ref::WidgetRef) {
 
 /// Release keyboard focus from a widget.
 /// Only releases if the given widget currently has focus, and repaints it.
+///
+/// A surface keeping it for the keyboard's return forgets it too: a field
+/// blurred while a popup held the focus does not take it back when the popup
+/// closes.
 pub fn release_focus(id: WidgetId) {
+    with_app_state(|app| {
+        app.kept_focus
+            .borrow_mut()
+            .retain(|_, (kept, _)| *kept != id)
+    });
     if focus().get_untracked().widget() == Some(id) {
         request_job(id, JobRequest::Paint);
         focus().set(FocusPath::default());
@@ -243,7 +290,7 @@ pub(crate) fn focus_within(id: WidgetId) -> bool {
 /// surface owns the keyboard, and that is the whole test.
 pub(crate) fn release_focus_under(root: WidgetId) {
     if focus().with_untracked(|path| path.root() == Some(root)) {
-        clear_focus();
+        drop_focus();
     }
 }
 
@@ -259,7 +306,16 @@ pub fn focused_widget() -> Option<WidgetId> {
 
 /// Clear all focus (no widget will have focus).
 /// Repaints the previously focused widget if any.
+///
+/// What every surface kept for the keyboard's return goes too, or one of them
+/// would have the focus again when the keyboard next came back.
 pub fn clear_focus() {
+    with_app_state(|app| app.kept_focus.borrow_mut().clear());
+    drop_focus();
+}
+
+/// Take the focus off the widget holding it, leaving what other surfaces kept.
+fn drop_focus() {
     let old = focus().get_untracked();
     if let Some(old_id) = old.widget() {
         request_job(old_id, JobRequest::Paint);
@@ -309,6 +365,36 @@ mod tests {
             has_focus_with_keyboard(&tree, field),
             "a late leave from the other surface says nothing about this one"
         );
+    }
+
+    /// A blur reaches a focus kept for the keyboard's return: the field a
+    /// popup's handler blurred does not have the focus back when the keyboard
+    /// comes back to its surface.
+    #[test]
+    fn a_kept_focus_that_was_released_is_not_given_back() {
+        use crate::layout::Constraints;
+        use crate::widgets::{Event, text_input};
+
+        create_root_owner();
+        clear_focus();
+        let mut tree = Tree::new();
+        let field = |tree: &mut Tree| {
+            let id = tree.register(Box::new(text_input(crate::reactive::create_signal(
+                String::new(),
+            ))));
+            tree.layout_widget(id, Constraints::new(0.0, 0.0, 200.0, 40.0));
+            id
+        };
+        let search = field(&mut tree);
+        let in_popup = field(&mut tree);
+        request_focus(&tree, search);
+        request_focus(&tree, in_popup);
+
+        release_focus(search);
+        tree.dispatch(search, &Event::FocusIn);
+
+        assert!(!has_focus(search), "blurred, and it stays blurred");
+        assert!(has_focus(in_popup), "the focus is where it was");
     }
 
     /// A request outlives a widget that comes and goes, and must not fire at
