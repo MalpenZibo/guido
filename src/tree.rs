@@ -2217,13 +2217,25 @@ impl Tree {
     /// places those itself, clear of its scroll offset, and no ref can be
     /// attached to them.
     pub fn get_surface_relative_bounds(&self, id: WidgetId) -> Option<Rect> {
+        self.surface_relative_boxes(id).map(|(drawn, _)| drawn)
+    }
+
+    /// Where a widget is drawn, as [`get_surface_relative_bounds`](Self::get_surface_relative_bounds)
+    /// says, and beside it where layout put it: the same walk with every
+    /// widget's own transform left out, so the scroll of the containers it is
+    /// in still carries it. The second is what
+    /// [`WidgetRef::layout_rect`](crate::widget_ref::WidgetRef::layout_rect)
+    /// reports. One walk for both, so the two cannot disagree about scroll.
+    pub(crate) fn surface_relative_boxes(&self, id: WidgetId) -> Option<(Rect, Rect)> {
         let placement_of = |id: WidgetId| self.with_widget(id, |widget| widget.placement(self, id));
         let size = self.cached_size(id)?;
         let mut current = id;
         let mut placement = placement_of(id)?;
         // From the widget's own coordinates to those of the one `current` is
-        // laid out in, built up one ancestor at a time.
+        // laid out in, built up one ancestor at a time — with the transforms,
+        // and without them.
         let mut placed = Transform::IDENTITY;
+        let mut laid_out = (0.0f32, 0.0f32);
         loop {
             let (x, y) = self.get_origin(current)?;
             let parent = self.get_parent(current);
@@ -2235,12 +2247,17 @@ impl Tree {
             placed = Transform::translate(x - scroll.0, y - scroll.1)
                 .then(&placement.own)
                 .then(&placed);
+            laid_out = (laid_out.0 + x - scroll.0, laid_out.1 + y - scroll.1);
             match (parent, above) {
                 (Some(parent), Some(above)) => (current, placement) = (parent, above),
                 _ => break,
             }
         }
-        Some(placed.map_rect(Rect::new(0.0, 0.0, size.width, size.height)))
+        let own = Rect::new(0.0, 0.0, size.width, size.height);
+        Some((
+            placed.map_rect(own),
+            Rect::new(laid_out.0, laid_out.1, size.width, size.height),
+        ))
     }
 
     /// Walk to the surface root, returning it together with the widget's
