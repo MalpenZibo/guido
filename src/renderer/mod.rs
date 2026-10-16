@@ -21,6 +21,8 @@ mod gpu_context;
 mod image_atlas;
 mod image_quad;
 mod paint_context;
+mod path;
+mod path_mesh;
 mod render;
 mod text;
 mod text_mask;
@@ -50,6 +52,7 @@ pub(crate) use gpu_context::GpuSlot;
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
 pub use paint_context::PaintContext;
+pub use path::{Cap, Fill, FillRule, Join, Path, PathElement, Stroke};
 pub use render::Renderer;
 pub(crate) use text::ResolvedFont;
 pub use text_measurer::{
