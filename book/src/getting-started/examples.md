@@ -211,6 +211,7 @@ cargo run --example shadow_example
 - A ladder of shadows defined by the application, as `const` values
 - A shadow thrown sideways, a coloured one, and one with spread — none of which
   a single elevation number could ask for
+- An inset glow, a control pressed in, and a tight shadow stacked over a soft one
 - A hover that lifts a card, with the motion declared beside the value
 
 ---

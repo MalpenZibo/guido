@@ -676,9 +676,24 @@ pub struct ShapeInstance {
     pub border_width: f32,
     pub shape_curvature: f32,     // superellipse K-value
     pub gradient_type: u32,       // 0=none, 1=horizontal, 2=vertical, 3/4=diagonal
-    pub shape_kind: u32,          // a rounded rect, or an arc and its cap
+    pub shape_kind: u32,          // a rounded rect, or an arc and its cap; SHADOW_INSET above
 }
 ```
+
+**One shadow per instance.** A container casting several takes an instance for
+each shadow past the first: the first outer shadow rides the fill's own
+instance, every other outer one is an instance with a transparent fill drawn
+before it, and every inset one an instance drawn after it and before the border
+frame — so a box with one shadow costs what it always did, and only a box that
+asks for more pays for more. Every comparable renderer that draws a list of box
+shadows draws one primitive per shadow; a fixed array in the instance would have
+widened every shape drawn, shadow or none, by the three it rarely uses. An
+inset instance carries the container's border width with a transparent border
+colour: the shader casts the shadow inside `dist + border_width`, the edge the
+border frame's inner side is drawn on, which is where CSS casts one. Whether a
+shadow is inset is the `SHADOW_INSET` bit of `shape_kind`, above the byte the
+kinds use: the arcs had taken the tail padding, and every inter-stage location
+was already spoken for.
 
 **It arrives as a storage buffer, not as vertex attributes.** The vertex shader
 reads `instances[instance_index]`, which is why the struct can hold whatever it

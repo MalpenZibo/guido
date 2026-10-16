@@ -504,7 +504,7 @@ impl StateStyleBuilder {
     pub fn translate<M>(self, translate: impl IntoSignal<Translate, M>) -> Self;
     pub fn rotate<M>(self, degrees: impl IntoSignal<f32, M>) -> Self;
     pub fn scale<M>(self, factor: impl IntoSignal<Scale, M>) -> Self;
-    pub fn shadow<M>(self, shadow: impl IntoSignal<Shadow, M>) -> Self;
+    pub fn shadow<M>(self, shadow: impl IntoSignal<Shadows, M>) -> Self;
 
     // Ripple
     pub fn ripple(self) -> Self;

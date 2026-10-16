@@ -177,6 +177,45 @@ mod elevation {
 number could never say: a shadow thrown sideways, a coloured one, and one with
 spread.
 
+### Inset shadows
+
+`.inset()` casts the same shadow inside the shape instead, as CSS's `inset`
+keyword does: over the fill and inside the border, dark at the edge and fading
+inwards, moved by its offset and pushed further in by its spread.
+
+```rust
+// A glow inside the edge
+container().shadow(Shadow::new((0.0, 0.0), 12.0, 0.0, Color::rgba(1.0, 0.3, 0.2, 0.6)).inset())
+// Pressed in: the offset pulls the shadow in from the top
+container().shadow(Shadow::new((0.0, 3.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.35)).inset())
+// A hard 1.5 px ring inside the edge
+container().shadow(Shadow::new((0.0, 0.0), 0.0, 1.5, Color::WHITE).inset())
+```
+
+An outer shadow rides the fill and draws nothing without one; an inset shadow
+needs no fill, so an empty box can glow.
+
+### More than one shadow
+
+`.shadow(..)` takes a `Shadows` — a list of up to `Shadows::MAX` — and a single
+`Shadow` or an array of them converts into one. They are drawn as CSS draws a
+`box-shadow` list, the first on top, and outer and inset shadows mix:
+
+```rust
+const RAISED: Shadows = Shadows::new([
+    Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3)),  // tight
+    Shadow::new((0.0, 4.0), 8.0, 3.0, Color::rgba(0.0, 0.0, 0.0, 0.15)), // soft
+]);
+container().shadow(RAISED)
+container().shadow([outer, glow.inset()])
+```
+
+A list animates shadow by shadow. The shorter of two lists is padded with
+shadows that draw nothing, so one arriving fades and grows in; a shadow that is
+inset at one end and outer at the other has nothing between the two, and the
+whole list steps halfway, as CSS's does. A timeline is written over `Shadows`:
+`Keyframes::new(300.0).at(0.0, LOW.into()).at(1.0, HIGH.into())`.
+
 ### Shadows in State Layers
 
 ```rust
