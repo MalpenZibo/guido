@@ -1,4 +1,5 @@
 pub mod backdrop;
+pub(crate) mod clicks;
 pub mod input;
 pub mod lock;
 pub mod outputs;

@@ -1005,6 +1005,7 @@ fn presses_that_do_not_acquire_a_scrollbar_leave_the_flick_running() {
                     at: None,
                     button: MouseButton::Left,
                     pointer: PointerKind::Mouse,
+                    count: 1,
                 },
             };
             h.dispatch_at(event, at);

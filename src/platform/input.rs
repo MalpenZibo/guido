@@ -31,6 +31,7 @@ use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::
     Shape as WpCursorShape, WpCursorShapeDeviceV1,
 };
 
+use super::clicks::ClickCounter;
 use super::wayland::WaylandState;
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
@@ -54,6 +55,20 @@ fn push_event(events: &mut Vec<(Instant, Event)>, at: Instant, event: Event) {
     } else {
         events.push((at, event));
     }
+}
+
+/// Queue a pointer event on its way to `surface`, through the counter that
+/// numbers the presses: every pointer event goes through here, so a path
+/// that queues one cannot miss the run it belongs to.
+fn queue_counted(
+    clicks: &mut ClickCounter,
+    events: &mut Vec<(Instant, Event)>,
+    surface: SurfaceId,
+    at: Instant,
+    mut event: Event,
+) {
+    clicks.observe(surface, at, &mut event);
+    push_event(events, at, event);
 }
 
 /// The finger was *lifted*: release the synthesized press, and clear hover,
@@ -180,6 +195,8 @@ pub struct InputState {
     /// that carries a timestamp. `None` until one does — which is why every
     /// reader goes through `at`.
     pub(super) event_clock: Option<EventClock>,
+    /// The run of presses the seat is in, which numbers each press.
+    pub(super) clicks: ClickCounter,
 
     // Cursor shape
     pub(super) cursor_shape_manager: Option<CursorShapeManager>,
@@ -217,6 +234,7 @@ impl InputState {
             touch_fingers: FxHashMap::default(),
             primary_finger: None,
             event_clock: None,
+            clicks: ClickCounter::default(),
             cursor_shape_manager,
             cursor_shape_device: None,
             keyboard: None,
@@ -502,7 +520,13 @@ impl WaylandState {
         );
         for (surface_id, at, event) in translated {
             if let Some(surface_state) = self.surfaces.get_mut(&surface_id) {
-                push_event(&mut surface_state.pending_events, at, event);
+                queue_counted(
+                    &mut self.input.clicks,
+                    &mut surface_state.pending_events,
+                    surface_id,
+                    at,
+                    event,
+                );
             }
         }
     }
@@ -613,14 +637,17 @@ impl PointerHandler for WaylandState {
             };
 
             // Get the target event queue for this surface
-            let target_events: Option<&mut Vec<(Instant, Event)>> = if let Some(id) = surface_id {
-                self.surfaces.get_mut(&id).map(|s| &mut s.pending_events)
-            } else if !matches!(event.kind, PointerEventKind::Leave { .. }) {
-                // Not our surface and not a leave event, skip
-                continue;
-            } else {
-                None
-            };
+            let target_events: Option<(SurfaceId, &mut Vec<(Instant, Event)>)> =
+                if let Some(id) = surface_id {
+                    self.surfaces
+                        .get_mut(&id)
+                        .map(|s| (id, &mut s.pending_events))
+                } else if !matches!(event.kind, PointerEventKind::Leave { .. }) {
+                    // Not our surface and not a leave event, skip
+                    continue;
+                } else {
+                    None
+                };
 
             match event.kind {
                 PointerEventKind::Enter { serial } => {
@@ -632,15 +659,17 @@ impl PointerHandler for WaylandState {
                     // Track which surface has pointer focus
                     self.current_pointer_surface = surface_id;
 
-                    if let Some(events) = target_events {
+                    if let Some((id, events)) = target_events {
                         events.push((
                             at,
                             Event::MouseEnter {
                                 at: Some(self.input.pointer_at),
                             },
                         ));
-                        push_event(
+                        queue_counted(
+                            &mut self.input.clicks,
                             events,
+                            id,
                             at,
                             Event::mouse_move(self.input.pointer_at.x, self.input.pointer_at.y),
                         );
@@ -662,9 +691,11 @@ impl PointerHandler for WaylandState {
                 }
                 PointerEventKind::Motion { .. } => {
                     self.input.pointer_at = point(event.position);
-                    if let Some(events) = target_events {
-                        push_event(
+                    if let Some((id, events)) = target_events {
+                        queue_counted(
+                            &mut self.input.clicks,
                             events,
+                            id,
                             at,
                             Event::mouse_move(self.input.pointer_at.x, self.input.pointer_at.y),
                         );
@@ -673,29 +704,27 @@ impl PointerHandler for WaylandState {
                 PointerEventKind::Press { button, serial, .. } => {
                     self.input.latest_input_serial = serial;
                     if let Some(mouse_button) = wayland_button_to_mouse_button(button)
-                        && let Some(events) = target_events
+                        && let Some((id, events)) = target_events
                     {
-                        events.push((
+                        let at_pointer = self.input.pointer_at;
+                        queue_counted(
+                            &mut self.input.clicks,
+                            events,
+                            id,
                             at,
-                            Event::mouse_down(
-                                self.input.pointer_at.x,
-                                self.input.pointer_at.y,
-                                mouse_button,
-                            ),
-                        ));
+                            Event::mouse_down(at_pointer.x, at_pointer.y, mouse_button),
+                        );
                     }
                 }
                 PointerEventKind::Release { button, .. } => {
                     if let Some(mouse_button) = wayland_button_to_mouse_button(button)
-                        && let Some(events) = target_events
+                        && let Some((id, events)) = target_events
                     {
-                        events.push((
-                            at,
-                            Event::MouseUp {
-                                at: Some(self.input.pointer_at),
-                                button: mouse_button,
-                            },
-                        ));
+                        let released = Event::MouseUp {
+                            at: Some(self.input.pointer_at),
+                            button: mouse_button,
+                        };
+                        queue_counted(&mut self.input.clicks, events, id, at, released);
                     }
                 }
                 PointerEventKind::Axis {
@@ -704,7 +733,7 @@ impl PointerHandler for WaylandState {
                     source,
                     ..
                 } => {
-                    if let Some(events) = target_events {
+                    if let Some((_, events)) = target_events {
                         translate_axis(
                             events,
                             at,
@@ -1538,6 +1567,7 @@ mod tests {
                     at: pressed,
                     button,
                     pointer: pressed_by,
+                    ..
                 },
             ),
         ] = events
