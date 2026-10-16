@@ -81,6 +81,11 @@ pub struct Keyframes<T> {
     stops: Vec<Stop<T>>,
     duration_ms: f32,
     repeat: Repeat,
+    /// How long it holds before the first run begins. Paid once per play, not
+    /// per run.
+    delay_ms: f32,
+    /// How far into its cycle the first run begins, in `0.0..1.0`.
+    phase: f32,
     /// What replays it, if anything. `None` plays once from the moment the
     /// widget appears, which is what a wait wants and what a gesture does not.
     trigger: Option<Signal<u32>>,
@@ -93,6 +98,8 @@ impl<T: Animatable> Keyframes<T> {
             stops: Vec::new(),
             duration_ms: duration_ms.into_f32().max(1.0),
             repeat: Repeat::Times(1),
+            delay_ms: 0.0,
+            phase: 0.0,
             trigger: None,
         }
     }
@@ -197,6 +204,31 @@ impl<T: Animatable> Keyframes<T> {
         self
     }
 
+    /// Hold the first value for `delay_ms` before the first run, then play.
+    ///
+    /// Paid once each time it plays: a repeat runs straight on into the
+    /// next run, as `animation-delay` does in CSS. Never below zero.
+    pub fn delay(mut self, delay_ms: impl IntoF32) -> Self {
+        // `f32::max` answers the other side for a NaN, so this absorbs both.
+        self.delay_ms = delay_ms.into_f32().max(0.0);
+        self
+    }
+
+    /// Start the first run `phase` of the way through its cycle, so several
+    /// elements can share one looping definition out of step.
+    ///
+    /// A negative `animation-delay` in CSS: the part of the cycle it skips is
+    /// behind it, so a counted sequence ends that much sooner. A phase is a
+    /// point on a circle, so it is read round it — `1.25` is `0.25`, `-0.25`
+    /// is `0.75` — and a NaN is none.
+    pub fn phase(mut self, phase: f32) -> Self {
+        // A NaN fails the comparison, and so does the divisor itself, which
+        // `rem_euclid` rounds a tiny negative up to: a whole turn is no phase.
+        let phase = phase.rem_euclid(1.0);
+        self.phase = if phase < 1.0 { phase } else { 0.0 };
+        self
+    }
+
     /// Replay it on every change of `trigger`, instead of playing when the
     /// widget appears.
     ///
@@ -211,11 +243,13 @@ impl<T: Animatable> Keyframes<T> {
         self.trigger
     }
 
-    /// How long the whole thing lasts, repeats included, or `None` where it
-    /// does not end.
+    /// How long the whole thing lasts — the delay, and the repeats less what
+    /// the phase skips — or `None` where it does not end.
     pub fn total_ms(&self) -> Option<f32> {
         match self.repeat {
-            Repeat::Times(times) => Some(self.duration_ms * times as f32),
+            Repeat::Times(times) => {
+                Some(self.delay_ms + self.duration_ms * (times as f32 - self.phase))
+            }
             Repeat::Forever => None,
         }
     }
@@ -225,7 +259,8 @@ impl<T: Animatable> Keyframes<T> {
         self.stops.is_empty()
     }
 
-    /// The value `elapsed_ms` into the run, or `None` once it is over.
+    /// The value `elapsed_ms` after it began playing, delay included, or `None`
+    /// once it is over.
     pub fn value_at(&self, elapsed_ms: f32) -> Option<T> {
         self.value_since(f64::from(elapsed_ms))
     }
@@ -238,7 +273,8 @@ impl<T: Animatable> Keyframes<T> {
     /// whole run of a short sequence within a few weeks — at which point it
     /// shows one value for frame after frame. A bar is the thing that runs for
     /// weeks. So whole runs, which say nothing about where it is now, are taken
-    /// off before anything is narrowed.
+    /// off before anything is narrowed — and they are counted from the end of
+    /// the delay, which is paid once and is not one of them.
     ///
     /// Taken off here rather than by moving the start forward: the reduction
     /// is computed from the start on every frame anyway, so a stored one would
@@ -254,8 +290,11 @@ impl<T: Animatable> Keyframes<T> {
         {
             return None;
         }
+        // Before the first run it holds where that run begins, so the end
+        // of the wait is not a jump.
         let duration = f64::from(self.duration_ms);
-        let into_cycle = since_start_ms.max(0.0);
+        let running = (since_start_ms - f64::from(self.delay_ms)).max(0.0);
+        let into_cycle = running + f64::from(self.phase) * duration;
         Some(self.sample(((into_cycle % duration) / duration) as f32))
     }
 
@@ -475,5 +514,111 @@ mod tests {
                 .value_at(25.0),
             "and it is not the linear one either"
         );
+    }
+
+    /// A run of 1000ms that climbs from 0 to 100, so the value is the time
+    /// over ten and every comparison below can be read off by eye.
+    fn ramp() -> Keyframes<f32> {
+        Keyframes::new(1000.0).at(0.0, 0.0).at(1.0, 100.0)
+    }
+
+    /// A delay holds the first stop, then plays the run it would have played
+    /// without one.
+    #[test]
+    fn a_delay_holds_the_first_stop_and_then_plays_the_same_run() {
+        let delayed = shake().delay(200.0);
+        assert_eq!(delayed.value_at(100.0), Some(0.0));
+        let waits = Keyframes::new(300.0).at(0.0, 7.0).at(1.0, 0.0).delay(200.0);
+        assert_eq!(waits.value_at(0.0), Some(7.0));
+        assert_eq!(waits.value_at(199.0), Some(7.0), "still waiting");
+        for t in [0.0, 75.0, 150.0, 225.0, 299.0] {
+            assert_eq!(delayed.value_at(200.0 + t), shake().value_at(t), "{t}ms in");
+        }
+        assert_eq!(delayed.total_ms(), Some(500.0));
+        assert_eq!(delayed.value_at(500.0), None, "and over when it would be");
+    }
+
+    /// With a repeat the delay is paid once, not per run.
+    #[test]
+    fn a_delay_is_paid_once_however_often_it_repeats() {
+        let twice = shake().repeat(Repeat::Times(2)).delay(200.0);
+        assert_eq!(twice.total_ms(), Some(800.0));
+        assert_eq!(
+            twice.value_at(650.0),
+            Some(10.0),
+            "the peak of the second run"
+        );
+        assert_eq!(twice.value_at(800.0), None);
+
+        let forever = ramp().repeat(Repeat::Forever).delay(200.0);
+        assert_eq!(
+            forever.value_at(1200.0),
+            Some(0.0),
+            "the second run's start"
+        );
+        assert_eq!(forever.value_at(1300.0), Some(10.0), "not a second wait");
+    }
+
+    /// A phase starts the loop part of the way through its cycle, and the
+    /// loop then wraps as it always does.
+    #[test]
+    fn a_phase_starts_the_loop_part_of_the_way_through() {
+        let ahead = ramp().repeat(Repeat::Forever).phase(0.25);
+        assert_eq!(ahead.value_at(0.0), ramp().value_at(250.0));
+        assert_eq!(ahead.value_at(500.0), ramp().value_at(750.0));
+        assert_eq!(ahead.value_at(750.0), ramp().value_at(0.0), "wrapped");
+        assert_eq!(
+            ahead.value_at(1000.0),
+            ramp().value_at(250.0),
+            "round again"
+        );
+    }
+
+    /// As a negative `animation-delay` is in CSS: the part of the first run
+    /// the phase skips is behind it, so a counted sequence ends that much
+    /// sooner, on its last stop.
+    #[test]
+    fn a_phase_shortens_a_counted_sequence_by_what_it_skips() {
+        let once = ramp().phase(0.25);
+        assert_eq!(once.total_ms(), Some(750.0));
+        assert_eq!(once.value_at(749.0), ramp().value_at(999.0));
+        assert_eq!(once.value_at(750.0), None);
+
+        let twice = ramp().repeat(Repeat::Times(2)).phase(0.25);
+        assert_eq!(twice.total_ms(), Some(1750.0));
+        assert_eq!(twice.value_at(1000.0), ramp().value_at(250.0), "second run");
+    }
+
+    /// A phase is a point on a circle, so one past the end is read round it;
+    /// a NaN is absorbed at the door as a NaN offset is.
+    #[test]
+    fn a_phase_outside_the_cycle_is_read_round_it() {
+        let forever = || ramp().repeat(Repeat::Forever);
+        assert_eq!(
+            forever().phase(1.25).value_at(0.0),
+            forever().phase(0.25).value_at(0.0)
+        );
+        assert_eq!(
+            forever().phase(-0.25).value_at(0.0),
+            forever().phase(0.75).value_at(0.0)
+        );
+        assert_eq!(forever().phase(f32::NAN).value_at(0.0), Some(0.0));
+        assert_eq!(
+            ramp().phase(1.0).total_ms(),
+            Some(1000.0),
+            "a whole turn is none"
+        );
+        assert_eq!(ramp().delay(-50.0).value_at(0.0), Some(0.0));
+        assert_eq!(ramp().delay(f32::NAN).total_ms(), Some(1000.0));
+    }
+
+    /// With both, the wait holds the value the run will start from, so the
+    /// end of the wait is not a jump.
+    #[test]
+    fn a_delayed_phase_waits_on_the_value_it_starts_from() {
+        let both = ramp().repeat(Repeat::Forever).phase(0.25).delay(200.0);
+        assert_eq!(both.value_at(0.0), ramp().value_at(250.0));
+        assert_eq!(both.value_at(199.0), ramp().value_at(250.0));
+        assert_eq!(both.value_at(300.0), ramp().value_at(350.0));
     }
 }

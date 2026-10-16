@@ -827,6 +827,36 @@ mod tests {
         );
     }
 
+    /// An endless sequence has its whole runs taken off before the time is
+    /// narrowed, and a delay is not one of them: counting runs from the play
+    /// rather than from the end of the wait put every run's first stretch
+    /// back in the wait.
+    #[test]
+    fn an_endless_delayed_sequence_waits_once() {
+        use crate::animation::{Keyframes, Repeat};
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        anim = anim.with_timeline(
+            Keyframes::new(1000.0)
+                .at(0.0, 0.0)
+                .at(1.0, 100.0)
+                .delay(200.0)
+                .repeat(Repeat::Forever)
+                .played_by(never_played()),
+        );
+
+        anim.play(FrameInstant::from(Instant::now()));
+        play_at(&mut anim, 100);
+        assert_eq!(*anim.current(), 0.0, "waiting");
+        play_at(&mut anim, 1100);
+        assert!(
+            (*anim.current() - 90.0).abs() < 1e-3,
+            "900ms into the first run, got {}",
+            anim.current()
+        );
+    }
+
     /// The end of a sequence hands the property back to its declared
     /// transition — it does not cancel it.
     ///
