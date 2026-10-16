@@ -54,7 +54,7 @@ fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
     tree.layout_widget(root, Constraints::new(0.0, 0.0, width, height));
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, 1.0);
 
     let mut out = String::new();
     dump_node(&node, 0, &mut out);

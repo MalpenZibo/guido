@@ -2483,7 +2483,7 @@ mod tests {
         // First paint: registers the subscription AND must notice the
         // animation target no longer matches the signal value.
         let mut root_node = crate::renderer::RenderNode::new(id.as_u64());
-        tree.paint_widget(id, &mut root_node);
+        tree.paint_widget(id, &mut root_node, 1.0);
 
         jobs::distribute_jobs(&tree, &roots);
         let drained = jobs::drain_surface_jobs(id);
