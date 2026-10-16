@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use guido::prelude::*;
 use guido::render_stats::{
-    self, DrawCalls, GpuAllocations, PathMeshes, PhaseTiming, StatsSnapshot,
+    self, DrawCalls, GpuAllocations, LayerWork, PathMeshes, PhaseTiming, StatsSnapshot,
 };
 use guido::testing::Headless;
 
@@ -111,6 +111,10 @@ pub struct Counts {
     pub quad_allocations: GpuAllocations,
     /// The fills and strokes drawn, by whether they were tessellated.
     pub path_meshes: PathMeshes,
+    /// What the layers the painted frames composited cost: drawn into their
+    /// textures, laid down from the texture an earlier frame drew, blurred,
+    /// and the textures allocated for them.
+    pub layers: LayerWork,
 }
 
 impl Counts {
@@ -146,6 +150,11 @@ impl Counts {
         self.quad_allocations.bind_groups += snapshot.quad_allocations.bind_groups;
         self.path_meshes.tessellated += snapshot.path_meshes.tessellated;
         self.path_meshes.reused += snapshot.path_meshes.reused;
+        let (layers, done) = (&mut self.layers, &snapshot.layers);
+        layers.drawn += done.drawn;
+        layers.kept += done.kept;
+        layers.blurred += done.blurred;
+        layers.textures += done.textures;
     }
 
     /// A delta was asked for and nothing moved.
@@ -442,6 +451,10 @@ pub fn report(run: &Run, rows: usize) -> String {
         ),
         ("path.tessellated", counts.path_meshes.tessellated),
         ("path.reused", counts.path_meshes.reused),
+        ("layer.drawn", counts.layers.drawn),
+        ("layer.kept", counts.layers.kept),
+        ("layer.blurred", counts.layers.blurred),
+        ("layer.textures_created", counts.layers.textures),
         ("script.deltas_pinned", counts.frames_pinned),
     ] {
         out.push_str(&format!("  {name:<26} {value}\n"));
