@@ -10,6 +10,7 @@
 //!
 //! Styling (background, borders, etc.) should be handled by wrapping in a Container.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -478,6 +479,12 @@ pub struct TextInput<C = Plain> {
 
     // Horizontal scroll offset for text overflow
     scroll_offset: f32,
+    /// A replaced text whose scroll is still to be fitted to the field's
+    /// width. Every layout fits it until the field is painted, because a
+    /// parent can lay the field out again, narrower, after the layout that
+    /// read the text back: a row that overflows does. Cleared when the field
+    /// is next painted; a field the frame does not paint keeps fitting.
+    scroll_fit_pending: Cell<bool>,
 
     /// What this input declares about its own text, and about the furniture
     /// only it draws. Boxed and absent by default.
@@ -613,6 +620,7 @@ impl<C: Content> TextInput<C> {
             hover: crate::reactive::signal::create_signal(false),
             history: History::new(),
             scroll_offset: 0.0,
+            scroll_fit_pending: Cell::new(false),
             text_style: None,
             text_anims: None,
             input_style: None,
@@ -1046,6 +1054,18 @@ impl<C: Content> TextInput<C> {
         left.min(self.cached_char_count)
     }
 
+    /// Keep the scroll within a text that was replaced wholesale: never past
+    /// its end, and with its caret in view. Kept as the old text had it, an
+    /// emptied field drew its caret and placeholder out of sight (#723). A
+    /// scroll already within the text moves no further than the caret needs.
+    fn scroll_within_text(&mut self, width: f32) {
+        self.update_measurements();
+        let visible_width = width - SCROLL_PADDING * 2.0;
+        let furthest = (self.cached_text_width - visible_width).max(0.0);
+        self.scroll_offset = self.scroll_offset.min(furthest);
+        self.ensure_cursor_visible(width);
+    }
+
     /// Ensure the cursor is visible by adjusting scroll offset
     fn ensure_cursor_visible(&mut self, width: f32) {
         // Ensure measurements are up to date
@@ -1110,10 +1130,10 @@ impl<C: Content> TextInput<C> {
         self.save_to_history(EditType::Insert, edit.at);
 
         let (start, end) = self.selection.range();
-        self.splice(start, end, text);
+        let rewritten = self.splice(start, end, text);
 
         self.reset_cursor_blink(edit.at);
-        self.ensure_cursor_visible(edit.width);
+        self.follow_edit(rewritten, edit.width);
     }
 
     /// Delete selected text or character before/after cursor
@@ -1131,18 +1151,19 @@ impl<C: Content> TextInput<C> {
         };
         // Nothing to delete is no edit: no history entry, and nothing for
         // `on_change` to hear.
+        let mut rewritten = false;
         if start < end {
             self.save_to_history(EditType::Delete, edit.at);
-            self.splice(start, end, "");
+            rewritten = self.splice(start, end, "");
         }
         self.reset_cursor_blink(edit.at);
-        self.ensure_cursor_visible(edit.width);
+        self.follow_edit(rewritten, edit.width);
     }
 
     /// Replace the characters `start..end` with `text`, and put the cursor
     /// after it — or wherever is left of it, when a callback that heard the
-    /// edit rewrote the text.
-    fn splice(&mut self, start: usize, end: usize, text: &str) {
+    /// edit rewrote the text. Says whether one did.
+    fn splice(&mut self, start: usize, end: usize, text: &str) -> bool {
         let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
         let inserted_char_count = text.chars().count();
 
@@ -1154,6 +1175,17 @@ impl<C: Content> TextInput<C> {
         self.selection = Selection::new(start + inserted_char_count);
         if let Some(char_count) = replaced {
             self.text_replaced(char_count);
+        }
+        replaced.is_some()
+    }
+
+    /// Bring the caret into view after an edit: within the text as well, when
+    /// a callback replaced it, since the text the scroll was for is gone.
+    fn follow_edit(&mut self, rewritten: bool, width: f32) {
+        if rewritten {
+            self.scroll_within_text(width);
+        } else {
+            self.ensure_cursor_visible(width);
         }
     }
 
@@ -1168,6 +1200,7 @@ impl<C: Content> TextInput<C> {
         // text put it inside
         self.selection.cursor = self.cluster_start(self.selection.cursor.min(char_count));
         self.selection.anchor = self.cluster_start(self.selection.anchor.min(char_count));
+        self.scroll_fit_pending.set(true);
     }
 
     /// Move cursor left/right, optionally extending selection
@@ -1418,7 +1451,7 @@ impl<C: Content> TextInput<C> {
         self.text_replaced(replaced.unwrap_or_else(|| entry.text.chars().count()));
         self.history.reset_coalescing();
         self.reset_cursor_blink(edit.at);
-        self.ensure_cursor_visible(edit.width);
+        self.scroll_within_text(edit.width);
     }
 
     /// Handle key down event
@@ -1450,6 +1483,7 @@ impl<C: Content> TextInput<C> {
             Key::Enter => {
                 if let Some(char_count) = self.content.submit() {
                     self.text_replaced(char_count);
+                    self.scroll_within_text(edit.width);
                 }
                 EventResponse::Handled
             }
@@ -1635,6 +1669,11 @@ impl<C: Content> Widget for TextInput<C> {
                 .min(constraints.max_height),
         );
 
+        // Measured now that the width is known, against the text it holds now.
+        if self.scroll_fit_pending.get() {
+            self.scroll_within_text(size.width);
+        }
+
         if let Some(widget_ref) = self.widget_ref {
             register_widget_ref(id, widget_ref);
         }
@@ -1657,6 +1696,9 @@ impl<C: Content> Widget for TextInput<C> {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let bounds = tree.get_bounds(id).unwrap_or_default();
+        // Every layout of this pass has fitted the scroll by now; the last
+        // one, at the width drawn here, is the one that holds.
+        self.scroll_fit_pending.set(false);
         let display = self.display_text_cached();
         let is_focused = has_focus(id);
 
@@ -2324,6 +2366,124 @@ mod tests {
             drawn_strings(&mut tree, id).is_empty(),
             "the mask outlived the text"
         );
+    }
+
+    /// Where the field drew each of its texts, the placeholder included.
+    fn drawn_text_x(tree: &mut Tree, id: WidgetId) -> Vec<(String, f32)> {
+        fn collect(node: &crate::renderer::RenderNode, out: &mut Vec<(String, f32)>) {
+            for cmd in &node.commands {
+                if let crate::renderer::DrawCommand::Text { text, rect, .. } = &**cmd {
+                    out.push((text.to_string(), rect.x));
+                }
+            }
+            for child in &node.children {
+                collect(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        collect(&paint_once(tree, id), &mut out);
+        out
+    }
+
+    /// A field typed past its width and then cleared by its own submit draws
+    /// its caret and its placeholder from its start, not where the old text
+    /// had scrolled them, out of sight (#723). The clear reaches the field on
+    /// the layout the write schedules, which only these tests can pump.
+    #[test]
+    fn a_field_cleared_by_its_submit_draws_its_caret_and_placeholder_in_view() {
+        let value = create_signal(String::new());
+        let (mut tree, root, id) = field_in_container(
+            text_input(value)
+                .placeholder("Search")
+                .on_submit(move |_| value.set(String::new())),
+        );
+        for _ in 0..80 {
+            key(&mut tree, id, Key::Char('a'), false);
+        }
+        assert!(
+            drawn_rects(&mut tree, id)[0].x > 100.0,
+            "typed past its width, the caret is at the right"
+        );
+
+        key(&mut tree, id, Key::Enter, false);
+        relayout(&mut tree, root);
+        assert_eq!(value.get_untracked(), "");
+        assert_eq!(drawn_text_x(&mut tree, id), [("Search".to_owned(), 0.0)]);
+        assert_eq!(drawn_rects(&mut tree, id)[0].x, 0.0, "the caret");
+    }
+
+    /// A text shortened from outside is shown from its start, not from where
+    /// the longer one had scrolled to (#723).
+    #[test]
+    fn a_field_shortened_from_outside_shows_its_text_from_the_start() {
+        let value = create_signal("a".repeat(80));
+        let (mut tree, root, id) = field_in_container(text_input(value));
+        caret_to_end(&mut tree, id);
+
+        value.set("abc".to_owned());
+        relayout(&mut tree, root);
+        assert_eq!(drawn_text_x(&mut tree, id), [("abc".to_owned(), 0.0)]);
+    }
+
+    /// A row that overflows lays a clipped box out a second time, narrower,
+    /// and the field in it with it, after the layout that read the field's
+    /// text back. The scroll is fitted to the width it is drawn at, so the
+    /// caret stays inside the field (#723).
+    #[test]
+    fn a_field_shortened_in_an_overflowing_row_keeps_its_caret_inside() {
+        let value = create_signal("a".repeat(80));
+        clear_pending_jobs();
+        clear_scheduled_jobs();
+        crate::reactive::focus::clear_focus();
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .layout(crate::layout::Flex::row())
+                .child(
+                    crate::widgets::container()
+                        .overflow(crate::widgets::Overflow::Hidden)
+                        .child(text_input(value)),
+                )
+                .child(crate::widgets::container().width(60.0).height(10.0)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let clip = tree.get_children(root)[0];
+        let id = tree.get_children(clip)[0];
+        relayout(&mut tree, root);
+        request_focus(&tree, id);
+        clear_pending_jobs();
+        caret_to_end(&mut tree, id);
+
+        value.set("a".repeat(40));
+        relayout(&mut tree, root);
+        let width = tree.get_bounds(id).unwrap().width;
+        assert!(width < 200.0, "the row squeezed the field: {width}");
+        let caret = drawn_rects(&mut tree, id)[0].x;
+        assert!(
+            (0.0..=width).contains(&caret),
+            "the caret at {caret}, in a field {width} wide"
+        );
+    }
+
+    /// A revealed password reads its text back on every layout. With its caret
+    /// moved back from the end, a layout leaves its view where it was.
+    #[test]
+    fn a_revealed_password_with_its_caret_moved_back_keeps_its_view() {
+        let password = crate::reactive::create_password();
+        password.set(Secret::from("a".repeat(80)));
+        let mask = create_signal('*');
+        let (mut tree, root, id) =
+            field_in_container(password_input(password).reveal(true).mask_char(mask));
+        caret_to_end(&mut tree, id);
+        for _ in 0..3 {
+            key(&mut tree, id, Key::Left, false);
+        }
+        let before = drawn_rects(&mut tree, id)[0].x;
+
+        // Something the field reads changes, so the field is laid out again.
+        mask.set('.');
+        relayout(&mut tree, root);
+        assert_eq!(drawn_rects(&mut tree, id)[0].x, before);
     }
 
     /// Revealing is a value the field can be told, and the eye icon beside a

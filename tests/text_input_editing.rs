@@ -731,6 +731,48 @@ fn a_cut_leaves_the_cursor_where_the_selection_was() {
     );
 }
 
+/// An undo back to a short text shows it from its start, as a field that only
+/// ever held it would, not from where the long text had scrolled (#723).
+#[test]
+fn an_undo_back_to_a_short_text_shows_it_as_typed() {
+    let mut fresh = Field::focused("");
+    fresh.type_text("abc");
+    let expected = fresh.caret_x().expect("a focused field draws its caret");
+
+    let mut field = Field::focused("");
+    field.type_text("abc");
+    field.pause();
+    field.type_text(&"a".repeat(120));
+    assert!(field.caret_x().unwrap() > expected, "typed past its width");
+
+    field.ctrl('z');
+    assert_eq!(field.text(), "abc");
+    assert_caret_at(&mut field, expected, "undone back to abc");
+}
+
+/// An `on_change` that cuts a long text back to a shorter one leaves the field
+/// showing it as a field that only ever held the shorter one would (#723).
+#[test]
+fn a_text_cut_short_by_on_change_shows_it_as_typed() {
+    let mut fresh = Field::focused("");
+    fresh.type_text(&"a".repeat(40));
+    let expected = fresh.caret_x().expect("a focused field draws its caret");
+
+    let value = create_signal(String::new());
+    let mut field = Field::focused_around(
+        value,
+        text_input(value).on_change(move |text| {
+            if text.len() > 80 {
+                value.set(text[..40].to_owned());
+            }
+        }),
+    );
+    field.type_text(&"a".repeat(80));
+    field.key(Key::Char('a'));
+    assert_eq!(field.text(), "a".repeat(40));
+    assert_caret_at(&mut field, expected, "cut back to 40");
+}
+
 #[test]
 fn ctrl_z_puts_back_what_was_typed_and_ctrl_y_takes_it_away_again() {
     let mut field = Field::focused("");
