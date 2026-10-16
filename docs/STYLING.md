@@ -256,6 +256,25 @@ outer shadows are the merged shape's; its inset shadows stay on its own box. A c
 takes no input. A scrolling container that merges merges its scrollbar track
 too, since the track is one of its children. How it is built is in [RENDERER.md](RENDERER.md#merged-shapes).
 
+## Opacity and Blur
+
+```rust
+container().opacity(0.5)                                 // fades as one picture
+container().opacity(0.5).opacity_mode(OpacityMode::Modulate) // each draw on its own
+container().blur(4.0)                                    // blurs the subtree
+container().blur(0.0.transition(200.0).entering_from(8.0))
+```
+
+`opacity` defaults to `OpacityMode::Auto`: the subtree is composited
+offscreen as one layer when two of its draws overlap, and faded draw by draw
+when none does — the same picture, for nothing — or when it holds a backdrop
+blur, so the frost keeps frosting what guido drew beneath it in the surface.
+`OpacityMode::Modulate` always fades draw by draw, so an overlap shows
+through. `blur` always composites the subtree as a layer, a radius of zero
+included; a backdrop blur inside one frosts only what the layer drew beneath
+it (CSS's Backdrop Root). How a
+layer is drawn, cached and released is in `docs/RENDERER.md` under "Layers".
+
 ## Padding
 
 ```rust

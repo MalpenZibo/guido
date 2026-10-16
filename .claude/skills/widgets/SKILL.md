@@ -11,7 +11,7 @@ description: Guido's widget layer — the Widget trait, Container's builder API,
 declarations do not.**
 
 Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
-`border`, `translate`, `rotate`, `scale`, `pivot`, `opacity`, `width`, `height`,
+`border`, `translate`, `rotate`, `scale`, `pivot`, `opacity`, `opacity_mode`, `blur`, `width`, `height`,
 `padding`, `visible`, `enabled`, `takes_input`, `cursor`, `shadow` — and beyond `Container`, `Text`'s `wrap`, `align`, `max_lines` and `overflow`,
 `Image`'s `content_fit`, `TextInput`'s `caret`, `readonly` and `cursor`, `PasswordInput`'s `mask_char` and `reveal`,
 `RippleConfig`'s colour, `Arc`'s `size`, `stroke`, `track`, `caps`, `start`
@@ -50,7 +50,7 @@ asking why the cache is not good enough, and saying so where it is read.
 An animatable property takes `impl IntoAnimated<T, M>` instead, which is
 everything `IntoSignal` accepts plus a value carrying its own motion:
 `background`, `corners`, `padding`, `border` (each half), `shadow`, `width`,
-`height`, `translate`, `rotate`, `scale`, `opacity` — and beyond `Container`,
+`height`, `translate`, `rotate`, `scale`, `opacity`, `blur` — and beyond `Container`,
 `Text`'s `color` and `font_size` and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
 property somebody else declared, so a timing there is a compile error rather
