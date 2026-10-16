@@ -659,6 +659,38 @@ impl<T: Animatable> AnimationState<T> {
 }
 
 impl<T: Animatable + Copy> AnimationState<T> {
+    /// Point the motion at `value`, as a widget that resolves its targets
+    /// during layout does: a motion that has never run is *seeded* — or plays
+    /// its enter — rather than eased, and a sequence its trigger asked for is
+    /// played before it is pointed anywhere.
+    ///
+    /// The seed is not an ease because the value stored at construction is
+    /// whatever `get_untracked` saw then, and a write between construction and
+    /// the first layout would otherwise make the first frame ease from a value
+    /// that was already stale. The play comes first because it has to start
+    /// before the frame that shows its first value (#385), and `take_play` is
+    /// asked on every pass — the first included — because it reads the trigger,
+    /// and that read is the subscription that brings the next frame.
+    pub(crate) fn retarget(&mut self, ctx: &mut LayoutCtx, value: T, now: FrameInstant) {
+        let play = self.take_play();
+        if self.is_initial() {
+            if !self.begin_enter(ctx, value, || now) {
+                self.set_immediate(ctx, value);
+            }
+            // After the seed, so a sequence that plays because the widget
+            // exists is not immediately overwritten by the value it was
+            // seeded with.
+            if play {
+                self.play(now);
+            }
+        } else {
+            if play {
+                self.play(now);
+            }
+            self.animate_to(value, now);
+        }
+    }
+
     /// The value this animation contributes right now.
     ///
     /// Normally the in-flight value — that is the animation. While a natural
