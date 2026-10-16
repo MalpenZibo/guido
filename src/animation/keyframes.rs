@@ -220,11 +220,6 @@ impl<T: Animatable> Keyframes<T> {
         }
     }
 
-    /// How long one run takes.
-    pub(crate) fn duration_ms(&self) -> f32 {
-        self.duration_ms
-    }
-
     /// Whether there is anything to play.
     pub fn is_empty(&self) -> bool {
         self.stops.is_empty()
@@ -232,14 +227,36 @@ impl<T: Animatable> Keyframes<T> {
 
     /// The value `elapsed_ms` into the run, or `None` once it is over.
     pub fn value_at(&self, elapsed_ms: f32) -> Option<T> {
+        self.value_since(f64::from(elapsed_ms))
+    }
+
+    /// [`value_at`](Self::value_at), from a time kept in `f64`.
+    ///
+    /// An endless sequence never ends, so its distance from its start grows
+    /// for the life of the widget, and an `f32` count of milliseconds loses a
+    /// whole 60Hz frame of resolution after about thirty-seven hours and a
+    /// whole run of a short sequence within a few weeks — at which point it
+    /// shows one value for frame after frame. A bar is the thing that runs for
+    /// weeks. So whole runs, which say nothing about where it is now, are taken
+    /// off before anything is narrowed.
+    ///
+    /// Taken off here rather than by moving the start forward: the reduction
+    /// is computed from the start on every frame anyway, so a stored one would
+    /// be a second place for the same arithmetic to be wrong in. A run is never
+    /// shorter than a millisecond, so the division is never by zero.
+    pub(crate) fn value_since(&self, since_start_ms: f64) -> Option<T> {
         if self.stops.is_empty() {
             return None;
         }
-        if self.total_ms().is_some_and(|total| elapsed_ms >= total) {
+        if self
+            .total_ms()
+            .is_some_and(|total| since_start_ms >= f64::from(total))
+        {
             return None;
         }
-        let within = (elapsed_ms.max(0.0) % self.duration_ms) / self.duration_ms;
-        Some(self.sample(within))
+        let duration = f64::from(self.duration_ms);
+        let into_cycle = since_start_ms.max(0.0);
+        Some(self.sample(((into_cycle % duration) / duration) as f32))
     }
 
     /// The value at `t` in `0.0..=1.0` of a single run.
