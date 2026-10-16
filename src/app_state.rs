@@ -88,6 +88,11 @@ pub(crate) struct AppState {
     /// one is laid out. One slot, not a queue: two requests in a frame are two
     /// answers to "where should the keyboard be", and the last one is meant.
     pub(crate) pending_focus: RefCell<Option<WidgetRef>>,
+    /// The widget each surface had focused when the focus went to another
+    /// surface, by that surface's root, and whether Tab had put it there. Given
+    /// back when the keyboard returns to the surface (#726); an entry exists
+    /// only while the focus is somewhere else.
+    pub(crate) kept_focus: RefCell<FxHashMap<WidgetId, (WidgetId, bool)>>,
     /// Pastes asked for, waiting for the loop to start their reads.
     pub(crate) paste_requests: DeferredQueue<(SelectionKind, PasteTarget)>,
     /// Pastes whose text has arrived, waiting for the loop to hand them over.
@@ -181,6 +186,7 @@ pub(crate) fn reset() {
             outgoing_clipboard,
             outgoing_primary,
             pending_focus,
+            kept_focus,
             paste_requests,
             pastes,
             lock_request,
@@ -234,6 +240,7 @@ pub(crate) fn reset() {
         outgoing_clipboard.clear();
         outgoing_primary.clear();
         pending_focus.take();
+        kept_focus.take();
 
         current_cursor.take();
         pointed_cursor.take();

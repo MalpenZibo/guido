@@ -725,6 +725,14 @@ got there by Tab (#634).
 The surface gaining or losing the keyboard goes down the focus path. Both travel
 from the root through the containers on the way, so a hidden or disabled one
 still stops them. Nothing else of the tree is asked (#241).
+Losing it takes no focus away: `Tree` notes which surface has the keyboard,
+and a text input holding the focus on a surface without it draws no caret until
+the keyboard is back. Each
+surface keeps the widget it had focused when the focus went to another surface
+— `AppState::kept_focus`, by root, as a GtkWindow keeps its focus widget and
+Flutter's FocusScopeNode its focusedChild — and the keyboard coming back
+gives it the focus again if it is still there. A grabbing popup whose field
+took the focus and then closed is the case that needs the second half (#726).
 
 A held key travels the same way, once per repeat, as a key-down whose `repeat`
 is set (#613). Both of its producers — sctk's calloop timer and `wl_keyboard`'s

@@ -21,10 +21,10 @@ use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
 use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
-use crate::reactive::focus::focused_widget;
+use crate::reactive::focus::{focused_widget, has_focus_with_keyboard};
 use crate::reactive::{
     CursorIcon, IntoSignal, Password, Prop, RwSignal, SelectionKind, clipboard_copy, has_focus,
-    paste_into, primary_copy, release_focus, request_focus,
+    paste_into, primary_copy, request_focus,
 };
 use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
@@ -958,10 +958,11 @@ impl<C: Content> TextInput<C> {
     /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
     /// A focused field is the normal state of a lock screen, and that ran all
     /// night.
-    fn update_cursor_blink(&mut self, id: WidgetId, now: FrameInstant) -> bool {
-        if !self.cached_caret || !has_focus(id) {
+    fn update_cursor_blink(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        if !self.cached_caret || !has_focus_with_keyboard(tree, id) {
             return false;
         }
+        let now = tree.frame_instant();
         let period = Duration::from_millis(CURSOR_BLINK_MS);
         if now.duration_since(self.last_cursor_toggle) >= period {
             self.cursor_visible = !self.cursor_visible;
@@ -1592,7 +1593,7 @@ impl<C: Content> Widget for TextInput<C> {
     }
 
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
-        let blinking = self.update_cursor_blink(id, tree.frame_instant());
+        let blinking = self.update_cursor_blink(tree, id);
         let animating = self.advance_text_anims(tree, id);
         blinking || animating
     }
@@ -1760,7 +1761,9 @@ impl<C: Content> Widget for TextInput<C> {
         // `self.caret` gates the *drawing*, not only the blink: stopping the blink
         // leaves `cursor_visible` at whatever it last was — true, from the
         // constructor — and a field asked for no caret got a permanent one.
-        if self.cached_caret && is_focused {
+        // Not while the surface is without the keyboard: the field keeps the
+        // focus then, and a caret blinking in it would say keys go there.
+        if self.cached_caret && has_focus_with_keyboard(tree, id) {
             // The toggle happens in `advance_animations`, and this is what asks
             // for the wake that runs it. It has to be here, not at the moment
             // focus arrives: focus comes from a click, from `autofocus`, or from
@@ -1901,10 +1904,14 @@ impl<C: Content> Widget for TextInput<C> {
                 request_job(id, JobRequest::Paint);
                 return EventResponse::Handled;
             }
+            // The surface losing the keyboard keeps the focus here, and the
+            // caret goes until it is back; see `has_focus_with_keyboard`.
             Event::FocusOut if has_focus(id) => {
-                release_focus(id);
-                self.cursor_visible = false;
                 self.is_dragging = false;
+                request_job(id, JobRequest::Paint);
+            }
+            Event::FocusIn if has_focus(id) => {
+                self.reset_cursor_blink(edit.at);
                 request_job(id, JobRequest::Paint);
             }
             Event::MouseLeave => {
@@ -2744,6 +2751,25 @@ mod tests {
 
         assert!(!blinking);
         assert_eq!(next_deadline(), None);
+    }
+
+    #[test]
+    fn a_focused_field_whose_surface_is_without_the_keyboard_asks_for_nothing() {
+        // The field keeps the focus while the keyboard is elsewhere (#726),
+        // and a bar's field kept that way all night must not wake the loop
+        // twice a second for a caret nobody can type at.
+        let (mut tree, id) = field(text_input(create_signal(String::new())), true);
+        tree.set_event_instant(Some(std::time::Instant::now()));
+        tree.dispatch(id, &Event::FocusOut);
+        tree.set_event_instant(None);
+        clear_pending_jobs();
+
+        let blinking = advance(&mut tree, id);
+        paint_once(&mut tree, id);
+
+        assert!(has_focus(id), "the focus stayed");
+        assert!(!blinking, "but the caret does not blink");
+        assert_eq!(next_deadline(), None, "and asks for no wake");
     }
 
     /// What a field measures its caret, its selection and its clicks against

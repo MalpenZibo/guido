@@ -948,6 +948,61 @@ fn a_click_outside_the_field_takes_the_keyboard_off_it() {
     );
 }
 
+/// A surface gets back the widget it had focused when the keyboard comes back
+/// to it (#726).
+///
+/// A suggestion list opened from a search field, as a popup that grabs the
+/// keyboard: the bar loses the keyboard to it, the popup's own field takes the
+/// focus, and the popup closes, taking that field with it. Nothing is focused
+/// then, and only the bar remembering its field puts the next key there — it
+/// is what a `GtkWindow`'s focus widget, and a browser's `activeElement`
+/// across a window blur, are for.
+#[test]
+fn a_field_has_the_focus_back_when_a_grabbing_popup_closes() {
+    let Some(mut app) = headless() else { return };
+    let field = create_widget_ref();
+    let value = create_signal(String::new());
+    let bar = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
+    app.configure(bar, 200, 50, 1.0);
+    app.step();
+    app.click(bar, 100.0, 8.0);
+    app.step();
+    assert!(field.is_focused(), "a click into the field takes the focus");
+
+    let suggestion = create_widget_ref();
+    let popup = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .child(text_input(create_signal(String::new())).widget_ref(suggestion))
+    });
+    app.step();
+    app.configure(popup.id(), 80, 40, 1.0);
+    app.step();
+    // The grab: the compositor takes the keyboard from the bar and hands it to
+    // the popup, whose field the user then clicks into.
+    let now = Instant::now();
+    app.event_at(bar, Event::FocusOut, now);
+    app.event_at(popup.id(), Event::FocusIn, now);
+    app.step();
+    app.click(popup.id(), 40.0, 8.0);
+    app.step();
+    assert!(suggestion.is_focused(), "the popup's field took the focus");
+
+    popup.close();
+    app.step();
+    app.event_at(bar, Event::FocusIn, Instant::now());
+    app.step();
+    app.event_at(bar, key_down(Key::Char('x')), Instant::now());
+    app.step();
+
+    assert!(
+        field.is_focused(),
+        "the keyboard back on the bar, its field has the focus"
+    );
+    assert_eq!(value.get_untracked(), "x", "and the key is typed into it");
+}
+
 /// A focused field on a bar, built by `input` around its signal, with `typed`
 /// already in it — each key stepped on its own.
 fn a_focused_field_holding(
