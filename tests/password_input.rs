@@ -125,6 +125,21 @@ fn enter_can_take_the_secret_and_leave_the_field_empty() {
     assert_eq!(field.held(), "ok");
 }
 
+/// A password typed past the field's width and taken on Enter leaves the
+/// field drawing its caret at its start, not where the long one had scrolled
+/// it, out of sight (#723).
+#[test]
+fn a_password_taken_on_enter_draws_its_caret_in_view() {
+    let mut field = Field::new(|f, password| f.on_submit(move || drop(password.take())));
+    field.type_str(&"a".repeat(120));
+    let caret = |field: &mut Field| field.harness.painted_rects()[0].x;
+    assert!(caret(&mut field) > 100.0, "typed past its width");
+
+    field.key(Key::Enter);
+    assert_eq!(field.held(), "");
+    assert_eq!(caret(&mut field), 0.0);
+}
+
 /// A password field is one line too, and a password copied with its line
 /// break is where it hurts most: the mask hides the break, and the password is
 /// refused with it.
