@@ -4,7 +4,8 @@
 //! numbers — offset, blur, spread and colour — and a design system's steps are
 //! `Shadow` constants the application writes down, the way it writes down its
 //! colours. Row 1 is one such ladder; the rows below it are what a single
-//! number could never say.
+//! number could never say, then shadows cast inside the box and stacked on
+//! one.
 
 use guido::prelude::*;
 
@@ -30,7 +31,7 @@ mod elevation {
     pub const HIGH: Shadow = step(6.0, 10.0, 0.22);
 }
 
-fn card<M>(label: &str, shadow: impl IntoAnimated<Shadow, M>) -> Container {
+fn card<M>(label: &str, shadow: impl IntoAnimated<Shadows, M>) -> Container {
     container()
         .padding(28.0)
         .background(Color::WHITE)
@@ -94,6 +95,44 @@ fn main() {
                                     10.0,
                                     Color::rgba(0.1, 0.2, 0.8, 0.45),
                                 ),
+                            )),
+                    )
+                    // Inside the box, and more than one: an inner glow, a
+                    // control pressed in, and an elevation spelled as a tight
+                    // shadow over a soft one.
+                    .child(
+                        row()
+                            .child(card(
+                                "Glow",
+                                Shadow::new(
+                                    (0.0, 0.0),
+                                    12.0,
+                                    0.0,
+                                    Color::rgba(0.95, 0.3, 0.2, 0.6),
+                                )
+                                .inset(),
+                            ))
+                            .child(card(
+                                "Pressed",
+                                Shadow::new((0.0, 3.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.35))
+                                    .inset(),
+                            ))
+                            .child(card(
+                                "Tight over soft",
+                                [
+                                    Shadow::new(
+                                        (0.0, 1.0),
+                                        2.0,
+                                        0.0,
+                                        Color::rgba(0.0, 0.0, 0.0, 0.3),
+                                    ),
+                                    Shadow::new(
+                                        (0.0, 6.0),
+                                        14.0,
+                                        3.0,
+                                        Color::rgba(0.0, 0.0, 0.0, 0.15),
+                                    ),
+                                ],
                             )),
                     )
                     // The motion rides with the declaration, so a hover lifts

@@ -63,4 +63,4 @@ pub use text_measurer::{
 };
 pub(crate) use text_measurer::{TextMeasurer, measure_line_height};
 pub use tree::{NodeId, RenderNode};
-pub use types::{Gradient, GradientDir, Shadow, TextEntry};
+pub use types::{Gradient, GradientDir, Shadow, Shadows, TextEntry};

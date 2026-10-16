@@ -32,7 +32,7 @@ use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
-use crate::renderer::{GradientDir, PaintContext, Shadow};
+use crate::renderer::{GradientDir, PaintContext, Shadow, Shadows};
 use crate::transform::{Scale, Transform, Translate};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
@@ -224,7 +224,7 @@ pub(super) struct LayerProps {
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
-    pub(super) shadow: Prop<Shadow>,
+    pub(super) shadow: Prop<Shadows>,
 }
 
 bitflags::bitflags! {
@@ -684,7 +684,7 @@ impl Container {
             .map_or(Prop::Unset, |d| d.gradient)
     }
 
-    pub(super) fn shadow_prop(&self) -> Prop<Shadow> {
+    pub(super) fn shadow_prop(&self) -> Prop<Shadows> {
         self.decoration.as_deref().map_or(Prop::Unset, |d| d.shadow)
     }
 
@@ -1263,7 +1263,8 @@ impl Container {
     }
 
     /// The shadow this container casts — offset, blur, spread and colour, all
-    /// four of them.
+    /// four of them — or up to [`Shadows::MAX`] of them, the first on top, any
+    /// of which may be [cast inside the box](Shadow::inset) instead.
     ///
     /// There is no elevation level and no table behind one. A design system's
     /// ladder is a set of `Shadow` values the application writes down, the way
@@ -1278,8 +1279,13 @@ impl Container {
     /// let _ = container()
     ///     .shadow(Shadow::none().transition(120.0))
     ///     .when_hovered(|s| s.shadow(LIFTED));
+    ///
+    /// // A tight shadow over a soft one, and a glow inside the edge.
+    /// const EDGE: Shadow = Shadow::new((0.0, 1.0), 2.0, 0.0, Color::BLACK);
+    /// let _ = container().shadow([EDGE, LIFTED]);
+    /// let _ = container().shadow(Shadow::new((0.0, 0.0), 8.0, 0.0, Color::WHITE).inset());
     /// ```
-    pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
+    pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadows, M>) -> Self {
         let declared = animated_properties::declare::shadow(&mut self.anims, shadow);
         self.decoration_mut().shadow = declared;
         self

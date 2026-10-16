@@ -167,18 +167,27 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = container().when_pressed(move |s| s.ripple_with_color(move || hot.get()));
     let _ = container().when_pressed(move |s| s.ripple_with_color(hot));
 
-    // `shadow` takes a `Shadow` and nothing convertible into one, so there is
-    // no `converts!` entry for it — which is exactly the case this test exists
-    // to cover: the forms have to arrive through the blanket impls, and nothing
-    // checks that they do until it is written down. On the state layer too,
-    // where the override is a value and never a motion.
-    let lift = create_signal(Shadow::new((0.0, 6.0), 10.0, 0.0, Color::BLACK));
+    // `shadow` holds a `Shadows`, and one `Shadow` or an array of up to four
+    // converts into one through the `converts!` entries beside the type. Each
+    // in every form, and on the state layer too, where the override is a value
+    // and never a motion.
+    let one = Shadow::new((0.0, 6.0), 10.0, 0.0, Color::BLACK);
+    let lift = create_signal(one);
+    let pair = create_signal([one, one.inset()]);
+    let list = create_signal(Shadows::new([one]));
     let _ = container().shadow(Shadow::none());
     let _ = container().shadow(move || lift.get());
     let _ = container().shadow(lift);
+    let _ = container().shadow([one, one.inset()]);
+    let _ = container().shadow(move || [one, one.inset()]);
+    let _ = container().shadow(pair);
+    let _ = container().shadow(list);
     let _ = container().when_hovered(|s| s.shadow(Shadow::none()));
     let _ = container().when_hovered(move |s| s.shadow(move || lift.get()));
     let _ = container().when_hovered(move |s| s.shadow(lift));
+    let _ = container().when_hovered(move |s| s.shadow([one, one.inset()]));
+    let _ = container().when_hovered(move |s| s.shadow(move || [one, one.inset()]));
+    let _ = container().when_hovered(move |s| s.shadow(pair));
 }
 
 /// A bare number is a line height's factor, in every form a property takes.
