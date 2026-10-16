@@ -16,9 +16,9 @@
 //!
 //! Every field is an `Option`, so a declaration says only what it means to
 //! say. What fills the rest is the widget's own default — white, 14 logical
-//! pixels, the registered family, normal weight, the font's own line height
-//! and letter spacing — not a neighbouring declaration: nothing is inherited
-//! from anywhere.
+//! pixels, the registered family, normal weight, upright, the font's own
+//! features, line height and letter spacing — not a neighbouring declaration:
+//! nothing is inherited from anywhere.
 //!
 //! The partiality earns its keep on state overrides, which *are* merged:
 //! `when_hovered(|s| s.color(..))` changes the colour of a hovered label and
@@ -60,7 +60,7 @@ use crate::reactive::{IntoSignal, Prop};
 use crate::tree::WidgetId;
 use crate::widgets::container::AnimationState;
 
-use super::font::{FontFamily, FontWeight, LineHeight};
+use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use super::widget::Color;
 
 /// A contour drawn around the glyphs.
@@ -224,8 +224,8 @@ pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
 /// Every field is optional and resolved independently: a state override that
 /// sets only `color` leaves the metrics the widget declared alone. Properties
 /// nothing declares fall back to [`Text`](crate::widgets::Text)'s defaults —
-/// white, 14 logical pixels, the registered default family, normal weight, the
-/// font's own line height.
+/// white, 14 logical pixels, the registered default family, normal weight,
+/// upright, the font's own features and line height.
 #[derive(Clone, Copy, Default, PartialEq)]
 pub struct TextStyle {
     /// Colour of the glyphs.
@@ -236,6 +236,10 @@ pub struct TextStyle {
     pub font_family: Prop<FontFamily>,
     /// Font weight on the CSS 100-900 scale.
     pub font_weight: Prop<FontWeight>,
+    /// Upright, italic or oblique.
+    pub font_style: Prop<FontStyle>,
+    /// OpenType features to shape with — see [`FontFeatures`].
+    pub font_features: Prop<FontFeatures>,
     /// How tall each line is.
     pub line_height: Prop<LineHeight>,
     /// Extra advance after every glyph, in logical pixels — see
@@ -256,12 +260,13 @@ pub struct TextStyle {
 /// Container resolves its own properties in these two steps, and
 /// [`first_finite_override`] carries the rule they share.
 ///
-/// Only the three numeric properties have the distinction. A family and a weight
-/// cannot fail to be numbers, so the nearest declaration is the whole answer for
-/// them. A stroke and a shadow *can* — they are made of numbers — and they keep
-/// the nearest declaration anyway, because no `AllFinite` impl reaches them: that
-/// is a gap rather than a reason, and neither has an animation to poison, so a bad
-/// number is gone from them the frame the signal recovers.
+/// Only the three numeric properties have the distinction. A family, a weight, a
+/// style and a set of features cannot fail to be numbers, so the nearest
+/// declaration is the whole answer for them. A stroke and a shadow *can* — they
+/// are made of numbers — and they keep the nearest declaration anyway, because no
+/// `AllFinite` impl reaches them: that is a gap rather than a reason, and neither
+/// has an animation to poison, so a bad number is gone from them the frame the
+/// signal recovers.
 ///
 /// **A value is read when its property is asked for, not while walking.** The
 /// walk runs during layout and again during paint, and a read subscribes whichever
@@ -283,6 +288,8 @@ pub(crate) struct ResolvedTextStyle {
     letter_spacing: Prop<f32>,
     font_family: Prop<FontFamily>,
     font_weight: Prop<FontWeight>,
+    font_style: Prop<FontStyle>,
+    font_features: Prop<FontFeatures>,
     line_height: Prop<LineHeight>,
     stroke: Prop<TextStroke>,
     shadow: Prop<TextShadow>,
@@ -311,11 +318,13 @@ impl ResolvedTextStyle {
         self.take_unset(style);
     }
 
-    /// The five that resolve to one declaration: nearest wins, so whatever is
+    /// The seven that resolve to one declaration: nearest wins, so whatever is
     /// already set was found first.
     fn take_unset(&mut self, style: &TextStyle) {
         self.font_family = self.font_family.or(style.font_family);
         self.font_weight = self.font_weight.or(style.font_weight);
+        self.font_style = self.font_style.or(style.font_style);
+        self.font_features = self.font_features.or(style.font_features);
         self.line_height = self.line_height.or(style.line_height);
         self.stroke = self.stroke.or(style.stroke);
         self.shadow = self.shadow.or(style.shadow);
@@ -354,6 +363,17 @@ impl ResolvedTextStyle {
     /// The weight to shape them at, on the CSS 100-900 scale.
     pub(crate) fn font_weight(&self) -> FontWeight {
         self.font_weight.get_or(FontWeight::NORMAL)
+    }
+
+    /// Whether the glyphs are upright or slanted.
+    pub(crate) fn font_style(&self) -> FontStyle {
+        self.font_style.get_or(FontStyle::Normal)
+    }
+
+    /// The OpenType features to shape them with — none, the font's defaults,
+    /// where nothing declares any.
+    pub(crate) fn font_features(&self) -> FontFeatures {
+        self.font_features.get_or(FontFeatures::new())
     }
 
     /// How tall each line is.
@@ -511,9 +531,10 @@ impl TextAnims {
 ///
 /// These are the *declaration* sites, so `color` and `font_size` carry how they
 /// move as well as what they are — `color(theme.warn.transition(200.0))`. The
-/// rest take values only: a family and a weight snap to an installed face, a
-/// line height may change its kind between two values, and a stroke and a
-/// shadow are records with no `Animatable` between them.
+/// rest take values only: a family, a weight and a style snap to an installed
+/// face, a feature is on or off, a line height may change its kind between two
+/// values, and a stroke and a shadow are records with no `Animatable` between
+/// them.
 ///
 /// The *override* site is [`TextStyle`], and its setters take values alone.
 /// That is not a second vocabulary but the rule falling out of the types: a
@@ -681,6 +702,31 @@ macro_rules! declares_text_style {
                 self.font_weight($crate::widgets::FontWeight::BOLD)
             }
 
+            /// Upright, italic or oblique. A family with no slanted face is
+            /// drawn in its upright one, sheared.
+            pub fn font_style<M>(
+                mut self,
+                style: impl $crate::reactive::IntoSignal<$crate::widgets::FontStyle, M>,
+            ) -> Self {
+                self.text_style_mut().font_style = style.into_prop();
+                self
+            }
+
+            /// Shorthand for [`font_style`](Self::font_style) at `FontStyle::Italic`.
+            pub fn italic(self) -> Self {
+                self.font_style($crate::widgets::FontStyle::Italic)
+            }
+
+            /// OpenType features to shape the glyphs with, such as `tnum` for
+            /// digits of one width — see [`FontFeatures`]($crate::widgets::FontFeatures).
+            pub fn font_features<M>(
+                mut self,
+                features: impl $crate::reactive::IntoSignal<$crate::widgets::FontFeatures, M>,
+            ) -> Self {
+                self.text_style_mut().font_features = features.into_prop();
+                self
+            }
+
             /// How tall each line is. A bare number is a factor of the font
             /// size; [`LineHeight::Absolute`]($crate::widgets::LineHeight::Absolute)
             /// is logical pixels, and the default is the font's own.
@@ -780,6 +826,24 @@ impl TextStyle {
     /// Shorthand for [`font_weight`](Self::font_weight) at `FontWeight::BOLD`.
     pub fn bold(self) -> Self {
         self.font_weight(FontWeight::BOLD)
+    }
+
+    /// Upright, italic or oblique.
+    pub fn font_style<M>(mut self, style: impl IntoSignal<FontStyle, M>) -> Self {
+        self.font_style = style.into_prop();
+        self
+    }
+
+    /// Shorthand for [`font_style`](Self::font_style) at `FontStyle::Italic`.
+    pub fn italic(self) -> Self {
+        self.font_style(FontStyle::Italic)
+    }
+
+    /// OpenType features to shape the glyphs with. A state's set replaces the
+    /// declared one rather than adding to it, as every other property does.
+    pub fn font_features<M>(mut self, features: impl IntoSignal<FontFeatures, M>) -> Self {
+        self.font_features = features.into_prop();
+        self
     }
 
     /// How tall each line is. A bare number is a factor of the font size.

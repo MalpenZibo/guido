@@ -106,6 +106,22 @@ container().child(text_input(value))
 # }
 ```
 
+### Italic and OpenType Features
+
+As on a [text](text.md#italic): `italic()`, `font_style` and
+`font_features`. A field of numbers with tabular figures keeps its caret
+between digits of one width:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
+container().child(text_input(value).font_features(FontFeatures::new().enable(b"tnum")))
+# ;
+# }
+```
+
 ### Letter Spacing
 
 Logical pixels after every character, as on a [text](text.md#letter-spacing).

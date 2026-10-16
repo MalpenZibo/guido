@@ -3668,3 +3668,128 @@ fn oversized_raw_rasters_keep_thin_translucent_lines() {
             })),
     );
 }
+
+/// `assets/make_figures_fixture.py` builds these: "Guido Figures", whose
+/// upright digit n is a box 400 + 40n units wide and whose `tnum` makes every
+/// digit 600, and an italic face of its own drawn as slanted boxes half as
+/// tall — so a picture says which face drew an italic, and a shear of the
+/// upright boxes cannot pass for it.
+const FIGURES_REGULAR: &[u8] = include_bytes!("assets/GuidoFigures-Regular.ttf");
+const FIGURES_ITALIC: &[u8] = include_bytes!("assets/GuidoFigures-Italic.ttf");
+const FIGURES: &str = "Guido Figures";
+fn tnum() -> FontFeatures {
+    FontFeatures::new().enable(b"tnum")
+}
+
+/// The figures family, registered on this thread before anything measures.
+fn figures(content: &str, size: f32) -> Text {
+    guido::load_font(FIGURES_REGULAR.to_vec());
+    guido::load_font(FIGURES_ITALIC.to_vec());
+    text(content)
+        .font_family(FontFamily::name(FIGURES))
+        .font_size(size)
+        .color(Color::WHITE)
+}
+
+/// Only with `tnum` are a "1" and a "0" one advance, read off the layout: a
+/// line of ones and a line of zeros hug boxes of one width under `tnum`, and of
+/// two widths without it.
+#[test]
+fn tabular_figures_are_one_width_in_the_layout() {
+    let widths = |features: FontFeatures| {
+        let harness = common::Harness::laid_out(
+            container()
+                .layout(Flex::row().spacing(4.0))
+                .child(figures("1111", 20.0).font_features(features).nowrap())
+                .child(figures("0000", 20.0).font_features(features).nowrap()),
+            400.0,
+            100.0,
+        );
+        let children = harness.tree.get_children(harness.root).to_vec();
+        let width = |id| harness.tree.cached_size(id).expect("laid out").width;
+        (width(children[0]), width(children[1]))
+    };
+    // Four of 440 units and four of 400, at 20 pixels to the em.
+    let (ones, zeros) = widths(FontFeatures::new());
+    assert!(
+        (ones - 35.2).abs() < 0.01 && (zeros - 32.0).abs() < 0.01,
+        "{ones} {zeros}"
+    );
+    // Four of 600 each.
+    let (ones, zeros) = widths(tnum());
+    assert!(
+        (ones - 48.0).abs() < 0.01 && (zeros - 48.0).abs() < 0.01,
+        "{ones} {zeros}"
+    );
+}
+
+/// Figures without and with `tnum`, each on a box that hugs it: the upright
+/// digits are boxes of ten widths, the tabular ones of one. Then the tabular
+/// line on a turned card, which the quad shapes apart from glyphon and has to
+/// shape with the same features.
+#[test]
+fn tabular_figures_reach_glyphon_and_the_quad() {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    let hugged = |label: Text| container().background(INK).child(label.nowrap());
+    let view = container()
+        .padding(12.0)
+        .layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+        .child(hugged(figures("0123456789", 20.0)))
+        .child(hugged(figures("0123456789", 20.0).font_features(tnum())))
+        .child(
+            container()
+                .padding(8.0)
+                .rotate(6.0)
+                .child(hugged(figures("0123456789", 20.0).font_features(tnum()))),
+        );
+    golden(
+        "tabular_figures_reach_glyphon_and_the_quad",
+        (180.0, 140.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
+/// An italic in a family with an italic face, beside one in a family without.
+///
+/// The first row is the figures family upright and then italic: the italic is
+/// its own face's short slanted boxes, on a box as tall as that face's line.
+/// The second is DejaVu Sans Mono, vendored upright only, upright and then
+/// italic — the upright face sheared by the shaper.
+#[test]
+fn italic_is_a_face_where_there_is_one_and_a_shear_where_there_is_not() {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    let hugged = |label: Text| container().background(INK).child(label.nowrap());
+    let row = || {
+        container().layout(
+            Flex::row()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let view = container()
+        .padding(12.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(
+            row()
+                .child(hugged(figures("0123", 20.0)))
+                .child(hugged(figures("0123", 20.0).italic())),
+        )
+        .child(
+            row()
+                .child(hugged(label("Upright", 20.0)))
+                .child(hugged(label("Sheared", 20.0).italic())),
+        );
+    golden(
+        "italic_is_a_face_where_there_is_one_and_a_shear_where_there_is_not",
+        (240.0, 90.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}

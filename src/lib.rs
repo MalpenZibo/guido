@@ -241,12 +241,12 @@ pub mod prelude {
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
-        EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
-        IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers, MouseButton, Overflow,
-        Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
-        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextAlign, TextInput,
-        TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed,
-        password_input, text, text_input,
+        EventResponse, FontFamily, FontFeatures, FontStyle, FontWeight, GradientDirection, Image,
+        ImageSource, IntoChildren, IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers,
+        MouseButton, Overflow, Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig,
+        Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful, Text,
+        TextAlign, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container,
+        image, keyed, password_input, text, text_input,
     };
     pub use crate::{
         App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
