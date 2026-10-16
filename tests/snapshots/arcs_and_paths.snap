@@ -1,0 +1,7 @@
+node 0,0 84x36
+  node 0,0 20x20 at 8,8
+    draw arc at 10,10 r=8.5 from=-90 sweep=360 width=3 Round stroke=#ffffff40
+    draw arc at 10,10 r=8.5 from=-90 sweep=90 width=3 Round stroke=#00ff00ff
+  node 0,0 40x20 at 36,8
+    draw path 4 segments in 0,6 40x10 fill=#0000ffff NonZero
+    draw path 4 segments in 0,0 40x12 stroke=#ffffffff@1.6 Butt Round

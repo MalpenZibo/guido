@@ -821,6 +821,65 @@ fn a_tinted_image_carries_its_tint() {
     assert_snapshot("tinted_image", render(view, 64.0, 32.0));
 }
 
+/// A widget that strokes a sparkline and fills a triangle under it.
+struct Chart;
+
+impl Widget for Chart {
+    fn layout(
+        &mut self,
+        _ctx: &mut guido::tree::LayoutCtx,
+        constraints: Constraints,
+    ) -> guido::layout::Size {
+        constraints.constrain(guido::layout::Size::new(40.0, 16.0))
+    }
+
+    fn paint(&self, ctx: &mut guido::renderer::PaintContext) {
+        use guido::renderer::{Fill, Join, Path, Stroke};
+        let line = Path::new()
+            .move_to((0.0, 12.0))
+            .line_to((10.0, 4.0))
+            .line_to((20.0, 9.0))
+            .quad_to((30.0, 0.0), (40.0, 6.0));
+        ctx.draw_path(
+            &Path::new()
+                .move_to((0.0, 16.0))
+                .line_to((40.0, 16.0))
+                .line_to((40.0, 6.0))
+                .close(),
+            Fill::color(Color::BLUE),
+            None,
+        );
+        ctx.draw_path(
+            &line,
+            None,
+            Stroke::new(1.6, Color::WHITE).joins(Join::Round),
+        );
+    }
+}
+
+/// An arc and a path are what was drawn, in the order it was drawn: a ring's
+/// track before the part its progress covers, and a chart's fill before the
+/// line over it.
+#[test]
+fn arcs_and_paths_are_carried_in_paint_order() {
+    let view = container()
+        .padding(8.0)
+        .layout(Flex::row().spacing(8.0))
+        .child(
+            arc()
+                .size(20.0)
+                .stroke(3.0)
+                .track(Color::WHITE.with_alpha(0.25))
+                .color(Color::GREEN)
+                .caps(Cap::Round)
+                .start(-90.0)
+                .progress(0.25),
+        )
+        .child(Chart);
+
+    assert_snapshot("arcs_and_paths", render(view, 96.0, 36.0));
+}
+
 // ---------------------------------------------------------------------------
 // A dynamic child lays out as the same child added statically (#558)
 // ---------------------------------------------------------------------------
