@@ -111,7 +111,9 @@ impl Container {
     /// Three things lead here and they mean the same thing. A `MouseLeave`
     /// says the pointer went somewhere else; the two gates at the top of
     /// [`event`](Widget::event), hidden and disabled, say this container
-    /// stopped accepting it. In every case nothing was activated, so the ripple
+    /// stopped accepting it — and reach it through
+    /// [`switched_off`](Self::switched_off), which says so to what is inside
+    /// as well. In every case nothing was activated, so the ripple
     /// is cancelled rather than completed, and `on_hover(false)` is owed to
     /// whoever asked to be told.
     ///
@@ -157,6 +159,44 @@ impl Container {
         {
             self.request_state_change_repaint(id);
         }
+    }
+
+    /// Stop taking the pointer, here and below: what one of the two gates at
+    /// the top of [`event`](Widget::event) does before it returns.
+    ///
+    /// The gate returns before the children are asked, so nothing else would
+    /// take the hover or the press off what is inside — shown or enabled
+    /// again, a child would still be drawn pressed and still take a release
+    /// that belongs to a press somewhere else (#716). Each child the pointer
+    /// record owes an event is told the pointer left, and passes it on down
+    /// the same way, so the walk is the record's and not the subtree's. A
+    /// hover is told once; a press is told again on each event until its
+    /// button comes up, because the record holds it that long, and every
+    /// `MouseLeave` arm is change-guarded. After that, the events that keep
+    /// arriving over a switched-off container ask one search of the record and
+    /// tell nobody.
+    ///
+    /// Not inside [`pointer_left`](Self::pointer_left), which the
+    /// `MouseLeave` arm also calls after that event has already been through
+    /// the children.
+    pub(super) fn switched_off(&mut self, tree: &mut Tree, id: WidgetId) {
+        let children = self.children_source.get();
+        let owed = tree.event_targets(
+            id,
+            children,
+            &Event::MouseLeave,
+            None,
+            self.children_sorted_along,
+        );
+        for (index, _) in owed {
+            let child_id = children[index];
+            if !is_detached(child_id) {
+                tree.with_widget_mut(child_id, |child, child_id, tree| {
+                    child.event(tree, child_id, &Event::MouseLeave)
+                });
+            }
+        }
+        self.pointer_left(tree, id);
     }
 
     /// Say this container's cursor for a point inside its shape.

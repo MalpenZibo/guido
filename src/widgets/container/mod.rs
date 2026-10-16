@@ -1829,10 +1829,10 @@ impl Widget for Container {
     }
 
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
-        // Hidden takes nothing, but it gives up what it held, as the disabled
-        // gate below does.
+        // Hidden takes nothing, but it gives up what it and its children held,
+        // as the disabled gate below does.
         if !self.visible.get_or(true) {
-            self.pointer_left(tree, id);
+            self.switched_off(tree, id);
             return EventResponse::Ignored;
         }
         let bounds = tree.get_bounds(id).unwrap_or_default();
@@ -1865,7 +1865,7 @@ impl Widget for Container {
         if let Some(ref ix) = self.interaction
             && !ix.declared_enabled.get_or(true)
         {
-            self.pointer_left(tree, id);
+            self.switched_off(tree, id);
             if hit.contains(local_event.coords()) && self.draws_its_own_surface(id) {
                 return EventResponse::Hit;
             }
