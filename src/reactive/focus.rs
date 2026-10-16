@@ -171,6 +171,32 @@ pub(crate) fn give_back_kept_focus(tree: &Tree, root: WidgetId) {
     }
 }
 
+/// What `autofocus` asks for at a widget's first layout: the focus, unless a
+/// widget on its own surface holds it.
+///
+/// Held on another surface, the focus moves only if the keyboard is already
+/// here. Otherwise the widget waits as this surface's kept focus, and the
+/// keyboard entering gives it the focus: a popup opened from a focused field
+/// is laid out before the keyboard reaches it, and a lock cover for a monitor
+/// plugged in mid-lock never has the keyboard come to it unless the user moves
+/// there. A widget the surface already keeps comes first.
+pub(crate) fn offer_autofocus(tree: &Tree, id: WidgetId) {
+    let Some(root) = tree.surface_root_of(id) else {
+        return;
+    };
+    match focus().with_untracked(FocusPath::root) {
+        None => request_focus(tree, id),
+        Some(held) if held == root => {}
+        Some(_) if tree.keyboard_is_on(root) => request_focus(tree, id),
+        Some(_) => with_app_state(|app| {
+            app.kept_focus
+                .borrow_mut()
+                .entry(root)
+                .or_insert((id, false));
+        }),
+    }
+}
+
 /// Forget what the surface rooted at `root` kept, because it is closing.
 pub(crate) fn forget_surface(root: WidgetId) {
     with_app_state(|app| app.kept_focus.borrow_mut().remove(&root));
@@ -395,6 +421,60 @@ mod tests {
 
         assert!(!has_focus(search), "blurred, and it stays blurred");
         assert!(has_focus(in_popup), "the focus is where it was");
+    }
+
+    /// A surface with two fields, laid out, and the field ids.
+    fn two_fields(tree: &mut Tree) -> (WidgetId, WidgetId, WidgetId) {
+        use crate::layout::Constraints;
+        use crate::widgets::{container, text_input};
+
+        let field = || text_input(crate::reactive::create_signal(String::new()));
+        let root = tree.register(Box::new(container().child(field()).child(field())));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 200.0, 80.0));
+        let children = tree.get_children(root).to_vec();
+        (root, children[0], children[1])
+    }
+
+    /// Autofocus never takes the focus from a widget on its own surface, even
+    /// with the keyboard there — the case in which it would take it from
+    /// another surface's.
+    #[test]
+    fn autofocus_leaves_the_focus_on_its_own_surface_alone() {
+        use crate::widgets::Event;
+
+        create_root_owner();
+        clear_focus();
+        let mut tree = Tree::new();
+        let (root, typed_into, autofocusing) = two_fields(&mut tree);
+        tree.dispatch(root, &Event::FocusIn);
+        request_focus(&tree, typed_into);
+
+        offer_autofocus(&tree, autofocusing);
+
+        assert!(has_focus(typed_into));
+    }
+
+    /// A surface waiting for the keyboard gives back the widget it already
+    /// kept, not an autofocusing one that appeared on it since.
+    #[test]
+    fn autofocus_waits_behind_a_widget_its_surface_already_keeps() {
+        use crate::widgets::Event;
+
+        create_root_owner();
+        clear_focus();
+        let mut tree = Tree::new();
+        let (popup, kept, autofocusing) = two_fields(&mut tree);
+        let (bar, on_bar, _) = two_fields(&mut tree);
+        tree.dispatch(bar, &Event::FocusIn);
+        request_focus(&tree, kept);
+        request_focus(&tree, on_bar);
+
+        offer_autofocus(&tree, autofocusing);
+        assert!(has_focus(on_bar), "the keyboard is on the bar");
+        tree.dispatch(popup, &Event::FocusIn);
+
+        assert!(has_focus(kept));
     }
 
     /// A request outlives a widget that comes and goes, and must not fire at

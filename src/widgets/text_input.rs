@@ -21,7 +21,7 @@ use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
 use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
-use crate::reactive::focus::{focused_widget, has_focus_with_keyboard};
+use crate::reactive::focus::{has_focus_with_keyboard, offer_autofocus};
 use crate::reactive::{
     CursorIcon, IntoSignal, Password, Prop, RwSignal, SelectionKind, clipboard_copy, has_focus,
     paste_into, primary_copy, request_focus,
@@ -773,22 +773,27 @@ impl<C: Content> TextInput<C> {
         self
     }
 
-    /// Take keyboard focus when this input first appears, if nothing else has it.
+    /// Take keyboard focus when this input first appears, unless a widget on
+    /// its own surface has it.
     ///
     /// For a screen that exists to be typed into — a lock screen, a search
     /// overlay, a dialog with one field — where making the user click first is
     /// the wrong answer, and where there is no cursor to click *with* on a
     /// surface that has no pointer.
     ///
-    /// The offer is made once, at the input's first layout, and only when no
-    /// widget holds focus. Both halves matter:
+    /// The offer is made once, at the input's first layout. Three things
+    /// shape it:
     ///
     /// - *once*, so a relayout does not drag focus back from wherever the user
     ///   has since put it
-    /// - *only when free*, so two autofocusing inputs do not fight — the first
-    ///   laid out wins — and one on a second surface does not pull focus off the
-    ///   surface being typed into. That last case is what a lock screen with two
-    ///   monitors is: the same view built per output, all of them asking.
+    /// - *never from its own surface*, so two autofocusing inputs side by side do
+    ///   not fight — the first laid out wins
+    /// - *with the keyboard*, when the focus is on another surface: the input
+    ///   takes it only once the keyboard is on its own surface. A popup opened
+    ///   from a focused field gets its focus when the keyboard reaches it,
+    ///   and the field below gets it back when the popup closes. A lock screen
+    ///   built for a monitor plugged in mid-lock does not pull the focus off
+    ///   the one being typed into, and has it if the keyboard comes to it.
     ///
     /// The equivalent elsewhere: Flutter's `autofocus: true`, Floem's
     /// `autofocus` focus-nav flag, `forward-focus` on a Slint window.
@@ -1644,9 +1649,7 @@ impl<C: Content> Widget for TextInput<C> {
         // makes you wait for a post-frame callback to request focus by hand.
         if self.autofocus_pending {
             self.autofocus_pending = false;
-            if focused_widget().is_none() {
-                request_focus(ctx.tree(), id);
-            }
+            offer_autofocus(ctx.tree(), id);
         }
 
         size
