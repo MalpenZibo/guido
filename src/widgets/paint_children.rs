@@ -346,7 +346,7 @@ mod culling_a_dirty_child {
         tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 120.0));
 
         let mut first = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut first);
+        tree.paint_widget(root, &mut first, 1.0);
         assert!(
             !drew_the_marked_row(&first),
             "row four starts just past the fold, which is what makes this the case"
@@ -359,7 +359,7 @@ mod culling_a_dirty_child {
         tree.mark_needs_paint(row);
 
         let mut second = RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut second);
+        tree.paint_widget(root, &mut second, 1.0);
         assert!(
             !drew_the_marked_row(&second),
             "a write to a row outside the viewport painted it anyway, into a \

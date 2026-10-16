@@ -72,7 +72,7 @@ fn glyph_pixels_of(
     );
 
     let mut node = RenderNode::new(root.as_u64());
-    tree.paint_widget(root, &mut node);
+    tree.paint_widget(root, &mut node, 1.0);
 
     let mut commands = Vec::new();
     let mut layers = Vec::new();

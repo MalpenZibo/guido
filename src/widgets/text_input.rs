@@ -2651,7 +2651,7 @@ mod tests {
 
     fn paint_once(tree: &mut Tree, id: WidgetId) -> crate::renderer::RenderNode {
         let mut node = crate::renderer::RenderNode::new(id.as_u64());
-        tree.paint_widget(id, &mut node);
+        tree.paint_widget(id, &mut node, 1.0);
         node
     }
 

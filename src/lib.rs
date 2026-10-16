@@ -1900,7 +1900,11 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
 
     time_phase!(render_stats::Phase::Paint, {
-        tree.paint_widget(surface.widget_id, &mut surface.root_node);
+        tree.paint_widget(
+            surface.widget_id,
+            &mut surface.root_node,
+            frame.scale_factor,
+        );
     });
 
     // Flatten tree into reused buffers

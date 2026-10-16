@@ -124,6 +124,44 @@ same scope layout gets — so a signal read while drawing belongs to this widget
 and repaints this widget. `ctx.id()` is which widget it is and `ctx.tree()` is
 the tree it is in.
 
+**The scale is the frame's.** Everything a paint draws is in logical pixels,
+and the renderer scales it to the surface. A widget that builds a raster of
+its own — a chart drawn into a buffer, a generated texture — wants one source
+pixel per device pixel, and `ctx.scale_factor()` says how many those are: the
+scale of the frame being painted, fractional where the compositor says so, 1
+until it has said anything. Read it while painting and nothing else is needed:
+a scale change repaints the whole surface, and each surface answers with its
+own. Round rather than truncate, as the surface's own buffer does, and keep
+the raster between paints if building it is not cheap — the sample below
+rebuilds it every time for brevity.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use guido::widget_prelude::*;
+# use std::sync::Arc;
+struct Noise;
+
+impl Widget for Noise {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        constraints.constrain(Size::new(100.0, 20.0))
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        let scale = ctx.scale_factor();
+        let (width, height) = ((100.0 * scale).round() as u32, (20.0 * scale).round() as u32);
+        let pixels: Vec<u8> = (0..width * height * 4).map(|i| (i % 251) as u8).collect();
+        ctx.draw_image(
+            ImageSource::Rgba { width, height, pixels: Arc::from(pixels) },
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            ContentFit::Fill,
+            None,
+        );
+    }
+}
+# fn main() {}
+```
+
 This is newer than it looks: until #390 a paint really did have to open its
 own scope, and a widget that did not subscribed to *nothing* — it drew once and
 then stayed as it was. The advice here used to say that the read fell through

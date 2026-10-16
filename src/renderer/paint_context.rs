@@ -70,6 +70,9 @@ pub struct PaintContext<'a> {
     /// [`paint_child`](Self::paint_child) attributes a read to, and what a
     /// widget asks for its own bounds with.
     id: WidgetId,
+    /// The scale of the frame being painted. See
+    /// [`scale_factor`](Self::scale_factor).
+    scale_factor: f32,
 }
 
 impl<'a> PaintContext<'a> {
@@ -78,18 +81,64 @@ impl<'a> PaintContext<'a> {
     /// The framework's, through [`Tree::paint_widget`](crate::tree::Tree::paint_widget):
     /// a widget is painted through that call or through
     /// [`paint_child`](Self::paint_child), never by reaching for this.
-    pub(crate) fn new(node: &'a mut RenderNode, tree: &'a Tree, id: WidgetId) -> Self {
+    pub(crate) fn new(
+        node: &'a mut RenderNode,
+        tree: &'a Tree,
+        id: WidgetId,
+        scale_factor: f32,
+    ) -> Self {
         Self {
             node,
             cull_rect: None,
             tree,
             id,
+            scale_factor,
         }
     }
 
     /// The widget being painted.
     pub fn id(&self) -> WidgetId {
         self.id
+    }
+
+    /// The scale of the frame being painted: how many device pixels its
+    /// surface has to one logical pixel.
+    ///
+    /// Fractional where the compositor says so, and 1 until it has said
+    /// anything. What a widget that builds its own raster needs, to build it at
+    /// one pixel per device pixel — everything it draws through this context is
+    /// still in logical coordinates.
+    ///
+    /// Read at paint time, and nothing more is needed: a scale change repaints
+    /// the whole surface, so a paint that read the old one is never reused at
+    /// the new one.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # use guido::widget_prelude::*;
+    /// # use std::sync::Arc;
+    /// struct Noise;
+    ///
+    /// impl Widget for Noise {
+    ///     fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+    ///         constraints.constrain(Size::new(100.0, 20.0))
+    ///     }
+    ///
+    ///     fn paint(&self, ctx: &mut PaintContext) {
+    ///         let scale = ctx.scale_factor();
+    ///         let (width, height) = ((100.0 * scale).round() as u32, (20.0 * scale).round() as u32);
+    ///         let pixels: Vec<u8> = (0..width * height * 4).map(|i| (i % 251) as u8).collect();
+    ///         ctx.draw_image(
+    ///             ImageSource::Rgba { width, height, pixels: Arc::from(pixels) },
+    ///             Rect::new(0.0, 0.0, 100.0, 20.0),
+    ///             ContentFit::Fill,
+    ///             None,
+    ///         );
+    ///     }
+    /// }
+    /// ```
+    pub fn scale_factor(&self) -> f32 {
+        self.scale_factor
     }
 
     /// The tree, for a widget that needs to ask about itself or its children.
@@ -683,7 +732,7 @@ impl<'a> PaintContext<'a> {
                 .expect("child was just pushed"),
         )
         .expect("freshly created child Rc is unique");
-        PaintContext::new(child, self.tree, widget)
+        PaintContext::new(child, self.tree, widget, self.scale_factor)
     }
 
     /// Add a pre-built child node.

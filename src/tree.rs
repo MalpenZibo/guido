@@ -881,9 +881,20 @@ impl Tree {
     /// reads while drawing belongs to it. Below the root that is
     /// [`PaintContext::paint_child`](crate::renderer::PaintContext::paint_child)'s
     /// job, and there is no third way: a widget never calls another's `paint`.
-    pub fn paint_widget(&self, id: WidgetId, node: &mut crate::renderer::RenderNode) {
+    ///
+    /// `scale_factor` is the scale of the frame being painted, which every
+    /// context below this one answers
+    /// [`PaintContext::scale_factor`](crate::renderer::PaintContext::scale_factor)
+    /// with. The loop passes its surface's; a paint outside a frame, as in a
+    /// test, passes 1.
+    pub fn paint_widget(
+        &self,
+        id: WidgetId,
+        node: &mut crate::renderer::RenderNode,
+        scale_factor: f32,
+    ) {
         self.with_widget(id, |widget| {
-            let mut ctx = crate::renderer::PaintContext::new(node, self, id);
+            let mut ctx = crate::renderer::PaintContext::new(node, self, id, scale_factor);
             crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Paint, || {
                 widget.paint(&mut ctx)
             });

@@ -386,7 +386,7 @@ mod tests {
         measured(&mut tree, root, Constraints::new(0.0, 0.0, 40.0, 40.0));
 
         let mut node = crate::renderer::RenderNode::new(root.as_u64());
-        tree.paint_widget(root, &mut node);
+        tree.paint_widget(root, &mut node, 1.0);
 
         let drawn = node
             .commands

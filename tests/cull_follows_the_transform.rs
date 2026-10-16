@@ -197,7 +197,7 @@ fn the_lifted_row_is_painted_on_both_frames(view: impl Widget + 'static) {
     for frame in 1..=2 {
         root.clear();
         root.bounds = guido::widgets::Rect::new(0.0, 0.0, 400.0, VIEWPORT);
-        harness.tree.paint_widget(harness.root, &mut root);
+        harness.tree.paint_widget(harness.root, &mut root, 1.0);
 
         let mut found = Vec::new();
         tops_of_width(&root, MARKED_WIDTH, 0.0, &mut found);

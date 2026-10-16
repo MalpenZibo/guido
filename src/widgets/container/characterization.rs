@@ -87,7 +87,7 @@ impl H {
     fn paint(&mut self) -> RenderNode {
         let root = self.root;
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.paint_widget(root, &mut node);
+        self.tree.paint_widget(root, &mut node, 1.0);
         node
     }
 
@@ -126,7 +126,7 @@ impl H {
         }
 
         let mut node = RenderNode::new(root.as_u64());
-        self.tree.paint_widget(root, &mut node);
+        self.tree.paint_widget(root, &mut node, 1.0);
 
         let node = std::rc::Rc::new(node);
         let mut commands = Vec::new();
