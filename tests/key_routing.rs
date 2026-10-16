@@ -200,6 +200,41 @@ fn a_focused_field_keeps_the_keys_it_takes_and_passes_the_rest_on() {
     );
 }
 
+/// Page Up, Page Down and the function keys are keys like Escape: a focused
+/// field does not take them, and they go on up to the listener around it —
+/// a list paging, an application binding F5.
+#[test]
+fn paging_and_function_keys_reach_the_listener_around_a_focused_field() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let around = heard.clone();
+    let typed = create_signal(String::new());
+    let (id, mut at) = surface(&mut app, move || {
+        listener("around", around.clone())
+            .height(30.0)
+            .child(text_input(typed))
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    for k in [Key::PageDown, Key::PageUp, Key::F(5)] {
+        key(&mut app, id, &mut at, k);
+    }
+
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("around", Key::PageDown),
+            ("around", Key::PageUp),
+            ("around", Key::F(5))
+        ]
+    );
+    assert_eq!(
+        typed.get_untracked(),
+        "",
+        "and the field typed none of them"
+    );
+}
+
 #[test]
 fn the_innermost_listener_hears_a_key_first() {
     let Some(mut app) = headless() else { return };

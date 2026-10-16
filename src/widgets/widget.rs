@@ -639,6 +639,12 @@ pub enum Key {
     Home,
     /// End key
     End,
+    /// Page Up, from the main block or the keypad
+    PageUp,
+    /// Page Down, from the main block or the keypad
+    PageDown,
+    /// A function key: `F(1)` is F1, up to `F(12)`
+    F(u8),
     /// Character input (includes A-Z for Ctrl+A shortcuts)
     Char(char),
 }

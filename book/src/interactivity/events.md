@@ -118,6 +118,12 @@ container()
 `on_key_down` fires while the surface has keyboard focus — a layer surface
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
+A key is a `Key`: a character, `Key::Char`, or one of the named keys — Enter,
+Tab, Escape, Backspace, Delete, the arrows, Home and End, `Key::PageUp` and
+`Key::PageDown` from the main block or the keypad, and the function keys
+`Key::F(1)` to `Key::F(12)`. A text input takes neither Page Up, Page Down
+nor a function key, so they reach the listener around it.
+
 It answers whether it took the key, as a widget's `event` does. `Handled` stops
 the key there; `Ignored` lets it go on to the next container listening, and
 then to what the key does by default — Tab moving the focus, under
