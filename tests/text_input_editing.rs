@@ -310,6 +310,19 @@ fn backspace_takes_the_character_before_the_cursor_and_leaves_it_there() {
     );
 }
 
+/// After a deletion the field knows how long its text is: End goes to its
+/// end, not as far past it as the text was long before.
+#[test]
+fn end_after_a_backspace_is_the_end_of_what_is_left() {
+    let mut field = Field::focused("");
+    field.type_text("hit");
+    field.key(Key::Backspace);
+
+    field.key(Key::End);
+    field.key(Key::Backspace);
+    assert_eq!(field.text(), "h");
+}
+
 /// Ctrl+Left and Ctrl+Right stop at the edges of words, skipping the spaces
 /// between them — asked, like the test above, by moving and then writing.
 #[test]

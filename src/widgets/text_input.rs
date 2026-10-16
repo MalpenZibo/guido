@@ -243,7 +243,9 @@ mod content {
         fn snapshot(&self) -> Option<String>;
 
         /// Replace a byte range, in place, and tell whoever is listening.
-        fn replace(&mut self, range: Range<usize>, with: &str);
+        /// `Some` with the new character count when what they did with it
+        /// replaced the text.
+        fn replace(&mut self, range: Range<usize>, with: &str) -> Option<usize>;
 
         /// Read the text back in layout, tracked. `Some` with the new character
         /// count when what is displayed differs from `char_count` characters
@@ -253,8 +255,8 @@ mod content {
         /// What is drawn for `char_count` characters.
         fn display(&self, char_count: usize) -> String;
 
-        /// Enter. `Some` with the new character count when the submit took
-        /// the text with it.
+        /// Enter. `Some` with the new character count when what the submit
+        /// did replaced the text.
         fn submit(&mut self) -> Option<usize>;
     }
 }
@@ -272,6 +274,28 @@ pub struct Plain {
     on_submit: Option<TextCallback>,
 }
 
+impl Plain {
+    /// Make `value` the text, if it is not already. `Some` with the new
+    /// character count when it was not.
+    fn adopt(&mut self, value: &str) -> Option<usize> {
+        if self.text == value {
+            return None;
+        }
+        self.text.clear();
+        self.text.push_str(value);
+        Some(self.text.chars().count())
+    }
+
+    /// What a callback just wrote to the signal, read now rather than at the
+    /// next layout: the loop hands a surface every queued event before laying
+    /// it out, and the next key in the batch must edit the text as the
+    /// callback left it (#725).
+    fn written_back(&mut self) -> Option<usize> {
+        let value = self.value;
+        value.with_untracked(|value| self.adopt(value))
+    }
+}
+
 impl Content for Plain {
     const HIDDEN: bool = false;
 
@@ -283,24 +307,17 @@ impl Content for Plain {
         Some(self.text.clone())
     }
 
-    fn replace(&mut self, range: Range<usize>, with: &str) {
+    fn replace(&mut self, range: Range<usize>, with: &str) -> Option<usize> {
         self.text.replace_range(range, with);
         self.value.set(self.text.clone());
-        if let Some(ref callback) = self.on_change {
-            callback(&self.text);
-        }
+        let callback = self.on_change.as_ref()?;
+        callback(&self.text);
+        self.written_back()
     }
 
     fn refresh(&mut self, _char_count: usize) -> Option<usize> {
-        let text = &mut self.text;
-        let changed = self.value.with(|value| {
-            let changed = value != text;
-            if changed {
-                text.clone_from(value);
-            }
-            changed
-        });
-        changed.then(|| self.text.chars().count())
+        let value = self.value;
+        value.with(|value| self.adopt(value))
     }
 
     fn display(&self, _char_count: usize) -> String {
@@ -308,10 +325,9 @@ impl Content for Plain {
     }
 
     fn submit(&mut self) -> Option<usize> {
-        if let Some(ref callback) = self.on_submit {
-            callback(&self.text);
-        }
-        None
+        let callback = self.on_submit.as_ref()?;
+        callback(&self.text);
+        self.written_back()
     }
 }
 
@@ -343,9 +359,10 @@ impl Content for Masked {
         None
     }
 
-    fn replace(&mut self, range: Range<usize>, with: &str) {
+    fn replace(&mut self, range: Range<usize>, with: &str) -> Option<usize> {
         self.password
             .edit(|secret| secret.replace_range(range, with));
+        None
     }
 
     fn refresh(&mut self, char_count: usize) -> Option<usize> {
@@ -1092,16 +1109,7 @@ impl<C: Content> TextInput<C> {
         self.save_to_history(EditType::Insert, edit.at);
 
         let (start, end) = self.selection.range();
-        let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
-        let inserted_char_count = text.chars().count();
-
-        // Replace selection with new text
-        self.content.replace(byte_start..byte_end, text);
-        // Update cached char count: old - deleted + inserted
-        self.cached_char_count = self.cached_char_count - (end - start) + inserted_char_count;
-        self.display_text_dirty = true;
-        self.measurements_dirty = true;
-        self.selection = Selection::new(start + inserted_char_count);
+        self.splice(start, end, text);
 
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
@@ -1124,25 +1132,33 @@ impl<C: Content> TextInput<C> {
         // `on_change` to hear.
         if start < end {
             self.save_to_history(EditType::Delete, edit.at);
-            self.delete_range(start, end);
-            self.selection = Selection::new(start);
+            self.splice(start, end, "");
         }
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
     }
 
-    /// Delete a range of characters
-    fn delete_range(&mut self, start: usize, end: usize) {
+    /// Replace the characters `start..end` with `text`, and put the cursor
+    /// after it — or wherever is left of it, when a callback that heard the
+    /// edit rewrote the text.
+    fn splice(&mut self, start: usize, end: usize, text: &str) {
         let (byte_start, byte_end) = self.char_range_to_byte_range(start, end);
+        let inserted_char_count = text.chars().count();
 
-        self.content.replace(byte_start..byte_end, "");
-        self.cached_char_count -= end - start;
+        let replaced = self.content.replace(byte_start..byte_end, text);
+        // Update cached char count: old - deleted + inserted
+        self.cached_char_count = self.cached_char_count - (end - start) + inserted_char_count;
         self.display_text_dirty = true;
         self.measurements_dirty = true;
+        self.selection = Selection::new(start + inserted_char_count);
+        if let Some(char_count) = replaced {
+            self.text_replaced(char_count);
+        }
     }
 
     /// The text was replaced wholesale — read back in layout, restored by an
-    /// undo, or taken by a submit — and is now `char_count` characters long.
+    /// undo, or rewritten by a callback — and is now `char_count` characters
+    /// long.
     fn text_replaced(&mut self, char_count: usize) {
         self.cached_char_count = char_count;
         self.display_text_dirty = true;
@@ -1395,10 +1411,10 @@ impl<C: Content> TextInput<C> {
     /// Put back a state from the history.
     fn restore(&mut self, entry: HistoryEntry, edit: Edit) {
         let whole = self.content.with_text(str::len);
-        self.content.replace(0..whole, &entry.text);
-        self.text_replaced(entry.text.chars().count());
+        let replaced = self.content.replace(0..whole, &entry.text);
         self.selection.cursor = entry.cursor;
         self.selection.anchor = entry.anchor;
+        self.text_replaced(replaced.unwrap_or_else(|| entry.text.chars().count()));
         self.history.reset_coalescing();
         self.reset_cursor_blink(edit.at);
         self.ensure_cursor_visible(edit.width);
