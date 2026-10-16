@@ -23,6 +23,7 @@ mod image_quad;
 mod paint_context;
 mod path;
 mod path_mesh;
+mod path_pipeline;
 mod render;
 mod text;
 mod text_mask;

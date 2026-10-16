@@ -240,6 +240,49 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
                 color(c)
             );
         }
+        DrawCommand::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+            width,
+            color: c,
+            cap,
+        } => {
+            let _ = writeln!(
+                out,
+                "{pad}{kind} arc at {},{} r={} from={} sweep={} width={} {:?} stroke={}",
+                n(center.x),
+                n(center.y),
+                n(*radius),
+                n(*start),
+                n(*sweep),
+                n(*width),
+                cap,
+                color(c)
+            );
+        }
+        DrawCommand::Path { path, fill, stroke } => {
+            let mut line = format!(
+                "{pad}{kind} path {} segments in {}",
+                path.elements().len(),
+                rect(&path.bounds())
+            );
+            if let Some(f) = fill {
+                let _ = write!(line, " fill={} {:?}", color(&f.color), f.rule);
+            }
+            if let Some(s) = stroke {
+                let _ = write!(
+                    line,
+                    " stroke={}@{} {:?} {:?}",
+                    color(&s.color),
+                    n(s.width),
+                    s.cap,
+                    s.join
+                );
+            }
+            let _ = writeln!(out, "{line}");
+        }
         // Deliberately metric-free: see the module docs.
         DrawCommand::Text { .. } => {
             let _ = writeln!(out, "{pad}{kind} text <not snapshotted>");
