@@ -733,6 +733,9 @@ surface keeps the widget it had focused when the focus went to another surface
 Flutter's FocusScopeNode its focusedChild — and the keyboard coming back
 gives it the focus again if it is still there. A grabbing popup whose field
 took the focus and then closed is the case that needs the second half (#726).
+An `autofocus` field laid out while the focus is on another surface, and the
+keyboard is not yet on its own, waits as its surface's kept widget, so the
+keyboard arriving is what gives it the focus (#731).
 
 A held key travels the same way, once per repeat, as a key-down whose `repeat`
 is set (#613). Both of its producers — sctk's calloop timer and `wl_keyboard`'s

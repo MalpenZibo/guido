@@ -1003,6 +1003,230 @@ fn a_field_has_the_focus_back_when_a_grabbing_popup_closes() {
     assert_eq!(value.get_untracked(), "x", "and the key is typed into it");
 }
 
+/// A bar whose field has the focus and the keyboard, and a grabbing popup
+/// opened from it whose field asks for `autofocus`, spawned and not yet
+/// configured.
+struct AutofocusPopup {
+    bar: SurfaceId,
+    field: WidgetRef,
+    value: RwSignal<String>,
+    popup: PopupHandle,
+    suggestion: WidgetRef,
+    typed: RwSignal<String>,
+}
+
+fn an_autofocus_popup_over_a_focused_field(app: &mut Headless) -> AutofocusPopup {
+    let field = create_widget_ref();
+    let value = create_signal(String::new());
+    let bar = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
+    app.configure(bar, 200, 50, 1.0);
+    app.step();
+    app.event_at(bar, Event::FocusIn, Instant::now());
+    app.click(bar, 100.0, 8.0);
+    app.step();
+    assert!(field.is_focused(), "a click into the field takes the focus");
+
+    let suggestion = create_widget_ref();
+    let typed = create_signal(String::new());
+    let popup = spawn_popup(bar, PopupConfig::new(80).height(40).grab(), move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .child(text_input(typed).widget_ref(suggestion).autofocus())
+    });
+    app.step();
+    AutofocusPopup {
+        bar,
+        field,
+        value,
+        popup,
+        suggestion,
+        typed,
+    }
+}
+
+/// A popup's `autofocus` field takes the focus from a field on the bar that
+/// opened it once the keyboard reaches the popup, and the bar has its field
+/// back when the popup closes (#731).
+///
+/// The popup is laid out while the keyboard is still on the bar, as it is on a
+/// real compositor: its field cannot take the focus then, or the keys still
+/// going to the bar would reach no field. It waits as the popup's kept focus,
+/// and the enter gives it the focus. The bar's leave comes after the popup's
+/// enter here, which a compositor may also do.
+#[test]
+fn a_popups_autofocus_field_takes_the_focus_from_the_bar_when_the_keyboard_reaches_it() {
+    let Some(mut app) = headless() else { return };
+    let AutofocusPopup {
+        bar,
+        field,
+        value,
+        popup,
+        suggestion,
+        typed,
+    } = an_autofocus_popup_over_a_focused_field(&mut app);
+    app.configure(popup.id(), 80, 40, 1.0);
+    app.step();
+    assert!(
+        field.is_focused(),
+        "laid out before the keyboard moved, the popup's field leaves the focus where the keys go"
+    );
+
+    let now = Instant::now();
+    app.event_at(popup.id(), Event::FocusIn, now);
+    app.event_at(bar, Event::FocusOut, now);
+    app.step();
+    app.event_at(popup.id(), key_down(Key::Char('a')), Instant::now());
+    app.step();
+    assert!(
+        suggestion.is_focused(),
+        "the keyboard on the popup, its field has the focus"
+    );
+    assert_eq!(typed.get_untracked(), "a", "and the key is typed into it");
+
+    popup.close();
+    app.step();
+    app.event_at(bar, Event::FocusIn, Instant::now());
+    app.step();
+    app.event_at(bar, key_down(Key::Char('x')), Instant::now());
+    app.step();
+    assert!(
+        field.is_focused(),
+        "the keyboard back on the bar, its field has the focus"
+    );
+    assert_eq!(value.get_untracked(), "x", "and the key is typed into it");
+}
+
+/// A popup whose keyboard enter comes before its first layout: its `autofocus`
+/// field takes the focus there and then, from the bar's field, because the
+/// keyboard is already on its surface (#731).
+#[test]
+fn a_popup_given_the_keyboard_before_its_first_layout_autofocuses_at_that_layout() {
+    let Some(mut app) = headless() else { return };
+    let AutofocusPopup {
+        bar,
+        popup,
+        suggestion,
+        typed,
+        ..
+    } = an_autofocus_popup_over_a_focused_field(&mut app);
+    // The enter and the configure in one batch: the loop routes the enter,
+    // then lays the popup out for the first time.
+    app.configure(popup.id(), 80, 40, 1.0);
+    let now = Instant::now();
+    app.event_at(bar, Event::FocusOut, now);
+    app.event_at(popup.id(), Event::FocusIn, now);
+    app.step();
+    assert!(
+        suggestion.is_focused(),
+        "its first layout found the keyboard on its surface"
+    );
+
+    app.event_at(popup.id(), key_down(Key::Char('a')), Instant::now());
+    app.step();
+    assert_eq!(typed.get_untracked(), "a");
+}
+
+/// A lock over two monitors, each cover with an `autofocus` field: whichever
+/// cover the keyboard enters has its own field focused, and the keys typed
+/// there land in it (#731).
+#[test]
+fn a_lock_over_two_monitors_focuses_the_field_on_the_one_with_the_keyboard() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+    let fields = lock_with_an_autofocus_field_per_output();
+    app.step();
+    app.grant_lock();
+    app.step();
+    let (on_laptop, on_external) = (cover_of(&app, laptop), cover_of(&app, external));
+    app.configure(on_laptop, 200, 50, 1.0);
+    app.configure(on_external, 200, 50, 1.0);
+    app.step();
+
+    let now = Instant::now();
+    app.event_at(on_external, Event::FocusIn, now);
+    app.event_at(on_external, key_down(Key::Char('a')), now);
+    app.step();
+    let (external_field, external_value) = fields.borrow()[&external];
+    assert!(
+        external_field.is_focused(),
+        "the keyboard on the second cover, its field has the focus"
+    );
+    assert_eq!(external_value.get_untracked(), "a");
+}
+
+/// A cover's field, and the text typed into it.
+type LockField = (WidgetRef, RwSignal<String>);
+
+/// Lock the session with a cover per output holding an `autofocus` field,
+/// and hand back each output's field and its text.
+fn lock_with_an_autofocus_field_per_output() -> Rc<RefCell<HashMap<OutputId, LockField>>> {
+    let fields: Rc<RefCell<HashMap<OutputId, LockField>>> = Rc::default();
+    let built = fields.clone();
+    lock_session(move |output: OutputInfo| {
+        let (field, value) = (create_widget_ref(), create_signal(String::new()));
+        built.borrow_mut().insert(output.id, (field, value));
+        container()
+            .width(fill())
+            .height(fill())
+            .child(text_input(value).widget_ref(field).autofocus())
+    });
+    fields
+}
+
+/// A monitor plugged in while the session is locked gets a cover whose
+/// `autofocus` field does not take the focus from the password being typed on
+/// the other one: the keyboard stays there, and the keys must too. The new
+/// cover's field has the focus when the keyboard comes to it (#731).
+#[test]
+fn a_lock_cover_built_mid_lock_does_not_take_the_focus_from_the_one_being_typed_into() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+    let fields = lock_with_an_autofocus_field_per_output();
+    app.step();
+    app.grant_lock();
+    app.step();
+    let on_laptop = cover_of(&app, laptop);
+    app.configure(on_laptop, 200, 50, 1.0);
+    app.step();
+    app.event_at(on_laptop, Event::FocusIn, Instant::now());
+    app.event_at(on_laptop, key_down(Key::Char('a')), Instant::now());
+    app.step();
+    let (laptop_field, laptop_value) = fields.borrow()[&laptop];
+    assert!(laptop_field.is_focused());
+    assert_eq!(laptop_value.get_untracked(), "a");
+
+    let external = app.connect_output("DP-2");
+    app.step();
+    let on_external = cover_of(&app, external);
+    app.configure(on_external, 200, 50, 1.0);
+    app.step();
+    app.event_at(on_laptop, key_down(Key::Char('b')), Instant::now());
+    app.step();
+    let (external_field, external_value) = fields.borrow()[&external];
+    assert!(
+        laptop_field.is_focused(),
+        "the cover built for the new monitor leaves the focus where the keyboard is"
+    );
+    assert_eq!(
+        laptop_value.get_untracked(),
+        "ab",
+        "and the keys keep landing there"
+    );
+
+    let now = Instant::now();
+    app.event_at(on_laptop, Event::FocusOut, now);
+    app.event_at(on_external, Event::FocusIn, now);
+    app.event_at(on_external, key_down(Key::Char('c')), now);
+    app.step();
+    assert!(
+        external_field.is_focused(),
+        "the keyboard on the new cover, its field has the focus"
+    );
+    assert_eq!(external_value.get_untracked(), "c");
+}
+
 /// A focused field on a bar, built by `input` around its signal, with `typed`
 /// already in it — each key stepped on its own.
 fn a_focused_field_holding(
@@ -3029,6 +3253,15 @@ fn a_departed_outputs_surface_is_torn_down_rather_than_abandoned() {
     );
 }
 
+/// The lock surface covering `output`.
+fn cover_of(app: &Headless, output: OutputId) -> SurfaceId {
+    app.lock_surfaces_created()
+        .into_iter()
+        .find(|(_, on)| *on == output)
+        .map(|(surface, _)| surface)
+        .expect("the output is covered")
+}
+
 /// What a lock screen is built from: one per monitor, saying which.
 fn lock_screen(output: OutputInfo) -> Text {
     text(format!("locked: {}", output.id.raw()))
@@ -3208,12 +3441,7 @@ fn an_output_that_leaves_mid_lock_is_asked_for_nothing_further() {
     app.step();
 
     assert_eq!(app.lock_surface_requests().len(), 2, "one ask per monitor");
-    let going = app
-        .lock_surfaces_created()
-        .into_iter()
-        .find(|(_, output)| *output == external)
-        .map(|(id, _)| id)
-        .expect("the external monitor was covered");
+    let going = cover_of(&app, external);
 
     app.disconnect_output(external);
     for _ in 0..30 {

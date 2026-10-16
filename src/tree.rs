@@ -1559,6 +1559,12 @@ impl Tree {
         }
     }
 
+    /// Whether a `FocusIn` said the keyboard is on the surface rooted at
+    /// `root`. Unlike [`has_keyboard`](Self::has_keyboard), not knowing is no.
+    pub(crate) fn keyboard_is_on(&self, root: WidgetId) -> bool {
+        self.keyboard == KeyboardAt::On(root)
+    }
+
     /// Route a key, or the surface gaining or losing the keyboard, the way
     /// Flutter's `FocusManager` does: down to the focused widget, which has it
     /// first, and up through its ancestors until one takes it. A key nobody on
