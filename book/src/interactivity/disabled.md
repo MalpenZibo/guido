@@ -69,8 +69,9 @@ its ancestors folded in, so it means one thing everywhere.
 **It gives up the pointer and the keyboard.** A disabled control is neither
 hovered nor pressed nor focused, so `when_hovered`, `when_pressed` and
 `when_focused` all switch off with it — no stale highlight, and no focus ring on
-something that is not taking keys. Qt, GTK, SwiftUI and `<fieldset disabled>`
-all behave this way.
+something that is not taking keys. A press held when it was disabled is dropped
+without a click, so enabled again nothing in it comes back pressed. Qt, GTK,
+SwiftUI and `<fieldset disabled>` all behave this way.
 
 **It is still laid out and still painted.** Disabling changes what an event
 does, not where anything sits — so it costs no layout pass.
