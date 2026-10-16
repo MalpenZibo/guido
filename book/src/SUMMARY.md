@@ -24,6 +24,7 @@
     - [Colors](building-ui/colors.md)
     - [Borders & Corners](building-ui/borders.md)
     - [Shadows](building-ui/shadows.md)
+    - [Merged Shapes](building-ui/merged-shapes.md)
     - [Text](building-ui/text.md)
     - [Text Input](building-ui/text-input.md)
     - [Images](building-ui/images.md)

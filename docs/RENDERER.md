@@ -31,6 +31,7 @@ pub struct RenderNode {
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
     pub clip: Option<ClipRegion>,            // Clips this node and children
     pub overlay_clip: Option<ClipRegion>,    // Clips only overlay commands
+    pub merge: Option<Box<MergeChildren>>,   // Children's backgrounds drawn as one shape
     pub repainted: Cell<bool>,               // true = freshly painted this frame
     pub partial: bool,                       // Some children were not painted (do not cache)
     pub cached_flatten: RefCell<Option<Rc<CachedFlatten>>>, // Cached flatten output
@@ -644,6 +645,96 @@ now: its clip is one of the ones it placed.
 The cache lives in `RefCell<Option<Rc<CachedFlatten>>>` on the node, so flatten
 only needs `&RenderNode` and shallow node clones share the cached output.
 
+### Merged shapes
+
+`Container::merge_children` draws the backgrounds of a container's direct
+children as one shape. The decision and its prior art are in #733; this is how
+it is built.
+
+**What a member is.** A container paints its own box — the fill, and the border
+frame it draws as a second command — inside `PaintContext::background`, which
+marks those `RoundedRect`s with `background: true`. The mark is in the command,
+as a `ClipRef` is, so it survives every cache a command passes through. A
+container that merges sets `RenderNode::merge` to a `MergeChildren`: the
+distance, and its own border and shadow, which the merged shape takes.
+
+**Where it is built: flatten.** `merge::gather` reads each direct child's node
+for the commands it marked, places them by the child's own `placement` — the
+same transform flatten composes onto the parent's world transform — and emits
+one `DrawCommand::MergedShape` after the container's own commands and before its
+children's. Each child is then flattened as usual, and the commands the merged
+shape stands in for are taken back out of what it emitted, by address
+(`FlattenScratch::take_out_since`). Taken out afterwards rather than left out:
+the child's own flatten entry is made inside that call, and it has to hold the
+background, because a later frame may replay the child under a parent that no
+longer merges it.
+
+That is also all the paint cache needs. A member that moves repaints, and
+`mark_needs_paint` marks its ancestors, so the merging container repaints and
+flatten gathers again — from a member that moved and from members that came
+back out of the paint and flatten caches alike, since a replay hands back the
+same `Rc`s. A group that moves as a whole replays its cached merged command with
+the offset, because the members are placed relative to the command's own world
+transform. `a_member_that_slides_moves_the_merged_shape` and
+`a_group_that_moves_replays_its_merged_shape` in
+`tests/paint_cache_across_frames.rs` hold both.
+
+**How it is drawn.** One instance, over the members' box grown by a quarter of
+the distance — a smooth minimum of reach `k` takes at most `k / 4` off the
+nearer distance, so the neck never reaches further. `ShapeInstance::merged`
+builds it: no transform, `shape_kind` `SHAPE_MERGED`, and — since a merged shape
+has no gradient — `gradient_type` naming the first of its members'
+`MergeRecord`s, written per frame into a storage buffer bound at group 0,
+binding 2 and chained by `next` as a clip chain is. Each record carries what a
+clip record does — the rect, the radii, the curvature and the
+physical-to-member map — plus `to_pixels`, which brings each member's distance
+to physical pixels so they can be compared, the premultiplied fill and border
+colour, and the border width.
+
+**Its own fragment entry point.** Merged instances are drawn by a second
+pipeline: the same `vs_main`, and `fs_merged` in place of `fs_main`. A shape
+drawn alone runs the fragment shader it ran before merging existed, with no
+loop and no record in it to size its registers by. The two share what follows
+the distance — the functions that cast the shadow, fill and border the shape,
+put it over its shadow and cut it by its clip — so both are composited by one
+definition. A group's shapes are one draw as before; only a group holding a
+merged shape is drawn in runs, a draw per change of pipeline, so a frame that
+merges nothing issues the draws it always did.
+
+`fs_merged` folds the members with the quadratic polynomial smooth minimum,
+which leaves two distances further apart than its reach exactly as `min` leaves
+them — a member that moves away splits off by itself — and gives, beside the
+distance, the share of the fragment each side keeps. The fill, the border
+colour and the border width blend by that share, so the border follows the
+merged outline and fades along a neck towards a member without one. The shadow
+is evaluated over the merged distance: the same SDF through the same
+`smoothstep` a lone shape's shadow uses. The merging container's outer shadows
+are all the merged shape's, each taking an instance as a box's do: the first
+rides the merged instance, and every further one is the merged shape drawn
+again beneath it with `MERGED_SHADOW_ONLY` set, for that shadow alone. Its
+inset shadows stay on its own box. A member's own outer shadows are moved
+beneath the merged shape; its inset ones stay with the member, over the merged
+fill. The shape and its shadow take the same
+clip any instance takes.
+
+**Damage.** A member that moves changes pixels outside its own box: the neck,
+its neighbour's outline leaning towards it, and the merged shadow. So a
+container that merges publishes `Tree::set_merge_reach` — the furthest a merged
+shape reaches past what its children paint, five quarters of the distance plus
+the shadow's extent — and `mark_needs_paint` on a child of such a container
+damages the container's whole area as well: its box, grown by its paint reach
+and that merge reach. Coarse, and always enough, which is the bargain Chromium's
+damage tracker makes for damage under an ancestor's effect. A merge reach that
+shrinks damages the area it vacates before it goes, as a paint reach does.
+
+**Limits.** At most `MAX_MEMBERS` (16) members. A member with a gradient, and any
+child past the limit, keeps its own background and is reported once per
+container and reason in debug builds (`merge_member_left_out`). The neck takes no
+input: hit testing still asks each child's own box. The goldens are
+`merged_pills_at_three_gaps`, `merged_pills_apart_are_the_pills_alone`,
+`merged_borders_blend_along_the_neck` (and at 2x),
+`a_gradient_member_is_drawn_unmerged` and `a_merged_shape_casts_one_shadow`.
+
 ## GPU Rendering Pipeline
 
 ### Instanced Rendering
@@ -676,7 +767,7 @@ pub struct ShapeInstance {
     pub border_width: f32,
     pub shape_curvature: f32,     // superellipse K-value
     pub gradient_type: u32,       // 0=none, 1=horizontal, 2=vertical, 3/4=diagonal
-    pub shape_kind: u32,          // a rounded rect, or an arc and its cap; SHADOW_INSET above
+    pub shape_kind: u32,          // a rounded rect, an arc and its cap, or merged; flag bits above
 }
 ```
 
@@ -900,6 +991,7 @@ fn paint(&self, ctx: &mut PaintContext) {
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
 | `src/renderer/clip.rs` | ClipRef, ClipTree, CachedClip — the clips a frame places |
 | `src/renderer/gpu.rs` | ShapeInstance, GPU data structures |
+| `src/renderer/merge.rs` | MergeChildren, gathering a container's members, MergeRecord |
 | `src/renderer/render.rs` | Main Renderer, GPU pipeline |
 | `src/renderer/shader.wgsl` | WGSL shaders for SDF rendering |
 | `src/renderer/text.rs` | Text rendering via glyphon |
