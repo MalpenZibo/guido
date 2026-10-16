@@ -136,7 +136,7 @@ ctx.draw_circle(cx, cy, radius, color);
 
 // Text
 ctx.draw_text(text, rect, color, font_size);
-ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight, line_height, letter_spacing, fit);
+ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight, font_style, font_features, line_height, letter_spacing, fit);
 // `fit` is the width the text was measured in, and the cut; without one, the
 // text wraps at `rect`'s width.
 

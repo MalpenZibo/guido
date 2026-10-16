@@ -7,7 +7,7 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 
 use super::container::get_animated_value;
 use super::control::Control;
-use super::font::{FontFamily, FontWeight, LineHeight};
+use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{DEFAULT_FONT_SIZE, TextAnims, TextShadow, TextStroke, TextStyle};
 use super::widget::{Color, Event, EventResponse, Rect, Widget};
@@ -131,6 +131,8 @@ pub struct Text {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
+    cached_font_style: FontStyle,
+    cached_font_features: FontFeatures,
     cached_line_height: LineHeight,
     cached_letter_spacing: f32,
     cached_wrap: bool,
@@ -165,6 +167,8 @@ impl Text {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
+            cached_font_style: FontStyle::Normal,
+            cached_font_features: FontFeatures::new(),
             cached_line_height: LineHeight::Normal,
             cached_letter_spacing: 0.0,
             cached_wrap: true,
@@ -413,6 +417,8 @@ impl Widget for Text {
             None,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_font_style,
+            self.cached_font_features,
             self.cached_line_height,
             self.cached_letter_spacing,
             self.cached_fit,
@@ -473,6 +479,8 @@ impl Widget for Text {
                 None,
                 self.cached_font_family,
                 self.cached_font_weight,
+                self.cached_font_style,
+                self.cached_font_features,
                 self.cached_line_height,
                 self.cached_letter_spacing,
                 None,
@@ -557,6 +565,8 @@ impl Widget for Text {
                 self.cached_font_size,
                 self.cached_font_family,
                 self.cached_font_weight,
+                self.cached_font_style,
+                self.cached_font_features,
                 self.cached_line_height,
                 self.cached_letter_spacing,
                 align,
@@ -570,6 +580,8 @@ impl Widget for Text {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_font_style,
+            self.cached_font_features,
             self.cached_line_height,
             self.cached_letter_spacing,
             align,

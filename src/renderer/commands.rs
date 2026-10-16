@@ -3,7 +3,7 @@
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
 use crate::image_decode::DecodedImage;
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
 use crate::widgets::{Color, Rect, TextAlign};
@@ -258,6 +258,10 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight
         font_weight: FontWeight,
+        /// Upright, italic or oblique
+        font_style: FontStyle,
+        /// The OpenType features it is shaped with
+        font_features: FontFeatures,
         /// How tall each line is
         line_height: LineHeight,
         /// Extra advance after every glyph, in logical pixels
@@ -338,6 +342,10 @@ pub enum DrawCommand {
         font_family: FontFamily,
         /// The font weight.
         font_weight: FontWeight,
+        /// Upright, italic or oblique.
+        font_style: FontStyle,
+        /// The OpenType features it is shaped with.
+        font_features: FontFeatures,
         /// How tall each line is.
         line_height: LineHeight,
         /// Extra advance after every glyph, in logical pixels.

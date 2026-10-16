@@ -39,7 +39,7 @@ use rustc_hash::FxHashMap;
 use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 use crate::render_stats::{self, Pipeline};
-use crate::widgets::font::FontWeight;
+use crate::widgets::font::{FontFeatures, FontStyle, FontWeight};
 use crate::widgets::{FontFamily, LineHeight, TextAlign};
 
 /// Masks kept before the unused ones are dropped.
@@ -61,6 +61,8 @@ pub struct MaskSpec<'a> {
     pub font_size: f32,
     pub font_family: FontFamily,
     pub font_weight: FontWeight,
+    pub font_style: FontStyle,
+    pub font_features: FontFeatures,
     pub line_height: LineHeight,
     /// Extra advance after every glyph, in logical pixels.
     pub letter_spacing: f32,
@@ -100,6 +102,8 @@ struct MaskKey {
     text: String,
     font_size_bits: u32,
     weight: u16,
+    style: FontStyle,
+    features: FontFeatures,
     family: FontFamily,
     line_height: (u8, u32),
     letter_spacing_bits: u32,
@@ -290,6 +294,8 @@ impl TextMaskRenderer {
             text: spec.text.to_owned(),
             font_size_bits: font_size.to_bits(),
             weight: weight.0,
+            style: spec.font_style,
+            features: spec.font_features,
             family: spec.font_family,
             line_height: spec.line_height.key(),
             letter_spacing_bits: spec.letter_spacing.to_bits(),
@@ -323,6 +329,8 @@ impl TextMaskRenderer {
             font_size,
             spec.font_family,
             spec.font_weight,
+            spec.font_style,
+            spec.font_features,
             spec.line_height,
             spec.letter_spacing,
             spec.align,
@@ -413,6 +421,8 @@ mod the_glyph_atlas_holds_a_text_not_a_history {
                 font_size: entry.font_size,
                 font_family: entry.font_family,
                 font_weight: entry.font_weight,
+                font_style: entry.font_style,
+                font_features: entry.font_features,
                 line_height: entry.line_height,
                 letter_spacing: entry.letter_spacing,
                 fit: None,

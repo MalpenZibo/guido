@@ -10,7 +10,7 @@ use crate::image_decode::DecodedImage;
 use crate::pivot::Pivot;
 use crate::transform::Transform;
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
 use crate::widgets::{Color, Rect, TextAlign};
@@ -467,6 +467,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -485,6 +487,8 @@ impl<'a> PaintContext<'a> {
                 font_size,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 line_height,
                 letter_spacing,
                 align,
@@ -513,14 +517,16 @@ impl<'a> PaintContext<'a> {
             font_size,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             None,
         );
     }
 
-    /// Draw text with custom font family, weight, line height and letter
-    /// spacing, laid out as `fit` says.
+    /// Draw text with custom font family, weight, style, features, line
+    /// height and letter spacing, laid out as `fit` says.
     ///
     /// `fit` is the width the text was measured in and the cut, if any: every
     /// path shapes the text in that width, so it is drawn on the lines it was
@@ -536,6 +542,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         fit: Option<LineFit>,
@@ -550,6 +558,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             TextAlign::Start,
@@ -566,6 +576,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -578,6 +590,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             align,
@@ -600,6 +614,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -628,6 +644,8 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    font_style,
+                    font_features,
                     line_height,
                     letter_spacing,
                     align,
@@ -645,6 +663,8 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    font_style,
+                    font_features,
                     line_height,
                     letter_spacing,
                     align,
@@ -660,6 +680,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             align,

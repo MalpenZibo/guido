@@ -328,6 +328,15 @@ impl FontFeatures {
         table.ids.insert(leaked, id);
         Self(id)
     }
+
+    /// Convert to the list cosmic-text shapes with.
+    pub(crate) fn to_cosmic(self) -> cosmic_text::FontFeatures {
+        let mut features = cosmic_text::FontFeatures::new();
+        for (tag, value) in self.features() {
+            features.set(cosmic_text::FeatureTag::new(tag), *value);
+        }
+        features
+    }
 }
 
 /// Written as CSS writes them: `"tnum" 1, "liga" 0`.
@@ -478,6 +487,21 @@ mod tests {
             .expect("the worker interned a set");
         assert_eq!(elsewhere, before);
         assert_eq!(elsewhere.features(), [(*b"zero", 1)]);
+    }
+
+    /// The set reaches cosmic-text as the same tags and values.
+    #[test]
+    fn a_feature_set_is_handed_to_the_shaper_whole() {
+        let shaped = FontFeatures::new()
+            .enable(b"tnum")
+            .set(b"salt", 3)
+            .to_cosmic();
+        let pairs: Vec<_> = shaped
+            .features
+            .iter()
+            .map(|f| (*f.tag.as_bytes(), f.value))
+            .collect();
+        assert_eq!(pairs, [(*b"salt", 3), (*b"tnum", 1)]);
     }
 
     #[test]

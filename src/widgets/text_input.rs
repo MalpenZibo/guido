@@ -32,7 +32,7 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::control::Control;
-use super::font::{FontFamily, FontWeight, LineHeight};
+use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{DEFAULT_FONT_SIZE, TextStyle};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
@@ -427,6 +427,8 @@ pub struct TextInput<C = Plain> {
     cached_font_size: f32,
     cached_font_family: FontFamily,
     cached_font_weight: FontWeight,
+    cached_font_style: FontStyle,
+    cached_font_features: FontFeatures,
     cached_line_height: LineHeight,
     cached_letter_spacing: f32,
     /// The height of one line of this style, which is the field's height.
@@ -602,6 +604,8 @@ impl<C: Content> TextInput<C> {
             cached_font_size: DEFAULT_FONT_SIZE,
             cached_font_family: default_family,
             cached_font_weight: FontWeight::NORMAL,
+            cached_font_style: FontStyle::Normal,
+            cached_font_features: FontFeatures::new(),
             cached_line_height: LineHeight::Normal,
             cached_letter_spacing: 0.0,
             cached_line_box: 0.0,
@@ -837,6 +841,8 @@ impl<C: Content> TextInput<C> {
         let font_size = self.cached_font_size;
         let font_family = &self.cached_font_family;
         let font_weight = self.cached_font_weight;
+        let font_style = self.cached_font_style;
+        let font_features = self.cached_font_features;
         let letter_spacing = self.cached_letter_spacing;
 
         // Build cumulative position array (positions[i] = x of the boundary
@@ -849,6 +855,8 @@ impl<C: Content> TextInput<C> {
             font_size,
             *font_family,
             font_weight,
+            font_style,
+            font_features,
             letter_spacing,
         );
         self.cached_text_width = self
@@ -860,6 +868,8 @@ impl<C: Content> TextInput<C> {
             font_size,
             *font_family,
             font_weight,
+            font_style,
+            font_features,
             self.cached_line_height,
         );
 
@@ -1030,6 +1040,8 @@ impl<C: Content> TextInput<C> {
                 relative_x,
                 self.cached_font_family,
                 self.cached_font_weight,
+                self.cached_font_style,
+                self.cached_font_features,
                 self.cached_letter_spacing,
             );
         }
@@ -1792,6 +1804,8 @@ impl<C: Content> Widget for TextInput<C> {
             self.cached_font_size,
             self.cached_font_family,
             self.cached_font_weight,
+            self.cached_font_style,
+            self.cached_font_features,
             self.cached_line_height,
             self.cached_letter_spacing,
             crate::widgets::TextAlign::Start,
