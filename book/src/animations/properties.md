@@ -146,6 +146,41 @@ A size follows the content it holds as well as the length declared here, so the
 animation is over the resolved extent. These are the one pair that cannot carry
 a timeline: they declare a `Length`, which is not an animatable value in itself.
 
+## Position
+
+What layout moves — a row a reorder sends elsewhere, a panel a sibling pushes
+down — jumps there unless it asks to slide:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let rows = create_signal(vec![1u32, 2, 3]);
+
+container().layout(Flex::column()).children(keyed(
+    move || rows.get(),
+    |id| *id,
+    |id| {
+        container()
+            .animate_position(SpringConfig::SNAPPY)
+            .child(text(format!("Row {id}")))
+    },
+))
+# ;
+# }
+```
+
+The row is laid out in its new place at once, and drawn where it was, sliding
+over to it; nothing re-lays out while it does. It is measured inside its parent:
+scrolling slides nothing, and a parent that moves carries its children without
+sliding them. A move during a move starts from where the row is drawn, and a
+spring keeps its speed. The first layout places it without a slide — an
+entrance is `entering_from`'s.
+
+A size that changes is the width and height's own business, so something that
+moves *and* grows takes both: `.animate_position(..)` beside
+`.width(w.transition(..))`.
+
 ## Corners and Padding
 
 ```rust
@@ -304,6 +339,7 @@ container()
 | Scale | `scale(..)` | Spring or Duration |
 | Opacity | `opacity(..)` | Duration, EaseOut |
 | Width, height | `width(..)`, `height(..)` | Spring |
+| Position given by layout | `animate_position(..)` | Spring |
 | Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
 | Font size | `font_size(..)` on a `text` or `text_input` | Duration |
