@@ -584,32 +584,10 @@ impl<T: Animatable> AnimationState<T> {
         };
         let started = timeline.playing?;
 
-        // Measured in `f64` and handed on as `f32`. An endless sequence never
-        // ends, so its distance from its start grows for the life of the
-        // widget, and an `f32` count of milliseconds loses a whole 60Hz frame
-        // of resolution after about thirty-seven hours and a whole run of a
-        // short sequence within a few weeks — at which point it shows one value
-        // for frame after frame. A bar is the thing that runs for weeks.
-        //
-        // Whole runs behind it say nothing about where it is now, so they are
-        // taken off before the number is narrowed. Taken off here rather than
-        // by moving `playing` forward: the reduction is computed from the start
-        // on every frame anyway, so a stored one would be a second place for
-        // the same arithmetic to be wrong in.
-        //
-        // The guard on the length is not paranoia: an endless sequence has no
-        // total to be past, so a run of no length would be a division by zero
-        // every frame for the life of the widget. What such a sequence *shows*
-        // is unchanged either way, which is why nothing here asserts it.
+        // In `f64`: `Keyframes::value_since` says why.
         let since_start = now.duration_since(started).as_secs_f64() * 1000.0;
-        let duration = f64::from(timeline.keyframes.duration_ms());
-        let elapsed = if timeline.keyframes.total_ms().is_none() && duration > 0.0 {
-            (since_start % duration) as f32
-        } else {
-            since_start as f32
-        };
 
-        let Some(value) = timeline.keyframes.value_at(elapsed) else {
+        let Some(value) = timeline.keyframes.value_since(since_start) else {
             // Over. The property goes back to whatever declares it — by
             // *animating* there from where the sequence left it, not by
             // snapping to it. The declared transition was suspended for the
@@ -845,6 +823,36 @@ mod tests {
         assert!(
             *anim.current() < far,
             "back near the top of the run, got {} after {far}",
+            anim.current()
+        );
+    }
+
+    /// An endless sequence has its whole runs taken off before the time is
+    /// narrowed, and a delay is not one of them: counting runs from the play
+    /// rather than from the end of the wait put every run's first stretch
+    /// back in the wait.
+    #[test]
+    fn an_endless_delayed_sequence_waits_once() {
+        use crate::animation::{Keyframes, Repeat};
+
+        let mut anim = AnimationState::new(0.0_f32, Transition::new(0.0, TimingFunction::Linear));
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        anim = anim.with_timeline(
+            Keyframes::new(1000.0)
+                .at(0.0, 0.0)
+                .at(1.0, 100.0)
+                .delay(200.0)
+                .repeat(Repeat::Forever)
+                .played_by(never_played()),
+        );
+
+        anim.play(FrameInstant::from(Instant::now()));
+        play_at(&mut anim, 100);
+        assert_eq!(*anim.current(), 0.0, "waiting");
+        play_at(&mut anim, 1100);
+        assert!(
+            (*anim.current() - 90.0).abs() < 1e-3,
+            "900ms into the first run, got {}",
             anim.current()
         );
     }
