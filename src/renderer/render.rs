@@ -19,6 +19,7 @@ use super::flatten::{CommandLayer, FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
+use super::merge::MergeRecord;
 use super::path_pipeline::PathRenderer;
 use super::text::TextRenderState;
 use super::text_mask::{MaskSpec, TextMaskRenderer};
@@ -36,6 +37,9 @@ pub struct Renderer {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: RenderPipeline,
+    /// The same vertex stage with `fs_merged`, for merged shapes alone, so a
+    /// shape drawn alone runs exactly the fragment shader it always did.
+    merged_pipeline: RenderPipeline,
     #[allow(dead_code)] // Kept alive - bind groups hold reference to layout
     bind_group_layout: BindGroupLayout,
 
@@ -50,6 +54,12 @@ pub struct Renderer {
     // Instance buffer (resized as needed)
     instance_buffer: Buffer,
     instance_buffer_capacity: usize,
+
+    /// The frame's merged shapes, a record per member, bound beside the
+    /// instances that name them. Grown like the instance buffer.
+    merge_buffer: Buffer,
+    merge_buffer_capacity: usize,
+    merge_records: Vec<MergeRecord>,
 
     /// The frame's clip chains, bound at group 1 by every pipeline that cuts
     /// by a clip.
@@ -122,6 +132,19 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // The members of the frame's merged shapes. Sized, for the
+                // reason the clip records' binding is: a storage binding left
+                // unsized is checked at every draw, at an allocation a frame.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(size_of::<MergeRecord>() as u64),
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -131,6 +154,15 @@ impl Renderer {
         let pipeline = Self::create_pipeline(
             &device,
             &shader,
+            "fs_main",
+            &bind_group_layout,
+            clip_records.layout(),
+            format,
+        );
+        let merged_pipeline = Self::create_pipeline(
+            &device,
+            &shader,
+            "fs_merged",
             &bind_group_layout,
             clip_records.layout(),
             format,
@@ -167,11 +199,17 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        // A binding cannot be empty, and a frame that merges nothing — most
+        // of them — binds it all the same.
+        let initial_merges = super::merge::MAX_MEMBERS;
+        let merge_buffer = Self::merge_buffer(&device, initial_merges);
+
         let uniform_bind_group = Self::make_bind_group(
             &device,
             &bind_group_layout,
             &uniform_buffer,
             &instance_buffer,
+            &merge_buffer,
         );
 
         // Initialize text renderer
@@ -192,6 +230,7 @@ impl Renderer {
             device,
             queue,
             pipeline,
+            merged_pipeline,
             bind_group_layout,
             vertex_buffer,
             index_buffer,
@@ -199,6 +238,9 @@ impl Renderer {
             uniform_bind_group,
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
+            merge_buffer,
+            merge_buffer_capacity: initial_merges,
+            merge_records: Vec::new(),
             clip_records,
             text_state,
             text_quad_renderer,
@@ -217,10 +259,11 @@ impl Renderer {
         }
     }
 
-    /// Create the render pipeline.
+    /// Create a shape pipeline, drawing with the fragment entry point `fragment`.
     fn create_pipeline(
         device: &Device,
         shader: &ShaderModule,
+        fragment: &str,
         bind_group_layout: &BindGroupLayout,
         clip_records: &BindGroupLayout,
         format: wgpu::TextureFormat,
@@ -242,7 +285,7 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(fragment),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(super::gpu::STRAIGHT_ALPHA_BLEND),
@@ -277,16 +320,18 @@ impl Renderer {
         self.scale_factor = scale;
     }
 
-    /// The uniforms, and the instances the vertex stage indexes into.
+    /// The uniforms, the instances the vertex stage indexes into, and the
+    /// members of the merged shapes among them.
     ///
-    /// Rebuilt whenever the instance buffer is, because a bind group holds the
-    /// buffer it was made from — which a vertex buffer binding did not, since
-    /// that one was named at draw time.
+    /// Rebuilt whenever the instance or merge buffer is, because a bind group
+    /// holds the buffer it was made from — which a vertex buffer binding did
+    /// not, since that one was named at draw time.
     fn make_bind_group(
         device: &wgpu::Device,
         layout: &BindGroupLayout,
         uniforms: &Buffer,
         instances: &Buffer,
+        merges: &Buffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Renderer Bind Group"),
@@ -300,12 +345,26 @@ impl Renderer {
                     binding: 1,
                     resource: instances.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: merges.as_entire_binding(),
+                },
             ],
         })
     }
 
-    /// Ensure instance buffer has enough capacity.
-    fn ensure_instance_capacity(&mut self, count: usize) {
+    fn merge_buffer(device: &wgpu::Device, capacity: usize) -> Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Renderer Merge Records"),
+            size: (capacity * size_of::<MergeRecord>()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Ensure the instance and merge buffers have enough capacity.
+    fn ensure_instance_capacity(&mut self, count: usize, merges: usize) {
+        let mut grown = false;
         if count > self.instance_buffer_capacity {
             // Double capacity or use count, whichever is larger
             let new_capacity = (self.instance_buffer_capacity * 2).max(count);
@@ -316,11 +375,20 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             self.instance_buffer_capacity = new_capacity;
+            grown = true;
+        }
+        if merges > self.merge_buffer_capacity {
+            self.merge_buffer_capacity = (self.merge_buffer_capacity * 2).max(merges);
+            self.merge_buffer = Self::merge_buffer(&self.device, self.merge_buffer_capacity);
+            grown = true;
+        }
+        if grown {
             self.uniform_bind_group = Self::make_bind_group(
                 &self.device,
                 &self.bind_group_layout,
                 &self.uniform_buffer,
                 &self.instance_buffer,
+                &self.merge_buffer,
             );
         }
     }
@@ -444,12 +512,19 @@ impl Renderer {
 
         // Instances for every group live in one buffer; the groups address it
         // by range, which is what keeps their draws in order.
-        self.ensure_instance_capacity(self.shape_instance_buf.len());
+        self.ensure_instance_capacity(self.shape_instance_buf.len(), self.merge_records.len());
         if !self.shape_instance_buf.is_empty() {
             self.queue.write_buffer(
                 &self.instance_buffer,
                 0,
                 bytemuck::cast_slice(&self.shape_instance_buf),
+            );
+        }
+        if !self.merge_records.is_empty() {
+            self.queue.write_buffer(
+                &self.merge_buffer,
+                0,
+                bytemuck::cast_slice(&self.merge_records),
             );
         }
 
@@ -524,9 +599,7 @@ impl Renderer {
                 }
 
                 if !layer.shapes.is_empty() {
-                    self.bind_shape_pipeline(&mut render_pass);
-                    render_pass.draw_indexed(0..6, 0, layer.shapes.clone());
-                    render_stats::record_draw_calls(Pipeline::Shapes, 1);
+                    self.draw_shapes(&mut render_pass, layer);
                 }
 
                 if !layer.paths.is_empty() {
@@ -572,6 +645,36 @@ impl Renderer {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// A group's shapes, in order. Where a merged shape is among them, the
+    /// run of instances on either side of it is a draw of its own with the
+    /// other pipeline — which only a frame that merges pays for.
+    fn draw_shapes(&self, pass: &mut wgpu::RenderPass<'_>, layer: &PreparedLayer) {
+        if !layer.merges {
+            self.bind_shape_pipeline(pass);
+            pass.draw_indexed(0..6, 0, layer.shapes.clone());
+            render_stats::record_draw_calls(Pipeline::Shapes, 1);
+            return;
+        }
+        let instances = &self.shape_instance_buf;
+        let merged = |at: u32| {
+            super::gpu::kind_of(instances[at as usize].shape_kind) == super::gpu::SHAPE_MERGED
+        };
+        let mut start = layer.shapes.start;
+        while start < layer.shapes.end {
+            let kind = merged(start);
+            let end = (start..layer.shapes.end)
+                .find(|&at| merged(at) != kind)
+                .unwrap_or(layer.shapes.end);
+            self.bind_shape_pipeline(pass);
+            if kind {
+                pass.set_pipeline(&self.merged_pipeline);
+            }
+            pass.draw_indexed(0..6, 0, start..end);
+            render_stats::record_draw_calls(Pipeline::Shapes, 1);
+            start = end;
+        }
+    }
+
     fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>) {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -595,6 +698,7 @@ impl Renderer {
 
         self.shape_instance_buf.clear();
         self.path_renderer.begin_frame();
+        self.merge_records.clear();
         self.image_quads.clear();
         self.text_quads.clear();
         self.prepared_layers.clear();
@@ -612,12 +716,17 @@ impl Renderer {
 
         for layer in layers {
             let shapes_start = self.shape_instance_buf.len() as u32;
-            self.shape_instance_buf.extend(
-                commands[layer.shapes.clone()]
-                    .iter()
-                    .filter_map(|c| faded_instance(c, scale)),
-            );
+            let merges_start = self.merge_records.len();
+            for command in &commands[layer.shapes.clone()] {
+                push_instances(
+                    command,
+                    scale,
+                    &mut self.merge_records,
+                    &mut self.shape_instance_buf,
+                );
+            }
             let shapes = shapes_start..self.shape_instance_buf.len() as u32;
+            let merges = self.merge_records.len() > merges_start;
 
             let paths_start = self.path_renderer.index_count();
             for command in &commands[layer.paths.clone()] {
@@ -689,6 +798,7 @@ impl Renderer {
 
             self.prepared_layers.push(PreparedLayer {
                 shapes,
+                merges,
                 paths,
                 images,
                 text_slot,
@@ -710,6 +820,8 @@ impl Renderer {
 /// per-frame buffers.
 struct PreparedLayer {
     shapes: std::ops::Range<u32>,
+    /// Whether a merged shape is among them, which draws them in runs.
+    merges: bool,
     /// Indices into the path renderer's frame.
     paths: std::ops::Range<u32>,
     images: std::ops::Range<usize>,
@@ -923,10 +1035,91 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
     })
 }
 
+/// The instances a command draws, onto `out`: one for most, none for what
+/// is drawn elsewhere, and for a merged shape one per shadow, its members
+/// written into `merges`.
+fn push_instances(
+    cmd: &FlattenedCommand,
+    scale: f32,
+    merges: &mut Vec<MergeRecord>,
+    out: &mut Vec<ShapeInstance>,
+) {
+    if let DrawCommand::MergedShape { .. } = &*cmd.command {
+        merged_instances(cmd, scale, merges, out);
+    } else {
+        out.extend(faded_instance(cmd, scale));
+    }
+}
+
 /// A command's shape instance, at the opacity it was flattened under — faded
 /// here, once, so no arm below can forget to.
 fn faded_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstance> {
     command_to_instance(cmd, scale).map(|instance| instance.faded(cmd.opacity))
+}
+
+/// A merged shape: its members into `merges`, faded there, and onto `out` an
+/// instance naming the first — under it, one more for each shadow past the
+/// first, the last first, as a box draws a rect per further shadow.
+fn merged_instances(
+    cmd: &FlattenedCommand,
+    scale: f32,
+    merges: &mut Vec<MergeRecord>,
+    out: &mut Vec<ShapeInstance>,
+) {
+    let DrawCommand::MergedShape {
+        members,
+        distance,
+        border,
+        shadows,
+        bounds,
+    } = &*cmd.command
+    else {
+        return;
+    };
+    let first = merges.len();
+    merges.extend(members.iter().filter_map(|member| {
+        MergeRecord::new(
+            member,
+            &cmd.world_transform,
+            *border,
+            cmd.opacity,
+            *distance,
+            scale,
+        )
+    }));
+    if merges.len() == first {
+        return;
+    }
+    // Each to the one after it; the last keeps `NO_MERGE`.
+    let last = merges.len() - 1;
+    for (index, record) in merges[first..last].iter_mut().enumerate() {
+        record.next = (first + index + 1) as u32;
+    }
+    // Drawn in world space: the members carry their own placements, so the
+    // quad is the box around them and nothing transforms it.
+    let world = cmd.world_transform.map_rect(*bounds);
+    let mut instance = ShapeInstance::merged(
+        [
+            world.x * scale,
+            world.y * scale,
+            world.width * scale,
+            world.height * scale,
+        ],
+        first as u32,
+    );
+    if let Some(clip) = cmd.clip() {
+        instance = instance.with_clip(&clip, scale);
+    }
+    let shadows = shadows.as_slice();
+    for further in shadows.iter().skip(1).rev() {
+        let mut alone = instance.with_shadow(further, scale).faded(cmd.opacity);
+        alone.shape_kind |= super::gpu::MERGED_SHADOW_ONLY;
+        out.push(alone);
+    }
+    if let Some(shadow) = shadows.first() {
+        instance = instance.with_shadow(shadow, scale);
+    }
+    out.push(instance.faded(cmd.opacity));
 }
 
 /// Convert a single flattened command to a shape instance.
@@ -940,6 +1133,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             border,
             shadow,
             gradient,
+            ..
         } => {
             let mut instance = ShapeInstance::from_rect(
                 [
@@ -1017,6 +1211,9 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             }
             Some(instance)
         }
+        // Members in the merge records, and an instance per shadow — see
+        // `merged_instances`, which `push_instances` sends it to instead.
+        DrawCommand::MergedShape { .. } => None,
         // Triangles, drawn by the path renderer from a layer of their own.
         DrawCommand::Path { .. } => None,
         // Text commands are handled separately via command_to_text_entry
@@ -1375,6 +1572,7 @@ mod tests {
                 border: None,
                 shadow: None,
                 gradient: None,
+                background: false,
             }),
             world_transform: Transform::IDENTITY,
             layer: RenderLayer::Shapes,

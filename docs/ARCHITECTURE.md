@@ -476,6 +476,7 @@ register is of. Sweeping either in would make the register noise.
 | `REPORTS` | `src/reactive/diagnostics.rs` | Debug builds: the number of warnings, for the diagnostic's own tests |
 | `NON_FINITE` | `src/reactive/diagnostics.rs` | Debug builds: widgets already warned about a non-finite value, with a rate limit of their own |
 | `CLOCKS` | `src/reactive/diagnostics.rs` | Debug builds: call sites already warned about reading a clock outside its pass |
+| `MERGE_LEFT_OUT` | `src/reactive/diagnostics.rs` | Debug builds: containers already warned about a child `merge_children` drew on its own, per reason |
 | `STATS` | `src/render_stats.rs` | The `render-stats` feature only: counters bumped from every pass, compiled out otherwise |
 | `MODIFIERS` | `src/keyboard.rs` | `GlobalSignal`: the keyboard modifiers, read by any handler, which has no platform |
 | `OUTPUTS` | `src/outputs.rs` | `GlobalSignal`: the connected outputs, read by application code that decides which surfaces to spawn |

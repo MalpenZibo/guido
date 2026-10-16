@@ -12,6 +12,7 @@ use crate::widgets::Rect;
 use super::clip::CachedClip;
 use super::commands::DrawCommand;
 use super::flatten::FlattenedCommand;
+use super::merge::MergeChildren;
 
 /// Clip region for a render node (in local coordinates).
 ///
@@ -170,6 +171,11 @@ pub struct RenderNode {
     /// without affecting child content.
     pub overlay_clip: Option<ClipRegion>,
 
+    /// Set by a container that merges its children's backgrounds into one
+    /// shape — see [`MergeChildren`]. Boxed, because a node is made for every
+    /// widget painted and almost none of them merge.
+    pub merge: Option<Box<MergeChildren>>,
+
     /// Whether this node was freshly painted this frame (true) or reused
     /// from cache (false). The flattener uses this to decide whether to
     /// reuse cached flatten output. Cleared by `cache_paint_results` after
@@ -207,9 +213,20 @@ impl RenderNode {
             overlay_commands: SmallVec::new(),
             clip: None,
             overlay_clip: None,
+            merge: None,
             repainted: Cell::new(true),
             partial: false,
             cached_flatten: RefCell::new(None),
+        }
+    }
+
+    /// This node's own space to its parent's: its local transform, about its
+    /// pivot. What flatten composes onto the parent's world transform.
+    pub fn placement(&self) -> Transform {
+        if self.local_transform.is_identity() {
+            Transform::IDENTITY
+        } else {
+            self.local_transform.about(self.pivot, self.bounds)
         }
     }
 
@@ -232,6 +249,7 @@ impl RenderNode {
         self.overlay_commands.clear();
         self.clip = None;
         self.overlay_clip = None;
+        self.merge = None;
         self.repainted.set(true);
         self.partial = false;
         *self.cached_flatten.borrow_mut() = None;

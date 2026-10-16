@@ -398,6 +398,10 @@ const SHAPE_ARC_ROUND: u32 = 2u;
 const SHAPE_ARC_SQUARE: u32 = 3u;
 // Above the kinds, in the same word: the shadow is cast inside the shape.
 const SHADOW_INSET: u32 = 256u;
+// The members of a merged shape, drawn by `fs_merged` alone.
+const SHAPE_MERGED: u32 = 4u;
+// Above the kinds too: a merged shape drawn for one of its shadows alone.
+const MERGED_SHADOW_ONLY: u32 = 512u;
 
 // The distance to a stroked circular arc, centred in `rect`.
 //
@@ -524,7 +528,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var shadow_contribution = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (in.shadow_color.a > 0.0 && !inset) {
         let shadow_offset = in.shadow_params.xy;
-        let shadow_blur = in.shadow_params.z;
         let shadow_spread = in.shadow_params.w;
 
         // Compute shadow position (offset from shape)
@@ -532,47 +535,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Compute shadow SDF (expanded by spread)
         let shadow_dist = rounded_rect_sdf(shadow_pos, in.shape_rect, radii, curvature) - shadow_spread;
-
-        // Convert to alpha with blur falloff
-        let shadow_alpha = in.shadow_color.a * (1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist));
-        shadow_contribution = vec4<f32>(in.shadow_color.rgb, shadow_alpha);
+        shadow_contribution = cast_shadow(in, shadow_dist);
     }
 
     // === Main Shape ===
-    var shape_result: vec4<f32>;
-
-    if (border_width <= 0.0) {
-        // No border - simple filled shape
-        let alpha = 1.0 - smoothstep(-aa, aa, dist);
-        shape_result = vec4<f32>(fill_color.rgb, fill_color.a * alpha);
-    } else {
-        // With border
-        let outer_edge = dist;
-        let inner_edge = dist + border_width;
-
-        let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
-        let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
-        let border_alpha = max(shape_alpha - fill_alpha, 0.0);
-
-        if (fill_color.a <= 0.0) {
-            // Border only (transparent fill)
-            shape_result = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
-        } else {
-            // Fill + border composite
-            let fill_contribution = vec4<f32>(fill_color.rgb, fill_color.a * fill_alpha);
-            let border_contribution = vec4<f32>(in.border_color.rgb, in.border_color.a * border_alpha);
-
-            let result_rgb = border_contribution.rgb * border_contribution.a +
-                             fill_contribution.rgb * fill_contribution.a * (1.0 - border_contribution.a);
-            let result_a = border_contribution.a + fill_contribution.a * (1.0 - border_contribution.a);
-
-            if (result_a <= 0.0) {
-                shape_result = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            } else {
-                shape_result = vec4<f32>(result_rgb / result_a, result_a);
-            }
-        }
-    }
+    var shape_result = filled_and_bordered(dist, aa, fill_color, in.border_color, border_width);
 
     // === Inset shadow, over the fill ===
     // The outer shadow mirrored: the box inside the border — its edge
@@ -613,40 +580,210 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // === Composite shadow behind shape ===
-    var final_result: vec4<f32>;
-    if (shadow_contribution.a > 0.0) {
-        let final_rgb = shape_result.rgb * shape_result.a +
-                        shadow_contribution.rgb * shadow_contribution.a * (1.0 - shape_result.a);
-        let final_a = shape_result.a + shadow_contribution.a * (1.0 - shape_result.a);
-        final_result = vec4<f32>(final_rgb, final_a);
-    } else {
-        final_result = shape_result;
-    }
+    return clipped(in, over_shadow(shape_result, shadow_contribution));
+}
 
-    // === Apply clipping ===
+// The shadow at a fragment whose shadow distance is `shadow_dist`: the colour,
+// faded out with the blur.
+fn cast_shadow(in: VertexOutput, shadow_dist: f32) -> vec4<f32> {
+    let shadow_blur = in.shadow_params.z;
+    // Convert to alpha with blur falloff
+    let shadow_alpha = in.shadow_color.a * (1.0 - smoothstep(-shadow_blur, shadow_blur * 2.0, shadow_dist));
+    return vec4<f32>(in.shadow_color.rgb, shadow_alpha);
+}
+
+// A shape at distance `dist`, antialiased over `aa`: its fill, and its border
+// `border_width` deep inside the edge.
+fn filled_and_bordered(
+    dist: f32,
+    aa: f32,
+    fill_color: vec4<f32>,
+    border_color: vec4<f32>,
+    border_width: f32,
+) -> vec4<f32> {
+    if (border_width <= 0.0) {
+        // No border - simple filled shape
+        let alpha = 1.0 - smoothstep(-aa, aa, dist);
+        return vec4<f32>(fill_color.rgb, fill_color.a * alpha);
+    }
+    // With border
+    let outer_edge = dist;
+    let inner_edge = dist + border_width;
+
+    let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
+    let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
+    let border_alpha = max(shape_alpha - fill_alpha, 0.0);
+
+    if (fill_color.a <= 0.0) {
+        // Border only (transparent fill)
+        return vec4<f32>(border_color.rgb, border_color.a * border_alpha);
+    }
+    // Fill + border composite
+    let fill_contribution = vec4<f32>(fill_color.rgb, fill_color.a * fill_alpha);
+    let border_contribution = vec4<f32>(border_color.rgb, border_color.a * border_alpha);
+
+    let result_rgb = border_contribution.rgb * border_contribution.a +
+                     fill_contribution.rgb * fill_contribution.a * (1.0 - border_contribution.a);
+    let result_a = border_contribution.a + fill_contribution.a * (1.0 - border_contribution.a);
+
+    if (result_a <= 0.0) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(result_rgb / result_a, result_a);
+}
+
+// `shape` composited over its `shadow`.
+fn over_shadow(shape: vec4<f32>, shadow: vec4<f32>) -> vec4<f32> {
+    if (shadow.a <= 0.0) {
+        return shape;
+    }
+    let final_rgb = shape.rgb * shape.a + shadow.rgb * shadow.a * (1.0 - shape.a);
+    let final_a = shape.a + shadow.a * (1.0 - shape.a);
+    return vec4<f32>(final_rgb, final_a);
+}
+
+// `color` cut by the instance's clip and the chain it continues in.
+fn clipped(in: VertexOutput, color: vec4<f32>) -> vec4<f32> {
     // Check if clipping is enabled (negative width/height = no clip sentinel)
-    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
-        let clip_dist = rounded_rect_sdf(
-            in.clip_pos,
-            in.clip_rect,
-            in.clip_radii,
-            in.clip_curvature
+    if (in.clip_rect.z < 0.0 || in.clip_rect.w < 0.0) {
+        return color;
+    }
+    let clip_dist = rounded_rect_sdf(
+        in.clip_pos,
+        in.clip_rect,
+        in.clip_radii,
+        in.clip_curvature
+    );
+
+    var clip_alpha: f32;
+    if (in.clip_chain == NO_CHAIN) {
+        // Smooth clip edge (anti-aliased)
+        let clip_aa = fwidth(clip_dist);
+        clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
+    } else {
+        let d = chain_distance(in.clip_position.xy, pixel_distance(clip_dist), in.clip_chain);
+        clip_alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+    }
+    return vec4<f32>(color.rgb, color.a * clip_alpha);
+}
+
+// === Merged shapes ===
+//
+// A container that merges its children draws their backgrounds as one shape:
+// one record per member, written by `src/renderer/merge.rs` and chained by
+// `next` as a clip chain is. Each member is measured in its own space, as a
+// clip is, and brought to physical pixels so the members can be compared.
+//
+// They are folded with a polynomial smooth minimum, which leaves two distances
+// further apart than its reach exactly as `min` would — a member that moves
+// away splits off by itself — and gives back, beside the distance, how much of
+// the fragment belongs to each. The fill, the border's colour and its width
+// blend by that share, so the border runs along the merged outline and fades
+// along a neck towards a member without one.
+//
+// Its own entry point, drawn by a pipeline of its own over the merged
+// instances alone, so a shape drawn alone runs `fs_main` and nothing of this.
+// The vertex stage is `vs_main`, unchanged: a merged instance has no gradient,
+// so its `gradient_type` names its first member.
+
+// Mirrors `MergeRecord` in `src/renderer/merge.rs`, checked field for field by
+// the test beside it.
+struct MergeRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    // physical world pixels to the member's own space, row-major 2x3
+    inverse: array<f32, 6>,
+    curvature: f32,
+    // one unit of the member's own space, in physical pixels
+    to_pixels: f32,
+    // premultiplied
+    fill: vec4<f32>,
+    // premultiplied
+    border_color: vec4<f32>,
+    // physical pixels
+    border_width: f32,
+    // the smooth minimum's reach, physical pixels; 0 is a plain union
+    smoothing: f32,
+    next: u32,
+}
+
+@group(0) @binding(2) var<storage, read> merge_records: array<MergeRecord>;
+
+const NO_MERGE: u32 = 0xffffffffu;
+
+// No container merges more; a broken chain cannot hang the GPU either.
+const MAX_MERGED: u32 = 16u;
+
+struct Merged {
+    dist: f32,
+    fill: vec4<f32>,
+    border_color: vec4<f32>,
+    border_width: f32,
+}
+
+// The merged distance at `at`, in physical pixels, and what the members give
+// the fragment there — colours still premultiplied.
+fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
+    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0);
+    var i = first;
+    for (var n = 0u; n < MAX_MERGED && i != NO_MERGE; n = n + 1u) {
+        let r = merge_records[i];
+        let p = vec2<f32>(
+            r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
+            r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
         );
-
-        var clip_alpha: f32;
-        if (in.clip_chain == NO_CHAIN) {
-            // Smooth clip edge (anti-aliased)
-            let clip_aa = fwidth(clip_dist);
-            clip_alpha = 1.0 - smoothstep(-clip_aa, clip_aa, clip_dist);
-        } else {
-            let d = chain_distance(in.clip_position.xy, pixel_distance(clip_dist), in.clip_chain);
-            clip_alpha = 1.0 - smoothstep(-1.0, 1.0, d);
+        let d = rounded_rect_sdf(p, r.rect, r.radii, r.curvature) * r.to_pixels;
+        // The quadratic smooth minimum (Inigo Quilez, "smooth minimum"): `h`
+        // is how far inside each other's reach the two distances are, and
+        // `q` the share the further one keeps.
+        var h = 0.0;
+        if (r.smoothing > 0.0) {
+            h = max(r.smoothing - abs(m.dist - d), 0.0) / r.smoothing;
         }
+        let q = h * h * 0.5;
+        let share = select(1.0 - q, q, m.dist < d);
+        m.dist = min(m.dist, d) - q * r.smoothing * 0.5;
+        m.fill = mix(m.fill, r.fill, share);
+        m.border_color = mix(m.border_color, r.border_color, share);
+        m.border_width = mix(m.border_width, r.border_width, share);
+        i = r.next;
+    }
+    return m;
+}
 
-        // Apply clip to final result
-        final_result = vec4<f32>(final_result.rgb, final_result.a * clip_alpha);
+fn unpremultiplied(c: vec4<f32>) -> vec4<f32> {
+    if (c.a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(c.rgb / c.a, c.a);
+}
+
+@fragment
+fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
+    // A merged shape draws in world space, so `pos` is where the members are
+    // placed from.
+    let pos = in.frag_pos;
+    let first = in.kinds.x;
+    let merged = merged_shape(pos, first);
+    let aa = fwidth(merged.dist);
+
+    var shadow = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if (in.shadow_color.a > 0.0) {
+        let shadow_dist = merged_shape(pos - in.shadow_params.xy, first).dist - in.shadow_params.w;
+        shadow = cast_shadow(in, shadow_dist);
     }
 
-    return final_result;
+    // A further shadow is the merged shape drawn again beneath it for that
+    // shadow alone, as a box draws a rect per further shadow.
+    var shape = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    if ((in.kinds.y & MERGED_SHADOW_ONLY) == 0u) {
+        shape = filled_and_bordered(
+            merged.dist,
+            aa,
+            unpremultiplied(merged.fill),
+            unpremultiplied(merged.border_color),
+            merged.border_width,
+        );
+    }
+    return clipped(in, over_shadow(shape, shadow));
 }

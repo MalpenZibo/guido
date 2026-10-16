@@ -3,6 +3,7 @@
 use std::rc::Rc;
 
 use super::commands::{Border, CornerRadii, DrawCommand};
+use super::merge::MergeChildren;
 use super::path::{Fill, Path, Stroke};
 use super::text_measurer::LineFit;
 use super::tree::{ClipRegion, NodeId, RenderNode};
@@ -249,6 +250,30 @@ impl<'a> PaintContext<'a> {
         self.node.opacity = opacity.clamp(0.0, 1.0);
     }
 
+    /// Draw the backgrounds of this node's direct children as one shape.
+    ///
+    /// Flatten collects every background a child marked with
+    /// [`background`](Self::background) and draws them merged, at this node's
+    /// place in paint order — after what this node draws itself, before its
+    /// children's content.
+    pub fn merge_children(&mut self, merge: MergeChildren) {
+        self.node.merge = Some(Box::new(merge));
+    }
+
+    /// Mark the rounded rects `paint` draws as this node's background: the
+    /// box a parent that [merges its children](Self::merge_children) takes
+    /// into the merged shape.
+    pub fn background(&mut self, paint: impl FnOnce(&mut Self)) {
+        let from = self.node.commands.len();
+        paint(self);
+        for command in &mut self.node.commands[from..] {
+            // Just pushed, so nothing else holds it yet.
+            if let Some(DrawCommand::RoundedRect { background, .. }) = Rc::get_mut(command) {
+                *background = true;
+            }
+        }
+    }
+
     /// Set this node's transform origin.
     pub fn set_pivot(&mut self, origin: Pivot) {
         self.node.pivot = origin;
@@ -329,6 +354,7 @@ impl<'a> PaintContext<'a> {
             border: None,
             shadow: None,
             gradient: None,
+            background: false,
         }));
     }
 
@@ -348,6 +374,7 @@ impl<'a> PaintContext<'a> {
             border: None,
             shadow: None,
             gradient: None,
+            background: false,
         }));
     }
 
@@ -368,6 +395,7 @@ impl<'a> PaintContext<'a> {
             border: Some(Border::new(border_width, border_color)),
             shadow: None,
             gradient: None,
+            background: false,
         }));
     }
 
@@ -388,6 +416,7 @@ impl<'a> PaintContext<'a> {
             border: None,
             shadow: Some(shadow),
             gradient: None,
+            background: false,
         }));
     }
 
@@ -411,6 +440,7 @@ impl<'a> PaintContext<'a> {
             border,
             shadow,
             gradient,
+            background: false,
         }));
     }
 
@@ -893,6 +923,7 @@ impl<'a> PaintContext<'a> {
                 border: None,
                 shadow: None,
                 gradient: None,
+                background: false,
             }));
     }
 }

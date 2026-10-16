@@ -20,6 +20,7 @@ mod gpu;
 mod gpu_context;
 mod image_atlas;
 mod image_quad;
+mod merge;
 mod paint_context;
 mod path;
 mod path_mesh;
@@ -52,6 +53,7 @@ pub(crate) use gpu_context::GpuSlot;
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
+pub use merge::{MAX_MEMBERS, MergeChildren, MergeMember};
 pub use paint_context::PaintContext;
 pub use path::{Cap, Fill, FillRule, Join, Path, PathElement, Stroke};
 pub use render::Renderer;
