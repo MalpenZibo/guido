@@ -299,12 +299,17 @@ password_input(password)
 # }
 ```
 
-The input takes the keyboard at its first layout, and only if no widget already
-holds focus. That second condition is what makes it safe: an input appearing
-later never pulls focus off the one being typed into, two autofocusing inputs do
-not fight (the first laid out wins), and the same view built once per output — a
-lock screen with two monitors — ends up with one focused field rather than
-whichever was laid out last.
+The input takes the keyboard at its first layout, unless a widget on its own
+surface already holds focus. That condition is what makes it safe: an input
+appearing later never pulls focus off the one being typed into beside it, and two
+autofocusing inputs do not fight (the first laid out wins).
+
+When the focus is on *another* surface, the input waits for the keyboard. A popup
+opened from a focused field has its field focused once the keyboard reaches the
+popup, and the field below has the focus back when the popup closes. The same view
+built once per output — a lock screen with two monitors — ends up with the field
+on the monitor holding the keyboard focused, and one built for a monitor plugged
+in mid-lock takes nothing from the password being typed.
 
 The offer is made once. A relayout does not ask again, so a resize or a scale
 change cannot drag focus back from wherever the user has since put it.

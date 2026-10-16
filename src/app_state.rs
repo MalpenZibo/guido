@@ -90,8 +90,10 @@ pub(crate) struct AppState {
     pub(crate) pending_focus: RefCell<Option<WidgetRef>>,
     /// The widget each surface had focused when the focus went to another
     /// surface, by that surface's root, and whether Tab had put it there. Given
-    /// back when the keyboard returns to the surface (#726); an entry exists
-    /// only while the focus is somewhere else.
+    /// back when the keyboard returns to the surface (#726), as is an
+    /// `autofocus` field that appeared there while the focus was elsewhere and
+    /// waits for the keyboard (#731). An entry exists only while the focus is
+    /// somewhere else.
     pub(crate) kept_focus: RefCell<FxHashMap<WidgetId, (WidgetId, bool)>>,
     /// Pastes asked for, waiting for the loop to start their reads.
     pub(crate) paste_requests: DeferredQueue<(SelectionKind, PasteTarget)>,
