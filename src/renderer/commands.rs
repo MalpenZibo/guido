@@ -214,7 +214,11 @@ impl From<(f32, f32, f32, f32)> for CornerRadii {
 ///
 /// All coordinates and sizes are in the node's local coordinate space.
 /// World transforms are applied during tree flattening.
-#[derive(Debug, Clone)]
+///
+/// Comparable, because a layer's texture is kept for as long as what it was
+/// drawn from is the same: a container that repaints only to change its own
+/// opacity draws the same background again, as a new value.
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     /// Draw a rounded rectangle with optional gradient, border, shadow.
     RoundedRect {
