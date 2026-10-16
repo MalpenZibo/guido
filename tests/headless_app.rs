@@ -553,11 +553,7 @@ impl ClosingDialog {
 }
 
 fn enter_down() -> Event {
-    Event::KeyDown {
-        key: Key::Enter,
-        modifiers: Modifiers::default(),
-        repeat: false,
-    }
+    key_down(Key::Enter)
 }
 
 fn enter_up() -> Event {
@@ -950,6 +946,78 @@ fn a_click_outside_the_field_takes_the_keyboard_off_it() {
         !field.is_focused(),
         "and a click on the bar behind it gives it back"
     );
+}
+
+/// A focused field on a bar, built by `input` around its signal, with `typed`
+/// already in it — each key stepped on its own.
+fn a_focused_field_holding(
+    app: &mut Headless,
+    typed: &str,
+    input: impl Fn(RwSignal<String>) -> TextInput + 'static,
+) -> (SurfaceId, RwSignal<String>) {
+    let value = create_signal(String::new());
+    let surface = app.surface(fixed_bar(), move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .child(input(value).autofocus())
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+    for c in typed.chars() {
+        app.event_at(surface, key_down(Key::Char(c)), Instant::now());
+        app.step();
+    }
+    (surface, value)
+}
+
+fn key_down(key: Key) -> Event {
+    Event::KeyDown {
+        key,
+        modifiers: Modifiers::default(),
+        repeat: false,
+    }
+}
+
+/// Every key in one batch, and one step: the loop hands a surface all of
+/// them before it lays anything out.
+fn queue_keys(app: &mut Headless, surface: SurfaceId, keys: impl IntoIterator<Item = Key>) {
+    let now = Instant::now();
+    for key in keys {
+        app.event_at(surface, key_down(key), now);
+    }
+    app.step();
+}
+
+/// A key queued behind the Enter whose `on_submit` cleared the field edits the
+/// cleared field, not the text that was submitted (#725).
+#[test]
+fn a_key_queued_behind_a_submit_that_clears_the_field_edits_the_cleared_field() {
+    let Some(mut app) = headless() else { return };
+    let (surface, value) = a_focused_field_holding(&mut app, "hi", |value| {
+        text_input(value).on_submit(move |_| value.set(String::new()))
+    });
+    assert_eq!(value.get_untracked(), "hi");
+
+    queue_keys(&mut app, surface, [Key::Enter, Key::Char('x')]);
+    assert_eq!(value.get_untracked(), "x");
+}
+
+/// The same for `on_change`: a tag input that takes its word at a comma, given
+/// the whole word and the next letter in one batch, keeps only the letter.
+#[test]
+fn a_key_queued_behind_an_on_change_that_clears_the_field_edits_the_cleared_field() {
+    let Some(mut app) = headless() else { return };
+    let (surface, value) = a_focused_field_holding(&mut app, "", |value| {
+        text_input(value).on_change(move |text| {
+            if text.ends_with(',') {
+                value.set(String::new());
+            }
+        })
+    });
+
+    queue_keys(&mut app, surface, "foo,b".chars().map(Key::Char));
+    assert_eq!(value.get_untracked(), "b");
 }
 
 /// Another application's copy is not read when it is offered, only when the
