@@ -214,6 +214,9 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
                     n(s.offset.1),
                     n(s.blur)
                 );
+                if s.inset {
+                    line.push_str(" inset");
+                }
             }
             if let Some(g) = gradient {
                 let _ = write!(

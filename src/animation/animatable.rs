@@ -162,6 +162,8 @@ impl Animatable for Color {
 }
 
 impl Animatable for Shadow {
+    /// Every length and the colour, continuously. Inset or not is a step,
+    /// taken halfway, as CSS takes every value it cannot interpolate.
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         let f = |a: f32, b: f32| a + (b - a) * t;
         Self {
@@ -169,6 +171,7 @@ impl Animatable for Shadow {
             blur: f(from.blur, to.blur),
             spread: f(from.spread, to.spread),
             color: Color::lerp(&from.color, &to.color, t),
+            inset: if t < 0.5 { from.inset } else { to.inset },
         }
     }
 
@@ -188,10 +191,11 @@ impl Animatable for Shadow {
     /// Showing comes before size: a transparent shadow measures zero, which is
     /// above every shadow pulled inside its box, so by extent alone fading one
     /// of those out would read as growing.
+    ///
+    /// An inset shadow is measured the same way, inwards: one reaching deeper
+    /// into the box is the larger.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        let shows = |s: &Self| s.color.a > 0.0;
-        (shows(to), to.signed_extent(), to.color.a)
-            < (shows(from), from.signed_extent(), from.color.a)
+        to.size() < from.size()
     }
 
     fn channels(&self) -> Channels {
@@ -205,6 +209,15 @@ impl Animatable for Shadow {
             self.color.b,
             self.color.a,
         ])
+    }
+}
+
+impl Shadow {
+    /// What [`Animatable::is_reverse`] orders shadows by: whether it shows,
+    /// then how deep it is drawn, then how strongly.
+    fn size(&self) -> (bool, f32, f32) {
+        let shows = self.color.a > 0.0;
+        (shows, if shows { self.depth() } else { 0.0 }, self.color.a)
     }
 }
 

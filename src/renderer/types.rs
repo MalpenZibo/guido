@@ -32,6 +32,9 @@ pub struct Shadow {
     pub spread: f32,
     /// Shadow color
     pub color: Color,
+    /// Drawn inside the shape rather than outside it — see
+    /// [`inset`](Self::inset).
+    pub inset: bool,
 }
 
 impl Shadow {
@@ -47,7 +50,21 @@ impl Shadow {
             blur,
             spread,
             color,
+            ..Self::none()
         }
+    }
+
+    /// The same shadow, cast inside the shape instead of outside it, as CSS's
+    /// `inset` keyword casts one.
+    ///
+    /// It is drawn over the fill and inside the border, from the same distance
+    /// the outer shadow is: dark at the edge and fading inwards, moved by the
+    /// offset — so `(0.0, 4.0)` darkens the top edge, the way a control
+    /// pressed in looks — and with a positive spread pushing the edge further
+    /// in. A blur of zero and a spread is a hard ring inside the edge.
+    pub const fn inset(mut self) -> Self {
+        self.inset = true;
+        self
     }
 
     /// How far this shadow reaches past the box that casts it.
@@ -68,10 +85,19 @@ impl Shadow {
     /// across: every shadow pulled inside the box has an
     /// [`extent`](Self::extent) of zero, but one pulled in by 16 and one by 4
     /// are still a step apart.
+    ///
+    /// An inset shadow reaches nothing past its box, whatever its numbers.
     pub(crate) fn signed_extent(&self) -> f32 {
-        if self.color.a <= 0.0 {
+        if self.color.a <= 0.0 || self.inset {
             return 0.0;
         }
+        self.depth()
+    }
+
+    /// How far the shadow is drawn from the edge, on the side its offset
+    /// carries it furthest: out of the box for an outer shadow, into it for
+    /// an inset one.
+    pub(crate) fn depth(&self) -> f32 {
         self.spill() + self.offset.0.abs().max(self.offset.1.abs())
     }
 
@@ -109,7 +135,7 @@ impl Shadow {
             offset: (self.offset.0 * k, self.offset.1 * k),
             blur: self.blur * k,
             spread: self.spread * k,
-            color: self.color,
+            ..self
         }
     }
 
@@ -122,25 +148,15 @@ impl Shadow {
     /// `NaN` field, since every comparison against it is false. A reach below
     /// zero counts as zero, so the factor is never above one or below zero.
     pub fn shrunk_to(self, reach: f32) -> Self {
-        let reach = reach.clamp(0.0, f32::INFINITY);
-        let extent = self.extent();
-        match extent.partial_cmp(&reach) {
-            Some(std::cmp::Ordering::Greater) => self.scaled(reach / extent),
-            // Inside the reach, exactly at it, or not comparable at all — a
-            // `NaN` on either side lands here rather than scaling by a `NaN`
-            // factor, which would spread it into all four fields.
-            _ => self,
+        match shrink_factor(self.extent(), reach) {
+            Some(k) => self.scaled(k),
+            None => self,
         }
     }
 
     /// Create a shadow with no spread
     pub const fn simple(offset: (f32, f32), blur: f32, color: Color) -> Self {
-        Self {
-            offset,
-            blur,
-            spread: 0.0,
-            color,
-        }
+        Self::new(offset, blur, 0.0, color)
     }
 
     /// Create a default shadow (no shadow)
@@ -150,8 +166,21 @@ impl Shadow {
             blur: 0.0,
             spread: 0.0,
             color: Color::TRANSPARENT,
+            inset: false,
         }
     }
+}
+
+/// What a shadow reaching `extent` past its box is scaled by to reach no
+/// further than `reach`, or `None` where it already fits.
+///
+/// A reach below zero counts as zero, so the factor is never above one or below
+/// zero. Inside the reach, exactly at it, or not comparable at all is `None` —
+/// a `NaN` on either side lands there rather than scaling by a `NaN` factor,
+/// which would spread it into every field.
+fn shrink_factor(extent: f32, reach: f32) -> Option<f32> {
+    let reach = reach.clamp(0.0, f32::INFINITY);
+    (extent > reach).then(|| reach / extent)
 }
 
 /// A text entry for rendering, containing all information needed to render text.

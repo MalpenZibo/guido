@@ -204,6 +204,10 @@ pub struct ShapeInstance {
     /// the three caps — [`ShapeInstance::arc`] says how an arc reads the
     /// fields above. It was the padding that rounded the struct out to its
     /// 16-byte alignment, so a second kind of shape costs no instance any room.
+    ///
+    /// Its low byte is the kind. Above it sits [`SHADOW_INSET`], set where the
+    /// shadow is cast inside the shape: no padding was left for a field of its
+    /// own, and no inter-stage location for one either.
     pub shape_kind: u32,
 }
 
@@ -213,6 +217,10 @@ pub struct ShapeInstance {
 pub fn arc_reach(radius: f32, half_width: f32) -> f32 {
     ((radius + half_width).powi(2) + half_width.powi(2)).sqrt() + 1.0
 }
+
+/// Set in [`ShapeInstance::shape_kind`] where the shadow is drawn inside the
+/// shape rather than outside it — clear of the low byte the kinds take.
+pub const SHADOW_INSET: u32 = 1 << 8;
 
 /// The rounded rect, which every instance but an arc is.
 pub const SHAPE_ROUNDED_RECT: u32 = 0;
@@ -379,6 +387,10 @@ impl ShapeInstance {
             scaled.color.b,
             scaled.color.a,
         ];
+        self.shape_kind &= !SHADOW_INSET;
+        if shadow.inset {
+            self.shape_kind |= SHADOW_INSET;
+        }
         self
     }
 
@@ -454,6 +466,16 @@ mod tests {
             i.shadow_color,
             [1.0, 0.0, 0.0, 0.5],
             "the colour is not a length"
+        );
+        assert_eq!(
+            i.shape_kind, SHAPE_ROUNDED_RECT,
+            "cast outside, as declared"
+        );
+        let inset = ShapeInstance::default().with_shadow(&shadow.inset(), 2.0);
+        assert_eq!(
+            inset.shape_kind,
+            SHAPE_ROUNDED_RECT | SHADOW_INSET,
+            "and inside, where it says so, still a rounded rect"
         );
     }
 
@@ -591,6 +613,7 @@ mod tests {
             ("SHAPE_ARC_BUTT", SHAPE_ARC_BUTT),
             ("SHAPE_ARC_ROUND", SHAPE_ARC_ROUND),
             ("SHAPE_ARC_SQUARE", SHAPE_ARC_SQUARE),
+            ("SHADOW_INSET", SHADOW_INSET),
         ] {
             assert!(
                 shader.contains(&format!("const {name}: u32 = {value}u;")),
