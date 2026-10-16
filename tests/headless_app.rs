@@ -3011,6 +3011,11 @@ fn a_widget_ref_rect_follows_the_scroll_its_widget_is_drawn_under() {
     let mut seen = Vec::new();
     for frame in 0..30 {
         let y = row.rect().get_untracked().y;
+        assert_eq!(
+            row.layout_rect().get_untracked().y,
+            y,
+            "frame {frame}: the layout box moves with the scroll too"
+        );
         let drawn = 500.0 - scrolled(&app, surface);
         assert!(
             (y - drawn).abs() <= 1.0,
@@ -3098,6 +3103,141 @@ fn a_widget_ref_rect_is_the_box_its_own_scale_draws() {
         card.rect().get_untracked(),
         Rect::new(-20.0, 0.0, 120.0, 40.0)
     );
+}
+
+/// A 60 by 20 card, translated 30 across inside a parent scaled twice, at
+/// the padding's corner — or the same card with neither transform.
+fn a_translated_card_in_a_scaled_parent(card: WidgetRef, transformed: bool) -> Container {
+    let (scale, across) = if transformed { (2.0, 30.0) } else { (1.0, 0.0) };
+    container().padding(10.0).child(
+        container().scale(scale).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .translate(Translate::new(across, 0.0))
+                .widget_ref(card),
+        ),
+    )
+}
+
+/// `layout_rect()` is `rect()` with every transform taken out: the card's
+/// own translate and its parent's scale both move `rect()`, and neither moves
+/// `layout_rect()`, which is where the same card is drawn with no transform
+/// at all.
+#[test]
+fn a_widget_ref_layout_rect_is_its_rect_with_the_transforms_taken_out() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let plain = create_widget_ref();
+    let one = app.surface(fixed_bar(), move || {
+        a_translated_card_in_a_scaled_parent(card, true)
+    });
+    let two = app.surface(fixed_bar(), move || {
+        a_translated_card_in_a_scaled_parent(plain, false)
+    });
+    app.configure(one, 200, 50, 1.0);
+    app.configure(two, 200, 50, 1.0);
+    app.step();
+
+    let untransformed = plain.rect().get_untracked();
+    assert_eq!(untransformed, Rect::new(10.0, 10.0, 60.0, 20.0));
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(40.0, 0.0, 120.0, 40.0),
+        "drawn translated, then doubled about the parent's centre"
+    );
+    assert_eq!(card.layout_rect().get_untracked(), untransformed);
+}
+
+/// How many times `signal` is written, counted by an effect that reads it —
+/// its first run included.
+fn writes_of(signal: Signal<Rect>) -> Rc<Cell<usize>> {
+    let writes = Rc::new(Cell::new(0));
+    let counted = writes.clone();
+    create_effect(move || {
+        signal.get();
+        counted.set(counted.get() + 1);
+    });
+    writes
+}
+
+/// A translate animating across frames moves `rect()` on each of them and
+/// never writes `layout_rect()`: nothing about the layout moved.
+#[test]
+fn an_animating_translate_never_writes_a_widget_ref_layout_rect() {
+    let Some(mut app) = headless() else { return };
+    let moved = create_signal(false);
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding(10.0).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .translate(
+                    (move || {
+                        if moved.get() {
+                            Translate::new(40.0, 0.0)
+                        } else {
+                            Translate::NONE
+                        }
+                    })
+                    .transition(160.0),
+                )
+                .widget_ref(card),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let writes = writes_of(card.layout_rect());
+    let mut at = Instant::now();
+    app.step_at(at);
+    let laid_out = card.layout_rect().get_untracked();
+    assert_eq!(laid_out, Rect::new(10.0, 10.0, 60.0, 20.0));
+    let before = writes.get();
+
+    moved.set(true);
+    // The frame that starts the transition draws it at its start.
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    let mut xs = vec![card.rect().get_untracked().x];
+    for _ in 0..8 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        xs.push(card.rect().get_untracked().x);
+    }
+    assert!(
+        xs.windows(2).all(|pair| pair[1] > pair[0]),
+        "rect() moved on every frame of the translate: {xs:?}"
+    );
+    assert_eq!(writes.get(), before, "and layout_rect() was never written");
+    assert_eq!(card.layout_rect().get_untracked(), laid_out);
+}
+
+/// A layout change that moves the widget writes `layout_rect()` once, on the
+/// frame that laid it out, and the frames after it write nothing.
+#[test]
+fn a_layout_move_writes_a_widget_ref_layout_rect_once() {
+    let Some(mut app) = headless() else { return };
+    let wide = create_signal(false);
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container()
+            .padding(move || if wide.get() { 10.0 } else { 5.0 })
+            .child(container().width(60.0).height(20.0).widget_ref(card))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let writes = writes_of(card.layout_rect());
+    app.step();
+    let before = writes.get();
+
+    wide.set(true);
+    for _ in 0..3 {
+        app.step();
+    }
+    assert_eq!(
+        card.layout_rect().get_untracked(),
+        Rect::new(10.0, 10.0, 60.0, 20.0)
+    );
+    assert_eq!(writes.get(), before + 1, "written once, for the one move");
 }
 
 /// A layout root is restarted under its own constraints, not the surface's.

@@ -8015,3 +8015,44 @@ fn a_widgets_drawn_bounds_are_where_paint_and_flatten_put_it() {
         );
     }
 }
+
+/// Where layout put a widget moves with the scroll on both axes, and with
+/// no transform: the translate and the scale on the way down leave it where
+/// the origins and the scroll offsets alone put it.
+#[test]
+fn a_widgets_laid_out_box_moves_with_scroll_on_both_axes_and_no_transform() {
+    let mut h = H::new(
+        container().translate((15.0, 5.0)).padding(10.0).child(
+            container()
+                .width(200.0)
+                .height(150.0)
+                .scroll(Scroll::both().visibility(ScrollbarVisibility::Hidden))
+                .child(
+                    container()
+                        .layout(Flex::column())
+                        .child(box_of(300.0, 100.0))
+                        .child(box_of(40.0, 20.0).scale(1.5))
+                        .child(box_of(80.0, 400.0)),
+                ),
+        ),
+    );
+    h.frame(300.0, 300.0);
+    let column = h.tree.get_children(h.children()[0])[0];
+    let scaled = h.tree.get_children(column)[1];
+    let laid_out = |h: &H| h.tree.surface_relative_boxes(scaled).expect("laid out").1;
+    assert_eq!(laid_out(&h), Rect::new(10.0, 110.0, 40.0, 20.0));
+
+    h.send(Event::scroll(
+        60.0,
+        60.0,
+        30.0,
+        50.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+    h.frame(300.0, 300.0);
+    assert_eq!(
+        laid_out(&h),
+        Rect::new(-20.0, 60.0, 40.0, 20.0),
+        "the wheel scrolled the content 30 sideways and 50 down"
+    );
+}
