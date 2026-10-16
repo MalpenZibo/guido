@@ -1,8 +1,12 @@
 //! `.autofocus()`: an input that takes the keyboard when it first appears.
 //!
 //! The rule has two halves, and each has a test here because each is what makes
-//! the other safe: the offer is made *once*, at the first layout, and only when
-//! no widget already holds focus.
+//! the other safe: the offer is made *once*, at the first layout, and it takes
+//! the focus from a widget that holds it only once the keyboard is on the
+//! field's own surface. Each input here is its own root, and no compositor has
+//! put the keyboard anywhere, so a second one waits instead of taking it; the
+//! popup and lock cases where the keyboard does arrive are in
+//! `tests/headless_app.rs`.
 
 use guido::layout::Constraints;
 use guido::prelude::*;
