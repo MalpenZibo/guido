@@ -569,6 +569,11 @@ pub struct Tree {
     /// layout moves it. A map rather than a slot field, because every widget
     /// pays for a slot and almost none of them slide.
     positions: rustc_hash::FxHashMap<WidgetId, PositionMotion>,
+    /// How far past what it and its children paint each container that
+    /// merges its children's shapes reaches with the merged shape — see
+    /// [`Tree::set_merge_reach`]. A map rather than a slot field, for the
+    /// reason `positions` is one.
+    merge_reaches: rustc_hash::FxHashMap<WidgetId, f32>,
     /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
     /// surface without it keeps its focus, and a field holding that focus
     /// draws no caret until the keyboard is back (#726).
@@ -610,6 +615,7 @@ impl Tree {
             key_heard_by: None,
             tab_stops: rustc_hash::FxHashMap::default(),
             positions: rustc_hash::FxHashMap::default(),
+            merge_reaches: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
             keyboard: KeyboardAt::Unknown,
@@ -842,6 +848,7 @@ impl Tree {
         self.tab_stops.remove(&id);
         self.declared_visible.remove(&id);
         self.positions.remove(&id);
+        self.merge_reaches.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1210,6 +1217,34 @@ impl Tree {
             return;
         }
         self.gather_reach_upward(id, before, after > before);
+    }
+
+    /// Say that this widget merges its children's shapes into one, reaching
+    /// `reach` past what it and its children paint — or, with `None`, that it
+    /// does not.
+    ///
+    /// A member that moves changes pixels outside its own box: the neck, its
+    /// neighbour's outline leaning towards it, the merged shadow. So marking
+    /// a member damages this widget's whole area too — coarse, and always
+    /// enough, as Chromium's damage tracker grows damage under an ancestor's
+    /// effect to the effect's area. A reach that changes damages the wider of
+    /// the two areas before it is written, so a shrinking one vacates.
+    pub fn set_merge_reach(&mut self, id: WidgetId, reach: Option<f32>) {
+        if self.get_dense_index(id).is_none() {
+            return;
+        }
+        let was = self.merge_reaches.get(&id).copied();
+        if was == reach {
+            return;
+        }
+        let wider = was.unwrap_or(0.0).max(reach.unwrap_or(0.0));
+        if let Some((root, laid_out)) = self.surface_relative_layout_and_root(id) {
+            self.expand_damage_rect(root, laid_out.outset(self.paint_overflow(id) + wider));
+        }
+        match reach {
+            Some(reach) => self.merge_reaches.insert(id, reach),
+            None => self.merge_reaches.remove(&id),
+        };
     }
 
     /// Carry a change in a child's reach into the ancestors it affects.
@@ -2117,6 +2152,17 @@ impl Tree {
         let Some(idx) = self.get_dense_index(widget_id) else {
             return;
         };
+
+        // A member of a container that merges its children's shapes moves the
+        // merged shape with it, out past its own box: the container's whole
+        // area is damaged too. See `set_merge_reach`.
+        if !self.merge_reaches.is_empty()
+            && let Some(parent) = self.dense[idx].parent
+            && self.merge_reaches.contains_key(&parent)
+            && let Some((root, area)) = self.surface_relative_damage_and_root(parent)
+        {
+            self.expand_damage_rect(root, area);
+        }
         self.dense[idx].needs_paint = true;
 
         // From the *parent*, never from the widget itself. A widget the frame
@@ -2309,11 +2355,13 @@ impl Tree {
 
     /// The same, widened by whatever the widget paints outside itself, so a
     /// shadow is re-composited along with the thing that cast it — and so is a
-    /// widget its own transform has carried off its laid-out box. What damage
+    /// widget its own transform has carried off its laid-out box, and the
+    /// shape a container merging its children draws past them. What damage
     /// is measured from, and not what the widget's bounds are.
     fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let (root, laid_out) = self.surface_relative_layout_and_root(id)?;
-        Some((root, laid_out.outset(self.paint_overflow(id))))
+        let merged = self.merge_reaches.get(&id).copied().unwrap_or(0.0);
+        Some((root, laid_out.outset(self.paint_overflow(id) + merged)))
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
@@ -3292,6 +3340,59 @@ mod tests {
         assert!(
             rect.width >= 40.0 + 16.0 && rect.height >= 20.0 + 16.0,
             "and past its far edges, got {rect:?}"
+        );
+    }
+
+    /// A member of a container that merges its children's shapes changes
+    /// pixels outside its own box when it moves — the neck between it and its
+    /// neighbour, the neighbour's outline leaning towards it, and the merged
+    /// shadow — so marking it damages the merging container's whole area: its
+    /// box, grown by what it and its children paint past it and by how far
+    /// the merged shape reaches past that (#752).
+    #[test]
+    fn a_member_of_a_merging_container_damages_the_container_s_area() {
+        let (mut tree, root, a, b) = two_children_tree();
+        // `b` slid 30 past its box, as a translate carries it.
+        tree.set_own_paint_reach(b, 30.0);
+        tree.set_merge_reach(root, Some(32.0));
+        let _ = tree.take_damage(root);
+
+        tree.mark_needs_paint(b);
+
+        let rect = partial_damage(&mut tree, root);
+        let area = Rect::new(0.0, 0.0, 100.0, 100.0).outset(30.0 + 32.0);
+        assert!(
+            rect.x <= area.x
+                && rect.y <= area.y
+                && rect.x + rect.width >= area.x + area.width
+                && rect.y + rect.height >= area.y + area.height,
+            "the damage {rect:?} does not cover the merging container's area {area:?}, \
+             so the neck and the merged shadow outside the member's own box are left \
+             as they were"
+        );
+
+        // A container that does not merge keeps the old, tight rule.
+        tree.set_merge_reach(root, None);
+        let _ = tree.take_damage(root);
+        tree.mark_needs_paint(a);
+        let rect = partial_damage(&mut tree, root);
+        assert_eq!(rect, Rect::new(0.0, 0.0, 40.0, 20.0));
+    }
+
+    /// A merge reach that shrinks damages the area it is vacating, before it
+    /// goes: nothing else would name the shadow it drew a frame ago.
+    #[test]
+    fn a_merge_reach_that_shrinks_damages_what_it_vacates() {
+        let (mut tree, root, _a, _b) = two_children_tree();
+        tree.set_merge_reach(root, Some(40.0));
+        let _ = tree.take_damage(root);
+
+        tree.set_merge_reach(root, Some(10.0));
+
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.x <= -40.0 && rect.width >= 100.0 + 80.0,
+            "the vacated ring is not damaged: {rect:?}"
         );
     }
 

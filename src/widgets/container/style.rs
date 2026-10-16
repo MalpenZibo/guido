@@ -596,6 +596,7 @@ impl Container {
 }
 
 /// The container's own surface, resolved for one frame.
+#[derive(Clone, Copy)]
 pub(super) struct Decoration {
     pub background: Color,
     pub gradient: Option<LinearGradient>,
@@ -606,7 +607,52 @@ pub(super) struct Decoration {
     pub border_color: Color,
 }
 
+impl Decoration {
+    /// The shadows and the border a merged shape takes from the container
+    /// that merges, by the gates `paint_decoration` puts them through: every
+    /// outer shadow that shows, and the border. Its inset shadows stay on its
+    /// own box.
+    pub(super) fn for_merged_shape(&self) -> (Shadows, Option<crate::renderer::Border>) {
+        let mut outer = Shadows::none();
+        for shadow in self.shadow.as_slice() {
+            if !shadow.inset && shadow.color.a > SHADOW_ALPHA_FLOOR {
+                outer.push(*shadow);
+            }
+        }
+        (
+            outer,
+            border_shows(self.border_width, self.border_color)
+                .then(|| crate::renderer::Border::new(self.border_width, self.border_color)),
+        )
+    }
+
+    /// This decoration without the outer shadows and the border a merged
+    /// shape took.
+    pub(super) fn without_its_own_edge(&self) -> Self {
+        let mut inset = Shadows::none();
+        for shadow in self.shadow.as_slice().iter().filter(|s| s.inset) {
+            inset.push(*shadow);
+        }
+        Self {
+            shadow: inset,
+            border_width: 0.0,
+            ..*self
+        }
+    }
+}
+
 impl Container {
+    /// What `merge_children` resolves to, if it was declared: a distance no
+    /// smaller than zero.
+    pub(super) fn merge_distance(&self, id: WidgetId) -> Option<f32> {
+        let distance = self.merge_children_prop().get()?;
+        if !distance.is_finite() {
+            crate::reactive::diagnostics::non_finite_value(id, "merge_children");
+            return Some(0.0);
+        }
+        Some(distance.max(0.0))
+    }
+
     /// Draw the container's own surface: background or gradient, its shadow,
     /// and the border frame. Children are painted separately, after this.
     ///

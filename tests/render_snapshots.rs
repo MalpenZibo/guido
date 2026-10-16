@@ -1092,3 +1092,35 @@ fn children_that_do_not_fit_share_the_overflow() {
 
     assert_snapshot("children_that_do_not_fit", render(view, 400.0, 200.0));
 }
+
+/// A container merging its children's backgrounds: the merged command appears
+/// once, at the container's place in paint order — after its own background,
+/// before what its children hold — and the backgrounds it stands in for are
+/// not drawn on their own as well.
+#[test]
+fn merged_children_are_drawn_once_where_their_container_is() {
+    let island = container()
+        .width(120.0)
+        .height(36.0)
+        .corners(18.0)
+        .background(Color::BLACK)
+        .border(1.0, Color::WHITE)
+        .padding(10.0)
+        .child(swatch(16.0, 16.0, Color::GREEN));
+    let bubble = swatch(36.0, 36.0, Color::BLACK)
+        .corners(18.0)
+        .translate((6.0, 0.0));
+    let view = container().padding(8.0).child(
+        container()
+            .layout(Flex::row())
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.1))
+            .merge_children(14.0)
+            .child(island)
+            .child(bubble),
+    );
+
+    assert_snapshot(
+        "merged_children_are_drawn_once_where_their_container_is",
+        render_flattened(view, 240.0, 60.0),
+    );
+}

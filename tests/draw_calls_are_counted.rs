@@ -546,3 +546,40 @@ fn transformed_text_drawn_again_allocates_no_buffer() {
         assert_eq!(stats.quad_allocations.buffers, 0);
     }
 }
+
+/// A merged shape is drawn by a pipeline of its own, so the shapes before it
+/// and after it in its group are a draw each, and it is one between them. A
+/// frame that merges nothing draws its shapes in one call, as it always did —
+/// which `a_group_s_paths_are_one_call_whatever_lies_between_them` holds.
+#[test]
+fn a_merged_shape_is_a_draw_between_the_shapes_around_it() {
+    let row = || {
+        container()
+            .layout(Flex::row().spacing(8.0))
+            .background(Color::rgb(0.1, 0.1, 0.1))
+            .child(
+                container()
+                    .layout(Flex::row())
+                    .merge_children(8.0)
+                    .child(container().width(16.0).height(16.0).background(Color::RED))
+                    .child(container().width(16.0).height(16.0).background(Color::RED))
+                    // What a member holds is drawn after the merged shape.
+                    .child(
+                        container()
+                            .padding(2.0)
+                            .child(container().width(8.0).height(8.0).background(Color::BLUE)),
+                    ),
+            )
+    };
+    let Some(stats) = first_frame(row) else {
+        return;
+    };
+    assert_eq!(
+        stats.draw_calls,
+        DrawCalls {
+            shapes: 3,
+            ..DrawCalls::default()
+        },
+        "the background, the merged shape and the box after it: three runs"
+    );
+}

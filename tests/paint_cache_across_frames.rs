@@ -33,8 +33,8 @@ mod common;
 use common::Harness;
 use guido::prelude::*;
 use guido::renderer::{
-    CommandLayer, CornerRadii, DrawCommand, FlattenScratch, FlattenedCommand, NodeId, RenderNode,
-    ScratchCapacity, flatten_root_into,
+    CommandLayer, CornerRadii, DrawCommand, FlattenScratch, FlattenedCommand, MergeMember, NodeId,
+    RenderNode, ScratchCapacity, flatten_root_into,
 };
 use guido::shape::PlacedShape;
 use guido::tree::WidgetId;
@@ -1326,5 +1326,157 @@ fn a_frame_flattens_into_the_buffers_the_last_one_left() {
         wide,
         "the narrow frame left the scratch its own size, so the buffers the \
          wide frames filled were given back and built again"
+    );
+}
+
+// The merged shape a container builds from its children's backgrounds is made
+// in flatten, out of commands that may each have come out of a cache — so it
+// has to be rebuilt when a member moves, and carried along when the whole
+// group does.
+/// The members' fills, which is how their backgrounds are picked out.
+const MEMBER_FILL: Color = Color::rgb(0.3, 0.6, 0.9);
+const BUBBLE_FILL: Color = Color::rgb(0.9, 0.6, 0.3);
+const MEMBER_WIDTH: f32 = 60.0;
+const BUBBLE: f32 = 30.0;
+
+/// A container merging a fixed member and a bubble the caller can slide.
+fn merge_group(slide: RwSignal<f32>) -> Container {
+    container()
+        .layout(Flex::row())
+        .merge_children(12.0)
+        .child(
+            container()
+                .width(MEMBER_WIDTH)
+                .height(BUBBLE)
+                .background(MEMBER_FILL),
+        )
+        .child(
+            container()
+                .width(BUBBLE)
+                .height(BUBBLE)
+                .corners(BUBBLE / 2.0)
+                .background(BUBBLE_FILL)
+                .translate(move || (slide.get(), 0.0)),
+        )
+}
+
+impl Surface {
+    /// The frame's one merged shape and its members.
+    fn merged(&self) -> (&FlattenedCommand, &[MergeMember]) {
+        let mut found = self
+            .commands
+            .iter()
+            .filter(|cmd| matches!(&*cmd.command, DrawCommand::MergedShape { .. }));
+        let cmd = found.next().expect("the group drew a merged shape");
+        assert!(found.next().is_none(), "and only one");
+        let DrawCommand::MergedShape { members, .. } = &*cmd.command else {
+            unreachable!("filtered on this variant")
+        };
+        (cmd, members)
+    }
+
+    /// Whether a box filled with `fill` was drawn on its own this frame.
+    fn drawn_alone(&self, fill: Color) -> bool {
+        self.commands.iter().any(
+            |cmd| matches!(&*cmd.command, DrawCommand::RoundedRect { color, .. } if *color == fill),
+        )
+    }
+}
+
+/// A member that slides moves the merged shape on the next frame — while the
+/// member beside it, which did not move, comes back out of the caches and is
+/// still taken into the shape rather than drawn on its own as well.
+#[test]
+fn a_member_that_slides_moves_the_merged_shape() {
+    let slide = create_signal(0.0f32);
+    let mut s = Surface::new(
+        container().padding(PAD).child(merge_group(slide)),
+        PAD + MEMBER_WIDTH + BUBBLE * 3.0 + PAD,
+        PAD + BUBBLE + PAD,
+    );
+
+    s.frame();
+    let group = s.surface.tree.get_children(s.surface.root)[0];
+    let [fixed, bubble] = s.surface.tree.get_children(group)[..] else {
+        panic!("the group holds two members");
+    };
+    // Once more, so the fixed member has an entry to be replayed from.
+    s.frames(bubble, 1);
+    let (_, members) = s.merged();
+    assert_eq!(members[1].placement.tx(), MEMBER_WIDTH);
+    let entry = s
+        .node_of(fixed)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("the fixed member is cached from its last flatten");
+
+    slide.set(BUBBLE);
+    s.surface.tree.mark_needs_paint(bubble);
+    s.frame();
+
+    let (_, members) = s.merged();
+    assert_eq!(
+        members[1].placement.tx(),
+        MEMBER_WIDTH + BUBBLE,
+        "the bubble slid and the merged shape still holds it where it was"
+    );
+    assert!(
+        Rc::ptr_eq(
+            &entry,
+            &s.node_of(fixed).cached_flatten.borrow().clone().unwrap()
+        ),
+        "the fixed member was flattened again rather than replayed, so nothing \
+         here says a replayed background is taken into the shape"
+    );
+    assert!(
+        !s.drawn_alone(MEMBER_FILL) && !s.drawn_alone(BUBBLE_FILL),
+        "a member's background was drawn on its own beside the merged shape"
+    );
+}
+
+/// A group that moves as a whole replays its merged shape, moved, rather than
+/// building it again — and its members' backgrounds stay out of the frame.
+#[test]
+fn a_group_that_moves_replays_its_merged_shape() {
+    let grower = create_signal(GROWER_WIDTH);
+    let mut s = Surface::new(
+        container()
+            .layout(Flex::row().spacing(GAP))
+            .padding(PAD)
+            .child(
+                container()
+                    .width(grower)
+                    .child(container().height(BOX_HEIGHT)),
+            )
+            .child(merge_group(create_signal(0.0))),
+        PAD + GROWN_WIDTH + GAP + MEMBER_WIDTH + BUBBLE + PAD,
+        PAD + BUBBLE + PAD,
+    );
+
+    s.frame();
+    let (cmd, _) = s.merged();
+    let (painted, at_rest) = (Rc::clone(&cmd.command), cmd.world_transform.tx());
+
+    grower.set(GROWN_WIDTH);
+    let grower_id = s.surface.tree.get_children(s.surface.root)[0];
+    s.surface.tree.mark_needs_layout(grower_id);
+    s.surface.lay_out(s.width, s.height);
+    s.frame();
+
+    let (cmd, _) = s.merged();
+    assert!(
+        Rc::ptr_eq(&painted, &cmd.command),
+        "the merged shape was built again, so the group was flattened again \
+         rather than replayed"
+    );
+    assert_eq!(
+        cmd.world_transform.tx(),
+        at_rest + GROWN_WIDTH - GROWER_WIDTH,
+        "the replayed merged shape stayed where the group was"
+    );
+    assert!(
+        !s.drawn_alone(MEMBER_FILL) && !s.drawn_alone(BUBBLE_FILL),
+        "a replay put a member's background back beside the merged shape"
     );
 }

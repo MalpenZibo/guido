@@ -5972,6 +5972,48 @@ fn a_shadow_going_flat_damages_the_ring_it_gave_up() {
     }
 }
 
+/// A container that merges its children publishes how far its merged shape
+/// reaches, so a member it slides damages the neck and the merged shadow
+/// along with its own box (#752): the gap between the two members, which
+/// neither member's box covers, and the shadow's ring past both.
+#[test]
+fn a_sliding_member_damages_the_merged_shape_around_it() {
+    let slide = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .layout(crate::layout::Flex::row())
+            .merge_children(16.0)
+            .shadow(LIFTED)
+            .child(container().width(40.0).height(20.0).background(Color::RED))
+            .child(
+                container()
+                    .width(20.0)
+                    .height(20.0)
+                    .background(Color::RED)
+                    .translate(move || (slide.get(), 0.0)),
+            ),
+    );
+    h.fit(200.0, 100.0);
+    h.paint();
+    let group = h.tree.get_bounds(h.root).expect("laid out");
+    let area = group.outset(16.0 * 1.25 + LIFTED.extent());
+    let _ = h.tree.take_damage(h.root);
+
+    slide.set(30.0);
+    pump(&mut h);
+
+    match h.tree.take_damage(h.root) {
+        crate::tree::DamageRegion::Partial(rect) => assert_eq!(
+            area.outset_beyond(rect),
+            0.0,
+            "a member sliding damages {rect:?}, short of the merged shape's \
+             area {area:?}"
+        ),
+        crate::tree::DamageRegion::Full => {}
+        crate::tree::DamageRegion::None => panic!("a member slid and nothing was damaged"),
+    }
+}
+
 /// The clamp the descent above must not trip is still doing its job.
 ///
 /// A spring keeps its momentum across a retarget, so hover flicker pumps it:
