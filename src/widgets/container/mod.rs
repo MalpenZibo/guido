@@ -1768,8 +1768,8 @@ impl Widget for Container {
             let sd = self.scroll_mut();
             sd.scroll_state.content_width = content_size.width + padding.horizontal_total();
             sd.scroll_state.content_height = content_size.height + padding.vertical_total();
-            sd.scroll_state.viewport_width = child.viewport.width;
-            sd.scroll_state.viewport_height = child.viewport.height;
+            sd.scroll_state.viewport_width = child.seen_through.width;
+            sd.scroll_state.viewport_height = child.seen_through.height;
             sd.scroll_state.clamp_offsets();
         }
 

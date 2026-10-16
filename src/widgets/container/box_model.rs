@@ -11,8 +11,9 @@
 //!    known at layout time, so nothing downstream has to know about it.
 //! 2. **What do the children get?** — [`child_layout`] subtracts the padding
 //!    and any scrollbar gutter, opens the scrolled axis to infinity so content
-//!    can exceed the viewport, and reports the finite viewport separately —
-//!    that second value is what scrolling measures its content against.
+//!    can exceed the viewport, and reports separately the finite box the
+//!    content is seen through, padding included but not the gutter — what
+//!    scrolling measures its content and padding against.
 //! 3. **How big are we?** — [`resolve_size`] combines the declared length, the
 //!    measured content and the shrink policy, then clamps to what the parent
 //!    allows.
@@ -48,12 +49,12 @@ pub(super) struct ChildLayout {
     pub constraints: Constraints,
     /// Where the first child starts, inside the padding.
     pub origin: (f32, f32),
-    /// The extent children are actually *visible* within — finite on every
-    /// axis, including a scrolled one. Scrolling compares its content against
-    /// this, so it must never be the unbounded value from `constraints`: an
-    /// infinite viewport is never exceeded, and a scrollbar that never has
-    /// anything to scroll is a scrollbar that never appears.
-    pub viewport: Size,
+    /// The box a scroller shows its content and padding through: the extent
+    /// it was offered less a reserved gutter, padding included. Scrolling
+    /// compares its content, which counts the padding, against this; compared
+    /// with the extent inside the padding instead, the padding counted twice
+    /// and a padded scroller ran past its end by it (#721).
+    pub seen_through: Size,
 }
 
 impl Container {
@@ -182,23 +183,31 @@ impl Container {
             constraints.max_height,
         );
 
-        let mut max_width = (layout_width - padding.horizontal_total()).max(0.0);
-        let mut max_height = (layout_height - padding.vertical_total()).max(0.0);
-
         // A reserved gutter is space the content never gets, scrollbar shown
         // or not — that is the point of reserving it.
-        if let Some(ref sd) = self.scroll_data
-            && sd.metrics.reserve_gutter
-            && sd.scrollbar_visibility != ScrollbarVisibility::Hidden
-        {
-            let gutter = sd.metrics.width + sd.metrics.margin * 2.0;
-            if self.scroll_axis.allows_vertical() {
-                max_width = (max_width - gutter).max(0.0);
+        let (gutter_width, gutter_height) = match self.scroll_data {
+            Some(ref sd)
+                if sd.metrics.reserve_gutter
+                    && sd.scrollbar_visibility != ScrollbarVisibility::Hidden =>
+            {
+                let gutter = sd.metrics.width + sd.metrics.margin * 2.0;
+                (
+                    if self.scroll_axis.allows_vertical() {
+                        gutter
+                    } else {
+                        0.0
+                    },
+                    if self.scroll_axis.allows_horizontal() {
+                        gutter
+                    } else {
+                        0.0
+                    },
+                )
             }
-            if self.scroll_axis.allows_horizontal() {
-                max_height = (max_height - gutter).max(0.0);
-            }
-        }
+            _ => (0.0, 0.0),
+        };
+        let max_width = (layout_width - padding.horizontal_total() - gutter_width).max(0.0);
+        let max_height = (layout_height - padding.vertical_total() - gutter_height).max(0.0);
 
         // Pass the effective minimum down so alignments like Center and End
         // know how much room they actually have to place children in.
@@ -227,8 +236,12 @@ impl Container {
                 .min(max_height)
         };
 
-        // The visible extent, captured before the scrolled axis is opened up.
+        // The visible extents, captured before the scrolled axis is opened up.
         let viewport = Size::new(max_width, max_height);
+        let seen_through = Size::new(
+            (layout_width - gutter_width).max(0.0),
+            (layout_height - gutter_height).max(0.0),
+        );
 
         // A scrolled axis is unbounded: the content is free to exceed the
         // viewport, which is what there is to scroll through. Filling the
@@ -275,7 +288,7 @@ impl Container {
             constraints: child,
             // Children sit in local coordinates; the parent places the container.
             origin: (padding.left, padding.top),
-            viewport,
+            seen_through,
         }
     }
 
