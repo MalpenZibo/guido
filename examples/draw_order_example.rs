@@ -138,16 +138,8 @@ fn main() {
                     // Narrower than the panel and pushed right, so the label
                     // is covered where they overlap and legible where they do
                     // not. A photo that filled the panel would look identical
-                    // whether the order held or not. The row wrapper is what
-                    // keeps the photo at its own width — a stack child sized
-                    // directly would be stretched to the panel's tight bounds.
-                    .child(
-                        container()
-                            .width(fill())
-                            .height(fill())
-                            .layout(Flex::row().main_alignment(MainAlignment::End))
-                            .child(photo_of(120.0, 140.0)),
-                    ),
+                    // whether the order held or not.
+                    .child(photo_of(120.0, 140.0).align_self(Alignment::TOP_END)),
             ));
 
         app.add_surface(

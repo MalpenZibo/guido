@@ -559,7 +559,10 @@ There are nine: `TOP_START`, `TOP_CENTER`, `TOP_END`, `CENTER_START`,
 `CENTER`, `CENTER_END`, `BOTTOM_START`, `BOTTOM_CENTER` and `BOTTOM_END`.
 Start is the left and the top.
 
-An alignment places a child in the room the stack has left over, so a
+An alignment places a child in the room the stack has left over. Every
+leader is offered up to the stack's size and held to none of it, as Flutter's
+`Stack` does by default, so even in a stack with an exact size a child that
+sizes to its content keeps that size, and the alignment shares out the rest. A
 follower that fills the stack on an axis has none there and stays put: a
 background behind a centred label is still exactly the stack's size. A child
 larger than the stack is shared out the same way and overhangs instead —
