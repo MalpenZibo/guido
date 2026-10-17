@@ -142,9 +142,11 @@ const SWEEP_EVERY: u64 = 32;
 pub(crate) struct PathRenderer {
     pipeline: RenderPipeline,
     layout: BindGroupLayout,
-    /// The uniforms and this frame's records. Rebuilt when the record buffer
-    /// grows, since a bind group holds the buffer it was made from.
-    bind_group: Option<BindGroup>,
+    /// The uniforms and this frame's records, one per target a frame draws
+    /// into — the surface first, then each layer's texture, whose uniforms
+    /// project against its own size. Rebuilt when the record buffer grows,
+    /// since a bind group holds the buffer it was made from.
+    bind_groups: Vec<BindGroup>,
 
     vertex_buffer: Option<Buffer>,
     index_buffer: Option<Buffer>,
@@ -238,7 +240,7 @@ impl PathRenderer {
         Self {
             pipeline,
             layout,
-            bind_group: None,
+            bind_groups: Vec::new(),
             vertex_buffer: None,
             index_buffer: None,
             record_buffer: None,
@@ -343,7 +345,16 @@ impl PathRenderer {
     /// Write this frame's triangles and records to the GPU, before the pass
     /// opens, and drop the meshes nobody has drawn for a while. Allocates only
     /// when a frame holds more than any frame before it.
-    pub(crate) fn upload(&mut self, device: &Device, queue: &Queue, uniforms: &Buffer) {
+    ///
+    /// `uniforms` is the surface's, and `layers` the layers' textures', with
+    /// the bind group each is drawn through beside it.
+    pub(crate) fn upload(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        uniforms: &Buffer,
+        layers: &[(Buffer, BindGroup)],
+    ) {
         // Swept now and then rather than every frame: a mesh kept a few
         // frames past its time costs memory, a scan of every mesh every frame
         // costs time.
@@ -381,21 +392,28 @@ impl PathRenderer {
         else {
             return;
         };
-        if records_grew {
-            self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Path Bind Group"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: records.as_entire_binding(),
-                    },
-                ],
-            }));
+        let targets = 1 + layers.len();
+        if records_grew || self.bind_groups.len() != targets {
+            let bind = |uniforms: &Buffer| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Path Bind Group"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniforms.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: records.as_entire_binding(),
+                        },
+                    ],
+                })
+            };
+            self.bind_groups = std::iter::once(uniforms)
+                .chain(layers.iter().map(|(buffer, _)| buffer))
+                .map(bind)
+                .collect();
         }
         queue.write_buffer(vertices, 0, bytemuck::cast_slice(&self.vertices));
         queue.write_buffer(indices, 0, bytemuck::cast_slice(&self.indices));
@@ -404,15 +422,21 @@ impl PathRenderer {
 
     /// Draw the paths whose triangles are `indices` of this frame's, in one
     /// call.
+    ///
+    /// `target` is `0` for the surface and a layer's pass index plus one for
+    /// its texture, as the renderer numbers them.
     pub(crate) fn draw(
         &self,
         pass: &mut RenderPass<'_>,
         indices: Range<u32>,
         clip_records: &BindGroup,
+        target: usize,
     ) {
-        let (Some(bind_group), Some(vertices), Some(index_buffer)) =
-            (&self.bind_group, &self.vertex_buffer, &self.index_buffer)
-        else {
+        let (Some(bind_group), Some(vertices), Some(index_buffer)) = (
+            self.bind_groups.get(target),
+            &self.vertex_buffer,
+            &self.index_buffer,
+        ) else {
             return;
         };
         if indices.is_empty() {

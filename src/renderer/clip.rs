@@ -85,6 +85,8 @@ pub(crate) struct ClipLink {
     pub(crate) next: u32,
     /// How many links a walk from this one takes, this one included.
     depth: u32,
+    /// The layer whose content pushed it — see [`ClipTree::segment`].
+    segment: u32,
 }
 
 /// The chains one frame's clips hang from, as one persistent cons-list.
@@ -124,7 +126,7 @@ impl ClipChains {
         })
     }
 
-    fn push(&mut self, shape: PlacedShape, next: u32) -> u32 {
+    fn push(&mut self, shape: PlacedShape, next: u32, segment: u32) -> u32 {
         let index = self.links.len() as u32;
         let depth = 1 + self.depth(next);
         if depth == MAX_CHAIN + 1 {
@@ -133,7 +135,12 @@ impl ClipChains {
                  of them, and the outermost are not cut by"
             );
         }
-        self.links.push(ClipLink { shape, next, depth });
+        self.links.push(ClipLink {
+            shape,
+            next,
+            depth,
+            segment,
+        });
         index
     }
 
@@ -215,6 +222,8 @@ struct Placed {
     /// The link this clip's resolved shape was pushed as for the children that
     /// chain to it, or [`NO_CHAIN`] until one does.
     link: u32,
+    /// The layer whose content placed it — see [`ClipTree::segment`].
+    segment: u32,
 }
 
 /// The clips one frame placed, in the order flatten met them.
@@ -227,6 +236,15 @@ pub(crate) struct ClipTree {
     placed: Vec<Placed>,
     /// The chains the placed clips hang from.
     chains: ClipChains,
+    /// Which layer's content is being flattened: `0` for the surface, and a
+    /// number of its own for each layer a frame composites offscreen.
+    ///
+    /// A layer's clips are written in the space of its texture, and that
+    /// space is only known once its content is — so they are placed in the
+    /// space the content was flattened in and moved afterwards, by
+    /// [`translate_segment`](Self::translate_segment). Placing a layer inside
+    /// a layer interleaves the two runs, and this is what tells them apart.
+    segment: u32,
 }
 
 impl ClipTree {
@@ -244,9 +262,110 @@ impl ClipTree {
     pub(crate) fn clear(&mut self) {
         // Destructured, as the flattener's own resets are: a field added to
         // this tree has to be answered for here.
-        let Self { placed, chains } = self;
+        let Self {
+            placed,
+            chains,
+            segment,
+        } = self;
         placed.clear();
         chains.links.clear();
+        *segment = 0;
+    }
+
+    /// Clips placed from here on belong to `segment`'s content; returns the
+    /// segment that was current, to be put back when that content ends.
+    pub(crate) fn enter_segment(&mut self, segment: u32) -> u32 {
+        std::mem::replace(&mut self.segment, segment)
+    }
+
+    /// How many chain links have been pushed, which is where the next
+    /// subtree's own links will start.
+    pub(crate) fn link_mark(&self) -> usize {
+        self.chains.links.len()
+    }
+
+    /// Forget every clip placed and every link pushed since the two marks.
+    ///
+    /// Only for a run nothing outside it can name: a layer's content, whose
+    /// first clips were placed under nothing, so no clip before the mark was
+    /// cut against one after it and no link before it points past it.
+    pub(crate) fn truncate(&mut self, placed: usize, links: usize) {
+        self.placed.truncate(placed);
+        self.chains.links.truncate(links);
+    }
+
+    /// Move every clip `segment` placed since the two marks by `(dx, dy)`,
+    /// in place, writing through the references its commands carry.
+    ///
+    /// A layer's clips were placed in the space its content was flattened in,
+    /// and its texture's origin is only known once that content is: this is
+    /// the move between the two. The runs of a layer inside it are skipped —
+    /// they were moved into their own texture already.
+    pub(crate) fn translate_segment(
+        &mut self,
+        segment: u32,
+        placed: usize,
+        links: usize,
+        (dx, dy): (f32, f32),
+    ) {
+        let shift = Transform::translate(dx, dy);
+        for clip in self.placed[placed..]
+            .iter_mut()
+            .filter(|clip| clip.segment == segment)
+        {
+            clip.own = clip.own.mapped(&shift);
+            let held = clip.reference.resolved();
+            clip.reference.place(ResolvedClip {
+                first: held.first.mapped(&shift),
+                rest: held.rest,
+                open: held.open.offset(dx, dy),
+            });
+        }
+        for link in self.chains.links[links..]
+            .iter_mut()
+            .filter(|link| link.segment == segment)
+        {
+            link.shape = link.shape.mapped(&shift);
+        }
+    }
+
+    /// A second copy of every clip `segment` placed since `placed`, carried by
+    /// `transform` and hung under `under`, with references of its own —
+    /// returned beside the references they copy.
+    ///
+    /// For what a layer's content says to the compositor rather than draws: an
+    /// input region or a compositor blur inside a layer still has to be
+    /// published where it is on the surface, cut by the clips around the
+    /// layer as well as those inside it. The originals stay where the texture
+    /// needs them.
+    pub(crate) fn twin_segment(
+        &mut self,
+        segment: u32,
+        placed: usize,
+        transform: &Transform,
+        under: Option<ClipIndex>,
+    ) -> Vec<(ClipRef, ClipRef)> {
+        // By position in the run, so a twin's parent is found by index; a clip
+        // of a layer inside this one has none.
+        let mut twins: Vec<Option<ClipIndex>> = Vec::new();
+        let mut pairs = Vec::new();
+        for index in placed..self.placed.len() {
+            let clip = &self.placed[index];
+            if clip.segment != segment {
+                twins.push(None);
+                continue;
+            }
+            let own = clip.own.mapped(transform);
+            let parent = match clip.under {
+                Some(ClipIndex(at)) if at >= placed => twins[at - placed].or(under),
+                _ => under,
+            };
+            let original = clip.reference.clone();
+            let twin = self.place(own, parent);
+            twins.push(Some(twin));
+            pairs.push((original, self.reference(twin)));
+        }
+        pairs
     }
 
     /// How many clips this tree can hold before it allocates again.
@@ -298,7 +417,7 @@ impl ClipTree {
                 // One link per parent, however many of its children chain to
                 // it: the first pushes it and the rest find it here.
                 if above.link == NO_CHAIN {
-                    above.link = self.chains.push(parent.first, parent.rest);
+                    above.link = self.chains.push(parent.first, parent.rest, self.segment);
                 }
                 ResolvedClip {
                     first: own,
@@ -321,6 +440,7 @@ impl ClipTree {
             own,
             under,
             link: NO_CHAIN,
+            segment: self.segment,
         });
         index
     }
@@ -381,17 +501,51 @@ impl ClipTree {
     /// made: a subtree cached under no clip at all can be replayed under one
     /// that has since appeared, and it has to be cut by it.
     pub(crate) fn since(&self, mark: usize) -> Vec<CachedClip> {
-        self.placed[mark..]
-            .iter()
-            .map(|placed| CachedClip {
+        let run = &self.placed[mark..];
+        // The common case, a run with no layer inside it, keeps every clip at
+        // its own offset and needs nothing to count them by.
+        if run.iter().all(|placed| placed.segment == self.segment) {
+            return run
+                .iter()
+                .map(|placed| CachedClip {
+                    reference: placed.reference.clone(),
+                    own: placed.own,
+                    parent: match placed.under {
+                        Some(ClipIndex(index)) if index >= mark => {
+                            CachedParent::Within(index - mark)
+                        }
+                        _ => CachedParent::Inherited,
+                    },
+                })
+                .collect();
+        }
+        // Otherwise only the clips of the content being flattened now. A
+        // layer inside the run placed clips of its own, in its texture's
+        // space, and they are drawn from its texture rather than replayed with
+        // the run — so they are left out, and the offsets of the rest counted
+        // without them.
+        let mut kept: Vec<Option<usize>> = Vec::new();
+        let mut clips = Vec::new();
+        for placed in run {
+            if placed.segment != self.segment {
+                kept.push(None);
+                continue;
+            }
+            let parent = match placed.under {
+                Some(ClipIndex(index)) if index >= mark => match kept[index - mark] {
+                    Some(at) => CachedParent::Within(at),
+                    None => CachedParent::Inherited,
+                },
+                _ => CachedParent::Inherited,
+            };
+            kept.push(Some(clips.len()));
+            clips.push(CachedClip {
                 reference: placed.reference.clone(),
                 own: placed.own,
-                parent: match placed.under {
-                    Some(ClipIndex(index)) if index >= mark => CachedParent::Within(index - mark),
-                    _ => CachedParent::Inherited,
-                },
-            })
-            .collect()
+                parent,
+            });
+        }
+        clips
     }
 }
 

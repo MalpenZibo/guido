@@ -982,6 +982,23 @@ impl Headless {
             .map_or(0, |renderer| renderer.image_textures())
     }
 
+    /// How many textures the renderer holds for layers — drawn into, blurred
+    /// into, or waiting in the pool for one.
+    pub fn layer_textures(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .map_or(0, |renderer| renderer.layer_textures())
+    }
+
+    /// Drop every texture the renderer holds for layers, as a release would,
+    /// so a test can ask what a frame does with a layer it lays down from a
+    /// texture that is gone.
+    pub fn forget_layer_textures(&mut self) {
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.forget_layer_textures();
+        }
+    }
+
     /// How many atlas pages the renderer holds small images on.
     pub fn image_atlas_pages(&self) -> usize {
         self.renderer

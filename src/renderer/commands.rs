@@ -421,6 +421,26 @@ pub enum DrawCommand {
         fit: Option<LineFit>,
     },
 
+    /// A layer's texture, laid over what is beneath it: a subtree drawn
+    /// offscreen and composited as one picture.
+    ///
+    /// No widget paints this. Flatten writes it in place of the subtree, once
+    /// it has decided the subtree is a layer — see
+    /// [`OpacityMode`](super::tree::OpacityMode) and
+    /// [`RenderNode::blur`](super::tree::RenderNode::blur) — and the renderer
+    /// draws it as a textured quad, at the opacity, through the clips and by
+    /// the transform the subtree was drawn under.
+    Layer {
+        /// The node composited, which is also what the texture is kept by.
+        id: super::tree::NodeId,
+        /// What the texture covers, in the node's own space, before any blur
+        /// spreads it.
+        frame: Rect,
+        /// The blur run over the texture before it is laid down, in logical
+        /// pixels; zero for none.
+        blur: f32,
+    },
+
     /// Draw an image.
     Image {
         /// Image source (path or bytes)

@@ -77,9 +77,7 @@ mod common;
 use guido::layout::Constraints;
 use guido::prelude::*;
 use guido::renderer::{Fill, FillRule, Join, Path as VectorPath, Stroke};
-use guido::renderer::{
-    FlatFrame, FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into,
-};
+use guido::renderer::{FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -171,12 +169,8 @@ fn render_pixels(
     let mut commands = Vec::new();
     let mut layers = Vec::new();
     let mut scratch = FlattenScratch::default();
-    let _ = flatten_root_into(&node, &mut commands, &mut layers, &mut scratch);
-    let frame = FlatFrame {
-        commands: &commands,
-        layers: &layers,
-        clips: scratch.clip_chains(),
-    };
+    let _ = flatten_root_into(&node, scale, &mut commands, &mut layers, &mut scratch);
+    let frame = scratch.frame(&commands, &layers);
 
     let device = ctx.device.clone();
     let queue = ctx.queue.clone();
@@ -3002,7 +2996,11 @@ fn every_draw_at(alpha: f32) -> Container {
 }
 
 /// `opacity(0.5)` draws what halving every colour's alpha draws, and a half
-/// inside a half draws what a quarter does.
+/// inside a half draws what a quarter does — when it is applied draw by draw,
+/// which is [`OpacityMode::Modulate`] and is what this scenario is about: each
+/// pipeline's own fade. Under the default a container whose draws overlap is
+/// composited as one layer, and every pipeline draws inside it at full
+/// strength; `group_opacity_fades_an_overlap_as_one_picture` is that one.
 ///
 /// The oracle is a second render rather than a picture: the same cells built
 /// with their colours halved by hand, which is what the opacity is defined to
@@ -3027,12 +3025,18 @@ fn opacity_is_every_colour_at_a_fraction_of_its_alpha() {
             .child(nested)
     };
     let faded = scene(
-        every_draw_at(1.0).opacity(0.5),
-        container().opacity(0.5).child(
-            swatch(50.0, 50.0, Color::rgb(0.85, 0.35, 0.30))
-                .corners(10.0)
-                .opacity(0.5),
-        ),
+        every_draw_at(1.0)
+            .opacity(0.5)
+            .opacity_mode(OpacityMode::Modulate),
+        container()
+            .opacity(0.5)
+            .opacity_mode(OpacityMode::Modulate)
+            .child(
+                swatch(50.0, 50.0, Color::rgb(0.85, 0.35, 0.30))
+                    .corners(10.0)
+                    .opacity(0.5)
+                    .opacity_mode(OpacityMode::Modulate),
+            ),
     );
     // The image's texels round a half to 128/255 and the opacity multiplies by
     // exactly 0.5, so the two differ there by a fraction of one unit.
@@ -3064,6 +3068,12 @@ fn opacity_is_every_colour_at_a_fraction_of_its_alpha() {
 /// nothing — the last is the stripes alone, blur and card gone together — and a
 /// frosted, outlined text and a turned label at a half, for the contour the
 /// backdrop pass draws and for the textured quad transformed text is drawn as.
+///
+/// Every fade here is [`OpacityMode::Modulate`], because the pipelines' own
+/// fades are the subject. Under the default each of these overlaps — a card
+/// over its frost, a label over its background — so each would be a layer,
+/// and a frost inside a layer sees only the layer:
+/// `a_backdrop_inside_a_layer_frosts_only_the_layer` is that picture.
 #[test]
 fn opacity_fades_a_frost_and_a_turned_text() {
     let centred = |content: AnyWidget| {
@@ -3086,11 +3096,13 @@ fn opacity_fades_a_frost_and_a_turned_text() {
                 .border(2.0, Color::rgba(1.0, 1.0, 1.0, 0.55))
                 .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE))
                 .opacity(opacity)
+                .opacity_mode(OpacityMode::Modulate)
                 .into_any(),
         )
     };
     let frosted_text = container()
         .opacity(0.5)
+        .opacity_mode(OpacityMode::Modulate)
         .child(
             label("Ag", 40.0)
                 .color(Color::rgba(1.0, 1.0, 1.0, 0.3))
@@ -3105,6 +3117,7 @@ fn opacity_fades_a_frost_and_a_turned_text() {
         .padding(8.0)
         .rotate(30.0)
         .opacity(0.5)
+        .opacity_mode(OpacityMode::Modulate)
         .child(label("turned", 16.0))
         .into_any();
 
@@ -4919,4 +4932,518 @@ fn a_card_that_hides_its_overflow_keeps_its_shadow() {
                 .child(colour_rows(34.0, 1)),
         ),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Layers
+// ---------------------------------------------------------------------------
+
+/// One pixel of a render, as `[r, g, b, a]`.
+fn rgba(pixels: &Pixels, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * pixels.width + x) * 4) as usize;
+    [
+        pixels.data[i],
+        pixels.data[i + 1],
+        pixels.data[i + 2],
+        pixels.data[i + 3],
+    ]
+}
+
+/// Whether two pixels are the same within the tolerance the goldens allow.
+fn same_pixel(a: [u8; 4], b: [u8; 4]) -> bool {
+    (0..4).all(|c| a[c].abs_diff(b[c]) <= TOLERANCE)
+}
+
+const CARD_RED: Color = Color::rgb(0.85, 0.20, 0.20);
+const TILE_BLUE: Color = Color::rgb(0.15, 0.40, 0.90);
+
+/// A red card holding a blue tile and a label, the tile over the card's
+/// background and the label over both — the overlap a fade has to keep.
+fn card_with_a_tile() -> Container {
+    swatch(120.0, 80.0, CARD_RED)
+        .corners(12.0)
+        .padding(16.0)
+        .layout(Flex::row().spacing(8.0))
+        .child(swatch(48.0, 48.0, TILE_BLUE).corners(8.0))
+        .child(label("Ag", 22.0))
+}
+
+/// The scene the two opacity modes are drawn in: the card at half opacity.
+fn faded_card(mode: OpacityMode) -> Container {
+    container()
+        .padding(20.0)
+        .child(card_with_a_tile().opacity(0.5).opacity_mode(mode))
+}
+
+/// Under a half opacity the tile shows the card's red through it when every
+/// draw fades on its own, and shows only its own blue when the card fades as
+/// one picture — which is what CSS draws, and what a cross-fade has to.
+///
+/// Read off the pixels rather than left to the golden alone: inside the tile
+/// the group render is the tile at half over the backdrop, exactly, and the
+/// modulated one is not.
+#[test]
+fn group_opacity_fades_an_overlap_as_one_picture() {
+    let name = "group_opacity_fades_an_overlap_as_one_picture";
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (160.0, 120.0);
+    let group =
+        render_with_own_renderer(ctx, faded_card(OpacityMode::Auto), logical, 1.0, BACKDROP);
+    let each = render_with_own_renderer(
+        ctx,
+        faded_card(OpacityMode::Modulate),
+        logical,
+        1.0,
+        BACKDROP,
+    );
+    // The tile without the card under it, at half: what the group must show.
+    let alone = render_with_own_renderer(
+        ctx,
+        container().padding(20.0).child(
+            box_of(120.0, 80.0)
+                .padding(16.0)
+                .layout(Flex::row())
+                .child(swatch(48.0, 48.0, TILE_BLUE.with_alpha(0.5)).corners(8.0)),
+        ),
+        logical,
+        1.0,
+        BACKDROP,
+    );
+
+    // The middle of the tile: card padding 16, tile 48 — well inside both.
+    let (x, y) = (20 + 16 + 24, 20 + 16 + 24);
+    assert!(
+        same_pixel(rgba(&group, x, y), rgba(&alone, x, y)),
+        "inside the tile the faded card shows {:?}, where the tile alone at \
+         half shows {:?}: the card's red is showing through",
+        rgba(&group, x, y),
+        rgba(&alone, x, y)
+    );
+    assert!(
+        !same_pixel(rgba(&each, x, y), rgba(&alone, x, y)),
+        "modulation is supposed to show the card through the tile, and \
+         drew {:?}",
+        rgba(&each, x, y)
+    );
+    // Outside the tile, on the card alone, the two agree: there is only one
+    // draw there to fade.
+    let (cx, cy) = (20 + 120 - 6, 20 + 40);
+    assert!(
+        same_pixel(rgba(&group, cx, cy), rgba(&each, cx, cy)),
+        "where only the card draws, a group fade and a modulated one are the \
+         same picture: {:?} against {:?}",
+        rgba(&group, cx, cy),
+        rgba(&each, cx, cy)
+    );
+    assert_golden(name, adapter, group);
+}
+
+/// The same at one and a half, where a logical pixel is not a whole number
+/// of physical ones and the texture is laid down a fraction of a pixel off the
+/// surface's grid — resampled, which is what a layer costs there.
+#[test]
+fn group_opacity_fades_an_overlap_as_one_picture_at_scale_1_5x() {
+    golden(
+        "group_opacity_fades_an_overlap_as_one_picture_at_scale_1_5x",
+        (160.0, 120.0),
+        1.5,
+        BACKDROP,
+        faded_card(OpacityMode::Auto),
+    );
+}
+
+/// A fade over draws that never overlap is drawn without a layer, and is the
+/// picture modulation draws — to the pixel, since it *is* modulation.
+///
+/// The draw calls in `tests/draw_calls_are_counted.rs` are what say no texture
+/// was drawn; this says that what was drawn instead is right.
+#[test]
+fn an_opacity_over_nothing_that_overlaps_is_drawn_without_a_layer() {
+    let name = "an_opacity_over_nothing_that_overlaps_is_drawn_without_a_layer";
+    let row = |mode: OpacityMode| {
+        container().padding(20.0).child(
+            container()
+                .layout(Flex::row().spacing(12.0))
+                .opacity(0.5)
+                .opacity_mode(mode)
+                .children([
+                    swatch(40.0, 40.0, CARD_RED).corners(8.0).into_any(),
+                    swatch(40.0, 40.0, TILE_BLUE).corners(20.0).into_any(),
+                    box_of(40.0, 40.0)
+                        .child(image(checkerboard(40, 10)).content_fit(ContentFit::Fill))
+                        .into_any(),
+                ]),
+        )
+    };
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (200.0, 80.0);
+    let auto = render_with_own_renderer(ctx, row(OpacityMode::Auto), logical, 1.0, BACKDROP);
+    let each = render_with_own_renderer(ctx, row(OpacityMode::Modulate), logical, 1.0, BACKDROP);
+    if let Some(report) = differences(&format!("{name}.modulated"), &each, &auto) {
+        panic!("a fade over nothing that overlaps is not the modulated picture: {report}");
+    }
+    assert_golden(name, adapter, auto);
+}
+
+/// A blur of nothing is still a layer — declaring one is what makes it — and
+/// a layer laid down unblurred, at full opacity and on the pixel grid, is the
+/// picture drawn without one. Then the same card blurred by eight.
+#[test]
+fn a_layer_blurred_by_nothing_is_the_scene_without_one() {
+    let name = "a_layer_blurred_by_nothing_is_the_scene_without_one";
+    let scene = |blur: Option<f32>| {
+        let card = card_with_a_tile();
+        container().padding(24.0).child(match blur {
+            Some(radius) => card.blur(radius),
+            None => card,
+        })
+    };
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (170.0, 130.0);
+    let plain = render_with_own_renderer(ctx, scene(None), logical, 1.0, BACKDROP);
+    let nothing = render_with_own_renderer(ctx, scene(Some(0.0)), logical, 1.0, BACKDROP);
+    if let Some(report) = differences(&format!("{name}.plain"), &plain, &nothing) {
+        panic!("a layer blurred by nothing is not the scene without one: {report}");
+    }
+    assert_golden(name, adapter, nothing);
+    golden(
+        "a_layer_blurred_by_eight",
+        logical,
+        1.0,
+        BACKDROP,
+        scene(Some(8.0)),
+    );
+}
+
+/// The blur at twice the scale, where its working texture is shrunk by a
+/// different factor for the same logical radius.
+#[test]
+fn a_layer_blurred_by_eight_at_scale_2x() {
+    golden(
+        "a_layer_blurred_by_eight_at_scale_2x",
+        (170.0, 130.0),
+        2.0,
+        BACKDROP,
+        container()
+            .padding(24.0)
+            .child(card_with_a_tile().blur(8.0)),
+    );
+}
+
+/// A layer inside a layer, the inner one drawn first. The outer fades and
+/// turns, so its own texture is laid down by a transform; the inner card is
+/// blurred, and overlaps a label the outer holds beside it.
+#[test]
+fn layers_nest_inner_first() {
+    let inner = card_with_a_tile().blur(2.0);
+    let outer = container()
+        .padding(12.0)
+        .background(Color::rgb(0.95, 0.85, 0.30))
+        .corners(16.0)
+        .layout(ZStack::new())
+        .child(inner)
+        .child(label("over", 18.0).color(Color::BLACK))
+        .rotate(8.0)
+        .opacity(0.6);
+    golden(
+        "layers_nest_inner_first",
+        (220.0, 160.0),
+        1.0,
+        BACKDROP,
+        container().padding(30.0).child(outer),
+    );
+}
+
+/// A frost inside a layer frosts what the layer drew beneath it and nothing
+/// behind it: the stripes under the panel stay sharp, and the two bars the
+/// panel holds are what the glass blurs — CSS's Backdrop Root. A fade alone
+/// does not make a layer of a subtree that frosts (see
+/// `a_fading_frost_keeps_frosting_what_is_beneath_it`), so the panel declares
+/// a blur of nothing, which always does.
+#[test]
+fn a_backdrop_inside_a_layer_frosts_only_the_layer() {
+    let panel = container()
+        .width(220.0)
+        .height(120.0)
+        .layout(ZStack::new())
+        .child(
+            container()
+                .layout(Flex::column().spacing(20.0))
+                .padding(20.0)
+                .child(swatch(180.0, 14.0, Color::rgb(0.95, 0.85, 0.30)))
+                .child(swatch(180.0, 14.0, Color::rgb(0.30, 0.85, 0.40))),
+        )
+        .child(
+            container().padding(40.0).child(
+                box_of(140.0, 40.0)
+                    .corners(10.0)
+                    .background(Color::rgba(1.0, 1.0, 1.0, 0.15))
+                    .backdrop_blur(BackdropBlur::new(10.0).sources(BackdropSources::SURFACE)),
+            ),
+        )
+        .blur(0.0)
+        .opacity(0.8);
+    golden(
+        "a_backdrop_inside_a_layer_frosts_only_the_layer",
+        (280.0, 160.0),
+        1.0,
+        BACKDROP,
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(ZStack::new())
+            .child(stripes(280.0, 10, 16.0))
+            .child(container().padding(30.0).child(panel)),
+    );
+}
+
+/// A card holding a rounded clip whose tile runs past its corner, its own
+/// corner cut off by a rounded clip around it — a clip inside the layer, and
+/// one outside.
+fn clipped_card(declare: impl Fn(Container) -> Container) -> Container {
+    let inner = box_of(64.0, 48.0)
+        .corners(12.0)
+        .overflow(Overflow::Hidden)
+        .child(
+            swatch(64.0, 48.0, TILE_BLUE)
+                .corners(20.0)
+                .translate((24.0, 20.0)),
+        );
+    let card = swatch(120.0, 80.0, CARD_RED)
+        .corners(12.0)
+        .padding(16.0)
+        .child(inner);
+    container().padding(24.0).child(
+        box_of(130.0, 120.0)
+            .corners(30.0)
+            .overflow(Overflow::Hidden)
+            .child(declare(card)),
+    )
+}
+
+/// The clips inside a layer cut its content where they would cut it without
+/// one, and the clips around it cut the composite: a layer laid down
+/// unblurred, at full opacity and on the pixel grid, is the scene without it —
+/// the rounded clip inside the card and the one cutting the card's corner off
+/// included. At one and at one and a half, where the texture's origin is a
+/// different number of physical pixels from the card's own.
+///
+/// The faded card beside it is the golden.
+#[test]
+fn clips_inside_a_layer_cut_where_they_cut_without_one() {
+    let name = "clips_inside_a_layer_cut_where_they_cut_without_one";
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (180.0, 170.0);
+    for scale in [1.0, 1.5] {
+        let plain = render_with_own_renderer(ctx, clipped_card(|c| c), logical, scale, BACKDROP);
+        let layered =
+            render_with_own_renderer(ctx, clipped_card(|c| c.blur(0.0)), logical, scale, BACKDROP);
+        if let Some(report) = differences(&format!("{name}.{scale}x"), &plain, &layered) {
+            panic!("at {scale}x, a layer moved what its clips cut: {report}");
+        }
+    }
+    let faded = render_with_own_renderer(
+        ctx,
+        clipped_card(|c| c.opacity(0.5)),
+        logical,
+        1.0,
+        BACKDROP,
+    );
+    assert_golden(name, adapter, faded);
+}
+
+/// The same clips on the path where the fade needs no texture: the card has
+/// no background, so nothing in it overlaps, and its content is put back where
+/// it stands with its clips placed again under the ones around it. That is the
+/// picture modulation draws, to the pixel.
+#[test]
+fn clips_inside_a_fade_that_needs_no_layer_cut_as_modulation_does() {
+    let name = "clips_inside_a_fade_that_needs_no_layer_cut_as_modulation_does";
+    let Some((ctx, _)) = rasterizer(name) else {
+        return;
+    };
+    let scene = |mode: OpacityMode| {
+        let inner = box_of(64.0, 48.0)
+            .corners(12.0)
+            .overflow(Overflow::Hidden)
+            .child(
+                swatch(64.0, 48.0, TILE_BLUE)
+                    .corners(20.0)
+                    .translate((24.0, 20.0)),
+            );
+        container().padding(24.0).child(
+            box_of(130.0, 120.0)
+                .corners(30.0)
+                .overflow(Overflow::Hidden)
+                .child(
+                    box_of(120.0, 80.0)
+                        .padding(16.0)
+                        .translate((0.0, 1.5))
+                        .opacity(0.5)
+                        .opacity_mode(mode)
+                        .child(inner),
+                ),
+        )
+    };
+    for scale in [1.0, 1.5] {
+        let each = render_with_own_renderer(
+            ctx,
+            scene(OpacityMode::Modulate),
+            (180.0, 170.0),
+            scale,
+            BACKDROP,
+        );
+        let auto = render_with_own_renderer(
+            ctx,
+            scene(OpacityMode::Auto),
+            (180.0, 170.0),
+            scale,
+            BACKDROP,
+        );
+        if let Some(report) = differences(&format!("{name}.{scale}x"), &each, &auto) {
+            panic!("at {scale}x, a fade put back without a layer is not modulation: {report}");
+        }
+    }
+}
+
+/// A frosted panel fading is not a layer: its frost keeps frosting what guido
+/// drew beneath it in the surface for the whole of the fade, rather than
+/// seeing nothing until the fade ends and popping back. It is the picture the
+/// per-draw fade gives, to the pixel, at every step of the fade.
+#[test]
+fn a_fading_frost_keeps_frosting_what_is_beneath_it() {
+    let name = "a_fading_frost_keeps_frosting_what_is_beneath_it";
+    let scene = |opacity: f32, mode: OpacityMode| {
+        let panel = box_of(140.0, 80.0)
+            .corners(18.0)
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.18))
+            .border(1.0, Color::rgba(1.0, 1.0, 1.0, 0.4))
+            .backdrop_blur(BackdropBlur::new(12.0).sources(BackdropSources::SURFACE))
+            .layout(
+                Flex::row()
+                    .main_alignment(MainAlignment::Center)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(label("Frost", 26.0))
+            .opacity(opacity)
+            .opacity_mode(mode);
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(ZStack::new())
+            .child(stripes(200.0, 9, 14.0))
+            .child(container().padding(30.0).child(panel))
+    };
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (200.0, 140.0);
+    for opacity in [0.25, 0.5, 0.75, 0.99] {
+        let auto = render_with_own_renderer(
+            ctx,
+            scene(opacity, OpacityMode::Auto),
+            logical,
+            1.0,
+            BACKDROP,
+        );
+        let each = render_with_own_renderer(
+            ctx,
+            scene(opacity, OpacityMode::Modulate),
+            logical,
+            1.0,
+            BACKDROP,
+        );
+        if let Some(report) = differences(&format!("{name}.{opacity}"), &each, &auto) {
+            panic!("at {opacity}, a fading frost is not the per-draw fade: {report}");
+        }
+    }
+    let half = render_with_own_renderer(ctx, scene(0.5, OpacityMode::Auto), logical, 1.0, BACKDROP);
+    assert_golden(name, adapter, half);
+}
+
+/// A layer standing a fraction of a pixel off the surface's grid draws its
+/// content at that fraction, so the texture lands on the grid and the layer is
+/// the scene without it — at one and at one and a half.
+#[test]
+fn a_layer_off_the_pixel_grid_draws_its_content_on_it() {
+    let name = "a_layer_off_the_pixel_grid_draws_its_content_on_it";
+    let scene = |layered: bool| {
+        let card = card_with_a_tile().translate((0.5, 0.25));
+        container()
+            .padding(24.0)
+            .child(if layered { card.blur(0.0) } else { card })
+    };
+    let Some((ctx, _)) = rasterizer(name) else {
+        return;
+    };
+    for scale in [1.0, 1.5] {
+        let plain = render_with_own_renderer(ctx, scene(false), (170.0, 130.0), scale, BACKDROP);
+        let layered = render_with_own_renderer(ctx, scene(true), (170.0, 130.0), scale, BACKDROP);
+        if let Some(report) = differences(&format!("{name}.{scale}x"), &plain, &layered) {
+            panic!("at {scale}x, a layer off the grid is not the scene without it: {report}");
+        }
+    }
+}
+
+/// Paths drawn inside a layer land where they land without one: the path
+/// pipeline projects against the texture it is drawn into.
+#[test]
+fn paths_inside_a_layer_are_drawn_where_they_are_without_one() {
+    let name = "paths_inside_a_layer_are_drawn_where_they_are_without_one";
+    let scene = |layered: bool| {
+        let card =
+            swatch(120.0, 100.0, CARD_RED)
+                .corners(12.0)
+                .child(drawing(100.0, 90.0, |ctx| {
+                    ctx.draw_path(&star(50.0, 45.0, 40.0), Fill::color(TILE_BLUE), None)
+                }));
+        container()
+            .padding(24.0)
+            .child(if layered { card.blur(0.0) } else { card })
+    };
+    let Some((ctx, _)) = rasterizer(name) else {
+        return;
+    };
+    for scale in [1.0, 2.0] {
+        let plain = render_with_own_renderer(ctx, scene(false), (170.0, 150.0), scale, BACKDROP);
+        let layered = render_with_own_renderer(ctx, scene(true), (170.0, 150.0), scale, BACKDROP);
+        if let Some(report) = differences(&format!("{name}.{scale}x"), &plain, &layered) {
+            panic!("at {scale}x, a path inside a layer moved: {report}");
+        }
+    }
+}
+
+/// Merged shapes drawn inside a layer land where they land without one: the
+/// merged-shape pipeline projects against the texture it is drawn into, and
+/// reads its members from the same records.
+#[test]
+fn merged_shapes_inside_a_layer_are_drawn_where_they_are_without_one() {
+    let name = "merged_shapes_inside_a_layer_are_drawn_where_they_are_without_one";
+    let scene = |layered: bool| {
+        let card = swatch(200.0, 76.0, CARD_RED)
+            .corners(12.0)
+            .padding(20.0)
+            .child(pill_row(6.0, true));
+        container()
+            .padding(24.0)
+            .child(if layered { card.blur(0.0) } else { card })
+    };
+    let Some((ctx, _)) = rasterizer(name) else {
+        return;
+    };
+    for scale in [1.0, 2.0] {
+        let plain = render_with_own_renderer(ctx, scene(false), (250.0, 130.0), scale, BACKDROP);
+        let layered = render_with_own_renderer(ctx, scene(true), (250.0, 130.0), scale, BACKDROP);
+        if let Some(report) = differences(&format!("{name}.{scale}x"), &plain, &layered) {
+            panic!("at {scale}x, a merged shape inside a layer moved: {report}");
+        }
+    }
 }

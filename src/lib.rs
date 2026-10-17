@@ -228,7 +228,7 @@ pub mod prelude {
         current_owner, expect_context, has_context, on_cleanup, provide_context,
         provide_signal_context, set_interval, set_timeout, use_context, with_context,
     };
-    pub use crate::renderer::{Cap, Shadow, Shadows, measure_text};
+    pub use crate::renderer::{Cap, OpacityMode, Shadow, Shadows, measure_text};
     pub use crate::session_lock::{
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
@@ -1896,29 +1896,22 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         return;
     }
 
-    // Clear and reuse the root node (preserves capacity)
-    surface.root_node.clear();
-    surface.root_node.bounds =
-        widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+    let mut carried = paint_and_flatten(surface, tree, frame);
 
-    time_phase!(render_stats::Phase::Paint, {
-        tree.paint_widget(
-            surface.widget_id,
-            &mut surface.root_node,
-            frame.scale_factor,
-        );
-    });
-
-    // Flatten tree into reused buffers
-    let carried;
-    time_phase!(render_stats::Phase::Flatten, {
-        carried = flatten_root_into(
-            &surface.root_node,
-            &mut surface.flattened_commands,
-            &mut surface.command_layers,
-            &mut surface.flatten_scratch,
-        );
-    });
+    // A cached subtree replayed with a layer in it lays the layer down from the
+    // texture an earlier frame drew, and hands the renderer none of its
+    // content. Where that texture is gone — released, or drawn from pixels
+    // still on their way — the frame is painted and flattened again in full,
+    // before anything is drawn, so the layer's content is there to draw it
+    // from. A frame without the layer is never presented.
+    if renderer.lacks_kept_layers(
+        &surface
+            .flatten_scratch
+            .frame(&surface.flattened_commands, &surface.command_layers),
+    ) {
+        tree.mark_subtree_needs_paint(surface.widget_id);
+        carried = paint_and_flatten(surface, tree, frame);
+    }
 
     // The compositor blur region is read off the frame that was just built, so
     // it cannot disagree with what is on screen — see `blur`. Set before
@@ -2035,11 +2028,9 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     time_phase!(render_stats::Phase::GpuRender, {
         presented = renderer.render(
             surface.wgpu_surface.as_mut().unwrap(),
-            &renderer::FlatFrame {
-                commands: &surface.flattened_commands,
-                layers: &surface.command_layers,
-                clips: surface.flatten_scratch.clip_chains(),
-            },
+            &surface
+                .flatten_scratch
+                .frame(&surface.flattened_commands, &surface.command_layers),
             surface.config.background_color,
         );
     });
@@ -2070,6 +2061,40 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     render_stats::end_frame(&damage);
 
     with_surface(wayland_state, id, |s| s.mark_frame_callback_pending());
+}
+
+/// Paint the surface into its retained root node and flatten it into the
+/// surface's buffers, returning what the frame carries for the compositor.
+fn paint_and_flatten(
+    surface: &mut ManagedSurface,
+    tree: &mut Tree,
+    frame: &Frame,
+) -> renderer::RegionsCarried {
+    // Clear and reuse the root node (preserves capacity)
+    surface.root_node.clear();
+    surface.root_node.bounds =
+        widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+
+    time_phase!(render_stats::Phase::Paint, {
+        tree.paint_widget(
+            surface.widget_id,
+            &mut surface.root_node,
+            frame.scale_factor,
+        );
+    });
+
+    // Flatten tree into reused buffers
+    let carried;
+    time_phase!(render_stats::Phase::Flatten, {
+        carried = flatten_root_into(
+            &surface.root_node,
+            frame.scale_factor,
+            &mut surface.flattened_commands,
+            &mut surface.command_layers,
+            &mut surface.flatten_scratch,
+        );
+    });
+    carried
 }
 
 /// The borrows a frame needs from start to finish, in one place.

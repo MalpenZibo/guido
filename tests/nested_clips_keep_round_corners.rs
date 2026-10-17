@@ -44,6 +44,7 @@ fn row_clip(view: Container) -> ResolvedClip {
     let (mut commands, mut layers) = (Vec::new(), Vec::new());
     let _ = flatten_root_into(
         &root,
+        1.0,
         &mut commands,
         &mut layers,
         &mut FlattenScratch::default(),

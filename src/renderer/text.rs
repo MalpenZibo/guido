@@ -478,7 +478,6 @@ fn cut_to_lines(
 pub struct TextRenderState {
     font_system: FontSystem,
     swash_cache: SwashCache,
-    #[allow(dead_code)] // Used for viewport and atlas construction
     cache: Cache,
     atlas: TextAtlas,
     /// One renderer per draw group that contains text.
@@ -489,7 +488,13 @@ pub struct TextRenderState {
     /// keeps exactly one, as before.
     text_renderers: Vec<TextRenderer>,
     buffers: Vec<Buffer>,
-    viewport: Viewport,
+    /// One per target a frame draws text into: the surface first, then each
+    /// layer's texture — a viewport is the resolution glyphon projects
+    /// against, and a texture is not the surface's size.
+    viewports: Vec<Viewport>,
+    /// Which of `viewports` each renderer in `text_renderers` was prepared
+    /// against, so it is drawn against the same one.
+    slot_targets: Vec<usize>,
     /// Cache of shaped text buffers from the previous frame, keyed by
     /// content+style hash. Avoids expensive Unicode analysis and glyph
     /// shaping for unchanged text. Multi-valued: the same label can appear
@@ -579,7 +584,8 @@ impl TextRenderState {
             atlas,
             text_renderers: vec![text_renderer],
             buffers: Vec::new(),
-            viewport,
+            viewports: vec![viewport],
+            slot_targets: vec![0],
             buffer_cache: FxHashMap::default(),
             frame_keys: Vec::new(),
             transformed_indices: Vec::new(),
@@ -600,13 +606,35 @@ impl TextRenderState {
         for (key, buffer) in self.frame_keys.drain(..).zip(self.buffers.drain(..)) {
             self.buffer_cache.entry(key).or_default().push(buffer);
         }
-        // Once per frame, not once per group: every group renders into the
-        // same viewport.
-        self.viewport.update(
+        // Once per frame, not once per group: every group drawn onto the
+        // surface renders into the same viewport.
+        self.viewports[0].update(
             queue,
             Resolution {
                 width: screen.0,
                 height: screen.1,
+            },
+        );
+    }
+
+    /// Size the viewport `target` projects against — a layer's texture, which
+    /// is drawn into with a resolution of its own. Target `0` is the surface,
+    /// sized by [`begin_frame`](Self::begin_frame).
+    pub fn set_target(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        target: usize,
+        resolution: (u32, u32),
+    ) {
+        while self.viewports.len() <= target {
+            self.viewports.push(Viewport::new(device, &self.cache));
+        }
+        self.viewports[target].update(
+            queue,
+            Resolution {
+                width: resolution.0,
+                height: resolution.1,
             },
         );
     }
@@ -628,6 +656,7 @@ impl TextRenderState {
     pub fn prepare_layer(
         &mut self,
         slot: usize,
+        target: usize,
         device: &Device,
         queue: &Queue,
         texts: &[TextEntry],
@@ -644,6 +673,10 @@ impl TextRenderState {
                 None,
             ));
         }
+        while self.slot_targets.len() <= slot {
+            self.slot_targets.push(0);
+        }
+        self.slot_targets[slot] = target;
         // Buffers accumulate across the frame's groups; this is where this
         // group's own shaped buffers begin.
         let buffers_start = self.buffers.len();
@@ -729,12 +762,13 @@ impl TextRenderState {
             font_system,
             swash_cache,
             atlas,
-            viewport,
+            viewports,
             buffers,
             text_renderers,
             kept,
             ..
         } = self;
+        let viewport = &viewports[target];
 
         // Lazy rather than collected: glyphon takes an iterator, so the areas
         // are built as it reads them and the borrow of `buffers` each one
@@ -822,8 +856,9 @@ impl TextRenderState {
     /// Draw the text prepared into `slot`.
     pub fn render_slot<'a>(&'a self, slot: usize, pass: &mut wgpu::RenderPass<'a>) {
         if let Some(renderer) = self.text_renderers.get(slot) {
+            let viewport = &self.viewports[self.slot_targets[slot]];
             renderer
-                .render(&self.atlas, &self.viewport, pass)
+                .render(&self.atlas, viewport, pass)
                 .expect("Failed to render text");
             render_stats::record_draw_calls(Pipeline::Text, 1);
         }
@@ -917,6 +952,7 @@ mod scratch_survives_the_frame {
         let frame = |state: &mut TextRenderState, texts: &[TextEntry]| {
             state.begin_frame(&gpu.queue, (200, 100));
             let transformed = state.prepare_layer(
+                0,
                 0,
                 &gpu.device,
                 &gpu.queue,
@@ -1017,6 +1053,7 @@ mod a_text_is_culled_only_when_an_axis_has_collapsed {
             let texts = [test_entry(box_, transform)];
             state.begin_frame(&gpu.queue, (200, 100));
             let transformed = state.prepare_layer(
+                0,
                 0,
                 &gpu.device,
                 &gpu.queue,
@@ -2096,6 +2133,7 @@ pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
             state.begin_frame(&gpu.queue, screen);
             let texts = [page(text, Transform::IDENTITY)];
             state.prepare_layer(
+                0,
                 0,
                 &gpu.device,
                 &gpu.queue,
