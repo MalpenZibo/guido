@@ -1514,6 +1514,10 @@ fn flatten_contents(
     // parent at all, which was the only answer while two clips could only be
     // folded into one by taking the smaller corner — the handle's pill would
     // have lost the scroller's arc. They meet exactly now.
+    //
+    // Only those drawn after the clip was set, though: one drawn before it — an
+    // outline, which stands outside the box a ripple is cut to — is cut by the
+    // clips above alone (#767).
     if !node.overlay_commands.is_empty() {
         let overlay_clip = match node.overlay_clip {
             Some(ref clip) => {
@@ -1521,15 +1525,20 @@ fn flatten_contents(
                 let index = out.clips.place(own, clip_index);
                 Some(out.clips.reference(index))
             }
-            None => effective_clip,
+            None => effective_clip.clone(),
         };
-        for cmd in &node.overlay_commands {
+        let (unclipped, clipped) = node.overlay_commands.split_at(node.overlay_clip_from);
+        let commands = unclipped
+            .iter()
+            .map(|cmd| (cmd, &effective_clip))
+            .chain(clipped.iter().map(|cmd| (cmd, &overlay_clip)));
+        for (cmd, clip) in commands {
             out.push(FlattenedCommand {
                 command: Rc::clone(cmd),
                 world_transform,
                 layer: RenderLayer::Overlay,
                 opacity,
-                clip: overlay_clip.clone(),
+                clip: clip.clone(),
             });
         }
     }
@@ -2804,6 +2813,53 @@ mod world_geometry_tests {
             clip.world_aabb().width > 112.0,
             "80·√2 ≈ 113.1, got {}",
             clip.world_aabb().width
+        );
+    }
+
+    /// An overlay drawn before the overlay clip was set is not cut by it: a
+    /// container's outline stands outside the box its ripples are cut to, and
+    /// is drawn first so a press does not erase it (#767).
+    #[test]
+    fn an_overlay_drawn_before_the_overlay_clip_is_not_cut_by_it() {
+        let mut node = RenderNode::new(1);
+        node.bounds = Rect::new(0.0, 0.0, 80.0, 80.0);
+        let ring = Rect::new(-4.0, -4.0, 88.0, 88.0);
+        node.overlay_commands
+            .push(Rc::new(DrawCommand::rounded_rect(ring, Color::WHITE, 0.0)));
+        node.overlay_clip = Some(ClipRegion {
+            rect: Rect::new(0.0, 0.0, 80.0, 80.0),
+            corner_radius: CornerRadii::uniform(16.0),
+            curvature: 1.0,
+        });
+        node.overlay_clip_from = 1;
+        node.overlay_commands
+            .push(Rc::new(DrawCommand::rounded_rect(
+                Rect::new(10.0, 10.0, 20.0, 20.0),
+                Color::RED,
+                0.0,
+            )));
+
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        flatten_root_into(
+            &node,
+            1.0,
+            &mut commands,
+            &mut layers,
+            &mut FlattenScratch::default(),
+        );
+        let clip_of = |color: Color| {
+            commands
+                .iter()
+                .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { color: k, .. } if *k == color))
+                .unwrap_or_else(|| panic!("{color:?} is drawn"))
+                .clip()
+                .map(|clip| clip.first.rect)
+        };
+        assert_eq!(clip_of(Color::WHITE), None, "the outline is left whole");
+        assert_eq!(
+            clip_of(Color::RED),
+            Some(Rect::new(0.0, 0.0, 80.0, 80.0)),
+            "the ripple is cut to the box"
         );
     }
 

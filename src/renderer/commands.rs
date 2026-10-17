@@ -495,6 +495,26 @@ impl DrawCommand {
         }
     }
 
+    /// Create a border frame: a rounded rectangle that draws only its border.
+    pub fn border_frame(
+        rect: Rect,
+        color: Color,
+        radius: impl Into<CornerRadii>,
+        width: f32,
+        curvature: f32,
+    ) -> Self {
+        Self::RoundedRect {
+            rect,
+            color: Color::TRANSPARENT,
+            radius: radius.into(),
+            curvature,
+            border: Some(Border::new(width, color)),
+            shadow: None,
+            gradient: None,
+            background: false,
+        }
+    }
+
     /// Create a circle.
     pub fn circle(center: (f32, f32), radius: f32, color: Color) -> Self {
         Self::Circle {
