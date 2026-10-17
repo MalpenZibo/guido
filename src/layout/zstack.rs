@@ -73,14 +73,16 @@ use super::{Alignment, Constraints, Layout, Size};
 ///     );
 /// ```
 ///
-/// A child narrower than the stack has free space to be placed in, and the
-/// alignment says where; a child that follows the stack on an axis is laid out
-/// at the stack's size there, so it has none and stays where the stack is. A
-/// child larger than the stack on an axis is shared out the same way, so
-/// `CENTER` overhangs both edges equally, as Flutter's `Stack` and SwiftUI's
-/// `ZStack` do. A child is larger than the stack where its length is
-/// [`natural()`](super::natural), since every other length is cut to what the
-/// stack offers:
+/// A child is offered up to the stack's size and held to none of it, as
+/// Flutter's `Stack` does by default, so even in a stack with an exact size a
+/// child that sizes to its content keeps that size. A child narrower than the
+/// stack has free space to be placed in, and the alignment says where; a child
+/// that follows the stack on an axis is laid out at the stack's size there, so
+/// it has none and stays where the stack is. A child larger than the stack on
+/// an axis is shared out the same way, so `CENTER` overhangs both edges
+/// equally, as Flutter's `Stack` and SwiftUI's `ZStack` do. A child is larger
+/// than the stack where its length is [`natural()`](super::natural), since
+/// every other length is cut to what the stack offers:
 ///
 /// ```
 /// use guido::prelude::*;
@@ -148,13 +150,15 @@ impl Layout for ZStack {
         let measure_followers = unled(constraints.max_width, |h| !h.fill_width)
             || unled(constraints.max_height, |h| !h.fill_height);
         let mut largest = Size::zero();
+        // Leaders are offered the stack's size, not held to it.
+        let loose = Constraints::loose(constraints.max_size());
 
         for (i, &child_id) in children.iter().enumerate() {
             let hints = self.hints[i];
             if hints.fill_width && hints.fill_height && !measure_followers {
                 continue;
             }
-            let Some(child_size) = ctx.layout_child(child_id, constraints) else {
+            let Some(child_size) = ctx.layout_child(child_id, loose) else {
                 continue;
             };
             // Laid out all the same, so it hears its visibility change; but
@@ -194,7 +198,7 @@ impl Layout for ZStack {
         let size = constraints.constrain(stack);
 
         // Pass 2: followers resolve against the stack size — tight on the axes
-        // they fill, unchanged on the axes they lead.
+        // they fill, loose on the axes they lead.
         for (i, &child_id) in children.iter().enumerate() {
             let hints = self.hints[i];
             if !hints.fill_width && !hints.fill_height {
@@ -211,16 +215,8 @@ impl Layout for ZStack {
                 continue;
             }
             let child_constraints = Constraints {
-                min_width: if hints.fill_width {
-                    size.width
-                } else {
-                    constraints.min_width.min(size.width)
-                },
-                min_height: if hints.fill_height {
-                    size.height
-                } else {
-                    constraints.min_height.min(size.height)
-                },
+                min_width: if hints.fill_width { size.width } else { 0.0 },
+                min_height: if hints.fill_height { size.height } else { 0.0 },
                 max_width: size.width,
                 max_height: size.height,
             };
@@ -448,6 +444,21 @@ mod tests {
             Some((46.0, 0.0)),
             "the badge should sit at the right edge of the 50px leader"
         );
+    }
+
+    /// A follower is held to the stack only on the axes it fills: on the one
+    /// it leads it keeps its own size, however tall the stack has to be.
+    #[test]
+    fn a_follower_keeps_its_own_size_on_the_axis_it_leads() {
+        let root = container()
+            .layout(ZStack::new())
+            .child(container().width(200).height(20))
+            .child(container().width(fill()).child(container().height(30)));
+
+        let (tree, id) = layout_root(root, Constraints::new(0.0, 110.0, 400.0, 400.0));
+
+        assert_eq!(tree.cached_size(id), Some(Size::new(200.0, 110.0)));
+        assert_eq!(child_size(&tree, id, 1), Size::new(200.0, 30.0));
     }
 
     /// With no leader on an axis that has no maximum there is no space to
