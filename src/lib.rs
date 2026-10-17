@@ -1650,9 +1650,9 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
 /// tell the compositor how big it wants to be.
 ///
 /// Partial layout is the normal path: only the subtrees that marked
-/// themselves re-run, from their relayout boundaries. A full layout from the
-/// root happens only on a resize, because that is the one change no widget
-/// can have noticed on its own.
+/// themselves re-run, from their relayout boundaries. The root is laid out
+/// again whenever the surface's size moves, because that is the one change no
+/// widget can have noticed on its own — whatever else the frame has pending.
 fn layout_pass<P: Platform>(
     ctx: &mut FrameContext<P>,
     frame: &Frame,
@@ -1673,32 +1673,20 @@ fn layout_pass<P: Platform>(
     );
     renderer.set_scale_factor(frame.scale_factor);
 
-    // Re-layout using partial layout from boundaries when available
     let constraints = Constraints::new(0.0, 0.0, frame.width as f32, frame.height as f32);
-    if !layout_roots.is_empty() {
-        // Partial layout: only update dirty subtrees starting from boundaries
-        let mut roots = Vec::new();
-        std::mem::swap(&mut roots, layout_roots);
-        for root_id in &roots {
-            // Use cached constraints for boundaries, or fall back to parent constraints
-            let cached = tree
-                .last_layout_constraints(*root_id)
-                .unwrap_or(constraints);
-            tree.layout_widget(*root_id, cached);
-        }
-        // Paint invalidation is per widget, not per subtree: every widget
-        // that actually ran its layout marked itself (and its ancestors)
-        // inside Tree::cache_layout, and Tree::set_origin damaged what
-        // moved. Marking the whole subtree here instead would repaint
-        // every descendant of the layout root — which in a
-        // content-sized tree is the whole surface — and throw away the
-        // paint and flatten caches the layout pass just earned.
-    } else if geometry.needs_resize {
-        // Full layout from root only when explicitly needed (first frame, resize, etc.)
-        tree.layout_widget(surface.widget_id, constraints);
-        tree.mark_subtree_needs_paint(surface.widget_id);
+    // From the root under the surface's size, then from each dirty boundary
+    // under its own. The first is a skip unless the size moved or the root is
+    // dirty — and the size is the logical one, which can move while the buffer
+    // stays (see `resolve_geometry`). The second is a skip for every boundary
+    // the first reached, and is there for one inside a subtree whose
+    // constraints did not move, which the first did not reach. Neither marks
+    // a subtree for paint: `cache_layout` marked whatever ran, and
+    // `paint_and_present` repaints the lot when the buffer or scale changed.
+    tree.layout_widget(surface.widget_id, constraints);
+    for root_id in std::mem::take(layout_roots) {
+        let cached = tree.last_layout_constraints(root_id).unwrap_or(constraints);
+        tree.layout_widget(root_id, cached);
     }
-    // If neither condition is true, skip layout entirely - nothing is dirty
 
     // Auto-height popups follow their content: when this surface had
     // layout activity, re-measure the natural height and ask the
