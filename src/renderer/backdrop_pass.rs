@@ -17,11 +17,18 @@
 //! shapes the result with the region's own corners; [`apply_masked`](BackdropRenderer::apply_masked)
 //! takes a coverage texture instead, which is what lets glyphs be the window
 //! rather than a box — see [`text_mask`](super::text_mask).
+//!
+//! What the passes read is kept from frame to frame, as the shape pipeline's
+//! instances are: their uniforms are slots of one buffer, written once when the
+//! frame is finished and grown only past what it has held, and a bind group is
+//! made the first time a texture is bound and kept while frames go on binding
+//! it — see [`Bindings`].
+
+use std::cell::RefCell;
 
 use bytemuck::Zeroable;
-use wgpu::util::DeviceExt;
 
-use crate::render_stats::{self, Pipeline};
+use crate::render_stats::{self, GpuObject, Pipeline};
 use crate::shape::PlacedShape;
 use crate::widgets::{Color, Rect};
 
@@ -40,6 +47,13 @@ const IDLE_FRAMES_BEFORE_RELEASE: u32 = 120;
 /// Cap on gaussian taps per axis. Beyond this the shrink is doing the work
 /// anyway, and an unbounded loop would let one huge radius stall a frame.
 const MAX_TAPS: f32 = 24.0;
+
+/// Slots the uniform buffer starts with: a frosted panel's four passes and the
+/// blit, with room for a second panel before it has to grow.
+const INITIAL_SLOTS: u64 = 16;
+
+/// The size every pass binds of the uniform buffer, at its own offset.
+const PARAMS_SIZE: wgpu::BufferSize = wgpu::BufferSize::new(size_of::<Params>() as u64).unwrap();
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -255,11 +269,108 @@ pub struct BackdropRenderer {
     blit: wgpu::RenderPipeline,
     targets: Option<Targets>,
     idle_frames: u32,
+    /// Behind a cell because the passes take `&self`: every pass stages its
+    /// uniforms and looks its bind group up, and none of them owns the
+    /// renderer.
+    bindings: RefCell<Bindings>,
+}
+
+/// Where a pass's uniforms are: the bind group that reads them, and their
+/// offset in the buffer it binds.
+struct Bound {
+    group: wgpu::BindGroup,
+    offset: u32,
+}
+
+/// The uniforms of every pass a frame runs, and the bind groups that read
+/// them.
+///
+/// Each pass takes the next slot of one buffer, read through a dynamic offset,
+/// so a bind group says only which textures a pass reads: one per texture, or
+/// per texture and mask, made the first time it is bound and kept while frames
+/// go on binding it. The slots are gathered here and written in one
+/// `write_buffer` when the frame is [finished](BackdropRenderer::finish),
+/// because each write is a staging buffer of wgpu's own and a frame runs
+/// several passes per backdrop.
+struct Bindings {
+    queue: wgpu::Queue,
+    /// `None` until a pass needs it, and again once the targets are released.
+    buffer: Option<wgpu::Buffer>,
+    /// A slot's size: the uniforms, padded to the offset alignment the device
+    /// asks of a dynamic offset.
+    stride: u64,
+    /// This frame's slots, in the order the passes took them.
+    staged: Vec<u8>,
+    kept: Vec<KeptGroup>,
+}
+
+struct KeptGroup {
+    view: wgpu::TextureView,
+    mask: Option<wgpu::TextureView>,
+    group: wgpu::BindGroup,
+    /// Bound by the frame in progress. A group the last frame that blurred did
+    /// not bind is let go, so a texture no longer drawn is not kept alive by it.
+    used: bool,
+}
+
+impl Bindings {
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let align = u64::from(device.limits().min_uniform_buffer_offset_alignment);
+        Self {
+            queue: queue.clone(),
+            buffer: None,
+            stride: PARAMS_SIZE.get().next_multiple_of(align),
+            staged: Vec::new(),
+            kept: Vec::new(),
+        }
+    }
+
+    /// Take the next slot for `params`, growing the buffer if every slot is
+    /// taken, and answer the slot's offset.
+    fn stage(&mut self, device: &wgpu::Device, params: Params) -> u32 {
+        let capacity = self.buffer.as_ref().map_or(0, wgpu::Buffer::size);
+        if self.staged.len() as u64 == capacity {
+            self.grow(device, capacity);
+        }
+        let offset = self.staged.len();
+        self.staged.extend_from_slice(bytemuck::bytes_of(&params));
+        self.staged.resize(offset + self.stride as usize, 0);
+        offset as u32
+    }
+
+    /// Replace the buffer with one twice the size.
+    ///
+    /// The frame goes on at the slot it reached, so by the time it finishes
+    /// the buffer holds all of it and the next frame like it fits. The passes
+    /// already recorded keep the buffer they were bound to, so what they
+    /// staged is written to it first. Every kept bind group names the old
+    /// buffer, so they all go with it.
+    fn grow(&mut self, device: &wgpu::Device, capacity: u64) {
+        if let Some(buffer) = &self.buffer {
+            self.queue.write_buffer(buffer, 0, &self.staged);
+        }
+        let size = (capacity * 2).max(INITIAL_SLOTS * self.stride);
+        self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Backdrop Params"),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        render_stats::record_backdrop_allocation(GpuObject::Buffer);
+        self.kept.clear();
+    }
+
+    fn release(&mut self) {
+        self.buffer = None;
+        self.staged = Vec::new();
+        self.kept.clear();
+    }
 }
 
 impl BackdropRenderer {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         clip_records: &wgpu::BindGroupLayout,
     ) -> Self {
@@ -304,8 +415,8 @@ impl BackdropRenderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: Some(PARAMS_SIZE),
                     },
                     count: None,
                 },
@@ -339,8 +450,8 @@ impl BackdropRenderer {
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                            has_dynamic_offset: true,
+                            min_binding_size: Some(PARAMS_SIZE),
                         },
                         count: None,
                     },
@@ -442,6 +553,7 @@ impl BackdropRenderer {
             mask_bind_group_layout,
             targets: None,
             idle_frames: 0,
+            bindings: RefCell::new(Bindings::new(device, queue)),
         }
     }
 
@@ -476,75 +588,106 @@ impl BackdropRenderer {
         self.idle_frames += 1;
         if self.idle_frames > IDLE_FRAMES_BEFORE_RELEASE {
             self.targets = None;
+            self.bindings.get_mut().release();
             self.idle_frames = 0;
         }
     }
 
+    /// Write the uniforms this frame's passes staged, before the frame's
+    /// commands are submitted, and let go of the bind groups it did not use.
+    ///
+    /// A frame that blurred nothing lets go of nothing: the targets outlive a
+    /// few such frames on purpose, and so do the groups that bind them.
+    pub fn finish(&self) {
+        let bindings = &mut *self.bindings.borrow_mut();
+        let Some(buffer) = &bindings.buffer else {
+            return;
+        };
+        if bindings.staged.is_empty() {
+            return;
+        }
+        bindings.queue.write_buffer(buffer, 0, &bindings.staged);
+        bindings.staged.clear();
+        bindings
+            .kept
+            .retain_mut(|kept| std::mem::take(&mut kept.used));
+    }
+
+    /// Stage `params` for a pass reading `view`, and `mask` for the masked
+    /// passes, and answer where the pass finds them.
     fn bind(
         &self,
         device: &wgpu::Device,
         view: &wgpu::TextureView,
+        mask: Option<&wgpu::TextureView>,
         params: Params,
-    ) -> wgpu::BindGroup {
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Backdrop Params"),
-            contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Backdrop Bind Group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer.as_entire_binding(),
-                },
-            ],
-        })
+    ) -> Bound {
+        let bindings = &mut *self.bindings.borrow_mut();
+        let offset = bindings.stage(device, params);
+        let buffer = bindings.buffer.as_ref().expect("staging made the buffer");
+        let index = bindings
+            .kept
+            .iter()
+            .position(|kept| kept.view == *view && kept.mask.as_ref() == mask)
+            .unwrap_or_else(|| {
+                let group = self.make_group(device, buffer, view, mask);
+                bindings.kept.push(KeptGroup {
+                    view: view.clone(),
+                    mask: mask.cloned(),
+                    group,
+                    used: false,
+                });
+                bindings.kept.len() - 1
+            });
+        let kept = &mut bindings.kept[index];
+        kept.used = true;
+        Bound {
+            group: kept.group.clone(),
+            offset,
+        }
     }
 
-    /// The same bindings plus a coverage texture, for the masked composite.
-    fn bind_masked(
+    fn make_group(
         &self,
         device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
         view: &wgpu::TextureView,
-        mask: &wgpu::TextureView,
-        params: Params,
+        mask: Option<&wgpu::TextureView>,
     ) -> wgpu::BindGroup {
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Backdrop Params"),
-            contents: bytemuck::cast_slice(&[params]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Backdrop Mask Bind Group"),
-            layout: &self.mask_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&self.sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer,
+                    offset: 0,
+                    size: Some(PARAMS_SIZE),
+                }),
+            },
+        ];
+        // The masked passes read the coverage texture as well.
+        let (layout, label) = match mask {
+            Some(mask) => {
+                entries.push(wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(mask),
-                },
-            ],
+                });
+                (&self.mask_bind_group_layout, "Backdrop Mask Bind Group")
+            }
+            None => (&self.bind_group_layout, "Backdrop Bind Group"),
+        };
+        render_stats::record_backdrop_allocation(GpuObject::BindGroup);
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout,
+            entries: &entries,
         })
     }
 
@@ -556,7 +699,7 @@ impl BackdropRenderer {
         pipeline: &wgpu::RenderPipeline,
         target: &wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
-        bind_group: &wgpu::BindGroup,
+        bind: &Bound,
         clip_records: Option<&wgpu::BindGroup>,
         viewport: (u32, u32, u32, u32),
         label: &str,
@@ -580,7 +723,7 @@ impl BackdropRenderer {
         let (x, y, w, h) = viewport;
         pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
+        pass.set_bind_group(0, &bind.group, &[bind.offset]);
         if let Some(clip_records) = clip_records {
             pass.set_bind_group(1, clip_records, &[]);
         }
@@ -657,7 +800,7 @@ impl BackdropRenderer {
         // Binding 0 goes unread by this pipeline; the working texture fills it
         // because the scene is the target and may not be bound as a resource
         // at the same time.
-        let bind = self.bind_masked(device, &targets.working_views[0], mask.view, params);
+        let bind = self.bind(device, &targets.working_views[0], Some(mask.view), params);
         self.pass(
             encoder,
             &self.outline,
@@ -721,7 +864,7 @@ impl BackdropRenderer {
         };
 
         // 1. Scene region → working[0], shrunk.
-        let bind = self.bind(device, &targets.scene_view, base);
+        let bind = self.bind(device, &targets.scene_view, None, base);
         self.pass(
             encoder,
             &self.downsample,
@@ -742,6 +885,7 @@ impl BackdropRenderer {
             let bind = self.bind(
                 device,
                 &targets.working_views[index],
+                None,
                 Params {
                     src_rect: work_rect,
                     direction,
@@ -768,12 +912,12 @@ impl BackdropRenderer {
         let (pipeline, bind, label) = match mask {
             Some(mask) => (
                 &self.composite_mask,
-                self.bind_masked(device, &targets.working_views[0], mask.view, params),
+                self.bind(device, &targets.working_views[0], Some(mask.view), params),
                 "Backdrop Composite Mask",
             ),
             None => (
                 &self.composite,
-                self.bind(device, &targets.working_views[0], params),
+                self.bind(device, &targets.working_views[0], None, params),
                 "Backdrop Composite",
             ),
         };
@@ -802,6 +946,7 @@ impl BackdropRenderer {
         let bind = self.bind(
             device,
             &targets.scene_view,
+            None,
             // The blit runs `fs_downsample`, which reads `src_rect` and
             // nothing else. A `curvature` and a `dst_size` were set here too
             // and went unread — copied from the passes that do read them, and

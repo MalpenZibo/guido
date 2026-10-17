@@ -293,6 +293,20 @@ gaussian passes ping-ponging between two working textures, then a composite
 back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
+What those passes read is kept across frames, as the shape pipeline's
+instances are. Each pass takes the next slot of one uniform buffer, read
+through a dynamic offset; the slots are gathered on the CPU and written in a
+single `write_buffer` when the frame is finished, and the buffer is replaced by
+one twice its size only when a frame needs more slots than it holds — the
+frame goes on at the slot it reached, so the next frame like it fits. A bind
+group says only which textures a pass reads — the scene or a working texture,
+and the coverage mask for a frosted text — so one is made the first time a
+texture is bound and kept while frames go on binding it, and let go after a
+frame that blurred without it. A frame that blurs what the last one blurred
+creates neither: `backdrop_allocations` in `render_stats` counts both, and
+`a_frame_that_blurs_its_backdrop_again_makes_no_buffer_and_no_bind_group` in
+`tests/draw_calls_are_counted.rs` holds it at zero.
+
 The viewport is the shape's world box, because a viewport is four integers and
 has no other shape to be. The **mask** is the shape: `BackdropRegion` carries a
 `PlacedShape` — the same type a clip is — plus the surface scale, and derives

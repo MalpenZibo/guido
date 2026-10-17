@@ -222,7 +222,7 @@ impl Renderer {
         // Initialize image renderer
         let image_quad_renderer = ImageQuadRenderer::new(&device, format, clip_records.layout());
 
-        let backdrop = BackdropRenderer::new(&device, format, clip_records.layout());
+        let backdrop = BackdropRenderer::new(&device, &queue, format, clip_records.layout());
 
         let path_renderer = PathRenderer::new(&device, format, clip_records.layout());
 
@@ -641,6 +641,7 @@ impl Renderer {
         if uses_backdrop {
             self.backdrop.present(&self.device, &mut encoder, view);
         }
+        self.backdrop.finish();
 
         self.queue.submit(std::iter::once(encoder.finish()));
     }
