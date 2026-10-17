@@ -1711,9 +1711,9 @@ mod tests {
         // about.
         let decorated = tree.paint_overflow(root);
         assert!(
-            decorated >= 3.0,
+            decorated.covers(crate::widgets::Outsets::all(3.0)),
             "the stroke and shadow overrides have to reach the published reach, \
-             got {decorated}"
+             got {decorated:?}"
         );
 
         hot.set(false);
@@ -1724,8 +1724,9 @@ mod tests {
             "and all of them come back off"
         );
         assert_ne!(plain.1, FontWeight::BOLD);
+        let plain = tree.paint_overflow(root);
         assert!(
-            tree.paint_overflow(root) < decorated,
+            decorated.covers(plain) && plain != decorated,
             "including the two only the reach can see"
         );
     }

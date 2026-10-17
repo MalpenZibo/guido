@@ -374,7 +374,7 @@ impl Container {
             .into_iter()
             .fold(0.0f32, |most, (x, y)| most.max((x - px).hypot(y - py)));
             let swept = Rect::new(px - far, py - far, far * 2.0, far * 2.0);
-            reach = reach.max(swept.outset_beyond(bounds));
+            reach = reach.max(swept.outset_beyond(bounds).widest());
         }
 
         // Each layer is a transform this container can be in, whether or not it
@@ -892,7 +892,7 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
         // would put a corner pivot in a different place here than on screen.
         transform.about(pivot, bounds).map_rect(painted)
     };
-    moved.outset_beyond(bounds)
+    moved.outset_beyond(bounds).widest()
 }
 
 /// A colour as a state layer resolves it: its background override, then its

@@ -290,23 +290,32 @@ impl Rect {
         self.inset(-amount)
     }
 
-    /// How far this rect stands outside `inner`, on its widest side. Zero when
-    /// it does not.
+    /// Grow this rect by each of `outsets` on its own side.
+    pub fn outset_by(&self, outsets: Outsets) -> Self {
+        Self {
+            x: self.x - outsets.left,
+            y: self.y - outsets.top,
+            width: self.width + outsets.left + outsets.right,
+            height: self.height + outsets.top + outsets.bottom,
+        }
+    }
+
+    /// How far this rect stands outside `inner` on each side, and zero on a
+    /// side where it does not.
     ///
     /// One question about two rects, asked in three places — how far a shadow
     /// and a transform carry a widget's painting past its own box, how far a
     /// child's painting carries past its parent's, and how far a damage rect
     /// has to grow to cover either. Two copies of it would be two copies of
     /// which rect is the outer one.
-    pub fn outset_beyond(&self, inner: Rect) -> f32 {
-        [
-            inner.x - self.x,
-            inner.y - self.y,
-            (self.x + self.width) - (inner.x + inner.width),
-            (self.y + self.height) - (inner.y + inner.height),
-        ]
-        .into_iter()
-        .fold(0.0f32, f32::max)
+    pub fn outset_beyond(&self, inner: Rect) -> Outsets {
+        Outsets {
+            left: inner.x - self.x,
+            top: inner.y - self.y,
+            right: (self.x + self.width) - (inner.x + inner.width),
+            bottom: (self.y + self.height) - (inner.y + inner.height),
+        }
+        .floored()
     }
 
     /// The area two rects share, or `None` where they share none — touching
@@ -397,6 +406,122 @@ impl Rect {
         let (mx, my) = (qx.max(0.0), qy.max(0.0));
         let inside = qx.max(qy).min(0.0);
         inside + superellipse_length(mx, my, n) - r
+    }
+}
+
+/// How far something reaches past a box, on each of its four sides.
+///
+/// What a widget paints outside its own bounds is rarely the same on every
+/// side: a shadow offset downward falls below the box and barely above it, and
+/// a box sliding up is drawn above where it was laid out and nowhere else. One
+/// number for all four widened every side by the furthest of them, so a
+/// 200 pixel vertical slide damaged 200 pixels either side of it as well.
+/// Chromium keeps a box's ink overflow as four outsets for the same reason
+/// (`InkOverflow`), and GTK gives a shadow's extents per side.
+///
+/// A plain number is the same on all four sides, which is what a widget whose
+/// reach has no direction — a glyph's stroke — publishes.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Outsets {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+
+impl Outsets {
+    /// Nothing past any side.
+    pub const ZERO: Self = Self::all(0.0);
+
+    /// The same reach on every side.
+    pub const fn all(value: f32) -> Self {
+        Self {
+            left: value,
+            top: value,
+            right: value,
+            bottom: value,
+        }
+    }
+
+    /// The furthest of the four.
+    pub fn widest(self) -> f32 {
+        self.left.max(self.top).max(self.right).max(self.bottom)
+    }
+
+    /// Each side the further of the two.
+    pub fn max(self, other: Self) -> Self {
+        self.zip(other, f32::max)
+    }
+
+    /// Each side the nearer of the two.
+    pub fn min(self, other: Self) -> Self {
+        self.zip(other, f32::min)
+    }
+
+    /// Whether this reaches at least as far as `other` on every side.
+    pub fn covers(self, other: Self) -> bool {
+        self.left >= other.left
+            && self.top >= other.top
+            && self.right >= other.right
+            && self.bottom >= other.bottom
+    }
+
+    /// No side below zero — `clamp` rather than `max`, so a `NaN` stays one.
+    pub(crate) fn floored(self) -> Self {
+        self.map(|side| side.clamp(0.0, f32::INFINITY))
+    }
+
+    /// The four sides, in the order the fields are declared.
+    pub(crate) fn sides(self) -> [f32; 4] {
+        [self.left, self.top, self.right, self.bottom]
+    }
+
+    pub(crate) fn map(self, f: impl Fn(f32) -> f32) -> Self {
+        Self {
+            left: f(self.left),
+            top: f(self.top),
+            right: f(self.right),
+            bottom: f(self.bottom),
+        }
+    }
+
+    fn zip(self, other: Self, f: impl Fn(f32, f32) -> f32) -> Self {
+        Self {
+            left: f(self.left, other.left),
+            top: f(self.top, other.top),
+            right: f(self.right, other.right),
+            bottom: f(self.bottom, other.bottom),
+        }
+    }
+}
+
+impl From<f32> for Outsets {
+    fn from(value: f32) -> Self {
+        Self::all(value)
+    }
+}
+
+impl std::ops::Add for Outsets {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        self.zip(other, |a, b| a + b)
+    }
+}
+
+impl std::ops::Sub for Outsets {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        self.zip(other, |a, b| a - b)
+    }
+}
+
+impl std::ops::Mul<f32> for Outsets {
+    type Output = Self;
+
+    fn mul(self, k: f32) -> Self {
+        self.map(|side| side * k)
     }
 }
 
@@ -1150,28 +1275,49 @@ mod rect_tests {
     #[test]
     fn a_rect_reports_how_far_it_stands_outside_another() {
         let inner = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let side = |left, top, right, bottom| Outsets {
+            left,
+            top,
+            right,
+            bottom,
+        };
 
-        assert_eq!(inner.outset_beyond(inner), 0.0, "itself");
+        assert_eq!(inner.outset_beyond(inner), Outsets::ZERO, "itself");
         assert_eq!(
             inner.inset(10.0).outset_beyond(inner),
-            0.0,
+            Outsets::ZERO,
             "wholly inside stands outside by nothing"
         );
 
         // Each side on its own, so a sign or a term swapped in one of the four
-        // cannot hide behind the others.
-        assert_eq!(inner.offset(-30.0, 0.0).outset_beyond(inner), 30.0, "left");
-        assert_eq!(inner.offset(0.0, -30.0).outset_beyond(inner), 30.0, "top");
-        assert_eq!(inner.offset(30.0, 0.0).outset_beyond(inner), 30.0, "right");
-        assert_eq!(inner.offset(0.0, 30.0).outset_beyond(inner), 30.0, "bottom");
+        // cannot hide behind the others — and a box moved one way stands
+        // outside on that side alone.
+        let moved = |dx, dy| inner.offset(dx, dy).outset_beyond(inner);
+        assert_eq!(moved(-30.0, 0.0), side(30.0, 0.0, 0.0, 0.0), "left");
+        assert_eq!(moved(0.0, -30.0), side(0.0, 30.0, 0.0, 0.0), "top");
+        assert_eq!(moved(30.0, 0.0), side(0.0, 0.0, 30.0, 0.0), "right");
+        assert_eq!(moved(0.0, 30.0), side(0.0, 0.0, 0.0, 30.0), "bottom");
 
-        // The widest side wins, and it is not the sum of them.
-        assert_eq!(inner.outset(7.0).outset_beyond(inner), 7.0, "all four");
+        assert_eq!(
+            inner.outset(7.0).outset_beyond(inner),
+            Outsets::all(7.0),
+            "all four"
+        );
         assert_eq!(
             Rect::new(-5.0, -40.0, 110.0, 180.0).outset_beyond(inner),
-            40.0,
-            "the widest, not the first"
+            side(5.0, 40.0, 5.0, 40.0),
+            "each its own"
         );
+    }
+
+    /// Growing by what a rect stands outside another gives back the outer
+    /// rect, side by side.
+    #[test]
+    fn growing_by_the_outsets_beyond_a_rect_reaches_the_outer_one() {
+        let inner = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let outer = Rect::new(4.0, -10.0, 130.0, 80.0);
+        assert_eq!(inner.outset_by(outer.outset_beyond(inner)), outer);
+        assert_eq!(inner.outset_by(Outsets::all(3.0)), inner.outset(3.0));
     }
 }
 

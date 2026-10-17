@@ -161,7 +161,7 @@ impl PaintContext<'_> {
         // its flag while it waits, and `reuse_cached` refuses a dirty child
         // its cache, so coming back into view still paints it.
         if let Some(ref cull) = opts.cull_rect {
-            let drawn = child_bounds.outset(self.tree().paint_overflow(child_id));
+            let drawn = child_bounds.outset_by(self.tree().paint_overflow(child_id));
             if !cull.intersects(&drawn) {
                 crate::render_stats::record_paint_child_culled();
                 self.mark_partial();

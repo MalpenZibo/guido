@@ -287,6 +287,9 @@ pub mod widget_prelude {
     /// and for that it needs the thing those three compose into.
     pub use crate::transform::Transform;
     pub use crate::tree::{LayoutCtx, LayoutPass, Tree, WidgetId};
+    /// What [`Tree::set_own_paint_reach`] takes, for a widget whose reach is
+    /// not the same on every side. A plain number is.
+    pub use crate::widgets::Outsets;
     /// What [`PaintContext::paint_child`](crate::renderer::PaintContext::paint_child)
     /// is given. A widget with the ordinary children of an ordinary box passes
     /// `&ChildPaintOptions::default()`; the fields are for a parent that
