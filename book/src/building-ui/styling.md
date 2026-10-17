@@ -289,6 +289,21 @@ container().width(move || fraction(volume.get() as f32 / 100.0))
 # }
 ```
 
+### Natural Size
+
+`natural()` is the size of the content, whatever the parent offers: it is
+never cut to the parent, and runs past its edge unless the parent clips — see
+[Natural Size](../concepts/layout.md#natural-size) in the Layout chapter.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().width(natural()).child(text("Never wrapped, never cut"))
+# ;
+# }
+```
+
 ## Static or Reactive
 
 Every property that survives to paint takes a signal, a closure, or a plain

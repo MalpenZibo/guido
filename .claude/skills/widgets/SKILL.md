@@ -151,6 +151,16 @@ it. A child's own alignment reaches the stack in `LayoutHints`, read untracked;
 `Container::layout` reads it tracked, which is what lays the stack out again
 when it changes.
 
+A child is never larger than its parent offers — an exact length included,
+which `exact_within` cuts to the parent's maximum — unless its length is
+`natural()`. `Container::own_constraints` lifts the parent's minimum and
+maximum on that axis before anything else in the layout reads them, so the
+content is measured unbounded and the box is its content's size; `least_size`
+then holds it there in a row too short for it. It overhangs the parent, cut
+off only where the parent has `Overflow::Hidden`. A custom `Layout` written to
+lay children out unbounded so they keep their size while a clipping parent
+changes around them is what `natural()` is for.
+
 Children: `.child()` for a static one — a widget, or an `Option` of one that
 is simply absent when `None`. `.children()` takes
 whatever `IntoChildren` fits — an iterator of widgets is static, a closure is

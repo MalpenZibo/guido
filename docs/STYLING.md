@@ -348,6 +348,17 @@ container()
     .height(at_least(30.0).at_most(100.0))
 ```
 
+### Natural Size
+
+```rust
+container().width(natural()).height(natural())
+```
+
+The content's own size, measured with no maximum and never cut to the parent's:
+the box runs past a smaller parent and is cut off only where that parent has
+`Overflow::Hidden`. Its own bounds still apply (`natural().at_most(300.0)`), and
+a row too short for it holds it at its size as it holds an exact length.
+
 ## Static or Reactive
 
 Every property that survives to paint takes a signal, a closure, or a plain

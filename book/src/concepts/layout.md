@@ -339,6 +339,49 @@ Along a scrolled axis there is no end to fill to, so `fill()` there is the
 container's content size. A scroller that should give it the visible area says
 so with `Scroll::vertical().fill_viewport(true)` — see the Container chapter.
 
+### Natural Size
+
+Every other length is cut to what the parent offers: `.width(240.0)` in a
+parent 100 wide is 100 wide, and its content is laid out in 100. `natural()`
+is the one that is not. The content is measured with no maximum on that axis
+— a label neither wraps nor ellipsizes — and the container is that size
+whatever its parent is, running past the parent's edge. It is cut off there
+only if the parent clips, with `Overflow::Hidden`; otherwise it paints where it
+runs to. It is CSS's `max-content`, SwiftUI's `fixedSize`.
+
+That is what a shape that changes size around its content wants. An island
+that springs from one view's width to the next would re-wrap its label at
+every frame of the spring; with the content at its natural size, the clipped
+island uncovers and covers it instead:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let expanded = create_signal(false);
+container()
+    .width((move || if expanded.get() { 320.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
+    .height(40.0)
+    .corners(20.0)
+    .overflow(Overflow::Hidden)
+    .layout(ZStack::new().align(Alignment::CENTER))
+    .child(
+        container()
+            .width(natural())
+            .layout(Flex::row().spacing(8.0))
+            .child(text("Now playing"))
+            .child(text("A song with a long title")),
+    )
+# ;
+# }
+```
+
+A clipping parent asks nothing of its content's size, so the island can be
+narrower than what it holds without a layout of its own. The length's own
+bounds still apply — `natural().at_most(300.0)` is the content's size up to
+300 — and in a row too short for its children a natural child is held at its
+size, as an exact one is.
+
 ## Children That Do Not Fit
 
 When a row's children are wider than the row, the children that can be
@@ -347,6 +390,7 @@ narrower give the room up, in proportion to their widths — CSS's
 
 - a container with an exact `width` keeps it, however deep it sits — an icon
   inside a padded button is not squashed by a long title beside the button
+- a container with a `natural()` width keeps the width of what it holds
 - a text that ellipsizes can go down to the `…`, one that wraps to its widest
   word, and one that does neither keeps its whole width
 - a container that clips (`Overflow::Hidden`) or scrolls can go down to
@@ -519,7 +563,23 @@ An alignment places a child in the room the stack has left over, so a
 follower that fills the stack on an axis has none there and stays put: a
 background behind a centred label is still exactly the stack's size. A child
 larger than the stack is shared out the same way and overhangs instead —
-`CENTER` by the same amount on both sides.
+`CENTER` by the same amount on both sides. A child is only larger than the
+stack when it is at its [natural size](#natural-size), since every other
+length is cut to what the stack offers:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .width(100.0)
+    .overflow(Overflow::Hidden)
+    .layout(ZStack::new().align(Alignment::CENTER))
+    // 160 wide in a stack of 100: 30 past each side, and cut there
+    .child(container().width(natural()).child(container().width(160.0).height(20.0)))
+# ;
+# }
+```
 
 ## API Reference
 
