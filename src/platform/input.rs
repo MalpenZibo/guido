@@ -1025,7 +1025,12 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<K
         Keysym::Down => return Some(Key::Down),
         Keysym::Home => return Some(Key::Home),
         Keysym::End => return Some(Key::End),
+        Keysym::Prior | Keysym::KP_Prior => return Some(Key::PageUp),
+        Keysym::Next | Keysym::KP_Next => return Some(Key::PageDown),
         _ => {}
+    }
+    if let Some(n) = function_key(keysym) {
+        return Some(Key::F(n));
     }
 
     // Character input: utf8 carries the composed result, so it wins whenever
@@ -1052,6 +1057,12 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<K
     }
 
     None
+}
+
+/// Which of F1 to F12 a keysym is. Their keysyms are consecutive.
+fn function_key(keysym: Keysym) -> Option<u8> {
+    let offset = keysym.raw().checked_sub(Keysym::F1.raw())?;
+    (offset < 12).then(|| offset as u8 + 1)
 }
 
 /// The character a keysym stands for, ignoring any composition.
@@ -1107,6 +1118,36 @@ mod tests {
     fn a_release_falls_back_to_the_keysym() {
         let e = Keysym::new(0x65);
         assert_eq!(keysym_to_key(e, None, false), Some(Key::Char('e')));
+    }
+
+    /// Page Up, Page Down and the function keys are named keys, from the main
+    /// block and the keypad alike, on a press and on a release.
+    #[test]
+    fn paging_and_function_keys_reach_widgets() {
+        let named = [
+            (Keysym::Prior, Key::PageUp),
+            (Keysym::Next, Key::PageDown),
+            (Keysym::KP_Prior, Key::PageUp),
+            (Keysym::KP_Next, Key::PageDown),
+            (Keysym::F1, Key::F(1)),
+            (Keysym::F2, Key::F(2)),
+            (Keysym::F3, Key::F(3)),
+            (Keysym::F4, Key::F(4)),
+            (Keysym::F5, Key::F(5)),
+            (Keysym::F6, Key::F(6)),
+            (Keysym::F7, Key::F(7)),
+            (Keysym::F8, Key::F(8)),
+            (Keysym::F9, Key::F(9)),
+            (Keysym::F10, Key::F(10)),
+            (Keysym::F11, Key::F(11)),
+            (Keysym::F12, Key::F(12)),
+        ];
+        for (keysym, key) in named {
+            assert_eq!(keysym_to_key(keysym, None, true), Some(key), "{keysym:?}");
+            assert_eq!(keysym_to_key(keysym, None, false), Some(key), "{keysym:?}");
+        }
+        // F13 is past what a widget is told about, and is not F(13).
+        assert_eq!(keysym_to_key(Keysym::F13, None, true), None);
     }
 
     /// Ordinary typing still goes through the text, not the keysym: that is
