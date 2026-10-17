@@ -25,7 +25,9 @@ pub struct RenderNode {
     pub local_transform: Transform,          // Transform relative to parent
     pub parent_position: Transform,          // Position set by parent (for cache reuse)
     pub pivot: Pivot,                        // What rotation and scale act about
-    pub opacity: f32,                        // Multiplied into this subtree's every draw
+    pub opacity: f32,                        // This subtree's fade
+    pub opacity_mode: OpacityMode,           // As one layer (Auto) or draw by draw
+    pub blur: Option<f32>,                   // Blurs the subtree, as a layer
     pub commands: SmallVec<[Rc<DrawCommand>; 2]>,        // Draw commands (shapes, text, images)
     pub children: Vec<Rc<RenderNode>>,       // Child nodes, Rc-shared with the paint cache
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
@@ -212,14 +214,147 @@ attribute of the textured quad for images and transformed text, and a uniform of
 the backdrop composite and contour.
 
 That is *modulation*: each draw faded on its own, so where two children
-overlap the overlap shows through. The alternative — drawing the subtree into
-an offscreen target and compositing it once, as CSS and Flutter's `Opacity` do
-— is correct for overlaps and a render pass of its own; it is not built, and
-the `opacity` a container declares is where it would go.
+overlap the overlap shows through. It is what `OpacityMode::Modulate` asks
+for, and what the default, `OpacityMode::Auto`, draws whenever none of the
+subtree's draws overlap — the same picture, for nothing. Where they do
+overlap, the subtree is a layer: see "Layers" below.
 
 A transformed text and an image take the opacity on the vertex rather than into
 their texture, because both textures are cached by content — a fade folded into
 the colour would rasterise the text again on every frame of it.
+
+### Layers
+
+A container whose `opacity` is below one under `OpacityMode::Auto`, or which
+declares a `blur`, asks to be composited as one picture — CSS's `opacity` and
+`filter`, Compose's `CompositingStrategy.Auto`. `flatten_as_layer` in
+`src/renderer/flatten.rs` answers in three steps.
+
+**Its content is flattened in the node's own space**, after its own transform
+and before every one above it, under none of the clips around it and at full
+opacity. The scratch opens a group of its own for it, and the clip tree numbers
+the clips it places (`ClipTree::enter_segment`), because a layer inside it
+interleaves its own clips with them.
+
+**Then the content says what it is.** `scan_layer` takes the box every draw
+lands in, and whether two of those boxes meet — the same rect test the draw
+groups split on, against the box each command covers. A path both filled and
+stroked counts as meeting itself: its stroke is drawn over its fill.
+
+- A fade whose draws never meet needs no texture, and nor does a fade over a
+  backdrop blur: in a layer the frost would see only the layer, and pop back
+  to frosting the surface when the fade ended. The content is put back where
+  the node stands by `elide_layer`: carried out of the node's space by
+  its world transform, faded by the node's opacity and every ancestor's, and
+  cut by the clips around it — the replay a cached subtree takes, with a
+  transform where the offset was (`ClipTree::replay` takes one now). Its clips
+  are dropped first and placed again; nothing outside the layer was cut against
+  them, since the first was placed under none. A node elided this way is cached
+  like any other.
+- Anything else is a layer: a declared blur, an overlap, or a layer inside
+  it.
+  `finish_layer` moves the content into its texture's space — the box it
+  covers, a texel of transparent edge round it, its origin on an even texel —
+  and out of the surface's groups into a `LayerPass`, and pushes one
+  `DrawCommand::Layer` where the node stands: in the image bucket, at the
+  node's opacity and every ancestor's, by its world transform, cut by the clips
+  around it.
+
+**The content is drawn on the device's pixel grid**, Chromium's way: a node
+that is only moved has its content nudged by the fraction of a pixel it stands
+off the grid, so the texture's texels land on the surface's pixels and the
+layer is as sharp as the content drawn without one. A move by whole device
+pixels changes nothing in the content and only lays the texture down again; a
+move to a new fraction draws it again. A turned or stretched node is
+resampled whatever is done, so its content is drawn unnudged and its own
+transform only re-composites.
+
+**The composite is cached like any command.** A subtree holding a layer keeps
+its flatten entry, composite and all (`CachedFlatten::holds_layers`), and is
+replayed while it moves by whole device pixels. A replay emits no pass — the
+layer's content is not among the commands an entry keeps — so the frame lists
+the layer in `FlatFrame::kept` and the renderer lays down the texture it already
+has. Should that texture not be there to lay down — released, drawn at
+another scale, or drawn from pixels still on their way — the loop asks before
+drawing anything (`Renderer::lacks_kept_layers`) and paints and flattens the
+frame again in full, which hands over the layer's content: no frame is
+presented without it. A layer the surface's edge cut, or left out for being
+wholly off the surface, holds only where it stands, so its entry replays only
+there (`CachedFlatten::cut_by_surface`): moved, it is flattened afresh. A
+layer's own clips are left out of the entries of the subtrees above it: they
+are in its texture's space, and drawn from it.
+
+What the content says to the compositor is not drawn: an input region, or the
+compositor's half of a backdrop blur. Those are left out of the texture and
+said again where the layer stands on the surface, under twins of the clips
+that cut them (`ClipTree::twin_segment`), so the regions read off the frame are
+the ones the same tree publishes without a layer.
+
+The texture is cut to what of the node's space can reach the surface, and to
+`MAX_LAYER_TEXELS` a side.
+
+**The frame carries its layers ahead of the surface.** `FlatFrame::passes`
+lists them, a layer inside another first, each with its commands, its groups
+and its texture's size in texels; `FlatFrame::surface_layers` is what is left.
+The renderer draws every pass into its texture before the surface, so each
+composite samples a texture already finished, and draws the composite as a
+textured quad through the image pipeline — premultiplied, which is what the
+shape and text pipelines leave in a texture cleared transparent.
+
+**A texture is kept while it holds the content.** `LayerTextures`
+(`src/renderer/layer_pass.rs`) keeps one per node, and at the start of a frame
+compares the pass's commands with the ones it drew — the same command (or an
+equal one: a container that repaints for its own opacity draws an equal
+background, a new value), the same transform, opacity and clip, at the same
+scale and size. A layer inside it drawn again changes it too, and so does an
+image that was drawn unsettled — its pixels still on their way — which the
+frame they land in may not show in any command. A kept texture costs its
+content nothing: its groups are not even prepared.
+
+**A blur runs over the texture.** The backdrop's passes — shrink into a working
+texture, then a gaussian each way (`BackdropRenderer::blur_layer`) — read the
+content's texture and write a blurred one the composite reads instead, larger
+by the blur's reach. They go through the backdrop's own bindings — a slot of
+its one uniform buffer per pass, and the bind group kept for each texture — so
+a blur that animates makes no buffer and no bind group after its first frame,
+and a frame whose only blur is a layer's is not an idle one for them. The shrink follows the radius (`BlurPlan` in
+`src/renderer/layer_blur.rs`): none for a small blur, so a two-pixel softening
+is not drawn blocky, up to the backdrop's quarter and beyond only where the
+kernel would not fit its taps. A blurred texture is kept with the content and
+the radius it was blurred by, so a radius that animates blurs again without
+drawing again. The container's damage is sized by `blur_reach_bound`, which no
+blur at any scale of one or more exceeds.
+
+**A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
+effect's scene is the layer's texture rather than the surface's. Only a
+declared blur — or a layer holding a layer — puts a frost inside one; a fade
+over a frost is drawn draw by draw. A backdrop
+replaces what is beneath it; over the opaque surface one straight-alpha blend
+does that, but a layer's texture is transparent wherever its content is not, so
+there the composite is an erase by its coverage and then an add of the
+premultiplied blur (`fs_erase`, `fs_replace`).
+
+**Textures come from a pool** and go back to it: allocated in steps of 64
+texels, so a layer whose size animates keeps its texture; a layer its own
+surface has not named for `IDLE_FRAMES_BEFORE_RELEASE` of that surface's frames
+— the backdrop target's 120 — gives its textures to the pool, and the pool
+drops what nobody took after as many again. Its own surface's frames, because
+the renderer is shared: a still panel beside a surface animating at full rate
+would otherwise lose its texture in two seconds. One no surface has named for
+thirty times as long is let go regardless, which is what releases the texture
+of a surface that has gone.
+
+`group_opacity_fades_an_overlap_as_one_picture`,
+`an_opacity_over_nothing_that_overlaps_is_drawn_without_a_layer`,
+`a_layer_blurred_by_nothing_is_the_scene_without_one`, `layers_nest_inner_first`,
+`a_backdrop_inside_a_layer_frosts_only_the_layer`,
+`a_fading_frost_keeps_frosting_what_is_beneath_it`,
+`a_layer_off_the_pixel_grid_draws_its_content_on_it`,
+`clips_inside_a_layer_cut_where_they_cut_without_one` and
+`paths_inside_a_layer_are_drawn_where_they_are_without_one` are the goldens;
+`tests/draw_calls_are_counted.rs` counts the passes and
+`tests/paint_cache_across_frames.rs` says a fade hands over the content it drew.
+`benches/fade` says what a fade costs a frame, against modulation.
 
 ### RenderLayer Ordering
 
@@ -1061,3 +1196,5 @@ fn paint(&self, ctx: &mut PaintContext) {
 | `src/renderer/path_mesh.rs` | lyon's tessellation, and the fringe that anti-aliases it |
 | `src/renderer/path_pipeline.rs` | The mesh cache, the frame's triangles, the path pipeline |
 | `src/renderer/textured_quad.rs` | The textured-quad pipeline, the frame's quad vertices, runs |
+| `src/renderer/layer_pass.rs` | A layer's texture across frames, and the pool |
+| `src/renderer/layer_blur.rs` | How a layer's blur is run, and how far it reaches |

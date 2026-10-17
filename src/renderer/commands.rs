@@ -214,7 +214,11 @@ impl From<(f32, f32, f32, f32)> for CornerRadii {
 ///
 /// All coordinates and sizes are in the node's local coordinate space.
 /// World transforms are applied during tree flattening.
-#[derive(Debug, Clone)]
+///
+/// Comparable, because a layer's texture is kept for as long as what it was
+/// drawn from is the same: a container that repaints only to change its own
+/// opacity draws the same background again, as a new value.
+#[derive(Debug, Clone, PartialEq)]
 pub enum DrawCommand {
     /// Draw a rounded rectangle with optional gradient, border, shadow.
     RoundedRect {
@@ -415,6 +419,26 @@ pub enum DrawCommand {
         align: TextAlign,
         /// The lines the text it frosts is cut to, so the mask is cut there too.
         fit: Option<LineFit>,
+    },
+
+    /// A layer's texture, laid over what is beneath it: a subtree drawn
+    /// offscreen and composited as one picture.
+    ///
+    /// No widget paints this. Flatten writes it in place of the subtree, once
+    /// it has decided the subtree is a layer — see
+    /// [`OpacityMode`](super::tree::OpacityMode) and
+    /// [`RenderNode::blur`](super::tree::RenderNode::blur) — and the renderer
+    /// draws it as a textured quad, at the opacity, through the clips and by
+    /// the transform the subtree was drawn under.
+    Layer {
+        /// The node composited, which is also what the texture is kept by.
+        id: super::tree::NodeId,
+        /// What the texture covers, in the node's own space, before any blur
+        /// spreads it.
+        frame: Rect,
+        /// The blur run over the texture before it is laid down, in logical
+        /// pixels; zero for none.
+        blur: f32,
     },
 
     /// Draw an image.

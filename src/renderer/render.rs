@@ -10,15 +10,15 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
-use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask};
-use super::clip::ClipChains;
+use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask, Scene};
 use super::clip_records::ClipRecords;
 use super::commands::{CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
-use super::flatten::{CommandLayer, FlatFrame, FlattenedCommand};
+use super::flatten::{FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
+use super::layer_pass::LayerTextures;
 use super::merge::MergeRecord;
 use super::path_pipeline::PathRenderer;
 use super::text::TextRenderState;
@@ -50,6 +50,10 @@ pub struct Renderer {
     // Uniform buffer
     uniform_buffer: Buffer,
     uniform_bind_group: BindGroup,
+    /// The same, for each layer's texture a frame draws into: a texture is not
+    /// the surface's size, and the shapes are projected against the size of
+    /// whatever they are drawn into. Indexed by pass, and grown, never shrunk.
+    layer_uniforms: Vec<(Buffer, BindGroup)>,
 
     // Instance buffer (resized as needed)
     instance_buffer: Buffer,
@@ -89,6 +93,8 @@ pub struct Renderer {
     /// What each group's draws address, one entry per group, rebuilt per frame.
     prepared_layers: Vec<PreparedLayer>,
     backdrop: BackdropRenderer,
+    /// The textures layers are drawn into, kept across frames.
+    layer_textures: LayerTextures,
 
     // Screen dimensions
     screen_width: f32,
@@ -236,6 +242,7 @@ impl Renderer {
             index_buffer,
             uniform_buffer,
             uniform_bind_group,
+            layer_uniforms: Vec::new(),
             instance_buffer,
             instance_buffer_capacity: initial_capacity,
             merge_buffer,
@@ -253,6 +260,7 @@ impl Renderer {
             text_quads: Vec::new(),
             prepared_layers: Vec::new(),
             backdrop,
+            layer_textures: LayerTextures::new(format),
             screen_width: 800.0,
             screen_height: 600.0,
             scale_factor: 1.0,
@@ -390,7 +398,76 @@ impl Renderer {
                 &self.instance_buffer,
                 &self.merge_buffer,
             );
+            for (uniforms, bind_group) in &mut self.layer_uniforms {
+                *bind_group = Self::make_bind_group(
+                    &self.device,
+                    &self.bind_group_layout,
+                    uniforms,
+                    &self.instance_buffer,
+                    &self.merge_buffer,
+                );
+            }
         }
+    }
+
+    /// Write the uniforms the shapes drawn into `target` are projected with:
+    /// the surface's for `0`, a layer's texture for pass `target - 1`.
+    fn write_target_uniforms(&mut self, target: usize, size: (u32, u32)) {
+        let uniforms = ShaderUniforms::new(size.0 as f32, size.1 as f32, self.scale_factor);
+        if target == 0 {
+            self.queue
+                .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+            return;
+        }
+        while self.layer_uniforms.len() < target {
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Layer Uniform Buffer"),
+                size: std::mem::size_of::<ShaderUniforms>() as u64,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = Self::make_bind_group(
+                &self.device,
+                &self.bind_group_layout,
+                &buffer,
+                &self.instance_buffer,
+                &self.merge_buffer,
+            );
+            self.layer_uniforms.push((buffer, bind_group));
+        }
+        self.queue.write_buffer(
+            &self.layer_uniforms[target - 1].0,
+            0,
+            bytemuck::cast_slice(&[uniforms]),
+        );
+    }
+
+    /// The shape pipeline's bind group for `target`.
+    fn target_bind_group(&self, target: usize) -> &BindGroup {
+        match target {
+            0 => &self.uniform_bind_group,
+            pass => &self.layer_uniforms[pass - 1].1,
+        }
+    }
+
+    /// Whether `frame` lays down a layer from a texture an earlier frame drew
+    /// — one a cached subtree replayed, with no pass — that is not there to
+    /// lay down, or not as it has to be. The caller paints and flattens the
+    /// frame again in full, which hands over the layer's content.
+    pub fn lacks_kept_layers(&self, frame: &FlatFrame<'_>) -> bool {
+        self.layer_textures.lacks(frame.kept, self.scale_factor)
+    }
+
+    /// Drop every texture the layers hold, as releasing them would.
+    #[cfg(feature = "testing")]
+    pub(crate) fn forget_layer_textures(&mut self) {
+        self.layer_textures.forget();
+    }
+
+    /// How many textures the layers hold, in use or in the pool.
+    #[cfg(feature = "testing")]
+    pub(crate) fn layer_textures(&self) -> usize {
+        self.layer_textures.textures()
     }
 
     /// How many image textures are cached.
@@ -483,28 +560,61 @@ impl Renderer {
         clear_color: Color,
     ) {
         let FlatFrame {
-            commands,
             layers,
             clips,
+            passes,
+            ..
         } = *frame;
-        // Update uniform buffer with current screen size (in logical pixels)
-        let uniforms =
-            ShaderUniforms::new(self.screen_width, self.screen_height, self.scale_factor);
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+        let scale = self.scale_factor;
+        // Update uniform buffer with current screen size (in physical pixels)
+        self.write_target_uniforms(0, (self.screen_width as u32, self.screen_height as u32));
 
-        self.prepare_layers(commands, layers, clips);
+        // Which layers keep the texture an earlier frame drew, and which are
+        // drawn again — decided before anything is prepared, so a layer that
+        // is kept costs its content nothing at all this frame.
+        self.layer_textures
+            .begin_frame(&self.device, &self.image_quad_renderer, frame, scale);
+
+        self.prepare_layers(frame);
 
         // A backdrop effect reads pixels already drawn, which a pass cannot do
         // to its own attachment: the frame goes to an offscreen target and is
         // blitted over at the end. Frames without one draw straight to the
-        // swapchain and never allocate it.
-        let uses_backdrop = layers.iter().any(|layer| !layer.backdrop.is_empty());
-        if uses_backdrop {
-            self.backdrop
-                .ensure_targets(&self.device, width.max(1), height.max(1));
-        } else {
-            self.backdrop.note_unused();
+        // swapchain and never allocate it. One inside a layer reads the
+        // layer's texture instead, which needs the working textures and not
+        // the surface's target.
+        let surface_start = frame.surface_start();
+        let uses_backdrop = layers[surface_start..]
+            .iter()
+            .any(|layer| !layer.backdrop.is_empty());
+        let mut largest = uses_backdrop.then_some((width, height));
+        for (pass, plan) in passes.iter().zip(self.layer_textures.plans()) {
+            if let Some(scene) = &plan.draw
+                && layers[pass.groups.clone()]
+                    .iter()
+                    .any(|layer| !layer.backdrop.is_empty())
+            {
+                let (w, h) = largest.unwrap_or((0, 0));
+                largest = Some((w.max(scene.width), h.max(scene.height)));
+            }
+        }
+        match largest {
+            Some(largest) => self.backdrop.ensure_targets(
+                &self.device,
+                uses_backdrop.then_some((width.max(1), height.max(1))),
+                largest,
+            ),
+            // A layer's blur runs the same passes through the same bindings,
+            // so a frame that blurs only a layer is not an idle one.
+            None if self
+                .layer_textures
+                .plans()
+                .iter()
+                .any(|plan| plan.blur.is_some()) =>
+            {
+                self.backdrop.note_used()
+            }
+            None => self.backdrop.note_unused(),
         }
 
         self.clip_records
@@ -534,109 +644,57 @@ impl Renderer {
                 label: Some("Renderer Encoder"),
             });
 
-        let scene_view = uses_backdrop.then(|| self.backdrop.scene_view()).flatten();
-        let target = scene_view.unwrap_or(view);
-
-        let scale = self.scale_factor;
-        {
-            let clear = wgpu::LoadOp::Clear(wgpu::Color {
-                r: clear_color.r as f64,
-                g: clear_color.g as f64,
-                b: clear_color.b as f64,
-                a: clear_color.a as f64,
-            });
-            let mut load = clear;
-            let mut render_pass = begin_pass(&mut encoder, target, load);
-            load = wgpu::LoadOp::Load;
-
-            // Groups are drawn in order; within a group, bucket order. The
-            // shape pipeline is re-bound per draw because the image and text
-            // renderers replace it.
-            for (index, layer) in self.prepared_layers.iter().enumerate() {
-                if !layers[index].backdrop.is_empty() {
-                    // The effect samples the target, so the pass has to end
-                    // and its contents be stored before it can run.
-                    drop(render_pass);
-                    let clip_records = self.clip_records.bind_group();
-                    for command in &commands[layers[index].backdrop.clone()] {
-                        if let Some(region) = command_to_backdrop_region(command, scale) {
-                            self.backdrop
-                                .apply(&self.device, &mut encoder, &region, clip_records);
-                        } else if let Some(frost) = command_to_text_backdrop(command, scale) {
-                            // The mask is rasterized and submitted on its own
-                            // encoder, so it is ready by the time this frame's
-                            // encoder reaches the composite below.
-                            if let Some(view) =
-                                self.text_mask.mask(&self.device, &self.queue, &frost.spec)
-                            {
-                                let mask = CoverageMask {
-                                    view: &view,
-                                    size: frost.spec.size,
-                                };
-                                self.backdrop.apply_masked(
-                                    &self.device,
-                                    &mut encoder,
-                                    &frost.region,
-                                    clip_records,
-                                    mask,
-                                );
-                                // After the blur and before the glyphs: a
-                                // contour on the glass, not under it.
-                                if let Some(outline) = frost.outline {
-                                    self.backdrop.apply_outline(
-                                        &self.device,
-                                        &mut encoder,
-                                        &frost.region,
-                                        clip_records,
-                                        mask,
-                                        outline,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    render_pass = begin_pass(&mut encoder, target, load);
-                }
-
-                if !layer.shapes.is_empty() {
-                    self.draw_shapes(&mut render_pass, layer);
-                }
-
-                if !layer.paths.is_empty() {
-                    self.path_renderer.draw(
-                        &mut render_pass,
-                        layer.paths.clone(),
-                        self.clip_records.bind_group(),
-                    );
-                }
-
-                if !layer.images.is_empty() {
-                    self.image_quad_renderer.render(
-                        &mut render_pass,
-                        &self.image_quads[layer.images.clone()],
-                        self.clip_records.bind_group(),
-                    );
-                }
-
-                if let Some(slot) = layer.text_slot {
-                    self.text_state.render_slot(slot, &mut render_pass);
-                }
-
-                if !layer.text_quads.is_empty() {
-                    self.text_quad_renderer.render(
-                        &mut render_pass,
-                        &self.text_quads[layer.text_quads.clone()],
-                        self.clip_records.bind_group(),
-                    );
-                }
-
-                if !layer.overlay.is_empty() {
-                    self.bind_shape_pipeline(&mut render_pass);
-                    render_pass.draw_indexed(0..6, 0, layer.overlay.clone());
-                    render_stats::record_draw_calls(Pipeline::Shapes, 1);
-                }
+        // Every layer first, a layer inside another before the one it is in,
+        // so each composite samples a texture that is already finished.
+        for (index, pass) in passes.iter().enumerate() {
+            let plan = &self.layer_textures.plans()[index];
+            let (draw, blur) = (plan.draw.clone(), plan.blur);
+            if let Some(scene) = draw {
+                self.encode_groups(
+                    &mut encoder,
+                    &scene.view,
+                    Some(&scene),
+                    pass.groups.clone(),
+                    frame,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                );
+            }
+            if let Some(plan) = blur
+                && let Some(targets) = self.layer_textures.blur_targets(pass.id)
+            {
+                self.backdrop.blur_layer(
+                    &self.device,
+                    &mut encoder,
+                    (&targets.source, targets.source_size),
+                    targets.working(),
+                    targets.region,
+                    plan,
+                );
             }
         }
+
+        let scene = if uses_backdrop {
+            self.backdrop.scene()
+        } else {
+            None
+        };
+        let target = scene
+            .as_ref()
+            .map_or_else(|| view.clone(), |scene| scene.view.clone());
+        let clear = wgpu::LoadOp::Clear(wgpu::Color {
+            r: clear_color.r as f64,
+            g: clear_color.g as f64,
+            b: clear_color.b as f64,
+            a: clear_color.a as f64,
+        });
+        self.encode_groups(
+            &mut encoder,
+            &target,
+            scene.as_ref(),
+            surface_start..layers.len(),
+            frame,
+            clear,
+        );
 
         if uses_backdrop {
             self.backdrop.present(&self.device, &mut encoder, view);
@@ -644,6 +702,7 @@ impl Renderer {
         self.backdrop.finish();
 
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.layer_textures.end_frame(frame.surface);
     }
 
     /// A group's shapes, in order. Where a merged shape is among them, the
@@ -651,7 +710,7 @@ impl Renderer {
     /// other pipeline — which only a frame that merges pays for.
     fn draw_shapes(&self, pass: &mut wgpu::RenderPass<'_>, layer: &PreparedLayer) {
         if !layer.merges {
-            self.bind_shape_pipeline(pass);
+            self.bind_shape_pipeline(pass, layer.target);
             pass.draw_indexed(0..6, 0, layer.shapes.clone());
             render_stats::record_draw_calls(Pipeline::Shapes, 1);
             return;
@@ -666,7 +725,7 @@ impl Renderer {
             let end = (start..layer.shapes.end)
                 .find(|&at| merged(at) != kind)
                 .unwrap_or(layer.shapes.end);
-            self.bind_shape_pipeline(pass);
+            self.bind_shape_pipeline(pass, layer.target);
             if kind {
                 pass.set_pipeline(&self.merged_pipeline);
             }
@@ -676,26 +735,136 @@ impl Renderer {
         }
     }
 
-    fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>) {
+    /// Draw `groups` of `frame` into `target`, in order — `scene` being what
+    /// a backdrop effect among them filters, which is `target` itself.
+    fn encode_groups(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        scene: Option<&Scene>,
+        groups: std::ops::Range<usize>,
+        frame: &FlatFrame<'_>,
+        clear: wgpu::LoadOp<wgpu::Color>,
+    ) {
+        let FlatFrame {
+            commands, layers, ..
+        } = *frame;
+        let scale = self.scale_factor;
+        let mut render_pass = begin_pass(encoder, target, clear);
+        let load = wgpu::LoadOp::Load;
+
+        // Groups are drawn in order; within a group, bucket order. The
+        // shape pipeline is re-bound per draw because the image and text
+        // renderers replace it.
+        for index in groups {
+            if !layers[index].backdrop.is_empty()
+                && let Some(scene) = scene
+            {
+                // The effect samples the target, so the pass has to end
+                // and its contents be stored before it can run.
+                drop(render_pass);
+                let clip_records = self.clip_records.bind_group();
+                for command in &commands[layers[index].backdrop.clone()] {
+                    if let Some(region) = command_to_backdrop_region(command, scale) {
+                        self.backdrop
+                            .apply(&self.device, encoder, scene, &region, clip_records);
+                    } else if let Some(frost) = command_to_text_backdrop(command, scale) {
+                        // The mask is rasterized and submitted on its own
+                        // encoder, so it is ready by the time this frame's
+                        // encoder reaches the composite below.
+                        if let Some(view) =
+                            self.text_mask.mask(&self.device, &self.queue, &frost.spec)
+                        {
+                            let mask = CoverageMask {
+                                view: &view,
+                                size: frost.spec.size,
+                            };
+                            self.backdrop.apply_masked(
+                                &self.device,
+                                encoder,
+                                scene,
+                                &frost.region,
+                                clip_records,
+                                mask,
+                            );
+                            // After the blur and before the glyphs: a
+                            // contour on the glass, not under it.
+                            if let Some(outline) = frost.outline {
+                                self.backdrop.apply_outline(
+                                    &self.device,
+                                    encoder,
+                                    scene,
+                                    &frost.region,
+                                    clip_records,
+                                    mask,
+                                    outline,
+                                );
+                            }
+                        }
+                    }
+                }
+                render_pass = begin_pass(encoder, target, load);
+            }
+
+            let layer = &self.prepared_layers[index];
+            if !layer.shapes.is_empty() {
+                self.draw_shapes(&mut render_pass, layer);
+            }
+
+            if !layer.paths.is_empty() {
+                self.path_renderer.draw(
+                    &mut render_pass,
+                    layer.paths.clone(),
+                    self.clip_records.bind_group(),
+                    layer.target,
+                );
+            }
+
+            if !layer.images.is_empty() {
+                self.image_quad_renderer.render(
+                    &mut render_pass,
+                    &self.image_quads[layer.images.clone()],
+                    self.clip_records.bind_group(),
+                );
+            }
+
+            if let Some(slot) = layer.text_slot {
+                self.text_state.render_slot(slot, &mut render_pass);
+            }
+
+            if !layer.text_quads.is_empty() {
+                self.text_quad_renderer.render(
+                    &mut render_pass,
+                    &self.text_quads[layer.text_quads.clone()],
+                    self.clip_records.bind_group(),
+                );
+            }
+
+            if !layer.overlay.is_empty() {
+                self.bind_shape_pipeline(&mut render_pass, layer.target);
+                render_pass.draw_indexed(0..6, 0, layer.overlay.clone());
+                render_stats::record_draw_calls(Pipeline::Shapes, 1);
+            }
+        }
+    }
+
+    fn bind_shape_pipeline(&self, pass: &mut wgpu::RenderPass<'_>, target: usize) {
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        pass.set_bind_group(0, self.target_bind_group(target), &[]);
         pass.set_bind_group(1, self.clip_records.bind_group(), &[]);
         pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
     }
 
     /// Resolve every group's GPU work before the pass opens, into
-    /// `prepared_layers`.
+    /// `prepared_layers` — one entry per group of the frame, a layer's
+    /// included. A layer that keeps its texture this frame has its groups
+    /// left empty: nothing of its content is drawn.
     ///
     /// Uploads cannot happen inside a render pass, so all shaping, atlas
     /// packing and buffer writes are done here and the pass only issues draws.
-    fn prepare_layers(
-        &mut self,
-        commands: &[FlattenedCommand],
-        layers: &[CommandLayer],
-        clips: &ClipChains,
-    ) {
-        let scale = self.scale_factor;
+    fn prepare_layers(&mut self, frame: &FlatFrame<'_>) {
+        let FlatFrame { layers, passes, .. } = *frame;
 
         self.shape_instance_buf.clear();
         self.path_renderer.begin_frame();
@@ -715,111 +884,180 @@ impl Renderer {
         // renderer, so slots are handed out only to groups that have some.
         let mut next_text_slot = 0;
 
-        for layer in layers {
-            let shapes_start = self.shape_instance_buf.len() as u32;
-            let merges_start = self.merge_records.len();
-            for command in &commands[layer.shapes.clone()] {
-                push_instances(
-                    command,
-                    scale,
-                    &mut self.merge_records,
-                    &mut self.shape_instance_buf,
+        // Every layer's groups, in order, into its own texture — or nothing,
+        // for a layer that keeps the texture an earlier frame drew.
+        for (index, pass) in passes.iter().enumerate() {
+            let target = index + 1;
+            let Some(size) = self.layer_textures.plans()[index]
+                .draw
+                .as_ref()
+                .map(|scene| (scene.width, scene.height))
+            else {
+                self.prepared_layers
+                    .extend(pass.groups.clone().map(|_| PreparedLayer::empty(target)));
+                continue;
+            };
+            self.write_target_uniforms(target, size);
+            self.text_state
+                .set_target(&self.device, &self.queue, target, size);
+            let unsettled = self.image_quad_renderer.unsettled();
+            for group in pass.groups.clone() {
+                let prepared = self.prepare_group(
+                    frame,
+                    group,
+                    target,
+                    (size.0 as f32, size.1 as f32),
+                    &mut next_text_slot,
                 );
+                self.prepared_layers.push(prepared);
             }
-            let shapes = shapes_start..self.shape_instance_buf.len() as u32;
-            let merges = self.merge_records.len() > merges_start;
-
-            let paths_start = self.path_renderer.index_count();
-            for command in &commands[layer.paths.clone()] {
-                self.path_renderer.push(command, scale);
+            // An image inside a layer that was not drawn as it will settle —
+            // its pixels still on their way — leaves the texture holding the
+            // wrong picture, and the frame they land in may change nothing
+            // the layer's commands could show.
+            if self.image_quad_renderer.unsettled() != unsettled {
+                self.layer_textures.unsettle(pass.id);
             }
-            let paths = paths_start..self.path_renderer.index_count();
+        }
 
-            let images_start = self.image_quads.len();
-            if !layer.images.is_empty() {
-                self.image_quad_renderer
-                    .set_screen_size(self.screen_width, self.screen_height);
-                self.image_quad_renderer.prepare(
-                    &self.device,
-                    &self.queue,
-                    &commands[layer.images.clone()],
-                    scale,
-                    &mut self.image_quads,
-                );
-            }
-            let images = images_start..self.image_quads.len();
-
-            self.text_entry_buf.clear();
-            self.text_entry_buf.extend(
-                commands[layer.text.clone()]
-                    .iter()
-                    .filter_map(command_to_text_entry),
-            );
-            let text_quads_start = self.text_quads.len();
-            let mut text_slot = None;
-            if !self.text_entry_buf.is_empty() {
-                let slot = next_text_slot;
-                next_text_slot += 1;
-                let transformed = self.text_state.prepare_layer(
-                    slot,
-                    &self.device,
-                    &self.queue,
-                    &self.text_entry_buf,
-                    clips,
-                    (self.screen_width as u32, self.screen_height as u32),
-                    scale,
-                );
-                // Rotated and scaled text goes through the textured-quad path
-                // instead, to keep the glyphon atlas stable.
-                if transformed.len() < self.text_entry_buf.len() {
-                    text_slot = Some(slot);
-                }
-                if !transformed.is_empty() {
-                    self.text_quad_renderer
-                        .set_screen_size(self.screen_width, self.screen_height);
-                    self.text_quad_renderer.prepare(
-                        &self.device,
-                        &self.queue,
-                        &self.text_entry_buf,
-                        transformed,
-                        scale,
-                        &mut self.text_quads,
-                    );
-                }
-            }
-            let text_quads = text_quads_start..self.text_quads.len();
-
-            let overlay_start = self.shape_instance_buf.len() as u32;
-            self.shape_instance_buf.extend(
-                commands[layer.overlay.clone()]
-                    .iter()
-                    .filter_map(|c| faded_instance(c, scale)),
-            );
-            let overlay = overlay_start..self.shape_instance_buf.len() as u32;
-
-            self.prepared_layers.push(PreparedLayer {
-                shapes,
-                merges,
-                paths,
-                images,
-                text_slot,
-                text_quads,
-                overlay,
-            });
+        // Then the surface's own.
+        let surface = (self.screen_width, self.screen_height);
+        for group in frame.surface_start()..layers.len() {
+            let prepared = self.prepare_group(frame, group, 0, surface, &mut next_text_slot);
+            self.prepared_layers.push(prepared);
         }
 
         self.image_quad_renderer.upload(&self.device, &self.queue);
         self.text_quad_renderer.upload(&self.device, &self.queue);
-        self.path_renderer
-            .upload(&self.device, &self.queue, &self.uniform_buffer);
+        self.path_renderer.upload(
+            &self.device,
+            &self.queue,
+            &self.uniform_buffer,
+            &self.layer_uniforms,
+        );
         self.image_quad_renderer.trim(crate::image_cache_budget());
         self.text_state.end_frame();
+    }
+
+    /// One group's GPU work, drawn into `target` — whose size, in physical
+    /// pixels, is `screen`.
+    fn prepare_group(
+        &mut self,
+        frame: &FlatFrame<'_>,
+        index: usize,
+        target: usize,
+        screen: (f32, f32),
+        next_text_slot: &mut usize,
+    ) -> PreparedLayer {
+        let FlatFrame {
+            commands,
+            layers,
+            clips,
+            ..
+        } = *frame;
+        let scale = self.scale_factor;
+        let layer = &layers[index];
+        let shapes_start = self.shape_instance_buf.len() as u32;
+        let merges_start = self.merge_records.len();
+        for command in &commands[layer.shapes.clone()] {
+            push_instances(
+                command,
+                scale,
+                &mut self.merge_records,
+                &mut self.shape_instance_buf,
+            );
+        }
+        let shapes = shapes_start..self.shape_instance_buf.len() as u32;
+        let merges = self.merge_records.len() > merges_start;
+
+        let paths_start = self.path_renderer.index_count();
+        for command in &commands[layer.paths.clone()] {
+            self.path_renderer.push(command, scale);
+        }
+        let paths = paths_start..self.path_renderer.index_count();
+
+        let images_start = self.image_quads.len();
+        if !layer.images.is_empty() {
+            self.image_quad_renderer.set_screen_size(screen.0, screen.1);
+            let layer_textures = &self.layer_textures;
+            self.image_quad_renderer.prepare(
+                &self.device,
+                &self.queue,
+                &commands[layer.images.clone()],
+                scale,
+                &|cmd| layer_textures.composite(cmd, scale),
+                &mut self.image_quads,
+            );
+        }
+        let images = images_start..self.image_quads.len();
+
+        self.text_entry_buf.clear();
+        self.text_entry_buf.extend(
+            commands[layer.text.clone()]
+                .iter()
+                .filter_map(command_to_text_entry),
+        );
+        let text_quads_start = self.text_quads.len();
+        let mut text_slot = None;
+        if !self.text_entry_buf.is_empty() {
+            let slot = *next_text_slot;
+            *next_text_slot += 1;
+            let transformed = self.text_state.prepare_layer(
+                slot,
+                target,
+                &self.device,
+                &self.queue,
+                &self.text_entry_buf,
+                clips,
+                (screen.0 as u32, screen.1 as u32),
+                scale,
+            );
+            // Rotated and scaled text goes through the textured-quad path
+            // instead, to keep the glyphon atlas stable.
+            if transformed.len() < self.text_entry_buf.len() {
+                text_slot = Some(slot);
+            }
+            if !transformed.is_empty() {
+                self.text_quad_renderer.set_screen_size(screen.0, screen.1);
+                self.text_quad_renderer.prepare(
+                    &self.device,
+                    &self.queue,
+                    &self.text_entry_buf,
+                    transformed,
+                    scale,
+                    &mut self.text_quads,
+                );
+            }
+        }
+        let text_quads = text_quads_start..self.text_quads.len();
+
+        let overlay_start = self.shape_instance_buf.len() as u32;
+        self.shape_instance_buf.extend(
+            commands[layer.overlay.clone()]
+                .iter()
+                .filter_map(|c| faded_instance(c, scale)),
+        );
+        let overlay = overlay_start..self.shape_instance_buf.len() as u32;
+
+        PreparedLayer {
+            target,
+            shapes,
+            merges,
+            paths,
+            images,
+            text_slot,
+            text_quads,
+            overlay,
+        }
     }
 }
 
 /// One draw group's GPU work, addressed by range into the renderer's
 /// per-frame buffers.
 struct PreparedLayer {
+    /// What its shapes are projected against: `0` for the surface, a pass's
+    /// index plus one for that layer's texture.
+    target: usize,
     shapes: std::ops::Range<u32>,
     /// Whether a merged shape is among them, which draws them in runs.
     merges: bool,
@@ -830,6 +1068,22 @@ struct PreparedLayer {
     text_slot: Option<usize>,
     text_quads: std::ops::Range<usize>,
     overlay: std::ops::Range<u32>,
+}
+
+impl PreparedLayer {
+    /// A group with nothing to draw.
+    fn empty(target: usize) -> Self {
+        Self {
+            target,
+            shapes: 0..0,
+            merges: false,
+            paths: 0..0,
+            images: 0..0,
+            text_slot: None,
+            text_quads: 0..0,
+            overlay: 0..0,
+        }
+    }
 }
 
 /// Open a colour-only render pass over `target`.
@@ -1224,8 +1478,9 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
         DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => None,
         // Says where input goes, not what is drawn.
         DrawCommand::InputRegion { .. } => None,
-        // Image commands are handled separately via ImageQuadRenderer
-        DrawCommand::Image { .. } => None,
+        // Image commands are handled separately via ImageQuadRenderer, and a
+        // layer's composite is drawn the way an image is.
+        DrawCommand::Image { .. } | DrawCommand::Layer { .. } => None,
     }
 }
 
@@ -1271,7 +1526,7 @@ mod tests {
     use super::*;
     use std::rc::Rc;
 
-    use crate::renderer::flatten::RenderLayer;
+    use crate::renderer::flatten::{CommandLayer, RenderLayer};
     use crate::transform::Transform;
     use crate::widgets::FontFamily;
 
@@ -1594,11 +1849,7 @@ mod tests {
         let mut frame = |renderer: &mut Renderer, layers: &[CommandLayer]| {
             renderer.render(
                 &mut target,
-                &FlatFrame {
-                    commands: &commands,
-                    layers,
-                    clips: &Default::default(),
-                },
+                &FlatFrame::of(&commands, layers, &Default::default()),
                 crate::widgets::Color::TRANSPARENT,
             );
         };

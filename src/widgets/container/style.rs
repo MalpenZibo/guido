@@ -146,6 +146,27 @@ impl Container {
         self.opacity_prop().get_finite_or(1.0, id, "opacity")
     }
 
+    /// The declared blur radius. No state layer overrides one; a negative
+    /// one is clamped where it is painted.
+    pub(super) fn effective_blur_target(&self, id: WidgetId) -> f32 {
+        self.blur_prop().get_finite_or(0.0, id, "blur")
+    }
+
+    /// How far past everything else it draws this container's blur can carry
+    /// a pixel, in logical pixels: the bound on the reach of the larger of
+    /// the declared radius and the one in flight, with the overshoot a spring
+    /// still has to come. Zero for a container that declares no blur.
+    pub(super) fn max_blur_reach(&self) -> f32 {
+        if !self.blur_prop().is_set() {
+            return 0.0;
+        }
+        let mut radius = self.blur_prop().get_finite_or_quietly(0.0).max(0.0);
+        if let Some(anim) = self.anims.as_ref().and_then(|a| a.blur()) {
+            radius = radius.max(*anim.current()) * (1.0 + anim.peak_overshoot());
+        }
+        crate::renderer::layer_blur::blur_reach_bound(radius)
+    }
+
     /// How far past its own bounds the deepest shadow this container can cast
     /// reaches, and the number its damage rect is sized by.
     ///
@@ -464,6 +485,12 @@ impl Container {
     pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
         get_animated_value(self.anims.as_ref().and_then(|a| a.border_width()), || {
             self.effective_border_width_target(id)
+        })
+    }
+
+    pub(super) fn animated_blur(&self, id: WidgetId) -> f32 {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.blur()), || {
+            self.effective_blur_target(id)
         })
     }
 

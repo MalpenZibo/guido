@@ -32,7 +32,7 @@ use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
-use crate::renderer::{GradientDir, MergeChildren, PaintContext, Shadow, Shadows};
+use crate::renderer::{GradientDir, MergeChildren, OpacityMode, PaintContext, Shadow, Shadows};
 use crate::transform::{Scale, Transform, Translate};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
@@ -192,8 +192,9 @@ pub enum Overflow {
 }
 
 /// What the renderer applies to a container's subtree as a whole: the three
-/// transform components, the point they act about, and the opacity. Boxed and
-/// absent by default, like `anims` and `interaction`.
+/// transform components, the point they act about, the opacity and how it
+/// applies, and the blur. Boxed and absent by default, like `anims` and
+/// `interaction`.
 ///
 /// Five property fields on every container in every tree, and the
 /// overwhelming majority declare none — so they live behind a pointer, and a
@@ -212,6 +213,8 @@ pub(super) struct LayerProps {
     /// rather than jumping. The slide itself is the tree's — see
     /// `Tree::set_origin`.
     pub(super) position: Option<crate::animation::TransitionConfig>,
+    pub(super) opacity_mode: Prop<OpacityMode>,
+    pub(super) blur: Prop<f32>,
 }
 
 /// The decorations a container rarely has. Boxed and absent by default, for
@@ -592,9 +595,17 @@ impl Container {
         // they publish, and re-measured whenever this container lays out. That
         // split is what lets this run from a Paint job without walking
         // anything.
+        // A blur spreads in the container's own space, as a shadow does, so
+        // its reach is carried by the transform with the shadow's.
+        let blur = self.max_blur_reach();
+        let extent = if blur > 0.0 {
+            shadow_extent.max(0.0) + blur
+        } else {
+            shadow_extent
+        };
         // A slide carries the whole box by its offset, after everything else.
         let (dx, dy) = self.position_offset(tree, id);
-        let reach = self.max_transform_reach(bounds, shadow_extent) + dx.abs().max(dy.abs());
+        let reach = self.max_transform_reach(bounds, extent) + dx.abs().max(dy.abs());
         tree.set_own_paint_reach(id, reach);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two
@@ -733,6 +744,16 @@ impl Container {
 
     pub(super) fn opacity_prop(&self) -> Prop<f32> {
         self.layer.as_deref().map_or(Prop::Unset, |t| t.opacity)
+    }
+
+    pub(super) fn opacity_mode_prop(&self) -> Prop<OpacityMode> {
+        self.layer
+            .as_deref()
+            .map_or(Prop::Unset, |t| t.opacity_mode)
+    }
+
+    pub(super) fn blur_prop(&self) -> Prop<f32> {
+        self.layer.as_deref().map_or(Prop::Unset, |t| t.blur)
     }
 
     /// Get or create interaction state
@@ -1524,10 +1545,20 @@ impl Container {
     /// faded to nothing is still there to be clicked.
     ///
     /// Nested opacities multiply, so a half inside a half is drawn at a
-    /// quarter. The opacity is multiplied into every colour the subtree draws
-    /// — backgrounds, borders, shadows, text, images and frost alike — each on
-    /// its own, so where two children overlap, the overlap shows through
-    /// darker rather than fading as one flat layer.
+    /// quarter. The subtree fades as one picture, as CSS's `opacity` does:
+    /// where two of its draws overlap — a label on a background, a cover under
+    /// a title — the overlap fades with the rest instead of showing through.
+    /// That takes drawing the subtree into a texture of its own, and it is
+    /// only done when two of its draws do overlap; where none does, fading
+    /// each on its own is the same picture, and that is what is drawn.
+    /// [`opacity_mode`](Self::opacity_mode) says otherwise.
+    ///
+    /// A container with a backdrop blur in it is the exception: it fades draw
+    /// by draw, so its frost keeps frosting what guido drew beneath it in the
+    /// surface for the whole of the fade. As one picture the frost would see
+    /// only what the container drew — CSS's Backdrop Root — and pop back when
+    /// the fade ended. A declared [`blur`](Self::blur) makes the container one
+    /// picture regardless, frost and all.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -1539,6 +1570,41 @@ impl Container {
     pub fn opacity<M>(mut self, opacity: impl IntoAnimated<f32, M>) -> Self {
         let declared = animated_properties::declare::opacity(&mut self.anims, opacity);
         self.layer_mut().opacity = declared;
+        self
+    }
+
+    /// How [`opacity`](Self::opacity) applies to what is inside this
+    /// container: as one picture ([`OpacityMode::Auto`], the default), or to
+    /// every draw on its own ([`OpacityMode::Modulate`]), where an overlap
+    /// shows through darker but nothing is drawn offscreen.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().opacity(0.5).opacity_mode(OpacityMode::Modulate);
+    /// ```
+    pub fn opacity_mode<M>(mut self, mode: impl IntoSignal<OpacityMode, M>) -> Self {
+        self.layer_mut().opacity_mode = mode.into_prop();
+        self
+    }
+
+    /// Blur everything this container draws, its children included, by a
+    /// radius in logical pixels — the radius a
+    /// [`backdrop_blur`](Self::backdrop_blur) takes. Animatable, so a view can
+    /// arrive out of focus and sharpen.
+    ///
+    /// Declaring one composites the container as a layer, a radius of zero
+    /// included, as a CSS `filter` does: the subtree is drawn into a texture
+    /// and the blur runs over it. The blur spreads past the container's edge
+    /// by about its radius and a quarter.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().blur(4.0);
+    /// container().blur(0.0.transition(200.0).entering_from(8.0).exiting_to(8.0));
+    /// ```
+    pub fn blur<M>(mut self, radius: impl IntoAnimated<f32, M>) -> Self {
+        let declared = animated_properties::declare::blur(&mut self.anims, radius);
+        self.layer_mut().blur = declared;
         self
     }
 
@@ -2262,6 +2328,8 @@ impl Widget for Container {
             takes_input,
             overflow,
             opacity,
+            opacity_mode,
+            blur,
         ) = (
             self.animated_background(id),
             self.animated_corners(id),
@@ -2275,6 +2343,8 @@ impl Widget for Container {
             self.takes_input.get(),
             self.overflow.get_or(Overflow::Visible),
             self.animated_opacity(id),
+            self.opacity_mode_prop().get_or(OpacityMode::Auto),
+            self.blur_prop().is_set().then(|| self.animated_blur(id)),
         );
         self.overflow_resolved.set(overflow);
 
@@ -2292,6 +2362,10 @@ impl Widget for Container {
             ctx.apply_transform_with_pivot(user_transform, pivot);
         }
         ctx.set_opacity(opacity);
+        ctx.set_opacity_mode(opacity_mode);
+        if let Some(blur) = blur {
+            ctx.set_blur(blur);
+        }
 
         // Before the decoration: the container paints over its own blurred
         // backdrop, and the effect must read a target that does not yet include

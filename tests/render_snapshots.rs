@@ -76,6 +76,7 @@ fn render_flattened(widget: impl Widget + 'static, width: f32, height: f32) -> S
     let (mut commands, mut layers) = (Vec::new(), Vec::new());
     let _ = flatten_root_into(
         &node,
+        1.0,
         &mut commands,
         &mut layers,
         &mut FlattenScratch::default(),
@@ -197,6 +198,9 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
 fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
     let pad = "  ".repeat(depth);
     match cmd {
+        // Written by flatten in place of a subtree it composites; no widget
+        // paints one, so a render tree never holds it.
+        DrawCommand::Layer { .. } => unreachable!("a layer's composite in a render tree"),
         DrawCommand::BackdropBlur {
             rect: r,
             sources,

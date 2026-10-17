@@ -10,7 +10,9 @@ use crate::widgets::Rect;
 
 use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip};
 use super::commands::DrawCommand;
-use super::tree::{CachedFlatten, ClipRegion, RenderNode};
+use super::layer_blur::blur_margin;
+use super::tree::{CachedFlatten, ClipRegion, NodeId, OpacityMode, RenderNode};
+use crate::backdrop::BackdropSources;
 use crate::shape::PlacedShape;
 
 /// Render layer for draw command ordering.
@@ -78,12 +80,80 @@ impl FlattenedCommand {
 /// link in `clips` by index, and `layers` addresses `commands` by range — so
 /// they travel as one rather than as three arguments in a row that a caller
 /// could take from two different frames.
+///
+/// A frame that composites a subtree as a layer carries that layer's content
+/// in the same two buffers, ahead of the surface's own: `passes` says which
+/// ranges are whose, and the surface's groups are the ones after the last of
+/// them — [`surface_layers`](Self::surface_layers).
 #[derive(Clone, Copy)]
 pub struct FlatFrame<'a> {
     pub commands: &'a [FlattenedCommand],
     pub layers: &'a [CommandLayer],
     /// [`FlattenScratch::clip_chains`] of the scratch `commands` came out of.
     pub clips: &'a ClipChains,
+    /// The layers drawn offscreen, a layer inside another before the one it
+    /// is in — [`FlattenScratch::passes`] of the same scratch.
+    pub passes: &'a [LayerPass],
+    /// The layers composited from a texture an earlier frame drew, with no
+    /// pass this frame: a cached subtree replayed, composite and all.
+    pub kept: &'a [NodeId],
+    /// The surface's root node, which layer textures idle by.
+    pub surface: NodeId,
+}
+
+impl<'a> FlatFrame<'a> {
+    /// A frame with no layers in it — what a caller that builds its own
+    /// commands, rather than flattening a tree, hands the renderer.
+    pub fn of(
+        commands: &'a [FlattenedCommand],
+        layers: &'a [CommandLayer],
+        clips: &'a ClipChains,
+    ) -> Self {
+        Self {
+            commands,
+            layers,
+            clips,
+            passes: &[],
+            kept: &[],
+            surface: 0,
+        }
+    }
+
+    /// Where the surface's own groups start in `layers`: after every layer's.
+    pub fn surface_start(&self) -> usize {
+        self.passes.last().map_or(0, |pass| pass.groups.end)
+    }
+
+    /// The groups drawn onto the surface itself, in order.
+    pub fn surface_layers(&self) -> &'a [CommandLayer] {
+        &self.layers[self.surface_start()..]
+    }
+}
+
+/// A subtree the frame draws into a texture of its own and composites once.
+///
+/// Its content sits in the frame's buffers like the surface's does, already in
+/// the texture's space: the texture's top-left texel is the origin, a logical
+/// pixel is `scale` texels, and nothing above the layer clips it there — the
+/// clips around the layer cut the composite instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerPass {
+    /// The node composited, which is what the texture is kept by from one
+    /// frame to the next.
+    pub id: NodeId,
+    /// Its content, in [`FlatFrame::commands`].
+    pub commands: Range<usize>,
+    /// The groups that content is drawn in, in [`FlatFrame::layers`].
+    pub groups: Range<usize>,
+    /// How large its texture has to be, in texels.
+    pub size: (u32, u32),
+    /// The blur its texture is composited through, in logical pixels; zero
+    /// for none.
+    pub blur: f32,
+    /// The layers drawn inside it, in this list — all before it, since a layer
+    /// inside another is finished first. One of them drawn again is a new
+    /// picture in this one.
+    pub inner: Range<usize>,
 }
 
 /// Where one frame's draw commands are grouped, before they are handed on as
@@ -129,6 +199,71 @@ pub struct FlattenScratch {
     /// to find out, on every painted frame, for the large majority of surfaces
     /// that carry neither.
     carried: RegionsCarried,
+    /// The layers this frame has finished, a layer inside another first.
+    passes: Vec<LayerPass>,
+    /// Their content and groups, in the same order, which is where they land
+    /// in the frame: ahead of the surface's own.
+    layer_commands: Vec<FlattenedCommand>,
+    layer_groups: Vec<CommandLayer>,
+    /// The layers whose content is being flattened, the innermost last.
+    open: Vec<OpenLayer>,
+    /// How many layers this frame has opened, which numbers each one's clips.
+    opened: u32,
+    /// Where a layer's content goes back to when it turns out not to need a
+    /// texture after all — kept so that, frame after frame, it is not a new
+    /// buffer.
+    elided: Vec<FlattenedCommand>,
+    /// Physical pixels per logical one, and the surface's own rect, for the
+    /// frame being flattened — what a layer's texture is sized against.
+    scale: f32,
+    surface: Option<Rect>,
+    /// The surface's root node, which the renderer keeps a layer's texture
+    /// idle-counting by.
+    root: NodeId,
+    /// The layers composited this frame from the texture an earlier frame
+    /// drew, replayed with a cached subtree and named by no pass.
+    kept: Vec<NodeId>,
+    /// How many layers this frame has composited, drawn or kept — what says a
+    /// cached subtree holds one.
+    composites: usize,
+    /// How many layers this frame has cut by the surface's edge, or put back
+    /// as plain commands for being wholly off it — what says a cached subtree
+    /// holds one that only stands where it was flattened.
+    cut_by_surface: usize,
+}
+
+/// A layer whose content is being flattened.
+#[derive(Debug, Clone, Copy)]
+struct OpenLayer {
+    /// The first of its groups in [`FlattenScratch::groups`].
+    base: usize,
+    /// Where its clips and chain links start in the clip tree.
+    clip_mark: usize,
+    link_mark: usize,
+    /// Its number in the clip tree, and the number of what it is in.
+    segment: u32,
+    outer_segment: u32,
+    /// What of its space can reach the surface at all, where that is known.
+    visible: Option<Rect>,
+    /// Whether a layer inside it was composited — which makes it one too.
+    holds_layer: bool,
+    /// How many layers the frame had finished when it opened: the ones
+    /// finished after are inside it.
+    first_pass: usize,
+}
+
+/// What a layer's content turned out to be, read once it has been flattened.
+struct LayerScan {
+    /// The box everything it draws stays inside, in its own space.
+    bounds: Option<Rect>,
+    /// Whether two of those draws touch the same pixel.
+    overlaps: bool,
+    /// Whether any of it is for the compositor rather than for the texture.
+    speaks_to_compositor: bool,
+    /// Whether a layer inside it was composited offscreen.
+    holds_layer: bool,
+    /// Whether any of it filters what is beneath it: a backdrop blur.
+    frosts: bool,
 }
 
 #[derive(Default)]
@@ -296,6 +431,39 @@ impl LayerBuckets {
         }
     }
 
+    /// Move this group's commands into `out` in draw order, each bucket by
+    /// `take`, and its ranges into `layers` — unless it ended up empty, which
+    /// would cost a pointless set of pipeline switches.
+    ///
+    /// The buckets are emptied rather than consumed, keeping what they held
+    /// for the next frame to fill.
+    fn drain_into(
+        &mut self,
+        out: &mut Vec<FlattenedCommand>,
+        layers: &mut Vec<CommandLayer>,
+        mut take: impl FnMut(&mut Vec<FlattenedCommand>, &mut Vec<FlattenedCommand>),
+    ) {
+        let mut layer = CommandLayer::default();
+        // Sized by the bucket count, so a bucket added without its range here
+        // is a compile error rather than a bucket silently left undrained.
+        let ranges: [&mut Range<usize>; LAYER_COUNT] = [
+            &mut layer.backdrop,
+            &mut layer.shapes,
+            &mut layer.paths,
+            &mut layer.images,
+            &mut layer.text,
+            &mut layer.overlay,
+        ];
+        for (bucket, range) in self.buckets_mut().into_iter().zip(ranges) {
+            let start = out.len();
+            take(bucket, out);
+            *range = start..out.len();
+        }
+        if !layer.is_empty() {
+            layers.push(layer);
+        }
+    }
+
     /// How many commands this group's buckets can hold before they allocate.
     fn command_capacity(&self) -> usize {
         self.backdrop.capacity()
@@ -314,6 +482,18 @@ impl Default for FlattenScratch {
             used: 1,
             clips: ClipTree::default(),
             carried: RegionsCarried::default(),
+            passes: Vec::new(),
+            layer_commands: Vec::new(),
+            layer_groups: Vec::new(),
+            open: Vec::new(),
+            opened: 0,
+            elided: Vec::new(),
+            scale: 1.0,
+            surface: None,
+            root: 0,
+            kept: Vec::new(),
+            composites: 0,
+            cut_by_surface: 0,
         }
     }
 }
@@ -366,6 +546,30 @@ impl FlattenScratch {
         self.clips.chains()
     }
 
+    /// The layers the frame just flattened draws offscreen, a layer inside
+    /// another first. Good for as long as [`clip_chains`](Self::clip_chains)
+    /// is.
+    pub fn passes(&self) -> &[LayerPass] {
+        &self.passes
+    }
+
+    /// The frame just flattened through this scratch into `commands` and
+    /// `layers`, as the renderer takes it.
+    pub fn frame<'a>(
+        &'a self,
+        commands: &'a [FlattenedCommand],
+        layers: &'a [CommandLayer],
+    ) -> FlatFrame<'a> {
+        FlatFrame {
+            commands,
+            layers,
+            clips: self.clip_chains(),
+            passes: self.passes(),
+            kept: &self.kept,
+            surface: self.root,
+        }
+    }
+
     /// Empty every buffer, keeping what each one is holding.
     ///
     /// The one thing that must not happen here is a field surviving: a
@@ -381,6 +585,18 @@ impl FlattenScratch {
             used,
             clips,
             carried,
+            passes,
+            layer_commands,
+            layer_groups,
+            open,
+            opened,
+            elided,
+            scale: _,
+            surface: _,
+            root: _,
+            kept,
+            composites,
+            cut_by_surface,
         } = self;
         for group in &mut groups[..*used] {
             group.clear();
@@ -388,6 +604,15 @@ impl FlattenScratch {
         *used = 1;
         clips.clear();
         *carried = RegionsCarried::default();
+        passes.clear();
+        layer_commands.clear();
+        layer_groups.clear();
+        open.clear();
+        *opened = 0;
+        elided.clear();
+        kept.clear();
+        *composites = 0;
+        *cut_by_surface = 0;
     }
 
     /// The groups this frame has opened, in draw order.
@@ -441,7 +666,7 @@ impl FlattenScratch {
             _ => {}
         }
         let layer = cmd.layer;
-        let rect = world_bounds(&cmd);
+        let rect = world_bounds(&cmd, self.scale);
         let current = self.current();
         if layer < current.high_water && current.covered_above(layer, rect) {
             self.open_group(layer);
@@ -585,32 +810,326 @@ impl FlattenScratch {
     /// Move the groups into one buffer in draw order, recording where each
     /// group's buckets landed.
     ///
-    /// The buckets are emptied rather than consumed — `append` takes the
-    /// commands and leaves the buffer that held them, which is what the next
-    /// frame fills.
+    /// The buckets are emptied rather than consumed, and the next frame
+    /// fills what they held.
     fn drain_into(&mut self, out: &mut Vec<FlattenedCommand>, layers: &mut Vec<CommandLayer>) {
+        // The layers' content first, at the positions their passes recorded.
+        out.append(&mut self.layer_commands);
+        layers.append(&mut self.layer_groups);
         for group in self.live_mut() {
-            let mut layer = CommandLayer::default();
-            let ranges = [
-                &mut layer.backdrop,
-                &mut layer.shapes,
-                &mut layer.paths,
-                &mut layer.images,
-                &mut layer.text,
-                &mut layer.overlay,
-            ];
-            for (bucket, range) in group.buckets_mut().into_iter().zip(ranges) {
-                let start = out.len();
-                out.append(bucket);
-                *range = start..out.len();
-            }
-            // A group left empty by a subtree that drew nothing would cost a
-            // pointless set of pipeline switches.
-            if !layer.is_empty() {
-                layers.push(layer);
-            }
+            // `append` takes the commands whole, and leaves the buffer.
+            group.drain_into(out, layers, |bucket, out| out.append(bucket));
         }
     }
+}
+
+/// A layer's texture, once its content says how large it is.
+struct LayerTexture {
+    id: NodeId,
+    /// The texture's top-left texel, in physical pixels of the space the
+    /// content was flattened in.
+    origin: (f32, f32),
+    size: (u32, u32),
+    /// The content's space — the layer node's own, nudged onto the device
+    /// grid — to the one it is composited into.
+    to_world: Transform,
+    /// What the composite is drawn by: the layer node's own world transform.
+    world_transform: Transform,
+    /// The texture's extent in the layer node's own space.
+    frame: Rect,
+    blur: f32,
+    opacity: f32,
+}
+
+/// One texel of transparent edge round a layer's content, so the clamped
+/// sampler that reads past it — a blur's taps, a turned composite's edge —
+/// reads nothing rather than smearing the outermost colour outwards.
+const LAYER_EDGE: f32 = 1.0;
+
+/// The widest a layer's texture is allowed to be, in texels. A layer is cut to
+/// what of it can reach the surface, so this is only ever met by a surface
+/// larger than any screen, or a layer turned so far that the box round the
+/// surface in its space is.
+const MAX_LAYER_TEXELS: f32 = 8192.0;
+
+impl FlattenScratch {
+    /// What of the space being flattened in can reach the surface, if that is
+    /// known: the surface itself, or a layer's view of it.
+    fn visible(&self) -> Option<Rect> {
+        match self.open.last() {
+            Some(layer) => layer.visible,
+            None => self.surface,
+        }
+    }
+
+    /// Begin a layer's content: a group of its own, and clips numbered as its.
+    fn open_layer(&mut self, visible: Option<Rect>) {
+        self.opened += 1;
+        let segment = self.opened;
+        let layer = OpenLayer {
+            base: self.used,
+            clip_mark: self.clips.mark(),
+            link_mark: self.clips.link_mark(),
+            segment,
+            outer_segment: self.clips.enter_segment(segment),
+            visible,
+            holds_layer: false,
+            first_pass: self.passes.len(),
+        };
+        self.open_group(RenderLayer::default());
+        self.open.push(layer);
+    }
+
+    /// The innermost layer being flattened — the one the steps below close.
+    /// Read off the stack rather than handed around, because a layer inside it
+    /// writes `holds_layer` there.
+    fn innermost(&self) -> OpenLayer {
+        *self.open.last().expect("a layer is open")
+    }
+
+    /// Everything the layer's content pushed, in draw order.
+    fn layer_tails(&self, layer: &OpenLayer) -> impl Iterator<Item = &[FlattenedCommand]> {
+        self.tails_since(Mark {
+            groups: layer.base + 1,
+            buckets: [0; LAYER_COUNT],
+        })
+    }
+
+    /// Read what the layer's content turned out to be. Asked while it is still
+    /// the innermost one open.
+    fn scan_layer(&self) -> LayerScan {
+        let layer = self.innermost();
+        let mut drawn = LayerBounds::default();
+        let mut scan = LayerScan {
+            bounds: None,
+            overlaps: false,
+            speaks_to_compositor: false,
+            holds_layer: layer.holds_layer,
+            frosts: false,
+        };
+        for cmd in self.layer_tails(&layer).flatten() {
+            if speaks_to_compositor(cmd) {
+                scan.speaks_to_compositor = true;
+            }
+            if cmd.layer == RenderLayer::Backdrop {
+                scan.frosts = true;
+            }
+            // A stroke drawn over its own fill is two draws on the same pixels.
+            if let DrawCommand::Path {
+                fill: Some(_),
+                stroke: Some(_),
+                ..
+            } = &*cmd.command
+            {
+                scan.overlaps = true;
+            }
+            let Some(rect) = extent(cmd, self.scale) else {
+                continue;
+            };
+            scan.overlaps |= drawn.intersects(rect);
+            drawn.record(Some(rect));
+        }
+        scan.bounds = drawn.union;
+        scan
+    }
+
+    /// The layer needs no texture: put its content back where the layer
+    /// stands, faded draw by draw, as though it had been flattened there.
+    ///
+    /// It was flattened in the layer's own space and under none of the clips
+    /// around it, so it is carried out of that space by `to_world` and cut by
+    /// `parent_clip` on the way — the replay a cached subtree takes, with a
+    /// transform for an offset.
+    fn elide_layer(
+        &mut self,
+        to_world: &Transform,
+        opacity: f32,
+        parent_clip: Option<ClipIndex>,
+        inherited: Option<ClipRef>,
+    ) {
+        let layer = self.innermost();
+        let mut content = std::mem::take(&mut self.elided);
+        content.clear();
+        for tail in self.layer_tails(&layer) {
+            content.extend_from_slice(tail);
+        }
+        let clips = self.clips.since(layer.clip_mark);
+        self.close_layer_groups(&layer);
+        // Nothing outside the layer was cut against its clips — the first of
+        // them was placed under none — so they can go, and be placed again.
+        self.clips.truncate(layer.clip_mark, layer.link_mark);
+        self.clips.enter_segment(layer.outer_segment);
+        self.clips.replay(&clips, to_world, parent_clip);
+        for mut cmd in content.drain(..) {
+            cmd.world_transform = to_world.then(&cmd.world_transform);
+            cmd.opacity *= opacity;
+            if cmd.clip.is_none() {
+                cmd.clip = inherited.clone();
+            }
+            self.push(cmd);
+        }
+        self.elided = content;
+    }
+
+    /// The layer is drawn offscreen: move its content into its texture's space
+    /// and out of the surface's groups, and composite it where it stands.
+    fn finish_layer(
+        &mut self,
+        texture: LayerTexture,
+        scan: &LayerScan,
+        parent_clip: Option<ClipIndex>,
+        inherited: Option<ClipRef>,
+    ) {
+        let layer = self.innermost();
+        self.clips.enter_segment(layer.outer_segment);
+
+        // What the content says to the compositor is said where the layer
+        // stands on the surface, cut by the clips around it too — a texture
+        // has no input region and no window behind it.
+        let mut speaking = Vec::new();
+        let mut twins = Vec::new();
+        if scan.speaks_to_compositor {
+            speaking.extend(
+                self.layer_tails(&layer)
+                    .flatten()
+                    .filter(|cmd| speaks_to_compositor(cmd))
+                    .cloned(),
+            );
+            twins = self.clips.twin_segment(
+                layer.segment,
+                layer.clip_mark,
+                &texture.to_world,
+                parent_clip,
+            );
+        }
+
+        let shift = (
+            -texture.origin.0 / self.scale,
+            -texture.origin.1 / self.scale,
+        );
+        self.clips
+            .translate_segment(layer.segment, layer.clip_mark, layer.link_mark, shift);
+
+        let commands_start = self.layer_commands.len();
+        let groups_start = self.layer_groups.len();
+        for group in &mut self.groups[layer.base..self.used] {
+            group.drain_into(
+                &mut self.layer_commands,
+                &mut self.layer_groups,
+                |bucket, out| {
+                    out.extend(bucket.drain(..).filter_map(|mut cmd| {
+                        cmd.command = drawn_in_texture(&cmd)?;
+                        cmd.world_transform = cmd.world_transform.translated(shift.0, shift.1);
+                        Some(cmd)
+                    }));
+                },
+            );
+        }
+        self.close_layer_groups(&layer);
+        self.passes.push(LayerPass {
+            id: texture.id,
+            commands: commands_start..self.layer_commands.len(),
+            groups: groups_start..self.layer_groups.len(),
+            size: texture.size,
+            blur: texture.blur,
+            inner: layer.first_pass..self.passes.len(),
+        });
+        if let Some(outer) = self.open.last_mut() {
+            outer.holds_layer = true;
+        }
+        self.composites += 1;
+
+        self.push(FlattenedCommand {
+            command: Rc::new(DrawCommand::Layer {
+                id: texture.id,
+                frame: texture.frame,
+                blur: texture.blur,
+            }),
+            world_transform: texture.world_transform,
+            layer: RenderLayer::Images,
+            opacity: texture.opacity,
+            clip: inherited.clone(),
+        });
+        for cmd in speaking {
+            let Some(said) = said_to_compositor(&cmd) else {
+                continue;
+            };
+            let clip = match &cmd.clip {
+                Some(clip) => twins
+                    .iter()
+                    .find(|(original, _)| original.is(clip))
+                    .map(|(_, twin)| twin.clone())
+                    .or_else(|| inherited.clone()),
+                None => inherited.clone(),
+            };
+            self.push(FlattenedCommand {
+                command: said,
+                world_transform: texture.to_world.then(&cmd.world_transform),
+                layer: RenderLayer::Shapes,
+                opacity: cmd.opacity * texture.opacity,
+                clip,
+            });
+        }
+    }
+
+    /// Empty the layer's groups and hand the group before them back as the
+    /// current one, which is where the composite lands.
+    fn close_layer_groups(&mut self, layer: &OpenLayer) {
+        for group in &mut self.groups[layer.base..self.used] {
+            group.clear();
+        }
+        self.used = layer.base;
+        self.open.pop();
+    }
+}
+
+/// Whether a command tells the compositor something: an input region, or a
+/// blur the compositor is asked to run.
+fn speaks_to_compositor(cmd: &FlattenedCommand) -> bool {
+    match &*cmd.command {
+        DrawCommand::InputRegion { .. } => true,
+        DrawCommand::BackdropBlur { sources, .. } => sources.contains(BackdropSources::COMPOSITOR),
+        _ => false,
+    }
+}
+
+/// What of a command a layer's texture draws: all of it, the surface's half of
+/// a blur that asks for both, or nothing.
+fn drawn_in_texture(cmd: &FlattenedCommand) -> Option<Rc<DrawCommand>> {
+    match &*cmd.command {
+        DrawCommand::InputRegion { .. } => None,
+        DrawCommand::BackdropBlur { sources, .. }
+            if sources.contains(BackdropSources::COMPOSITOR) =>
+        {
+            sources
+                .contains(BackdropSources::SURFACE)
+                .then(|| with_sources(&cmd.command, BackdropSources::SURFACE))
+        }
+        _ => Some(Rc::clone(&cmd.command)),
+    }
+}
+
+/// The half of a command the compositor is told about — the inverse of
+/// [`drawn_in_texture`].
+fn said_to_compositor(cmd: &FlattenedCommand) -> Option<Rc<DrawCommand>> {
+    match &*cmd.command {
+        DrawCommand::InputRegion { .. } => Some(Rc::clone(&cmd.command)),
+        DrawCommand::BackdropBlur { sources, .. }
+            if sources.contains(BackdropSources::COMPOSITOR) =>
+        {
+            Some(with_sources(&cmd.command, BackdropSources::COMPOSITOR))
+        }
+        _ => None,
+    }
+}
+
+/// A backdrop blur asking for `sources` and nothing else.
+fn with_sources(command: &DrawCommand, only: BackdropSources) -> Rc<DrawCommand> {
+    let mut command = command.clone();
+    if let DrawCommand::BackdropBlur { sources, .. } = &mut command {
+        *sources = only;
+    }
+    Rc::new(command)
 }
 
 /// A position in a [`FlattenScratch`], for capturing one subtree's output.
@@ -658,12 +1177,18 @@ impl CommandLayer {
 /// the surface's rather than the frame's for the same reason they are — it is
 /// emptied here, not constructed; see [`FlattenScratch`].
 ///
+/// `scale` is the surface's, in physical pixels per logical one: a subtree
+/// composited as a layer is drawn into a texture at that density. The root's
+/// `bounds` are taken as the surface, which a layer's texture is cut to; a
+/// root with none cuts nothing.
+///
 /// Returns what the frame carries that becomes a `wl_region` — a backdrop blur
 /// the *compositor* is asked to apply, and a declaration about where input
 /// reaches the surface — which is the only reason to walk the result again and
 /// build one from it.
 pub fn flatten_root_into(
     root: &RenderNode,
+    scale: f32,
     commands: &mut Vec<FlattenedCommand>,
     layers: &mut Vec<CommandLayer>,
     scratch: &mut FlattenScratch,
@@ -671,6 +1196,9 @@ pub fn flatten_root_into(
     commands.clear();
     layers.clear();
     scratch.clear();
+    scratch.scale = scale;
+    scratch.root = root.id;
+    scratch.surface = (root.bounds.width > 0.0 && root.bounds.height > 0.0).then_some(root.bounds);
 
     // Not replayable: the root is cleared before every paint (see `replayable`).
     flatten_node(root, Transform::IDENTITY, None, 1.0, false, scratch);
@@ -720,6 +1248,14 @@ fn place_clip(
 /// `replayable` says whether a later frame could ever be offered this node's
 /// entry. Every node below the root could; the root could not, and so is
 /// flattened without one.
+///
+/// A node that is a layer — see [`flatten_as_layer`] — is kept like any
+/// other, its composite among the commands: the entry says it holds a layer,
+/// and is replayed only by whole device pixels, or only where it stands if the
+/// surface's edge cut the layer.
+///
+/// Returns whether this subtree's output must not be kept for a later frame:
+/// something under it was culled.
 fn flatten_node(
     node: &RenderNode,
     parent_world_transform: Transform,
@@ -746,12 +1282,14 @@ fn flatten_node(
     };
     if let Some(cached) = cached_flatten
         && let Some((dx, dy)) = cached.replay_offset(world_transform)
+        && cached.replays_layers_by((dx, dy), out.scale)
         && let Some(fade) = cached.replay_fade(parent_opacity)
     {
         // The clips this subtree placed for itself move with it; the one it
         // inherits is the one it finds here, wherever that has got to. Placed
         // first, because the commands below read what they name.
-        out.clips.replay(&cached.clips, dx, dy, parent_clip);
+        out.clips
+            .replay(&cached.clips, &Transform::translate(dx, dy), parent_clip);
         for cmd in &cached.commands {
             let mut replayed = cmd.clone();
             replayed.world_transform = cmd.world_transform.translated(dx, dy);
@@ -761,7 +1299,18 @@ fn flatten_node(
             if replayed.clip.is_none() {
                 replayed.clip = inherited.clone();
             }
+            // A layer's composite, laid down from the texture an earlier frame
+            // drew: the renderer is told, since no pass this frame names it.
+            if let DrawCommand::Layer { id, .. } = &*replayed.command {
+                out.kept.push(*id);
+                out.composites += 1;
+            }
             out.push(replayed);
+        }
+        // Replayed where it was made, so whatever the surface cut is cut the
+        // same — but an entry made over this one has to say so too.
+        if cached.cut_by_surface {
+            out.cut_by_surface += 1;
         }
         crate::render_stats::record_flatten_cached();
         // Whatever was replayed came out of the paint cache, which keeps only
@@ -777,9 +1326,75 @@ fn flatten_node(
     // mark for it, nor for one no frame will ask to replay; whether the rest
     // is worth keeping is decided at the bottom, once the children have said
     // whether any of them was cut short.
-    let marks = (replayable && world_transform.is_translation_only())
-        .then(|| (out.mark(), out.clips.mark()));
+    let marks = (replayable && world_transform.is_translation_only()).then(|| {
+        (
+            out.mark(),
+            out.clips.mark(),
+            (out.composites, out.cut_by_surface),
+        )
+    });
 
+    let subtree_partial =
+        match flatten_as_layer(node, world_transform, parent_clip, parent_opacity, out) {
+            // Kept like any other subtree, the composite with the rest: its
+            // content is in a pass of its own, drawn into the texture a replay
+            // lays down again — see `CachedFlatten::holds_layers`. Put back
+            // where it stands, an elided one is the same.
+            Layered::Composited { partial } | Layered::Elided { partial } => partial,
+            Layered::No => flatten_contents(
+                node,
+                world_transform,
+                parent_clip,
+                inherited.clone(),
+                opacity,
+                out,
+            ),
+        };
+
+    // Cache flatten results for next frame, but only when reuse is possible,
+    // which is two questions.
+    //
+    // Can the entry be replayed? A replay shifts everything it kept by one
+    // offset, so a subtree that did anything but translate cannot be put back
+    // by one. A clip is no longer part of that question: the clips a subtree
+    // places travel with it and the one it inherits is looked up where it now
+    // is, so a row under a scroller is as replayable as a card on a desktop.
+    //
+    // Will it ever be *read*? Only a subtree the paint cache hands back clean
+    // is ever offered to the replay path, and `cache_paint_results` keeps only
+    // complete paints — a subtree with anything culled under it is dropped
+    // from the paint cache and repaints next frame. Collecting an entry for
+    // one is a copy of everything it drew, made for a frame that cannot ask
+    // for it. That is most of the cost of caching in a scrolling list, where
+    // the list culls and every ancestor of it inherits the culling.
+    *node.cached_flatten.borrow_mut() =
+        marks
+            .filter(|_| !subtree_partial)
+            .map(|(mark, clip_mark, composites)| {
+                Rc::new(CachedFlatten {
+                    commands: out.commands_since(mark, inherited.as_ref()),
+                    clips: out.clips.since(clip_mark),
+                    world_transform,
+                    opacity: parent_opacity,
+                    holds_layers: out.composites > composites.0,
+                    cut_by_surface: out.cut_by_surface > composites.1,
+                })
+            });
+    crate::render_stats::record_flatten_full();
+    subtree_partial
+}
+
+/// Everything a node draws: its clip, its commands, its children and its
+/// overlays, at `world_transform` and `opacity`. Returns whether anything
+/// under it was cut short — see [`flatten_node`].
+fn flatten_contents(
+    node: &RenderNode,
+    world_transform: Transform,
+    parent_clip: Option<ClipIndex>,
+    inherited: Option<ClipRef>,
+    opacity: f32,
+    out: &mut FlattenScratch,
+) -> bool {
     // This node's clip, placed under the one it inherits. The intersection is
     // still computed here and once — what changed is where it is written: into
     // the frame's clip tree, which every command below names, instead of into
@@ -807,7 +1422,7 @@ fn flatten_node(
     for cmd in &node.commands {
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
-            DrawCommand::Image { .. } => RenderLayer::Images,
+            DrawCommand::Image { .. } | DrawCommand::Layer { .. } => RenderLayer::Images,
             DrawCommand::Path { .. } => RenderLayer::Paths,
             // Only the half the renderer draws opens a backdrop group. A blur
             // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
@@ -819,7 +1434,7 @@ fn flatten_node(
             // frame — the region is read off this list — it just travels with
             // the shapes, where it produces no instance.
             DrawCommand::BackdropBlur { sources, .. }
-                if !sources.contains(crate::backdrop::BackdropSources::SURFACE) =>
+                if !sources.contains(BackdropSources::SURFACE) =>
             {
                 RenderLayer::Shapes
             }
@@ -919,33 +1534,147 @@ fn flatten_node(
         }
     }
 
-    // Cache flatten results for next frame, but only when reuse is possible,
-    // which is two questions.
-    //
-    // Can the entry be replayed? A replay shifts everything it kept by one
-    // offset, so a subtree that did anything but translate cannot be put back
-    // by one. A clip is no longer part of that question: the clips a subtree
-    // places travel with it and the one it inherits is looked up where it now
-    // is, so a row under a scroller is as replayable as a card on a desktop.
-    //
-    // Will it ever be *read*? Only a subtree the paint cache hands back clean
-    // is ever offered to the replay path, and `cache_paint_results` keeps only
-    // complete paints — a subtree with anything culled under it is dropped
-    // from the paint cache and repaints next frame. Collecting an entry for
-    // one is a copy of everything it drew, made for a frame that cannot ask
-    // for it. That is most of the cost of caching in a scrolling list, where
-    // the list culls and every ancestor of it inherits the culling.
-    *node.cached_flatten.borrow_mut() =
-        marks.filter(|_| !subtree_partial).map(|(mark, clip_mark)| {
-            Rc::new(CachedFlatten {
-                commands: out.commands_since(mark, inherited.as_ref()),
-                clips: out.clips.since(clip_mark),
-                world_transform,
-                opacity: parent_opacity,
-            })
-        });
-    crate::render_stats::record_flatten_full();
     subtree_partial
+}
+
+/// What [`flatten_as_layer`] made of a node.
+enum Layered {
+    /// It does not ask to be a layer, and is flattened as usual.
+    No,
+    /// It asked and needed no texture: its content is in the frame where it
+    /// stands, as though it had been flattened there. `partial` is what
+    /// [`flatten_node`] returns.
+    Elided { partial: bool },
+    /// It is drawn offscreen, and composited where it stands.
+    Composited { partial: bool },
+}
+
+/// Flatten `node` as a layer, if it asks to be one.
+///
+/// A node asks when it declares a blur, or fades below one with
+/// [`OpacityMode::Auto`]. Its content is flattened in the node's own space —
+/// after its own transform, before every one above it — under none of the
+/// clips around it and at full opacity. What it turned out to be decides the
+/// rest:
+///
+/// - **A fade whose draws never overlap is no layer.** Fading each draw on its
+///   own is then the same picture, so the content is put back where the node
+///   stands, faded draw by draw, and the frame is as it would have been.
+/// - **Nor is a fade over a backdrop blur.** Inside a layer a frost sees only
+///   what the layer drew beneath it, so a frosted panel fading as one picture
+///   would frost nothing until the fade ended and then pop back to frosting
+///   what is behind it. It fades draw by draw instead, its frost with it. A
+///   declared blur still makes a layer, frost or not.
+/// - **Anything else is.** The content moves into its texture's space and out
+///   of the frame's groups, into a [`LayerPass`], and the node draws one
+///   [`DrawCommand::Layer`] in its place — at the node's opacity and every
+///   ancestor's, by its world transform, cut by the clips around it.
+///
+/// The content is drawn on the device's pixel grid where the node stands, the
+/// way Chromium rasterizes a layer at its fraction of a pixel: a node that is
+/// only moved has its content nudged by that fraction, so the texture's texels
+/// land on the surface's pixels and the layer is as sharp as the content drawn
+/// without one. A move by whole device pixels changes nothing in the content,
+/// and the texture is only laid down again; a move to a new fraction draws it
+/// again. A node turned or stretched is resampled whatever is done, so its
+/// content is drawn unnudged and a transform of its own only re-composites.
+///
+/// A layer holding a layer is always one, so that a texture's content is
+/// never put back somewhere a frame's inner texture has already been made for.
+fn flatten_as_layer(
+    node: &RenderNode,
+    world_transform: Transform,
+    parent_clip: Option<ClipIndex>,
+    parent_opacity: f32,
+    out: &mut FlattenScratch,
+) -> Layered {
+    let opacity = parent_opacity * node.opacity;
+    let fades = node.opacity_mode == OpacityMode::Auto && node.opacity < 1.0;
+    // Invisible either way, and a texture would only be filled to be thrown
+    // away. Drawn faded to nothing, as without a layer.
+    if !(fades || node.blur.is_some()) || opacity.is_nan() || opacity <= 0.0 {
+        return Layered::No;
+    }
+    let scale = out.scale;
+    let nudge = if world_transform.is_translation_only() {
+        (
+            (world_transform.tx() * scale).rem_euclid(1.0) / scale,
+            (world_transform.ty() * scale).rem_euclid(1.0) / scale,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    // The content's space — the node's own, nudged — to the one the node is
+    // composited into.
+    let to_world = world_transform.then(&Transform::translate(-nudge.0, -nudge.1));
+    // A node squashed to nothing draws nothing, and there is no space of its
+    // own to draw it in.
+    let Some(back) = to_world.inverse() else {
+        return Layered::No;
+    };
+    let visible = out.visible().map(|surface| back.map_rect(surface));
+
+    let inherited = parent_clip.map(|index| out.clips.reference(index));
+    out.open_layer(visible);
+    let partial = flatten_contents(
+        node,
+        Transform::translate(nudge.0, nudge.1),
+        None,
+        None,
+        1.0,
+        out,
+    );
+    let scan = out.scan_layer();
+
+    let needed = node.blur.is_some() || scan.holds_layer || (scan.overlaps && !scan.frosts);
+    let shown = needed.then_some(scan.bounds).flatten().map(|bounds| {
+        let shown = match visible {
+            Some(visible) => bounds.intersection(&visible),
+            None => Some(bounds),
+        };
+        // Cut by the surface's edge, or off it altogether: what is made of
+        // the layer now holds only where it stands.
+        if shown != Some(bounds) {
+            out.cut_by_surface += 1;
+        }
+        shown
+    });
+    let texels = shown.flatten().map(|bounds| {
+        let even = |at: f32| at - at.rem_euclid(2.0);
+        let x0 = even((bounds.x * scale).floor() - LAYER_EDGE);
+        let y0 = even((bounds.y * scale).floor() - LAYER_EDGE);
+        let x1 = ((bounds.x + bounds.width) * scale).ceil() + LAYER_EDGE;
+        let y1 = ((bounds.y + bounds.height) * scale).ceil() + LAYER_EDGE;
+        (
+            (x0, y0),
+            (
+                (x1 - x0).min(MAX_LAYER_TEXELS),
+                (y1 - y0).min(MAX_LAYER_TEXELS),
+            ),
+        )
+    });
+    let Some((origin, (width, height))) = texels else {
+        out.elide_layer(&to_world, opacity, parent_clip, inherited);
+        return Layered::Elided { partial };
+    };
+
+    let texture = LayerTexture {
+        id: node.id,
+        origin,
+        size: (width as u32, height as u32),
+        to_world,
+        world_transform,
+        frame: Rect::new(
+            origin.0 / scale - nudge.0,
+            origin.1 / scale - nudge.1,
+            width / scale,
+            height / scale,
+        ),
+        blur: node.blur.unwrap_or(0.0).max(0.0),
+        opacity,
+    };
+    out.finish_layer(texture, &scan, parent_clip, inherited);
+    Layered::Composited { partial }
 }
 
 /// Stand-in for "this could be anywhere", used when a command's extent is not
@@ -970,14 +1699,14 @@ pub(super) fn union_of(a: Rect, b: Rect) -> Rect {
     Rect::new(x, y, right - x, bottom - y)
 }
 
-/// What a command covers, in world space, or `None` when that cannot be
-/// bounded cheaply.
+/// What a command covers in its own space, before its transform.
 ///
-/// Only used to decide whether two commands can safely swap places, so it has
-/// to be generous: a box that is too small could let something be drawn
-/// underneath what it should cover.
-fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
-    let local = match &*cmd.command {
+/// Only used to decide whether two commands can safely swap places, and how
+/// large a layer's texture is, so it has to be generous: a box that is too
+/// small could let something be drawn underneath what it should cover, or cut
+/// a layer short.
+fn local_bounds(cmd: &FlattenedCommand, scale: f32) -> Rect {
+    match &*cmd.command {
         DrawCommand::RoundedRect {
             rect,
             border,
@@ -1015,6 +1744,8 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
         }
         DrawCommand::Image { rect, .. } => *rect,
         DrawCommand::BackdropBlur { rect, .. } | DrawCommand::InputRegion { rect, .. } => *rect,
+        // A blur spreads the texture past what it covers, by its reach.
+        DrawCommand::Layer { frame, blur, .. } => frame.outset(blur_margin(*blur, scale)),
         DrawCommand::Text {
             rect, font_size, ..
         }
@@ -1032,13 +1763,18 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
                 rect.height + slack * 2.0,
             )
         }
-    };
+    }
+}
 
+/// What a command covers, in world space, or `None` when that cannot be
+/// bounded cheaply.
+fn world_bounds(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
     if !cmd.world_transform.is_translation_only() {
         // Rotation and scale would need the transformed corners; rather than
         // pay for that on every command, treat it as unbounded and split.
         return None;
     }
+    let local = local_bounds(cmd, scale);
     Some(Rect::new(
         local.x + cmd.world_transform.tx(),
         local.y + cmd.world_transform.ty(),
@@ -1063,6 +1799,25 @@ fn spilled(rect: Rect, border: f32, shadow: Option<&crate::renderer::Shadow>) ->
         rect.width + grow * 2.0 + offset.0.abs(),
         rect.height + grow * 2.0 + offset.1.abs(),
     )
+}
+
+/// The box a command's pixels land in, in the space it was flattened in — the
+/// box round its transformed bounds — or `None` for a command that draws no
+/// pixels at all.
+///
+/// What a layer is sized by and asked about overlap with, once per command
+/// and once per frame: worth the four corners [`world_bounds`] will not pay
+/// for on every push.
+fn extent(cmd: &FlattenedCommand, scale: f32) -> Option<Rect> {
+    match &*cmd.command {
+        DrawCommand::InputRegion { .. } => None,
+        DrawCommand::BackdropBlur { sources, .. }
+            if !sources.contains(BackdropSources::SURFACE) =>
+        {
+            None
+        }
+        _ => Some(cmd.world_transform.map_rect(local_bounds(cmd, scale))),
+    }
 }
 
 #[cfg(test)]
@@ -1140,6 +1895,7 @@ mod tests {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
             let told = flatten_root_into(
                 &node,
+                1.0,
                 &mut commands,
                 &mut layers,
                 &mut FlattenScratch::default(),
@@ -1183,6 +1939,7 @@ mod tests {
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
         let carried = flatten_root_into(
             &node,
+            1.0,
             &mut commands,
             &mut layers,
             &mut FlattenScratch::default(),
@@ -1562,7 +2319,7 @@ mod tests {
     /// over them. Two frames that differ anywhere differ here.
     fn frame_through(node: &RenderNode, scratch: &mut FlattenScratch) -> (String, usize) {
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
-        let carried = flatten_root_into(node, &mut commands, &mut layers, scratch);
+        let carried = flatten_root_into(node, 1.0, &mut commands, &mut layers, scratch);
         (
             format!("{carried:?}\n{commands:?}\n{layers:?}"),
             layers.len(),
@@ -2014,6 +2771,7 @@ mod world_geometry_tests {
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
         flatten_root_into(
             &node,
+            1.0,
             &mut commands,
             &mut layers,
             &mut FlattenScratch::default(),
@@ -2091,6 +2849,7 @@ mod world_geometry_tests {
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
         flatten_root_into(
             &root,
+            1.0,
             &mut commands,
             &mut layers,
             &mut FlattenScratch::default(),
@@ -2167,6 +2926,7 @@ mod world_geometry_tests {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
             flatten_root_into(
                 node,
+                1.0,
                 &mut commands,
                 &mut layers,
                 &mut FlattenScratch::default(),
@@ -2259,6 +3019,7 @@ mod world_geometry_tests {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
             flatten_root_into(
                 node,
+                1.0,
                 &mut commands,
                 &mut layers,
                 &mut FlattenScratch::default(),
@@ -2355,6 +3116,7 @@ mod world_geometry_tests {
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
             flatten_root_into(
                 node,
+                1.0,
                 &mut commands,
                 &mut layers,
                 &mut FlattenScratch::default(),
@@ -2431,6 +3193,7 @@ mod opacity_tests {
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
         flatten_root_into(
             root,
+            1.0,
             &mut commands,
             &mut layers,
             &mut FlattenScratch::default(),
@@ -2456,13 +3219,18 @@ mod opacity_tests {
     /// An opacity is the product of every one above it: a half inside a half
     /// draws at a quarter, and an overlay drawn after the children is drawn at
     /// its own node's opacity, not at the last child's.
+    /// Drawn draw by draw — [`OpacityMode::Modulate`] — which is the
+    /// arithmetic this is about: the boxes overlap, and under the default the
+    /// outer one would be composited as a layer instead.
     #[test]
     fn nested_opacities_multiply() {
         let mut inner = with_box(3, 0.5);
+        inner.opacity_mode = OpacityMode::Modulate;
         inner
             .overlay_commands
             .push(Rc::new(DrawCommand::circle((5.0, 5.0), 5.0, Color::WHITE)));
         let mut outer = with_box(2, 0.5);
+        outer.opacity_mode = OpacityMode::Modulate;
         outer.children.push(Rc::new(inner));
         outer
             .overlay_commands
@@ -2526,5 +3294,257 @@ mod opacity_tests {
         assert_eq!(opacities(&flatten(&frame_under(0.0))), [0.0]);
         child.repainted.set(false);
         assert_eq!(opacities(&flatten(&frame_under(0.5))), [0.5]);
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+    use crate::backdrop::BackdropSources;
+    use crate::renderer::CornerRadii;
+    use crate::renderer::tree::ClipRegion;
+    use crate::widgets::Color;
+
+    const CARD: Color = Color::rgb(0.8, 0.2, 0.2);
+    const TILE: Color = Color::rgb(0.2, 0.2, 0.8);
+
+    struct Flat {
+        commands: Vec<FlattenedCommand>,
+        scratch: FlattenScratch,
+    }
+
+    fn flatten(root: &RenderNode) -> Flat {
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        let mut scratch = FlattenScratch::default();
+        flatten_root_into(root, 1.0, &mut commands, &mut layers, &mut scratch);
+        Flat { commands, scratch }
+    }
+
+    fn rect_node(id: NodeId, rect: Rect, color: Color) -> RenderNode {
+        let mut node = RenderNode::with_bounds(id, Rect::new(0.0, 0.0, rect.width, rect.height));
+        node.local_transform = Transform::translate(rect.x, rect.y);
+        node.commands.push(Rc::new(DrawCommand::rounded_rect(
+            Rect::new(0.0, 0.0, rect.width, rect.height),
+            color,
+            0.0,
+        )));
+        node
+    }
+
+    /// A surface clipped to a rounded box, holding a card at `opacity` and
+    /// `mode` whose tile overlaps the card's background — and, when `speaks`,
+    /// tells the compositor where input goes and what to blur, under a clip of
+    /// the tile's own.
+    fn surface(opacity: f32, mode: OpacityMode, tile_at: (f32, f32), speaks: bool) -> RenderNode {
+        let mut tile = rect_node(3, Rect::new(tile_at.0, tile_at.1, 40.0, 40.0), TILE);
+        if speaks {
+            tile.clip = Some(ClipRegion {
+                rect: Rect::new(0.0, 0.0, 30.0, 30.0),
+                corner_radius: CornerRadii::uniform(6.0),
+                curvature: 1.0,
+            });
+            tile.commands.push(Rc::new(DrawCommand::InputRegion {
+                rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+                corner_radii: CornerRadii::uniform(4.0),
+                curvature: 1.0,
+                takes: false,
+            }));
+            tile.commands.push(Rc::new(DrawCommand::BackdropBlur {
+                rect: Rect::new(0.0, 0.0, 40.0, 40.0),
+                sources: BackdropSources::SURFACE | BackdropSources::COMPOSITOR,
+                radius: 6.0,
+                corner_radii: CornerRadii::uniform(4.0),
+                curvature: 1.0,
+            }));
+        }
+        let mut card = rect_node(2, Rect::new(30.0, 20.0, 100.0, 60.0), CARD);
+        card.opacity = opacity;
+        card.opacity_mode = mode;
+        card.children.push(Rc::new(tile));
+        let mut root = RenderNode::with_bounds(1, Rect::new(0.0, 0.0, 200.0, 120.0));
+        root.clip = Some(ClipRegion {
+            rect: Rect::new(10.0, 10.0, 120.0, 80.0),
+            corner_radius: CornerRadii::uniform(16.0),
+            curvature: 1.0,
+        });
+        root.children.push(Rc::new(card));
+        root
+    }
+
+    /// The content of the frame's first layer, and its composite.
+    fn layer(flat: &Flat) -> (&[FlattenedCommand], &FlattenedCommand) {
+        let pass = &flat.scratch.passes()[0];
+        let composite = flat
+            .commands
+            .iter()
+            .find(|cmd| matches!(&*cmd.command, DrawCommand::Layer { .. }))
+            .expect("composited");
+        (&flat.commands[pass.commands.clone()], composite)
+    }
+
+    /// A fade over a tile that overlaps its card is a layer: the content is
+    /// drawn at full strength in the texture's space, and the fade and the
+    /// clip around the card are the composite's.
+    #[test]
+    fn an_overlap_under_a_fade_is_composited_with_the_clips_around_it() {
+        let flat = flatten(&surface(0.5, OpacityMode::Auto, (10.0, 10.0), false));
+        assert_eq!(flat.scratch.passes().len(), 1);
+        let (content, composite) = layer(&flat);
+
+        assert_eq!(content.len(), 2, "the card and the tile");
+        assert!(content.iter().all(|cmd| cmd.opacity == 1.0));
+        assert!(
+            content.iter().all(|cmd| cmd.clip.is_none()),
+            "nothing above the layer cuts what is drawn into it"
+        );
+        assert_eq!(composite.opacity, 0.5);
+        assert_eq!(
+            composite
+                .clip()
+                .expect("cut by the surface's clip")
+                .first
+                .rect,
+            Rect::new(10.0, 10.0, 120.0, 80.0)
+        );
+        let DrawCommand::Layer { frame, .. } = &*composite.command else {
+            unreachable!()
+        };
+        // The texture covers the card, a texel of empty edge round it, its
+        // origin on an even texel.
+        assert_eq!(*frame, Rect::new(-2.0, -2.0, 103.0, 63.0));
+        assert_eq!(flat.scratch.passes()[0].size, (103, 63));
+        assert!(
+            content.iter().all(|cmd| cmd.world_transform.tx() >= 2.0),
+            "drawn in the texture's space, the card two texels in"
+        );
+    }
+
+    /// A fade over draws that never touch is put back as modulation: no pass,
+    /// and the very commands — transforms, opacities and clips — that
+    /// [`OpacityMode::Modulate`] gives.
+    #[test]
+    fn a_fade_whose_draws_do_not_overlap_is_modulation() {
+        let mut auto = surface(0.5, OpacityMode::Auto, (10.0, 10.0), false);
+        let mut each = surface(0.5, OpacityMode::Modulate, (10.0, 10.0), false);
+        // No background on the card: the tile is all it draws.
+        for root in [&mut auto, &mut each] {
+            let card = Rc::get_mut(&mut root.children[0]).unwrap();
+            card.commands.clear();
+        }
+        let (auto, each) = (flatten(&auto), flatten(&each));
+
+        assert!(auto.scratch.passes().is_empty(), "no layer");
+        assert_eq!(auto.commands.len(), each.commands.len());
+        for (a, e) in auto.commands.iter().zip(&each.commands) {
+            assert_eq!(a.command, e.command);
+            assert_eq!(a.world_transform, e.world_transform);
+            assert_eq!(a.opacity, e.opacity);
+            assert_eq!(a.clip(), e.clip());
+        }
+    }
+
+    /// What the content says to the compositor is said where the layer
+    /// stands, cut by the clips inside the layer and around it, exactly as
+    /// without one — the texture has no input region and nothing behind it.
+    /// The texture keeps the surface's half of a blur that asks for both.
+    #[test]
+    fn a_layer_tells_the_compositor_what_its_content_does() {
+        // A frost inside a fade is faded draw by draw rather than made a
+        // layer; a declared blur makes one regardless, which is the case where
+        // what the content says to the compositor has to leave the texture.
+        let mut layered = surface(0.5, OpacityMode::Auto, (10.0, 10.0), true);
+        Rc::get_mut(&mut layered.children[0]).unwrap().blur = Some(0.0);
+        let auto = flatten(&layered);
+        let each = flatten(&surface(0.5, OpacityMode::Modulate, (10.0, 10.0), true));
+        assert_eq!(auto.scratch.passes().len(), 1);
+
+        let (content, _) = layer(&auto);
+        assert!(
+            content.iter().all(|cmd| match &*cmd.command {
+                DrawCommand::InputRegion { .. } => false,
+                DrawCommand::BackdropBlur { sources, .. } => *sources == BackdropSources::SURFACE,
+                _ => true,
+            }),
+            "the texture draws, and says nothing"
+        );
+        assert!(
+            content
+                .iter()
+                .any(|cmd| matches!(&*cmd.command, DrawCommand::BackdropBlur { .. })),
+            "and still frosts what is beneath it in the layer"
+        );
+
+        // Only the surface's commands: the layer's are in its texture's space.
+        let surface_of = |flat: &Flat| {
+            let start = flat
+                .scratch
+                .passes()
+                .last()
+                .map_or(0, |pass| pass.commands.end);
+            flat.commands[start..].to_vec()
+        };
+        let regions = |flat: &Flat| {
+            let commands = surface_of(flat);
+            (
+                crate::region::input_ops_from_commands(&commands, flat.scratch.clip_chains()),
+                crate::blur::regions_from_commands(&commands, flat.scratch.clip_chains()),
+            )
+        };
+        let (auto_input, auto_blur) = regions(&auto);
+        let (each_input, each_blur) = regions(&each);
+        assert!(!each_input.is_empty() && !each_blur.is_empty());
+        assert_eq!(auto_input, each_input, "the input region");
+        assert_eq!(auto_blur, each_blur, "the compositor's blur");
+    }
+
+    /// A path that is both filled and stroked overlaps itself: the stroke is
+    /// drawn over the fill, so fading them one after the other shows the fill
+    /// through the stroke. A fade over it alone is a layer.
+    #[test]
+    fn a_path_filled_and_stroked_overlaps_itself() {
+        use crate::renderer::{Fill, Path, Stroke};
+        let path = Path::new()
+            .move_to((0.0, 0.0))
+            .line_to((40.0, 0.0))
+            .line_to((20.0, 30.0))
+            .close();
+        let mut node = RenderNode::with_bounds(2, Rect::new(0.0, 0.0, 40.0, 30.0));
+        node.opacity = 0.5;
+        node.commands.push(Rc::new(DrawCommand::Path {
+            path,
+            fill: Some(Fill::color(CARD)),
+            stroke: Some(Stroke::new(4.0, TILE)),
+        }));
+        let mut root = RenderNode::with_bounds(1, Rect::new(0.0, 0.0, 100.0, 100.0));
+        root.children.push(Rc::new(node));
+        assert_eq!(flatten(&root).scratch.passes().len(), 1);
+    }
+
+    /// A layer inside a layer is drawn first, and the outer one's content
+    /// holds its composite.
+    #[test]
+    fn a_layer_inside_a_layer_is_drawn_first() {
+        let mut root = surface(0.5, OpacityMode::Auto, (10.0, 10.0), false);
+        let card = Rc::get_mut(&mut root.children[0]).unwrap();
+        let tile = Rc::get_mut(&mut card.children[0]).unwrap();
+        tile.blur = Some(3.0);
+        let flat = flatten(&root);
+
+        let passes = flat.scratch.passes();
+        assert_eq!(
+            passes.iter().map(|pass| pass.id).collect::<Vec<_>>(),
+            [3, 2],
+            "the tile, then the card"
+        );
+        assert!(
+            flat.commands[passes[1].commands.clone()]
+                .iter()
+                .any(|cmd| matches!(&*cmd.command, DrawCommand::Layer { id: 3, blur, .. } if *blur == 3.0)),
+            "the card's texture lays the tile's down"
+        );
+        assert_eq!(
+            passes[0].groups.end, passes[1].groups.start,
+            "and their groups in that order"
+        );
     }
 }

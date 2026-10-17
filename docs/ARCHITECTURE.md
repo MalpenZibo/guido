@@ -91,7 +91,9 @@ The primary building block. Supports:
 - Borders with SDF rendering
 - Shadows: offset, blur, spread and colour, outside the shape or inset, up to four on one box
 - Transforms (translate, rotate, scale)
-- Opacity over the whole subtree, multiplied into every draw in it
+- Opacity over the whole subtree, composited as one layer where its draws
+  overlap and multiplied into every draw where they do not
+- A blur over the whole subtree, composited as a layer
 - State layers (hover/pressed styles)
 - Ripple effects
 - Event handlers (click, hover, scroll)

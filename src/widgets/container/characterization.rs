@@ -132,7 +132,13 @@ impl H {
         let mut commands = Vec::new();
         let mut layers = Vec::new();
         let mut scratch = crate::renderer::FlattenScratch::default();
-        let _ = crate::renderer::flatten_root_into(&node, &mut commands, &mut layers, &mut scratch);
+        let _ = crate::renderer::flatten_root_into(
+            &node,
+            1.0,
+            &mut commands,
+            &mut layers,
+            &mut scratch,
+        );
         let blur = crate::blur::regions_from_commands(&commands, scratch.clip_chains());
         let input = crate::region::input_ops_from_commands(&commands, scratch.clip_chains());
 
@@ -8045,8 +8051,13 @@ fn an_unbounded_axis_survives_a_length_that_declares_no_maximum() {
 
 /// `opacity(0.0.transition(..).entering_from(1.0))` fades the container out as
 /// it appears — and everything in it with it, which the table's own test
-/// cannot see: it reads the container's node, and a child is drawn at its own
-/// node's opacity times every ancestor's, which only the flattened frame says.
+/// cannot see: it reads the container's node, and what a child is drawn at
+/// only the flattened frame says.
+///
+/// The box inside overlaps the container's background, so the container is
+/// composited as a layer: its content is drawn at full strength into the
+/// texture, and the fade is the composite's. What a box is drawn at is its own
+/// command's opacity times that of the layer it is in.
 #[test]
 fn an_entering_opacity_fades_the_whole_subtree() {
     const FILL: Color = Color::rgb(0.9, 0.1, 0.1);
@@ -8067,18 +8078,31 @@ fn an_entering_opacity_fades_the_whole_subtree() {
     let drawn = |h: &mut H| -> f32 {
         let node = h.paint();
         let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        let mut scratch = crate::renderer::FlattenScratch::default();
         let _ = crate::renderer::flatten_root_into(
             &node,
+            1.0,
             &mut commands,
             &mut layers,
-            &mut crate::renderer::FlattenScratch::default(),
+            &mut scratch,
         );
+        let composite = commands
+            .iter()
+            .find(|c| matches!(&*c.command, DrawCommand::Layer { .. }))
+            .map(|c| c.opacity);
+        let layered = scratch.passes().first().map(|pass| pass.commands.clone());
         let at = |fill: Color| {
-            commands
+            let index = commands
                 .iter()
-                .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { color, .. } if *color == fill))
-                .expect("the box is drawn")
-                .opacity
+                .position(|c| matches!(&*c.command, DrawCommand::RoundedRect { color, .. } if *color == fill))
+                .expect("the box is drawn");
+            let inside = layered.as_ref().is_some_and(|range| range.contains(&index));
+            commands[index].opacity
+                * if inside {
+                    composite.unwrap_or(1.0)
+                } else {
+                    1.0
+                }
         };
         assert_eq!(
             at(FILL),
@@ -8260,5 +8284,38 @@ fn a_widgets_laid_out_box_moves_with_scroll_on_both_axes_and_no_transform() {
         laid_out(&h),
         Rect::new(-20.0, 60.0, 40.0, 20.0),
         "the wheel scrolled the content 30 sideways and 50 down"
+    );
+}
+
+/// A blur spreads a container's pixels past its edge, and its damage has to
+/// reach as far — in the container's own space, so a container scaled by two
+/// spreads twice as far on the surface and is damaged twice as far.
+#[test]
+fn the_damage_reach_covers_a_blur_and_scales_with_it() {
+    let bound = crate::renderer::layer_blur::blur_reach_bound(8.0);
+    let reach = |scale: f32| {
+        let mut h = H::new(
+            container()
+                .width(40.0)
+                .height(40.0)
+                .background(Color::RED)
+                .scale(scale)
+                .blur(8.0),
+        );
+        h.fit(200.0, 200.0);
+        h.tree.paint_overflow(h.root)
+    };
+    assert!(
+        reach(1.0) >= bound,
+        "{} must cover the blur's {bound}",
+        reach(1.0)
+    );
+    // Scaled by two about the centre: the box grows by 20 a side, and the
+    // blur's reach doubles with it.
+    assert!(
+        reach(2.0) >= 20.0 + 2.0 * bound,
+        "{} must cover the scaled blur's {}",
+        reach(2.0),
+        20.0 + 2.0 * bound
     );
 }
