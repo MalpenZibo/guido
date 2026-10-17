@@ -306,18 +306,29 @@ than pressing what is under it.
 A scroller with nothing to scroll claims none of this, so a list that happens
 to fit today still answers a tap the way it always did.
 
-The keyboard moves it too. Page Down scrolls the nearest scroller around the
-focus down by one viewport height, and Page Up back up by one — a scroller that
-is `.focusable(true)` and holds the focus itself, or one with the focused
-widget somewhere inside it. The key goes to the focus first, as every key does:
-the focused widget, then the scroller's own `on_key_down`, and only what both
-let through pages. A scroller at its end lets the key go on, so the next
-scroller out pages instead, as a browser's do. A page is vertical, so a
-`Scroll::horizontal()` scroller lets the key go on too. With Ctrl, Alt or
-Super held, the key is left for whoever binds it.
+The keyboard moves it too, the nearest scroller around the focus — a scroller
+that is `.focusable(true)` and holds the focus itself, or one with the focused
+widget somewhere inside it:
 
-With nothing focused, nothing pages. Clicking into a list that is not
-focusable gives nothing the focus, so a list that should page after a click
+| Key | Scrolls |
+| --- | --- |
+| Up / Down | one line, 40 pixels — what a wheel notch scrolls |
+| Left / Right | one line along the horizontal axis |
+| Page Up / Page Down | one viewport height |
+| Home / End | to the start or the end of the vertical axis, or of the horizontal one on a `Scroll::horizontal()` scroller |
+
+The key goes to the focus first, as every key does: the focused widget, then
+the scroller's own `on_key_down`, and only what both let through scrolls. A
+focused text input keeps Left, Right, Home and End for its caret and lets Up
+and Down through, and a list that moves a selection with the arrows takes
+them in its own `on_key_down`. A scroller that cannot move that way — at its
+end, or with no axis for the key, as a page on a `Scroll::horizontal()`
+scroller — lets the key go on, so the next scroller out moves instead, as a
+browser's do. With Ctrl, Alt or Super held, the key is left for whoever binds
+it.
+
+With nothing focused, nothing scrolls. Clicking into a list that is not
+focusable gives nothing the focus, so a list that should scroll after a click
 is made focusable:
 
 ```rust

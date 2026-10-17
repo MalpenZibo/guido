@@ -732,12 +732,17 @@ lets it on to the next. A listener on the focus path that let a key through is
 not asked again when the way down to another listener passes it — `Tree`
 keeps the path the key already went up for that (#634).
 
-A scroller on the focus path pages with Page Up and Page Down, by one viewport
-height, after its own `on_key_down` lets the key through, and answers
-`Handled` only if its offset moved — so a scroller at its end hands the key to
-the next one out, Chromium's scroll chain. It pages only on the focus path:
-with nothing focused nothing pages, as in Flutter, GTK and Qt, and a key on its
-way down to a listener inside a scroller does not page it (#747).
+A scroller on the focus path scrolls with the keys, after its own
+`on_key_down` lets the key through: Page Up and Page Down by one viewport
+height (#747), the arrows by `SCROLL_PIXELS_PER_LINE`, the wheel notch's 40, and
+Home and End to either end of the vertical axis, or of the horizontal one on a
+horizontal-only scroller (#765) — Chromium's scroll by line and by document.
+It answers `Handled` only if its offset moved, so a
+scroller at its end hands the key to the next one out, Chromium's scroll
+chain. It scrolls only on the focus path: with nothing focused nothing
+scrolls, as in Flutter, GTK and Qt, and a key on its way down to a listener
+inside a scroller does not move it. A focused text input takes Left, Right,
+Home and End before the scroller hears them, and lets Up and Down through.
 
 A Tab that neither route took then does what Tab does by default: it moves the
 focus, as the DOM runs a default action after dispatch and Flutter's root
