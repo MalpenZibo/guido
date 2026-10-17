@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/MalpenZibo/guido/compare/v0.12.0...v0.13.0) - 2026-10-17
+
+### Other
+
+- A leaving child no longer leads its ZStack's size ([#791](https://github.com/MalpenZibo/guido/pull/791))
+- A dynamic child runs in the scope it was written in ([#789](https://github.com/MalpenZibo/guido/pull/789))
+- A ZStack offers its children its size rather than holding them to it ([#788](https://github.com/MalpenZibo/guido/pull/788))
+- A child keeps its natural size inside a smaller, clipping parent ([#787](https://github.com/MalpenZibo/guido/pull/787))
+- A ZStack aligns its children ([#785](https://github.com/MalpenZibo/guido/pull/785))
+- A state override can fade a whole control ([#784](https://github.com/MalpenZibo/guido/pull/784))
+- An image's tint follows its control's state ([#783](https://github.com/MalpenZibo/guido/pull/783))
+- A resize is laid out from the root whatever else the frame has pending ([#777](https://github.com/MalpenZibo/guido/pull/777))
+- A text can be centred on its capitals, not on its line box ([#778](https://github.com/MalpenZibo/guido/pull/778))
+- A surface's widget tree finds its own SurfaceHandle in its scope ([#776](https://github.com/MalpenZibo/guido/pull/776))
+- A container's border takes room, and an outline that does not ([#772](https://github.com/MalpenZibo/guido/pull/772))
+- A widget's paint reach is four outsets, one per side ([#771](https://github.com/MalpenZibo/guido/pull/771))
+- Backdrops in one group share their render passes ([#770](https://github.com/MalpenZibo/guido/pull/770))
+- The arrows, Home and End scroll the scroller nearest the focus ([#769](https://github.com/MalpenZibo/guido/pull/769))
+- A container fades as one picture, and can blur what it draws ([#754](https://github.com/MalpenZibo/guido/pull/754))
+- A clipping container cuts its children inside its border ([#768](https://github.com/MalpenZibo/guido/pull/768))
+- A stroke can be dashed ([#762](https://github.com/MalpenZibo/guido/pull/762))
+- A backdrop pass reuses its uniforms and bind groups from frame to frame ([#763](https://github.com/MalpenZibo/guido/pull/763))
+- The scroller nearest the focus pages on Page Up and Page Down ([#761](https://github.com/MalpenZibo/guido/pull/761))
+- Shapes in one container can merge into one ([#753](https://github.com/MalpenZibo/guido/pull/753))
+- Measuring a content-sized surface reads its output as a snapshot ([#760](https://github.com/MalpenZibo/guido/pull/760))
+- Page Up, Page Down and the function keys reach widgets ([#748](https://github.com/MalpenZibo/guido/pull/748))
+- A double click reaches widgets, and selects a word in a text input ([#746](https://github.com/MalpenZibo/guido/pull/746))
+- A container can have an inset shadow, and more than one shadow ([#750](https://github.com/MalpenZibo/guido/pull/750))
+- A container moved by layout can slide to its new place ([#751](https://github.com/MalpenZibo/guido/pull/751))
+- A widget can draw paths and strokes, and an arc ([#756](https://github.com/MalpenZibo/guido/pull/756))
+- Text can be italic and ask for OpenType features ([#749](https://github.com/MalpenZibo/guido/pull/749))
+- A widget ref reports the box layout gave its widget, without the transforms ([#743](https://github.com/MalpenZibo/guido/pull/743))
+- Keyframes can start after a delay or at a phase ([#744](https://github.com/MalpenZibo/guido/pull/744))
+
 ## [0.12.0](https://github.com/MalpenZibo/guido/compare/v0.11.1...v0.12.0) - 2026-10-16
 
 ### Other
