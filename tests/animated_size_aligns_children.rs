@@ -6,7 +6,8 @@
 //! holding one view at its natural size whose inner width is a signal. The
 //! loop is the real one, stepped 16 ms at a time, and every frame of the
 //! transition is asked where the view is, for a shrink and for a grow — and
-//! for a `Flex` column centring across as well as for a `ZStack`.
+//! for a `Flex` column centring across as well as for a `ZStack`, and for a
+//! height as well as a width.
 #![cfg(feature = "testing")]
 
 use std::time::{Duration, Instant};
@@ -18,26 +19,37 @@ mod common;
 
 const FRAME: Duration = Duration::from_millis(16);
 
-/// How the shape lays out the one view it holds.
+/// How the shape lays out the one view it holds, and along which axis the two
+/// of them change size.
 #[derive(Clone, Copy)]
 enum Aligner {
     ZStack,
     FlexColumn,
+    /// A stack aligned centre start whose height follows its content.
+    ZStackDown,
+}
+
+impl Aligner {
+    fn vertical(self) -> bool {
+        matches!(self, Aligner::ZStackDown)
+    }
 }
 
 struct Shape {
     app: guido::testing::Headless,
-    width: RwSignal<f32>,
+    aligner: Aligner,
+    extent: RwSignal<f32>,
     shape: WidgetRef,
     view: WidgetRef,
     at: Instant,
 }
 
 impl Shape {
-    /// The shape holding a view `width` wide, settled.
-    fn new(aligner: Aligner, width: f32) -> Option<Self> {
+    /// The shape holding a view `extent` long along the axis it changes on,
+    /// settled.
+    fn new(aligner: Aligner, extent: f32) -> Option<Self> {
         let mut app = common::headless()?;
-        let w = create_signal(width);
+        let w = create_signal(extent);
         let shape = create_widget_ref();
         let view = create_widget_ref();
         let surface = app.surface(
@@ -45,14 +57,24 @@ impl Shape {
                 .height(100)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
             move || {
-                let inner = container()
-                    .width(at_least(0.0).transition(Transition::new(400.0, TimingFunction::Linear)))
-                    .overflow(Overflow::Hidden);
+                let follows =
+                    at_least(0.0).transition(Transition::new(400.0, TimingFunction::Linear));
+                let inner = container().overflow(Overflow::Hidden);
                 let inner = match aligner {
-                    Aligner::ZStack => inner.layout(ZStack::new().align(Alignment::TOP_CENTER)),
-                    Aligner::FlexColumn => {
-                        inner.layout(Flex::column().cross_alignment(CrossAlignment::Center))
-                    }
+                    Aligner::ZStack => inner
+                        .width(follows)
+                        .layout(ZStack::new().align(Alignment::TOP_CENTER)),
+                    Aligner::FlexColumn => inner
+                        .width(follows)
+                        .layout(Flex::column().cross_alignment(CrossAlignment::Center)),
+                    Aligner::ZStackDown => inner
+                        .height(follows)
+                        .layout(ZStack::new().align(Alignment::CENTER_START)),
+                };
+                let content = if aligner.vertical() {
+                    container().width(100.0).height(move || w.get())
+                } else {
+                    container().width(move || w.get()).height(30.0)
                 };
                 container()
                     .width(fill())
@@ -63,7 +85,7 @@ impl Shape {
                                 container()
                                     .width(natural())
                                     .height(natural())
-                                    .child(container().width(move || w.get()).height(30.0))
+                                    .child(content)
                                     .widget_ref(view),
                             )
                             .widget_ref(shape),
@@ -75,7 +97,8 @@ impl Shape {
         app.step_at(at);
         let mut this = Self {
             app,
-            width: w,
+            aligner,
+            extent: w,
             shape,
             view,
             at,
@@ -96,46 +119,52 @@ impl Shape {
         }
     }
 
-    fn rects(&self) -> (Rect, Rect) {
+    /// Where the shape and the view start along the axis they change on, and
+    /// how long each is there.
+    fn along(&self) -> ((f32, f32), (f32, f32)) {
+        let along = |r: Rect| {
+            if self.aligner.vertical() {
+                (r.y, r.height)
+            } else {
+                (r.x, r.width)
+            }
+        };
         (
-            self.shape.layout_rect().get_untracked(),
-            self.view.layout_rect().get_untracked(),
+            along(self.shape.layout_rect().get_untracked()),
+            along(self.view.layout_rect().get_untracked()),
         )
     }
 
-    /// Change the view's width, and check every frame of the transition that
+    /// Change the view's length, and check every frame of the transition that
     /// follows: the view is centred in the shape as the shape is then, and
     /// the shape is actually in flight on the frames in between.
     fn assert_centred_through(&mut self, to: f32) {
-        let (from_shape, _) = self.rects();
-        self.width.set(to);
+        let ((_, from), _) = self.along();
+        self.extent.set(to);
         let start = self.at;
         let mut frames = Vec::new();
         while self.at < start + Duration::from_millis(450) {
             self.frame();
-            let ms = (self.at - start).as_millis();
-            let (shape, view) = self.rects();
-            frames.push((ms, shape.x, shape.width, view.x, view.width));
+            frames.push(((self.at - start).as_millis(), self.along()));
         }
         let in_flight = frames
             .iter()
-            .filter(|&&(_, _, w, _, _)| (w - from_shape.width).abs() > 1.0 && (w - to).abs() > 1.0)
+            .filter(|(_, ((_, len), _))| (len - from).abs() > 1.0 && (len - to).abs() > 1.0)
             .count();
         assert!(
             in_flight > 10,
-            "the shape animates from {} to {to}: {frames:?}",
-            from_shape.width
+            "the shape animates from {from} to {to}: {frames:?}"
         );
-        for &(ms, shape_x, shape_w, view_x, view_w) in &frames {
-            let centred = shape_x + (shape_w - view_w) / 2.0;
+        for &(ms, ((shape_at, shape_len), (view_at, view_len))) in &frames {
+            let centred = shape_at + (shape_len - view_len) / 2.0;
             assert!(
-                (view_x - centred).abs() < 0.5,
-                "at {ms} ms the view is at {view_x}, centred in the shape would be {centred}: \
+                (view_at - centred).abs() < 0.5,
+                "at {ms} ms the view is at {view_at}, centred in the shape would be {centred}: \
                  {frames:?}"
             );
         }
-        let (shape, view) = self.rects();
-        assert_eq!((shape.width, view.width), (to, to), "and it settles");
+        let ((_, shape), (_, view)) = self.along();
+        assert_eq!((shape, view), (to, to), "and it settles");
     }
 }
 
@@ -169,4 +198,20 @@ fn a_flex_column_centres_its_child_while_growing() {
         return;
     };
     shape.assert_centred_through(300.0);
+}
+
+#[test]
+fn a_zstack_centres_its_child_while_its_height_shrinks() {
+    let Some(mut shape) = Shape::new(Aligner::ZStackDown, 80.0) else {
+        return;
+    };
+    shape.assert_centred_through(20.0);
+}
+
+#[test]
+fn a_zstack_centres_its_child_while_its_height_grows() {
+    let Some(mut shape) = Shape::new(Aligner::ZStackDown, 20.0) else {
+        return;
+    };
+    shape.assert_centred_through(80.0);
 }
