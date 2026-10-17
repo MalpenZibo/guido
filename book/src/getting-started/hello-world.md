@@ -101,7 +101,7 @@ The `SurfaceConfig` defines how the window appears:
 - **Anchor** - Attached to top, left, and right edges (full width)
 - **Background color** - Dark background for the bar
 
-Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for modifying surface properties dynamically.
+Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for modifying surface properties dynamically, and the surface's own widgets can read that handle with `expect_context::<SurfaceHandle>()`.
 
 ### Building the View
 

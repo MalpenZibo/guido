@@ -35,6 +35,11 @@ Three things follow, and they are the whole model:
   shadowing is for, and shadowing needs two scopes — a second declaration in one
   scope would replace the first with nothing to say it had.
 
+Guido declares one value of its own in each surface's scope — a popup's and a
+lock cover's included: that surface's `SurfaceHandle`, so
+`expect_context::<SurfaceHandle>()` in a factory body is the surface the tree
+is being built for (see [A Surface's Own Handle](./wayland.md#a-surfaces-own-handle)).
+
 The scopes are one level deep. A surface, a popup and a surface spawned at
 runtime are all children of the root — the loop opens each one's scope from the
 root, not from the surface it belongs to — so a popup reads what the
