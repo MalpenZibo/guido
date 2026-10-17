@@ -78,3 +78,59 @@ fn a_new_tint_is_drawn_from_the_same_texture() {
     assert_eq!(app.read_pixel(surface, 10, 10), [0, 255, 0, 255]);
     assert_eq!(app.image_textures(), 2, "the second tint made no texture");
 }
+
+/// An icon's pixels take the tint its control's state declares (#780): a row
+/// holding a tinted icon and a label, hovered and then disabled, draws the
+/// icon in the colour each state names.
+///
+/// The pointer is on the row's padding, nowhere near the icon, so it is the
+/// row's hover the icon follows and not its own.
+#[test]
+fn an_icon_is_drawn_in_the_tint_its_state_declares() {
+    let Some(mut app) = headless() else { return };
+    let enabled = create_signal(true);
+    let surface = app.surface(
+        SurfaceConfig::new().height(40).background_color(BACKDROP),
+        move || {
+            container()
+                .layout(Flex::row())
+                .padding(10.0)
+                .enabled(enabled)
+                .on_click(|| {})
+                .child(
+                    container().width(20.0).height(20.0).child(
+                        image(black_square())
+                            .content_fit(ContentFit::Fill)
+                            .tint(Color::rgb(1.0, 0.0, 0.0))
+                            .when_hovered(|s| s.tint(Color::rgb(0.0, 1.0, 0.0)))
+                            .when_disabled(|s| s.tint(Color::rgb(1.0, 1.0, 1.0))),
+                    ),
+                )
+                .child(
+                    text("Power off")
+                        .color(Color::rgb(1.0, 0.0, 0.0))
+                        .when_hovered(|s| s.color(Color::rgb(0.0, 1.0, 0.0)))
+                        .when_disabled(|s| s.color(Color::rgb(1.0, 1.0, 1.0))),
+                )
+        },
+    );
+    app.configure(surface, 120, 40, 1.0);
+    app.step();
+    assert_eq!(app.read_pixel(surface, 20, 20), [255, 0, 0, 255], "at rest");
+
+    app.event_at(
+        surface,
+        Event::mouse_move(2.0, 2.0),
+        std::time::Instant::now(),
+    );
+    app.step();
+    assert_eq!(app.read_pixel(surface, 20, 20), [0, 255, 0, 255], "hovered");
+
+    enabled.set(false);
+    app.step();
+    assert_eq!(
+        app.read_pixel(surface, 20, 20),
+        [255, 255, 255, 255],
+        "disabled"
+    );
+}

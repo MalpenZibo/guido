@@ -8,7 +8,7 @@ use crate::tree::{LayoutCtx, Tree, WidgetId};
 use super::container::get_animated_value;
 use super::control::Control;
 use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
-use super::state_layer::{StateWhen, Stateful};
+use super::state_layer::{StateWhen, Stateful, notice_own_hover, state_is_active};
 use super::text_style::{DEFAULT_FONT_SIZE, TextAnims, TextShadow, TextStroke, TextStyle};
 use super::widget::{Color, Event, EventResponse, Outsets, Rect, Widget};
 
@@ -357,23 +357,9 @@ impl Text {
         self
     }
 
-    /// Whether an override applies. Reading the answer is what subscribes the
-    /// text to the control, so it is asked only for a state it declares.
+    /// Whether an override applies — see [`state_is_active`].
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
-        match (when, control) {
-            (StateWhen::When(condition), _) => condition.get(),
-            // Inside a unit, every state is that unit's answer, whatever the
-            // state is — the whole point of `Control`.
-            (_, Some(control)) => control.is_active(when),
-            // No control above: this text is its own unit. It can notice the
-            // pointer over its own bounds, and it can hold the focus if
-            // something gave it — but it cannot be pressed, because being
-            // pressed means being activated and it has nothing to activate,
-            // and it cannot be disabled, because it takes no input to refuse.
-            (StateWhen::Hovered, None) => self.own_hover.is_some_and(|h| h.get()),
-            (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
-            (StateWhen::Pressed | StateWhen::Disabled, None) => false,
-        }
+        state_is_active(id, control, when, self.own_hover)
     }
 
     /// Refresh cached values from the declared style.
@@ -584,34 +570,10 @@ impl Widget for Text {
         size
     }
 
-    /// Notice the pointer, but only for a text that is its own interaction
-    /// unit. Inside a control it is the control that tracks, and asking twice
-    /// would light this text on its own glyphs rather than on the button whose
-    /// label it is.
+    /// Notice the pointer, for a text that is its own unit — see
+    /// `notice_own_hover`.
     fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
-        let Some(hover) = self.own_hover else {
-            return EventResponse::Ignored;
-        };
-        if tree.nearest_control(id).is_some() {
-            return EventResponse::Ignored;
-        }
-
-        let inside = match event {
-            // A pointer with no position is over nothing — the same answer a
-            // `MouseLeave` gives, and `contains_at` is where that is decided.
-            Event::MouseMove { at, .. } | Event::MouseEnter { at } => tree
-                .get_bounds(id)
-                .is_some_and(|bounds| bounds.contains_at(*at)),
-            Event::MouseLeave => false,
-            _ => return EventResponse::Ignored,
-        };
-        // Written only on a change: an unchanged pointer move must not wake
-        // every subscriber.
-        if hover.get_untracked() != inside {
-            hover.set(inside);
-        }
-        // Never handled: noticing the pointer is not consuming it.
-        EventResponse::Ignored
+        notice_own_hover(self.own_hover, tree, id, event)
     }
 
     fn paint(&self, ctx: &mut PaintContext) {

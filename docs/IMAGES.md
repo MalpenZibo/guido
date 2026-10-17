@@ -288,7 +288,11 @@ framebuffer premultiplied, as everything the textured-quad pipeline draws is
 textured-quad vertex (`TexturedVertex::tint`, `[r, g, b, amount]`) beside the
 opacity and for the same reason — a new colour is not a new texture — so it is
 neither in the texture cache's key nor a cause of a new raster. Paint reads it,
-so a new tint repaints and lays nothing out. Transformed text shares the
+so a new tint repaints and lays nothing out — unless it was declared with a
+motion, when layout reads it as well, to point the motion at it, as a text's
+colour does. An image is `Stateful`, and its `ImageStyle` overrides the tint,
+resolved from the image's control by the same `state_is_active` a text's
+colour is. Transformed text shares the
 pipeline and passes `NO_TINT`, an amount of zero, which leaves the texel as it
 was.
 
