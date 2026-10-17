@@ -287,6 +287,9 @@ pub mod widget_prelude {
     /// and for that it needs the thing those three compose into.
     pub use crate::transform::Transform;
     pub use crate::tree::{LayoutCtx, LayoutPass, Tree, WidgetId};
+    /// What [`Tree::set_own_paint_reach`] takes, for a widget whose reach is
+    /// not the same on every side. A plain number is.
+    pub use crate::widgets::Outsets;
     /// What [`PaintContext::paint_child`](crate::renderer::PaintContext::paint_child)
     /// is given. A widget with the ordinary children of an ordinary box passes
     /// `&ChildPaintOptions::default()`; the fields are for a parent that
@@ -1989,40 +1992,32 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     with_surface(wayland_state, id, |s| s.request_frame_callback());
 
     let damage = tree.take_damage(surface.widget_id);
-    match damage {
-        DamageRegion::None => {
-            // Shouldn't happen since we're rendering, but report full damage to be safe
-            with_surface(wayland_state, id, |s| {
-                s.damage(
-                    0,
-                    0,
-                    geometry.physical_width as i32,
-                    geometry.physical_height as i32,
-                )
-            });
-        }
+    let (buffer_width, buffer_height) = (
+        geometry.physical_width as i32,
+        geometry.physical_height as i32,
+    );
+    let (x, y, width, height) = match damage {
         DamageRegion::Partial(rect) => {
             let scale = frame.scale_factor;
-            with_surface(wayland_state, id, |s| {
-                s.damage(
-                    (rect.x * scale) as i32,
-                    (rect.y * scale) as i32,
-                    (rect.width * scale).ceil() as i32,
-                    (rect.height * scale).ceil() as i32,
-                )
-            });
+            (
+                (rect.x * scale) as i32,
+                (rect.y * scale) as i32,
+                (rect.width * scale).ceil() as i32,
+                (rect.height * scale).ceil() as i32,
+            )
         }
-        DamageRegion::Full => {
-            with_surface(wayland_state, id, |s| {
-                s.damage(
-                    0,
-                    0,
-                    geometry.physical_width as i32,
-                    geometry.physical_height as i32,
-                )
-            });
-        }
-    }
+        // `None` shouldn't happen since we're rendering, but full damage is
+        // the safe report for it.
+        DamageRegion::None | DamageRegion::Full => (0, 0, buffer_width, buffer_height),
+    };
+    with_surface(wayland_state, id, |s| s.damage(x, y, width, height));
+    let named = widgets::Rect::new(x as f32, y as f32, width as f32, height as f32);
+    let buffer = widgets::Rect::new(0.0, 0.0, buffer_width as f32, buffer_height as f32);
+    render_stats::record_damage_pixels(
+        named
+            .intersection(&buffer)
+            .map_or(0, |seen| (seen.width * seen.height) as u64),
+    );
 
     let presented;
     time_phase!(render_stats::Phase::GpuRender, {

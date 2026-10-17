@@ -28,7 +28,7 @@ use smallvec::SmallVec;
 use crate::layout::{Constraints, Size};
 use crate::reactive::{CursorIcon, Prop};
 use crate::transform::Transform;
-use crate::widgets::{Rect, Widget};
+use crate::widgets::{Outsets, Rect, Widget};
 
 /// Inline capacity for children. Most widgets have 0–4 children,
 /// so this avoids a heap allocation for the common case.
@@ -141,9 +141,10 @@ struct Slot {
     /// of text, if it has one. Reported by leaves during layout and read by a
     /// parent aligning on `CrossAlignment::Baseline`.
     baseline: Option<f32>,
-    /// How far this widget's *own* painting lands outside its bounds — its
-    /// shadow, and where its transform can carry it. Published by the widget.
-    own_paint_reach: f32,
+    /// How far this widget's *own* painting lands outside its bounds, side by
+    /// side — its shadow, and where its transform can carry it. Published by
+    /// the widget.
+    own_paint_reach: Outsets,
 
     /// How far anything its children draw stands outside its box.
     ///
@@ -151,7 +152,7 @@ struct Slot {
     /// different schedules: the widget republishes its own on every Paint job,
     /// which must stay cheap, while this one is a fact about a list and is
     /// re-measured only when that list is walked anyway.
-    children_outset: f32,
+    children_outset: Outsets,
 
     /// Whether this widget clips its children to its own edges.
     ///
@@ -261,6 +262,19 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
     crate::reactive::with_signal_tracking(id, crate::jobs::JobType::Paint, || {
         widget.refresh_paint_bounds(tree, id)
     });
+}
+
+/// Whether a child that reached `old` and now reaches `new` can have moved a
+/// maximum that stood at `had`: only by having led it, and by having got
+/// smaller. What lets a shrinking reach stop its walk without folding over the
+/// siblings, side by side.
+fn leads_and_shrank(old: f32, new: f32, had: f32) -> bool {
+    old >= had && new < old
+}
+
+/// The same, asked of each side.
+fn led_a_side_and_shrank(old: Outsets, new: Outsets, had: Outsets) -> bool {
+    (0..4).any(|side| leads_and_shrank(old.sides()[side], new.sides()[side], had.sides()[side]))
 }
 
 /// A child a container offered a positioned event to through its window: the
@@ -812,8 +826,8 @@ impl Tree {
             cached_paint: None,
             control: None,
             baseline: None,
-            own_paint_reach: 0.0,
-            children_outset: 0.0,
+            own_paint_reach: Outsets::ZERO,
+            children_outset: Outsets::ZERO,
             clips_children: false,
             children_reach: 0.0,
         });
@@ -1187,11 +1201,11 @@ impl Tree {
     /// the same contract as `set_origin`: the rect a repaint reports is built
     /// from the reach the widget has *now*, so nothing else would ever name
     /// the pixels it painted a frame ago.
-    pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: f32) {
+    pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: impl Into<Outsets>) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
-        let reach = reach.max(0.0);
+        let reach = reach.into().map(|side| side.max(0.0));
         if self.dense[idx].own_paint_reach == reach {
             return;
         }
@@ -1207,7 +1221,9 @@ impl Tree {
         // shape `set_origin` uses for the geometry it owns, and for the same
         // reason. A reach that *grows* needs none of it: the mark that follows
         // builds a rect from the wider value, and it contains the narrower one.
-        if after < before
+        // One that grows on one side and shrinks on another has vacated
+        // something all the same.
+        if !after.covers(before)
             && let Some((root, vacated)) = self.surface_relative_damage_and_root(id)
         {
             self.expand_damage_rect(root, vacated);
@@ -1216,7 +1232,7 @@ impl Tree {
         if before == after {
             return;
         }
-        self.gather_reach_upward(id, before, after > before);
+        self.gather_reach_upward(id, before);
     }
 
     /// Say that this widget merges its children's shapes into one, reaching
@@ -1239,7 +1255,10 @@ impl Tree {
         }
         let wider = was.unwrap_or(0.0).max(reach.unwrap_or(0.0));
         if let Some((root, laid_out)) = self.surface_relative_layout_and_root(id) {
-            self.expand_damage_rect(root, laid_out.outset(self.paint_overflow(id) + wider));
+            self.expand_damage_rect(
+                root,
+                laid_out.outset_by(self.paint_overflow(id)).outset(wider),
+            );
         }
         match reach {
             Some(reach) => self.merge_reaches.insert(id, reach),
@@ -1249,18 +1268,20 @@ impl Tree {
 
     /// Carry a change in a child's reach into the ancestors it affects.
     ///
-    /// A reach that **grew** only ever widens, so each ancestor is compared and
-    /// the walk stops at the first one already wide enough — nothing above it
-    /// can be narrow either. O(depth), no walk over siblings.
+    /// A reach that **grew** on no side shrinking only ever widens, so each
+    /// ancestor is compared and the walk stops at the first one already wide
+    /// enough — nothing above it can be narrow either. O(depth), no walk over
+    /// siblings.
     ///
     /// A reach that **shrank** cannot be answered by comparison: this child may
     /// have been the widest, and the new maximum is whatever the others say. So
-    /// that path re-measures — but only where it has to. A child that was not
-    /// the maximum on either axis cannot have changed one by getting smaller,
-    /// which is the common case and the one that matters: the return leg of a
-    /// spring shrinks on *every frame*, so a fold over the siblings there would
-    /// be an O(children) walk per frame, and a staggered list of them O(n²).
-    fn gather_reach_upward(&mut self, from: WidgetId, was: f32, grew: bool) {
+    /// that path re-measures — but only where it has to. A side the child did
+    /// not lead on, or did not get smaller on, cannot have moved, which is the
+    /// common case and the one that matters: the return leg of a spring shrinks
+    /// on *every frame*, so a fold over the siblings there would be an
+    /// O(children) walk per frame, and a staggered list of them O(n²). A reach
+    /// that grew on one side and shrank on another is re-measured as well.
+    fn gather_reach_upward(&mut self, from: WidgetId, was: Outsets) {
         let mut child = from;
         let mut was = was;
         while let Some(parent) = self.get_parent(child) {
@@ -1278,17 +1299,25 @@ impl Tree {
                 // learns anything and the walk is done.
                 let (_, widest) = self.measure_children(parent, None);
                 self.dense[parent_idx].children_reach = widest;
-                self.dense[parent_idx].children_outset = 0.0;
+                self.dense[parent_idx].children_outset = Outsets::ZERO;
                 return;
             }
-            let (outset, widest) = if grew {
+            let now = self.paint_overflow(child);
+            let (outset, widest) = if now.covers(was) {
                 (
-                    had_outset.max(self.child_paint_outset(child, parent)),
-                    had_reach.max(self.paint_overflow(child)),
+                    had_outset.max(self.child_outset_from(now, child, parent)),
+                    had_reach.max(now.widest()),
                 )
-            } else if was < had_reach && self.child_outset_from(was, child, parent) < had_outset {
-                // Not the widest on either axis before it shrank, so neither
-                // maximum can have moved, and nothing above can have either.
+            } else if was.covers(now)
+                && !leads_and_shrank(was.widest(), now.widest(), had_reach)
+                && !led_a_side_and_shrank(
+                    self.child_outset_from(was, child, parent),
+                    self.child_outset_from(now, child, parent),
+                    had_outset,
+                )
+            {
+                // Smaller on no side it led on, so no maximum can have moved,
+                // and nothing above can have either.
                 return;
             } else {
                 self.measure_children(parent, None)
@@ -1310,22 +1339,18 @@ impl Tree {
         }
     }
 
-    /// How far what `child` draws stands outside `parent`'s own box.
-    fn child_paint_outset(&self, child: WidgetId, parent: WidgetId) -> f32 {
-        self.child_outset_from(self.paint_overflow(child), child, parent)
-    }
-
-    /// The same, for a reach the caller names — which is how the shrink path
-    /// asks what a child's outset *was* without having kept the rect.
-    fn child_outset_from(&self, reach: f32, child: WidgetId, parent: WidgetId) -> f32 {
+    /// How far what `child` draws stands outside `parent`'s own box, for a
+    /// reach the caller names — which is how the shrink path asks what a
+    /// child's outset *was* without having kept the rect.
+    fn child_outset_from(&self, reach: Outsets, child: WidgetId, parent: WidgetId) -> Outsets {
         let (Some(child_box), Some(parent_box)) = (self.get_bounds(child), self.get_bounds(parent))
         else {
-            return 0.0;
+            return Outsets::ZERO;
         };
         // A child's bounds are relative to its parent, whose own box therefore
         // starts at the origin.
         child_box
-            .outset(reach)
+            .outset_by(reach)
             .outset_beyond(crate::widgets::Rect::from_size(crate::layout::Size::new(
                 parent_box.width,
                 parent_box.height,
@@ -1338,7 +1363,7 @@ impl Tree {
     ///
     /// One walk and one lookup per child — the sparse-then-dense resolve is the
     /// expensive half, and every number below comes off the slot it lands on.
-    fn measure_children(&self, id: WidgetId, own_size: Option<Size>) -> (f32, f32) {
+    fn measure_children(&self, id: WidgetId, own_size: Option<Size>) -> (Outsets, f32) {
         // The size this pass just measured, where the caller has it: the cache
         // is written when the widget's layout *returns*, so a container asking
         // in the middle of its own would otherwise be measuring its children
@@ -1348,19 +1373,19 @@ impl Tree {
             .or_else(|| self.get_bounds(id).map(|b| Size::new(b.width, b.height)))
             .map(crate::widgets::Rect::from_size)
         else {
-            return (0.0, 0.0);
+            return (Outsets::ZERO, 0.0);
         };
         self.get_children(id)
             .iter()
             .filter_map(|&child| self.get_dense_index(child))
-            .fold((0.0f32, 0.0f32), |(outset, widest), idx| {
+            .fold((Outsets::ZERO, 0.0f32), |(outset, widest), idx| {
                 let slot = &self.dense[idx];
                 // The reach counts whether or not the child has been laid out
                 // — the grow path in `gather_reach_upward` folds it
                 // unconditionally, and the two have to answer the same. Only
                 // the outset needs a box to be measured against.
                 let reach = slot.own_paint_reach.max(slot.children_outset);
-                let widest = widest.max(reach);
+                let widest = widest.max(reach.widest());
                 let Some(size) = slot.cached_size else {
                     return (outset, widest);
                 };
@@ -1370,11 +1395,8 @@ impl Tree {
                     size.width,
                     size.height,
                 )
-                .outset(reach);
-                (
-                    outset.max(drawn.outset_beyond(parent_box)),
-                    widest.max(reach),
-                )
+                .outset_by(reach);
+                (outset.max(drawn.outset_beyond(parent_box)), widest)
             })
     }
 
@@ -1397,7 +1419,7 @@ impl Tree {
             // measure this for itself — but a widget with a fixed size is its
             // own relayout boundary and the pass starts there, with no ancestor
             // to follow. Then this is the only thing that tells them.
-            self.gather_reach_upward(id, before, after > before);
+            self.gather_reach_upward(id, before);
         }
     }
 
@@ -1413,7 +1435,7 @@ impl Tree {
         };
         self.dense[idx].clips_children = clips;
         if clips {
-            self.dense[idx].children_outset = 0.0;
+            self.dense[idx].children_outset = Outsets::ZERO;
             let (_, widest) = self.measure_children(id, Some(own_size));
             self.dense[idx].children_reach = widest;
         }
@@ -1421,9 +1443,9 @@ impl Tree {
 
     /// How far the furthest of this widget's children stands outside its box.
     #[cfg(test)]
-    pub(crate) fn children_outset(&self, id: WidgetId) -> f32 {
+    pub(crate) fn children_outset(&self, id: WidgetId) -> Outsets {
         self.get_dense_index(id)
-            .map_or(0.0, |idx| self.dense[idx].children_outset)
+            .map_or(Outsets::ZERO, |idx| self.dense[idx].children_outset)
     }
 
     /// The children of a widget, ordered along `axis`, whose laid-out span —
@@ -1913,12 +1935,12 @@ impl Tree {
         let withholding = self.pointer.withholding;
         let chorded = self.pointer.chorded;
         let at = at.filter(|_| !withholding && !chorded);
-        let reach = self.children_reach(parent);
         let mut owed: SmallVec<[usize; 4]> = SmallVec::new();
         let mut blind: SmallVec<[usize; 4]> = SmallVec::new();
         let window = match (at, sorted) {
             (Some(at), Some(axis)) => {
                 let along = at.along(axis);
+                let reach = self.children_reach(parent);
                 let window = self.window_of(children, axis, (along, along), reach);
                 crate::render_stats::record_event_window(
                     children.len() as u64,
@@ -1928,8 +1950,8 @@ impl Tree {
             }
             (Some(at), None) => {
                 owed.extend((0..children.len()).filter(|&index| {
-                    self.get_bounds(children[index])
-                        .is_some_and(|b| b.outset(reach).contains(at.x, at.y))
+                    self.drawn_bounds(children[index])
+                        .is_some_and(|b| b.contains(at.x, at.y))
                 }));
                 0..0
             }
@@ -2038,21 +2060,32 @@ impl Tree {
             .map_or(0.0, |idx| self.dense[idx].children_reach)
     }
 
-    /// How far this widget's paint reaches beyond its bounds — a shadow's
-    /// falloff, or the distance its own transform can move what it draws.
+    /// How far this widget's paint reaches beyond its bounds on each side — a
+    /// shadow's falloff, or the distance its own transform can move what it
+    /// draws.
     ///
     /// Read by damage, so a repaint covers the shadow it moved, and by the two
     /// narrowings in `paint_children`, so neither drops a widget that draws
     /// somewhere other than where it was laid out.
-    pub(crate) fn paint_overflow(&self, id: WidgetId) -> f32 {
-        self.get_dense_index(id).map_or(0.0, |idx| {
+    pub(crate) fn paint_overflow(&self, id: WidgetId) -> Outsets {
+        self.get_dense_index(id).map_or(Outsets::ZERO, |idx| {
             self.paint_overflow_from(self.dense[idx].own_paint_reach, idx)
         })
     }
 
+    /// A widget's bounds grown by its paint reach, side by side: where it can
+    /// draw, from one lookup.
+    fn drawn_bounds(&self, id: WidgetId) -> Option<Rect> {
+        let idx = self.get_dense_index(id)?;
+        let slot = &self.dense[idx];
+        let size = slot.cached_size?;
+        let reach = self.paint_overflow_from(slot.own_paint_reach, idx);
+        Some(Rect::new(slot.origin.0, slot.origin.1, size.width, size.height).outset_by(reach))
+    }
+
     /// The same, for a reach the caller names — which is how a write asks what
     /// its own answer is about to become while the old one is still standing.
-    fn paint_overflow_from(&self, reach: f32, idx: usize) -> f32 {
+    fn paint_overflow_from(&self, reach: Outsets, idx: usize) -> Outsets {
         reach.max(self.dense[idx].children_outset)
     }
 
@@ -2369,7 +2402,10 @@ impl Tree {
     fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let (root, laid_out) = self.surface_relative_layout_and_root(id)?;
         let merged = self.merge_reaches.get(&id).copied().unwrap_or(0.0);
-        Some((root, laid_out.outset(self.paint_overflow(id) + merged)))
+        Some((
+            root,
+            laid_out.outset_by(self.paint_overflow(id)).outset(merged),
+        ))
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
@@ -2721,10 +2757,14 @@ mod tests {
     /// of them. It held a second layout-cache entry that was always empty,
     /// and gave it back: what a minimum costs is a size inside the one entry
     /// there is, not a field of its own.
+    ///
+    /// It grew once on purpose since: from 192 to 216, when a widget's own
+    /// reach and its children's outset became four sides each instead of one
+    /// number (#757) — 24 bytes, with no padding left to absorb them.
     #[test]
     fn a_slot_is_no_larger_than_its_one_cache_entry_leaves_it() {
         assert!(
-            size_of::<Slot>() <= 192,
+            size_of::<Slot>() <= 216,
             "a slot is {} bytes",
             size_of::<Slot>()
         );
@@ -3368,7 +3408,15 @@ mod tests {
         tree.mark_needs_paint(b);
 
         let rect = partial_damage(&mut tree, root);
-        let area = Rect::new(0.0, 0.0, 100.0, 100.0).outset(30.0 + 32.0);
+        // `b` stands at (0, 20), so its reach of 30 carries it past the root's
+        // left edge by 30 and its top by 10, and past neither of the others.
+        let area = Rect::new(0.0, 0.0, 100.0, 100.0)
+            .outset_by(Outsets {
+                left: 30.0,
+                top: 10.0,
+                ..Outsets::ZERO
+            })
+            .outset(32.0);
         assert!(
             rect.x <= area.x
                 && rect.y <= area.y
@@ -3440,7 +3488,15 @@ mod tests {
             40.0,
             "the far-reaching one leads"
         );
-        assert_eq!(tree.children_outset(root), 30.0, "the overhanging one does");
+        assert_eq!(
+            tree.children_outset(root),
+            Outsets {
+                left: 30.0,
+                top: 30.0,
+                ..Outsets::ZERO
+            },
+            "the overhanging one does, past the two edges it sits against"
+        );
 
         tree.set_own_paint_reach(far_reaching, 5.0);
         assert_eq!(
@@ -3514,7 +3570,11 @@ mod tests {
         );
         assert_eq!(
             tree.children_outset(root),
-            30.0,
+            Outsets {
+                left: 30.0,
+                top: 30.0,
+                ..Outsets::ZERO
+            },
             "the edge one stands out most"
         );
 
@@ -3524,7 +3584,11 @@ mod tests {
         // Its remaining 1px of reach, and nothing of the 30 it used to hold.
         assert_eq!(
             tree.children_outset(root),
-            1.0,
+            Outsets {
+                left: 1.0,
+                top: 1.0,
+                ..Outsets::ZERO
+            },
             "the parent kept an overhang no child has any more"
         );
     }
@@ -3569,6 +3633,65 @@ mod tests {
         );
     }
 
+    /// A reach that moves from one side to another neither grew nor shrank,
+    /// and its parent follows it all the same — and the side it left is
+    /// damaged on the way out, as a shrinking reach's is.
+    ///
+    /// One number could only grow or shrink, so the walk had two paths. Four
+    /// sides can do both at once, and taking either path for it is wrong: the
+    /// grow path keeps the side that was let go of, and the shrink path's
+    /// guard asks only about the sides that got smaller.
+    #[test]
+    fn a_reach_that_changes_sides_is_followed_and_vacates_the_side_it_left() {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(MockWidget::new()));
+        let child = tree.register(Box::new(MockWidget::new()));
+        tree.set_parent(child, root);
+        let cons = Constraints::new(0.0, 0.0, 100.0, 100.0);
+        tree.cache_layout(root, cons, Size::new(100.0, 100.0));
+        tree.cache_layout(child, cons, Size::new(20.0, 20.0));
+        tree.set_origin(child, 80.0, 0.0);
+
+        tree.set_own_paint_reach(
+            child,
+            Outsets {
+                right: 30.0,
+                ..Outsets::ZERO
+            },
+        );
+        assert_eq!(
+            tree.children_outset(root),
+            Outsets {
+                right: 30.0,
+                ..Outsets::ZERO
+            },
+            "the setup, not the claim"
+        );
+        let _ = tree.take_damage(root);
+
+        tree.set_own_paint_reach(
+            child,
+            Outsets {
+                left: 100.0,
+                ..Outsets::ZERO
+            },
+        );
+        assert_eq!(
+            tree.children_outset(root),
+            Outsets {
+                left: 20.0,
+                ..Outsets::ZERO
+            },
+            "the parent has to drop the right side and take the left"
+        );
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.x + rect.width >= 130.0,
+            "the frame the reach left the right side damages {rect:?}, short of \
+             the 30 pixels it reached past it"
+        );
+    }
+
     /// A reach that shrinks lets go all the way up, not one level.
     ///
     /// The shrink path prunes when the child that shrank was not the widest,
@@ -3594,12 +3717,12 @@ mod tests {
 
         tree.set_own_paint_reach(c, 70.0);
         let held = tree.paint_overflow(g);
-        assert!(held > 0.0, "nothing to let go of");
+        assert!(held.widest() > 0.0, "nothing to let go of");
 
         tree.set_own_paint_reach(c, 0.0);
         assert!(
-            tree.paint_overflow(g) < held,
-            "the grandparent stayed at {held} after its grandchild's reach went \
+            !tree.paint_overflow(g).covers(held),
+            "the grandparent stayed at {held:?} after its grandchild's reach went \
              to nothing, so the walk stopped one level short"
         );
     }
@@ -3633,7 +3756,7 @@ mod tests {
         tree.set_own_paint_reach(card, 20.0);
         assert_eq!(
             tree.paint_overflow(root),
-            0.0,
+            Outsets::ZERO,
             "the root should not have taken this on, which is what makes the \
              distinction visible"
         );
@@ -3693,10 +3816,20 @@ mod tests {
     fn a_reach_that_shrinks_under_its_children_damages_nothing() {
         let (mut tree, root, child) = inset_child();
 
-        // The child reaches 90 past the root's own box, so the root's union is
-        // the child's from here on.
-        tree.set_own_paint_reach(child, 100.0);
-        assert_eq!(tree.children_outset(root), 90.0, "the setup, not the claim");
+        // The child reaches past the root's own box on every side, by more
+        // than the root reaches itself, so the root's union is the child's
+        // from here on.
+        tree.set_own_paint_reach(child, 200.0);
+        assert_eq!(
+            tree.children_outset(root),
+            Outsets {
+                left: 190.0,
+                top: 190.0,
+                right: 60.0,
+                bottom: 60.0,
+            },
+            "the setup, not the claim"
+        );
         tree.set_own_paint_reach(root, 30.0);
         let _ = tree.take_damage(root);
 
@@ -3733,7 +3866,7 @@ mod tests {
         let went = partial_damage(&mut tree, root);
         assert_eq!(
             Rect::new(10.0, 110.0, 50.0, 50.0).outset_beyond(went),
-            0.0,
+            Outsets::ZERO,
             "the outbound frame does not even cover where it went: {went:?}"
         );
 
@@ -3746,7 +3879,7 @@ mod tests {
         let came_back = partial_damage(&mut tree, root);
         assert_eq!(
             went.outset_beyond(came_back),
-            0.0,
+            Outsets::ZERO,
             "the return frame damages {came_back:?}, which leaves the pixels \
              the widget occupied at {went:?} on screen as a fringe"
         );
@@ -3773,9 +3906,146 @@ mod tests {
         let without = partial_damage(&mut tree, root);
         assert_eq!(
             with_shadow.outset_beyond(without),
-            0.0,
+            Outsets::ZERO,
             "the frame that drops the shadow damages {without:?}, so the ring \
              it cast at {with_shadow:?} stays on screen"
+        );
+    }
+
+    /// A card in a padded box, laid out, painted once and clean, so a mark on
+    /// it reports its own damage and nothing else: the box is 50 from every
+    /// edge of a 300 square.
+    fn padded_card(card: crate::widgets::Container) -> (Tree, WidgetId, WidgetId) {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .width(300.0)
+                .height(300.0)
+                .padding(50.0)
+                .child(card),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 300.0, 300.0));
+        let card = tree.get_children(root)[0];
+        for id in [root, card] {
+            tree.clear_needs_paint(id);
+        }
+        let _ = tree.take_damage(root);
+        (tree, root, card)
+    }
+
+    /// A shadow offset downward falls below the box that casts it, and above
+    /// it reaches only as far as its blur outruns the offset: the top outset
+    /// is the blur alone, less the offset, and the damage stops there.
+    ///
+    /// One number for all four sides gave the top what the bottom needs —
+    /// the blur *and* the offset — and every repaint of a card with an
+    /// elevation shadow damaged a band above it that the shadow never touches.
+    #[test]
+    fn a_shadow_offset_downward_reaches_above_its_box_by_the_blur_alone() {
+        use crate::renderer::Shadow;
+        // A blur of 6 is drawn 12 past the edge; the offset carries all of it
+        // 8 down.
+        let shadow = Shadow::new((0.0, 8.0), 6.0, 0.0, crate::widgets::Color::BLACK);
+        let (mut tree, root, card) = padded_card(
+            crate::widgets::container()
+                .width(40.0)
+                .height(40.0)
+                .shadow(shadow),
+        );
+
+        assert_eq!(
+            tree.paint_overflow(card),
+            Outsets {
+                left: 12.0,
+                top: 4.0,
+                right: 12.0,
+                bottom: 20.0,
+            },
+            "the blur on every side, and the offset added below and taken off above"
+        );
+
+        tree.mark_needs_paint(card);
+        let rect = partial_damage(&mut tree, root);
+        assert_eq!(
+            rect.y,
+            50.0 - 4.0,
+            "the damage {rect:?} reaches above the card by more than its shadow does"
+        );
+    }
+
+    /// A card sliding 200 pixels down a column, with `animate_position`, is
+    /// drawn above where it was laid out and nowhere else: each frame of the
+    /// slide damages a rect no wider than the card and its own horizontal
+    /// reach — none here.
+    ///
+    /// One number for the four sides gave the slide's 200 to the left and the
+    /// right as well, and every frame of it damaged 440 pixels across for a
+    /// card 40 wide.
+    #[test]
+    fn a_vertical_slide_damages_no_wider_than_its_box() {
+        let gap = crate::reactive::create_signal(0.0f32);
+        let t0 = std::time::Instant::now();
+        let mut tree = Tree::new();
+        tree.set_frame_instant(Some(t0));
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .width(300.0)
+                .height(300.0)
+                .padding(50.0)
+                .child(
+                    crate::widgets::container()
+                        .layout(crate::layout::Flex::column())
+                        .child(crate::widgets::container().width(40.0).height(gap))
+                        .child(
+                            crate::widgets::container()
+                                .width(40.0)
+                                .height(40.0)
+                                .animate_position(crate::animation::Transition::new(
+                                    200.0,
+                                    crate::animation::TimingFunction::Linear,
+                                )),
+                        ),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let cons = Constraints::new(0.0, 0.0, 300.0, 300.0);
+        tree.layout_widget(root, cons);
+        let column = tree.get_children(root)[0];
+        let card = tree.get_children(column)[1];
+
+        // The gap opens, and the card is laid out 200 further down while it
+        // goes on being drawn where it was.
+        gap.set(200.0);
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(16)));
+        tree.mark_needs_layout(tree.get_children(column)[0]);
+        tree.layout_widget(root, cons);
+        assert_eq!(tree.position_offset(card), (0.0, -200.0), "the setup");
+        let _ = tree.take_damage(root);
+
+        // One frame of the slide, as the loop runs it: the motion advances,
+        // the reach is refreshed from it, and the card is marked.
+        let mid = t0 + std::time::Duration::from_millis(116);
+        tree.set_frame_instant(Some(mid));
+        assert_eq!(tree.advance_position(card, mid.into()), Some(true));
+        tree.set_frame_instant(None);
+        tree.with_widget_mut(card, |widget, id, tree| {
+            refresh_paint_reach(&*widget, tree, id)
+        });
+        tree.mark_needs_paint(card);
+
+        let reach = tree.paint_overflow(card);
+        assert_eq!(
+            (reach.left, reach.right, reach.bottom),
+            (0.0, 0.0, 0.0),
+            "a card drawn above its box reaches past no other side: {reach:?}"
+        );
+        assert!(reach.top > 0.0, "and above it by what is left of the slide");
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.width <= 40.0,
+            "a frame of a vertical slide damaged {rect:?}, wider than the 40 \
+             pixel card it moves"
         );
     }
 

@@ -61,11 +61,12 @@ box it was given. A parent narrows its children to the visible region before
 painting them, and it does that by their laid-out bounds — so a widget that
 paints elsewhere, because it transforms itself or casts something past its
 edges, has to say how far. That is `refresh_paint_bounds`, which reports it with
-`Tree::set_own_paint_reach`. The framework calls it the same way it calls the
-other two — inside your widget's own Paint scope — so read your signals
-plainly here too, and a write to one repaints your widget without reflowing
-anything. It runs after every layout *and* from the paint job, because either
-can be the last pass to have run.
+`Tree::set_own_paint_reach`: a number for the same distance on every side, or an
+`Outsets` for a reach that has a direction, like a shadow cast downward. The
+framework calls it the same way it calls the other two — inside your widget's
+own Paint scope — so read your signals plainly here too, and a write to one
+repaints your widget without reflowing anything. It runs after every layout
+*and* from the paint job, because either can be the last pass to have run.
 
 Read them untracked and you get the bug this closed: a widget culled before it
 ever painted has read nothing, so nothing can tell it to come back, and a

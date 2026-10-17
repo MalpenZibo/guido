@@ -95,13 +95,16 @@ cargo run --example status_bar     # a real surface, on a real compositor
 # that nests one rounded clip in another; the fifth scrolls rings and line
 # charts that a timer keeps moving, the only one that draws paths; the sixth
 # fades cards whose label overlaps their background, the only one that draws
-# a layer.
+# a layer; the seventh scrolls nothing — a timer reorders a column of cards
+# that slide to their new places, the only one whose damage is not a
+# scroller's viewport.
 cargo bench --bench scroll_list     --features testing,render-stats -- 5000
 cargo bench --bench static_clip     --features testing,render-stats -- 400
 cargo bench --bench icon_grid       --features testing,render-stats -- 1100
 cargo bench --bench nested_clip     --features testing,render-stats -- 240
 cargo bench --bench sparkline_ring  --features testing,render-stats -- 900
 cargo bench --bench fade            --features testing,render-stats -- 12
+cargo bench --bench slide_list      --features testing,render-stats -- 8
 
 mdbook build book                  # the user documentation
 mdbook serve book                  # ... with live reload
@@ -156,7 +159,7 @@ every run for months.
 | a widget that wraps another — `Box<dyn Widget>`, `OwnedWidget`, the struct `#[component]` generates — and a new `Widget` method | `tests/widget_wrappers_forward_every_method.rs` — the trait's methods, read from the source, against what each wrapper forwards |
 | which widgets an event reaches — the pointer's window and record, the focus path, the key listeners | `tests/event_window.rs` and `tests/key_routing.rs` — what each route gives and keeps; `tests/event_routes.rs` — that no kind of event reaches a widget outside its route |
 | the application above the compositor — a surface configuring, a frame opening, input routing, a monitor arriving or leaving, a session locking, what a surface asks for in return | `tests/headless_app.rs` — the real loop, with a recorder where the compositor is |
-| a performance claim about a frame | `benches/scroll_list`, `benches/static_clip`, `benches/icon_grid`, `benches/nested_clip`, `benches/sparkline_ring` and `benches/fade` — one scripted gesture over six workloads, run by hand; each one's `*_benchmark_is_repeatable.rs` test is what says their counts repeat. A change that helps one and hurts another is why there is more than one. The `renderer` skill has the rest |
+| a performance claim about a frame | `benches/scroll_list`, `benches/static_clip`, `benches/icon_grid`, `benches/nested_clip`, `benches/sparkline_ring`, `benches/fade` and `benches/slide_list` — one scripted gesture over six workloads and a timer over the seventh, run by hand; each one's `*_benchmark_is_repeatable.rs` test is what says their counts repeat. A change that helps one and hurts another is why there is more than one. The `renderer` skill has the rest |
 | how many draw calls a frame issues, the buffers and bind groups the image and transformed-text quads make to issue them — the image atlas and its runs — and the paths it tessellates rather than draws again | `tests/draw_calls_are_counted.rs` — frames whose calls can be worked out by hand — and the `draw.*`, `quad.*` and `path.*` rows of the benchmark tables; `atlas_neighbours_do_not_bleed` in `tests/golden_images.rs` for what packing images side by side must not do to their edges |
 | a claim that a frame allocates less | the heap section of those same tables. `CountingAllocator` is a `GlobalAlloc` the *binary* installs — a library may not — and `render_stats` samples it at each end of a frame; `tests/frame_allocations_are_counted.rs` says the window really is a frame's, and the repeatability tests say the figures repeat. Two windows are printed, the scripted frames' own and the whole play's: a change to how a widget is *built* lands only in the second |
 | Wayland protocol behaviour: what actually goes out on the wire, and what a compositor does with it | **nothing automated.** Run an example and say what you saw in the pull request |

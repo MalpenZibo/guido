@@ -142,6 +142,13 @@ harness = false
 test = false
 required-features = ["testing", "render-stats"]
 
+[[bench]]
+name = "slide_list"
+path = "benches/slide_list/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
 # Asserts exact allocation counts against a process-wide counter, so it runs
 # without libtest, whose own thread would allocate into its windows.
 [[test]]

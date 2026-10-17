@@ -20,8 +20,8 @@ use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
 use crate::reactive::{Signal, create_signal};
 use crate::renderer::{DrawCommand, RenderNode};
-use crate::widgets::CornerRadii;
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
+use crate::widgets::{CornerRadii, Outsets};
 
 // ---------------------------------------------------------------------------
 // Harness
@@ -5465,16 +5465,16 @@ fn the_damage_reach_covers_the_shadow_a_hover_can_reach() {
     h.fit(100.0, 100.0);
 
     let reach = h.tree.paint_overflow(h.root);
-    let lifted = LIFTED.extent();
+    let lifted = LIFTED.outsets();
     assert!(
-        reach >= lifted && lifted > 0.0,
-        "reach {reach} must cover the hovered shadow {lifted}"
+        reach.covers(lifted) && lifted.widest() > 0.0,
+        "reach {reach:?} must cover the hovered shadow {lifted:?}"
     );
 
     // And a container that can never lift pays nothing for it.
     let mut flat = H::new(container().width(40.0).height(40.0).background(Color::RED));
     flat.fit(100.0, 100.0);
-    assert_eq!(flat.tree.paint_overflow(flat.root), 0.0);
+    assert_eq!(flat.tree.paint_overflow(flat.root), Outsets::ZERO);
 }
 
 /// A transform nobody can compute reaches nowhere, rather than reaching NaN.
@@ -5503,10 +5503,14 @@ fn a_transform_that_is_not_a_number_reaches_nowhere() {
 
     let reach = h.tree.paint_overflow(h.root);
     assert!(
-        reach.is_finite(),
-        "a translate nobody can compute put {reach} in the damage rect"
+        reach.sides().iter().all(|side| side.is_finite()),
+        "a translate nobody can compute put {reach:?} in the damage rect"
     );
-    assert_eq!(reach, 0.0, "and it is coerced away, not merely made finite");
+    assert_eq!(
+        reach,
+        Outsets::ZERO,
+        "and it is coerced away, not merely made finite"
+    );
 }
 
 /// A state layer that declares *one* of the three transforms still counts
@@ -5531,7 +5535,7 @@ fn a_layer_declaring_one_transform_alone_still_counts_towards_the_reach() {
                 .when_hovered(decorate),
         );
         h.fit(200.0, 200.0);
-        h.tree.paint_overflow(h.root)
+        h.tree.paint_overflow(h.root).widest()
     };
 
     assert!(
@@ -5578,12 +5582,13 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
     let with_bounce = sprung.tree.paint_overflow(sprung.root);
 
     assert!(
-        with_bounce > without_bounce,
-        "a bouncy spring has to reach further than an ease: {with_bounce} vs {without_bounce}"
+        with_bounce.covers(without_bounce) && with_bounce != without_bounce,
+        "a bouncy spring has to reach further than an ease: {with_bounce:?} vs \
+         {without_bounce:?}"
     );
     assert!(
-        with_bounce >= LIFTED.extent() * 1.17 - 0.01,
-        "and far enough for BOUNCY's ~17%, got {with_bounce}"
+        with_bounce.covers(LIFTED.outsets() * 1.17 - Outsets::all(0.01)),
+        "and far enough for BOUNCY's ~17% on every side, got {with_bounce:?}"
     );
 }
 
@@ -5983,8 +5988,15 @@ fn a_shadow_going_flat_damages_the_ring_it_gave_up() {
     h.paint();
 
     let lifted = h.tree.paint_overflow(h.root);
-    assert!(lifted > 0.0, "a lifted card has to reach past its box");
-    let ring = h.tree.get_bounds(h.root).expect("laid out").outset(lifted);
+    assert!(
+        lifted.widest() > 0.0,
+        "a lifted card has to reach past its box"
+    );
+    let ring = h
+        .tree
+        .get_bounds(h.root)
+        .expect("laid out")
+        .outset_by(lifted);
     let _ = h.tree.take_damage(h.root);
 
     declared.set(Shadow::none());
@@ -5992,14 +6004,14 @@ fn a_shadow_going_flat_damages_the_ring_it_gave_up() {
     h.fit(100.0, 100.0);
     assert_eq!(
         h.tree.paint_overflow(h.root),
-        0.0,
+        Outsets::ZERO,
         "the shadow is what this frame gives up"
     );
 
     match h.tree.take_damage(h.root) {
         crate::tree::DamageRegion::Partial(rect) => assert_eq!(
             ring.outset_beyond(rect),
-            0.0,
+            Outsets::ZERO,
             "the frame that flattens the shadow damages {rect:?}, so the ring \
              it cast at {ring:?} is left on screen"
         ),
@@ -6031,7 +6043,7 @@ fn a_sliding_member_damages_the_merged_shape_around_it() {
     h.fit(200.0, 100.0);
     h.paint();
     let group = h.tree.get_bounds(h.root).expect("laid out");
-    let area = group.outset(16.0 * 1.25 + LIFTED.extent());
+    let area = group.outset(16.0 * 1.25 + LIFTED.outsets().widest());
     let _ = h.tree.take_damage(h.root);
 
     slide.set(30.0);
@@ -6040,7 +6052,7 @@ fn a_sliding_member_damages_the_merged_shape_around_it() {
     match h.tree.take_damage(h.root) {
         crate::tree::DamageRegion::Partial(rect) => assert_eq!(
             area.outset_beyond(rect),
-            0.0,
+            Outsets::ZERO,
             "a member sliding damages {rect:?}, short of the merged shape's \
              area {area:?}"
         ),
@@ -6093,11 +6105,12 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();
-        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
-            worst = worst.max(extent);
+        if let Some(drawn) = drawn_shadow(&node).map(|s| s.outsets()) {
+            worst = worst.max(drawn.widest());
             assert!(
-                extent <= reach + 0.01,
-                "step {step} drew a shadow reaching {extent} outside a damage rect of {reach}"
+                (reach + Outsets::all(0.01)).covers(drawn),
+                "step {step} drew a shadow reaching {drawn:?} outside a damage rect \
+                 of {reach:?}"
             );
         }
     }
@@ -6129,9 +6142,10 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
     set_hover(&mut h, true);
     // The headroom is the step the spring travels, times its overshoot: no
     // more, or every frame of the bounce damages a ring nothing is drawn in.
-    let step_travelled = near_edge.signed_extent() - deep_inside.signed_extent();
-    let headroom =
-        near_edge.signed_extent() + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
+    let step_travelled =
+        near_edge.signed_outsets().widest() - deep_inside.signed_outsets().widest();
+    let headroom = near_edge.signed_outsets().widest()
+        + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
     let t0 = std::time::Instant::now();
     let mut furthest = f32::NEG_INFINITY;
     for step in 1..=60 {
@@ -6143,8 +6157,8 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
         );
         let reach = h.tree.paint_overflow(h.root);
         assert!(
-            reach <= headroom + 0.05,
-            "step {step} reserved {reach} past the box, the bounce reaches {headroom}"
+            Outsets::all(headroom + 0.05).covers(reach),
+            "step {step} reserved {reach:?} past the box, the bounce reaches {headroom}"
         );
         let node = h.paint();
         let Some(drawn) = drawn_shadow(&node) else {
@@ -6156,9 +6170,9 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
             "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
         );
         assert!(
-            drawn.extent() <= reach + 0.01,
-            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
-            drawn.extent()
+            (reach + Outsets::all(0.01)).covers(drawn.outsets()),
+            "step {step} drew a shadow reaching {:?} outside a damage rect of {reach:?}",
+            drawn.outsets()
         );
     }
     assert!(
@@ -6214,9 +6228,9 @@ fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
             "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
         );
         assert!(
-            drawn.extent() <= reach + 0.01,
-            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
-            drawn.extent()
+            (reach + Outsets::all(0.01)).covers(drawn.outsets()),
+            "step {step} drew a shadow reaching {:?} outside a damage rect of {reach:?}",
+            drawn.outsets()
         );
     }
     assert!(
@@ -6271,9 +6285,9 @@ fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
     // allowed to need a bigger one than the frame that reserved it.
     let reach = h.tree.paint_overflow(h.root);
     assert!(
-        reach >= deep.extent() - 0.01,
-        "the reach has to cover the deepest keyframe ({}), got {reach}",
-        deep.extent()
+        (reach + Outsets::all(0.01)).covers(deep.outsets()),
+        "the reach has to cover the deepest keyframe ({:?}), got {reach:?}",
+        deep.outsets()
     );
 
     plays.set(1);
@@ -6284,11 +6298,11 @@ fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();
-        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
-            deepest = deepest.max(extent);
+        if let Some(drawn) = drawn_shadow(&node).map(|s| s.outsets()) {
+            deepest = deepest.max(drawn.widest());
             assert!(
-                extent <= reach + 0.01,
-                "drew a shadow reaching {extent} outside a damage rect of {reach}"
+                (reach + Outsets::all(0.01)).covers(drawn),
+                "drew a shadow reaching {drawn:?} outside a damage rect of {reach:?}"
             );
         }
     }
@@ -6314,7 +6328,7 @@ fn a_declared_shadow_change_invalidates_the_reach() {
     );
     h.fit(100.0, 100.0);
     h.paint();
-    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+    assert_eq!(h.tree.paint_overflow(h.root), Outsets::ZERO);
 
     let queued = h.jobs_from(|| declared.set(LOW));
     assert!(queued.contains(&JobType::Layout), "got {queued:?}");
@@ -6324,7 +6338,7 @@ fn a_declared_shadow_change_invalidates_the_reach() {
     declared.set(LIFTED);
     pump(&mut h);
     h.fit(100.0, 100.0);
-    assert!(h.tree.paint_overflow(h.root) > 0.0);
+    assert!(h.tree.paint_overflow(h.root).widest() > 0.0);
 }
 
 /// A container that clips does not report the overhang it is clipping away.
@@ -6350,7 +6364,7 @@ fn a_clipping_container_does_not_carry_its_content_s_overhang() {
 
     assert_eq!(
         clipped.tree.paint_overflow(clipped.root),
-        0.0,
+        Outsets::ZERO,
         "a scroller reported the height of everything inside it as paint that \
          lands outside its own box"
     );
@@ -6389,7 +6403,7 @@ fn a_clipping_container_keeps_not_carrying_it_when_a_child_moves() {
     h.fit(400.0, 400.0);
     // Painted, so the row holds the paint subscription its own write needs.
     h.paint();
-    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+    assert_eq!(h.tree.paint_overflow(h.root), Outsets::ZERO);
 
     // A frame of an animating row, with no layout in between.
     lift.set(20.0);
@@ -6397,7 +6411,7 @@ fn a_clipping_container_keeps_not_carrying_it_when_a_child_moves() {
 
     assert_eq!(
         h.tree.paint_overflow(h.root),
-        0.0,
+        Outsets::ZERO,
         "one row moved and the scroller went back to claiming it paints the \
          whole column outside its own box"
     );
@@ -6427,7 +6441,7 @@ fn a_declared_transform_change_invalidates_the_reach_without_a_layout() {
     let mut h = H::new(lifted_box(lift));
     h.fit(100.0, 100.0);
     h.paint();
-    assert_eq!(h.tree.paint_overflow(h.root), 0.0);
+    assert_eq!(h.tree.paint_overflow(h.root), Outsets::ZERO);
 
     lift.set(30.0);
     let queued = jobs::queued_job_types(h.root);
@@ -6442,7 +6456,10 @@ fn a_declared_transform_change_invalidates_the_reach_without_a_layout() {
     pump(&mut h);
     assert_eq!(
         h.tree.paint_overflow(h.root),
-        30.0,
+        Outsets {
+            top: 30.0,
+            ..Outsets::ZERO
+        },
         "the reach did not follow the transform through its Paint job"
     );
 }
@@ -7490,7 +7507,7 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         // Shadow has two resolvers, and the first draft of this fix converted
         // one: with the extent left raw, a container with a bad shadow and a
         // transform reported a damage rect that did not cover where it drew.
-        finite("shadow extent", vec![c.max_shadow_extent(id)]);
+        finite("shadow extent", c.max_shadow_extent(id).sides().to_vec());
     }
 
     // And a state layer's override is passed over the same way, so the base
@@ -8306,15 +8323,15 @@ fn the_damage_reach_covers_a_blur_and_scales_with_it() {
         h.tree.paint_overflow(h.root)
     };
     assert!(
-        reach(1.0) >= bound,
-        "{} must cover the blur's {bound}",
+        reach(1.0).covers(Outsets::all(bound)),
+        "{:?} must cover the blur's {bound} on every side",
         reach(1.0)
     );
     // Scaled by two about the centre: the box grows by 20 a side, and the
     // blur's reach doubles with it.
     assert!(
-        reach(2.0) >= 20.0 + 2.0 * bound,
-        "{} must cover the scaled blur's {}",
+        reach(2.0).covers(Outsets::all(20.0 + 2.0 * bound)),
+        "{:?} must cover the scaled blur's {} on every side",
         reach(2.0),
         20.0 + 2.0 * bound
     );

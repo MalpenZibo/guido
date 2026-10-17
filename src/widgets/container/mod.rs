@@ -46,8 +46,8 @@ use super::state_layer::{
     Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
 };
 use super::widget::{
-    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Placement,
-    Point, Rect, ScrollSource, Widget,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Outsets, Padding,
+    Placement, Point, Rect, ScrollSource, Widget,
 };
 
 /// Callback for click events
@@ -481,7 +481,8 @@ pub struct Container {
     /// the reason.
     pub(super) overflow_resolved: Cell<Overflow>,
     /// How far past its own bounds the last layout sized this container's
-    /// damage rect to reach — the extent of the deepest shadow it can cast.
+    /// damage rect to reach, side by side — the outsets of the deepest shadow
+    /// it can cast.
     ///
     /// Written by `layout` and read by `animated_shadow`, so the shadow that is
     /// drawn and the rect that is repainted are the *same number* rather than
@@ -490,7 +491,7 @@ pub struct Container {
     /// current value, so a card animating from a deep shadow to none was clamped
     /// to the nothing it had not reached yet and the shadow vanished in one
     /// frame while the animation went on running.
-    pub(super) shadow_reach: Cell<f32>,
+    pub(super) shadow_reach: Cell<Outsets>,
     pub(super) visible: Prop<bool>,
     pub(super) layer: Option<Box<LayerProps>>,
     pub(super) decoration: Option<Box<DecorationProps>>,
@@ -558,7 +559,7 @@ impl Container {
             height: Prop::Unset,
             overflow: Prop::Unset,
             overflow_resolved: Cell::new(Overflow::Visible),
-            shadow_reach: Cell::new(0.0),
+            shadow_reach: Cell::new(Outsets::ZERO),
             visible: Prop::Unset,
             layer: None,
             decoration: None,
@@ -596,16 +597,15 @@ impl Container {
         // split is what lets this run from a Paint job without walking
         // anything.
         // A blur spreads in the container's own space, as a shadow does, so
-        // its reach is carried by the transform with the shadow's.
-        let blur = self.max_blur_reach();
-        let extent = if blur > 0.0 {
-            shadow_extent.max(0.0) + blur
-        } else {
-            shadow_extent
-        };
-        // A slide carries the whole box by its offset, after everything else.
+        // its reach is carried by the transform with the shadow's. The blur
+        // reaches as far on every side; the shadow each its own.
+        let extent = shadow_extent + Outsets::all(self.max_blur_reach());
+        // A slide carries the whole box by its offset, after everything else,
+        // and only toward where it is drawn: a box drawn above its place
+        // reaches further up and no further either side.
         let (dx, dy) = self.position_offset(tree, id);
-        let reach = self.max_transform_reach(bounds, extent) + dx.abs().max(dy.abs());
+        let toward = bounds.offset(dx, dy).outset_beyond(bounds);
+        let reach = self.max_transform_reach(bounds, extent) + toward;
         tree.set_own_paint_reach(id, reach);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two
@@ -614,7 +614,7 @@ impl Container {
         tree.set_merge_reach(
             id,
             self.merge_distance(id)
-                .map(|distance| distance * 1.25 + shadow_extent),
+                .map(|distance| distance * 1.25 + shadow_extent.widest()),
         );
     }
 

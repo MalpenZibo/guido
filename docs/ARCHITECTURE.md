@@ -908,10 +908,14 @@ The paint system tracks which widgets need repainting:
 - **Vacated rects**: that rect always describes the widget as it is *now*, so anything
   that makes a widget cover *less* has to name what it is leaving before it changes —
   `set_origin` and `cache_layout` damage the old rect and then the new one, and
-  `set_own_paint_reach` damages the ring a shrinking reach gives up (a transform coming
+  `set_own_paint_reach` damages whatever a reach gives up on any side (a transform coming
   back to rest, a shadow falling to nothing). Without it the buffer is redrawn correctly
   and the compositor is never told to re-composite the pixels the widget has left, so the
   old position survives on screen as a fringe.
+- **Paint reach**: how far a widget paints past its box is an `Outsets`, one distance per
+  side, and its children's overhang is gathered into its own the same way. A shadow cast
+  downward, a card lifted by a translate and a box sliding up with `animate_position` each
+  widen damage, the cull and the pointer's test only on the sides they reach.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.
