@@ -171,6 +171,12 @@ pub struct RenderNode {
     /// without affecting child content.
     pub overlay_clip: Option<ClipRegion>,
 
+    /// Optional clip region that applies only to the children, placed under
+    /// `clip`. What a scroller or an `Overflow::Hidden` container cuts its
+    /// content to: CSS's overflow clip, which is the padding box and leaves the
+    /// box's own fill, border and shadow uncut (#764).
+    pub children_clip: Option<ClipRegion>,
+
     /// Set by a container that merges its children's backgrounds into one
     /// shape — see [`MergeChildren`]. Boxed, because a node is made for every
     /// widget painted and almost none of them merge.
@@ -213,6 +219,7 @@ impl RenderNode {
             overlay_commands: SmallVec::new(),
             clip: None,
             overlay_clip: None,
+            children_clip: None,
             merge: None,
             repainted: Cell::new(true),
             partial: false,
@@ -249,6 +256,7 @@ impl RenderNode {
         self.overlay_commands.clear();
         self.clip = None;
         self.overlay_clip = None;
+        self.children_clip = None;
         self.merge = None;
         self.repainted.set(true);
         self.partial = false;

@@ -311,6 +311,25 @@ impl<'a> PaintContext<'a> {
         });
     }
 
+    /// Set a clip region for this node's children, leaving what the node
+    /// draws itself uncut.
+    ///
+    /// What a container's overflow clip is: its children stop inside its
+    /// border, and its own fill, border and shadow are not cut by it (#764).
+    /// It sits under [`set_clip`](Self::set_clip) where a node has both.
+    pub fn set_children_clip(
+        &mut self,
+        rect: Rect,
+        corner_radius: crate::renderer::CornerRadii,
+        curvature: f32,
+    ) {
+        self.node.children_clip = Some(ClipRegion {
+            rect,
+            corner_radius,
+            curvature,
+        });
+    }
+
     /// Set a rectangular clip (no rounded corners).
     ///
     /// This is a convenience method for `set_clip(rect, 0.0, 1.0)`.
