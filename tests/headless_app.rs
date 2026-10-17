@@ -571,6 +571,169 @@ fn every_lock_cover_holds_the_handle_of_its_own_surface() {
     assert_eq!(seen.borrow()[&external], cover_of(&app, external));
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Marker(u32);
+
+/// What each closure read, by the name of the closure that read it.
+type Reads = Rc<RefCell<Vec<(&'static str, Option<Marker>)>>>;
+
+/// Note under `name` what `Marker` the current scope reads.
+fn note(reads: &Reads, name: &'static str) {
+    reads.borrow_mut().push((name, use_context::<Marker>()));
+}
+
+/// #786: a dynamic child's closure runs when the tree is laid out, long after
+/// the factory that wrote it returned. It reads from the scope that was
+/// current where it was written — the surface's — not from whatever is current
+/// when the frame gets round to it. Writing `rerun` runs it again from the
+/// frame's jobs rather than its layout, and that run reads the same.
+#[test]
+fn a_dynamic_child_reads_what_its_surface_declared() {
+    let Some(mut app) = headless() else { return };
+    let reads: Reads = Rc::default();
+    let log = reads.clone();
+    let rerun = create_signal(0u32);
+    let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+        provide_context(Marker(7));
+        note(&log, "factory");
+        container().child(move || {
+            rerun.get();
+            note(&log, "dynamic child");
+            let log = log.clone();
+            container().child(move || {
+                note(&log, "nested dynamic child");
+                container()
+            })
+        })
+    });
+    app.configure(surface, 100, 100, 1.0);
+    app.step();
+    app.step();
+    rerun.set(1);
+    app.step();
+
+    assert_eq!(
+        *reads.borrow(),
+        [
+            ("factory", Some(Marker(7))),
+            ("dynamic child", Some(Marker(7))),
+            ("nested dynamic child", Some(Marker(7))),
+            ("dynamic child", Some(Marker(7))),
+            ("nested dynamic child", Some(Marker(7))),
+        ]
+    );
+}
+
+/// The rows of a keyed list are built by the same reconciler, so they read the
+/// same scope — and a list inside a row reads it through the row.
+#[test]
+fn a_keyed_row_reads_what_its_surface_declared() {
+    let Some(mut app) = headless() else { return };
+    let reads: Reads = Rc::default();
+    let log = reads.clone();
+    let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+        provide_context(Marker(7));
+        container().children(keyed(
+            || vec![1u32, 2],
+            |k| *k,
+            move |_| {
+                note(&log, "row");
+                let log = log.clone();
+                container().children(keyed(
+                    || vec![1u32],
+                    |k| *k,
+                    move |_| {
+                        note(&log, "row in a row");
+                        container()
+                    },
+                ))
+            },
+        ))
+    });
+    app.configure(surface, 100, 100, 1.0);
+    app.step();
+
+    assert_eq!(
+        *reads.borrow(),
+        [
+            ("row", Some(Marker(7))),
+            ("row", Some(Marker(7))),
+            ("row in a row", Some(Marker(7))),
+            ("row in a row", Some(Marker(7))),
+        ]
+    );
+}
+
+/// A list inside a row reads what the row declared, and goes on reading it
+/// when a signal only the inner list read is written — a run the frame's jobs
+/// make, with no row laying out around it.
+#[test]
+fn a_list_inside_a_row_reads_what_the_row_declared_when_it_runs_again() {
+    let Some(mut app) = headless() else { return };
+    let reads: Reads = Rc::default();
+    let log = reads.clone();
+    let rerun = create_signal(0u32);
+    let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+        provide_context(Marker(7));
+        container().children(keyed(
+            || vec![3u32],
+            |k| *k,
+            move |k| {
+                provide_context(Marker(k));
+                let log = log.clone();
+                container().child(move || {
+                    rerun.get();
+                    note(&log, "list in a row");
+                    container()
+                })
+            },
+        ))
+    });
+    app.configure(surface, 100, 100, 1.0);
+    app.step();
+    rerun.set(1);
+    app.step();
+
+    assert_eq!(
+        *reads.borrow(),
+        [
+            ("list in a row", Some(Marker(3))),
+            ("list in a row", Some(Marker(3))),
+        ]
+    );
+}
+
+/// A popup is a surface of its own, and its dynamic children read what *it*
+/// declared — over the bar it hangs from, and with its own handle.
+#[test]
+fn a_popup_s_dynamic_child_reads_what_the_popup_declared() {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), || {
+        provide_context(Marker(7));
+        measuring_24()
+    });
+    app.configure(parent, 200, 24, 1.0);
+    app.step();
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let log = seen.clone();
+    let popup = spawn_popup(parent, PopupConfig::new(80).height(40), move || {
+        provide_context(Marker(9));
+        container().child(move || {
+            log.borrow_mut().push((
+                use_context::<Marker>(),
+                use_context::<SurfaceHandle>().map(|me| me.id()),
+            ));
+            container()
+        })
+    });
+    app.step();
+    app.configure(popup.id(), 80, 40, 1.0);
+    app.step();
+
+    assert_eq!(*seen.borrow(), [(Some(Marker(9)), Some(popup.id()))]);
+}
+
 #[test]
 fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
     let Some(mut app) = headless() else { return };
