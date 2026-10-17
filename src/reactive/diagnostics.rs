@@ -96,6 +96,18 @@ pub(crate) fn clock_outside_its_pass(read: &'static str, owner: &'static str, ot
     let _ = (read, owner, other);
 }
 
+/// Report that a child of a container merging its children's shapes was drawn
+/// on its own, and why.
+///
+/// Once per container and reason, because flatten asks again on every frame
+/// the container is drawn. Debug builds only.
+pub(crate) fn merge_member_left_out(group: crate::renderer::NodeId, why: &'static str) {
+    #[cfg(debug_assertions)]
+    imp::merge_member_left_out(group, why);
+    #[cfg(not(debug_assertions))]
+    let _ = (group, why);
+}
+
 #[cfg(debug_assertions)]
 mod imp {
     use std::cell::{Cell, RefCell};
@@ -212,8 +224,25 @@ mod imp {
             RefCell::new(FxHashSet::default());
     }
 
+    thread_local! {
+        /// Its own set, for the reason `NON_FINITE` has its own.
+        static MERGE_LEFT_OUT: RefCell<FxHashSet<(crate::renderer::NodeId, &'static str)>> =
+            RefCell::new(FxHashSet::default());
+    }
+
+    pub(super) fn merge_member_left_out(group: crate::renderer::NodeId, why: &'static str) {
+        if !MERGE_LEFT_OUT.with(|r| r.borrow_mut().insert((group, why))) {
+            return;
+        }
+        report(format!(
+            "widget {group}: `merge_children` drew a child on its own, because \
+             {why}. (debug builds only)"
+        ));
+    }
+
     /// Forget every reported call site (used by `reset_reactive`).
     pub(crate) fn reset() {
+        MERGE_LEFT_OUT.with(|r| r.borrow_mut().clear());
         CLOCKS.with(|r| r.borrow_mut().clear());
         NON_FINITE.with(|r| r.borrow_mut().clear());
         REPORTED.with(|r| r.borrow_mut().clear());

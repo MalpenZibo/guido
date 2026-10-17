@@ -225,6 +225,29 @@ container()
     .when_pressed(|s| s.shadow(elevation::FLAT))
 ```
 
+## Merged Shapes
+
+```rust
+container()
+    .layout(Flex::row())
+    .merge_children(14.0)       // within 14 px they lean in, within 7 they join; takes a signal
+    .shadow(Shadow::new((0.0, 10.0), 26.0, 0.0, Color::BLACK.with_alpha(0.5)))
+    .child(container().width(160.0).height(36.0).corners(18.0).background(pill))
+    .child(container().width(34.0).height(34.0).corners(17.0).background(pill)
+        .translate(move || (bubble_x.get(), 0.0)))
+```
+
+The direct children's boxes — fill, border, corners, transform — are drawn as one
+shape by a polynomial smooth minimum: two closer than the distance lean towards
+each other and are joined by a neck once the gap is half of it, overlapping ones
+are one outline, and ones further apart are left exactly as they were. `0.0` is a plain union. Fills, border colours and border
+widths blend across a neck by the share the smooth minimum gives each child, so
+the border follows the merged outline. The container's own `border` and
+outer shadows are the merged shape's; its inset shadows stay on its own box. A child with a gradient, and any child past
+`MAX_MEMBERS` (16), is drawn on its own with a warning in debug builds; the neck
+takes no input. A scrolling container that merges merges its scrollbar track
+too, since the track is one of its children. How it is built is in [RENDERER.md](RENDERER.md#merged-shapes).
+
 ## Padding
 
 ```rust

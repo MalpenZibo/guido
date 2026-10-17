@@ -37,7 +37,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, RenderNode};
+use guido::renderer::{DrawCommand, FlattenScratch, RenderNode, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -48,6 +48,13 @@ use guido::widgets::Widget;
 /// Lay out `widget` in a `width` x `height` viewport, paint it, and dump the
 /// resulting render tree.
 fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
+    let mut out = String::new();
+    dump_node(&painted(widget, width, height), 0, &mut out);
+    out
+}
+
+/// The render tree `widget` paints in a `width` x `height` viewport.
+fn painted(widget: impl Widget + 'static, width: f32, height: f32) -> RenderNode {
     let mut tree = Tree::new();
     let root = tree.register(Box::new(widget));
     tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
@@ -55,9 +62,40 @@ fn render(widget: impl Widget + 'static, width: f32, height: f32) -> String {
 
     let mut node = RenderNode::new(root.as_u64());
     tree.paint_widget(root, &mut node, 1.0);
+    node
+}
 
+/// The same, and then what flatten made of it: every command in the order it
+/// is drawn, with where it was placed. What only exists after flatten — a
+/// merged shape — is read here.
+fn render_flattened(widget: impl Widget + 'static, width: f32, height: f32) -> String {
+    let node = painted(widget, width, height);
     let mut out = String::new();
     dump_node(&node, 0, &mut out);
+
+    let (mut commands, mut layers) = (Vec::new(), Vec::new());
+    let _ = flatten_root_into(
+        &node,
+        &mut commands,
+        &mut layers,
+        &mut FlattenScratch::default(),
+    );
+    let _ = writeln!(out, "flattened");
+    for layer in &layers {
+        for range in [
+            &layer.backdrop,
+            &layer.shapes,
+            &layer.images,
+            &layer.text,
+            &layer.overlay,
+        ] {
+            for cmd in &commands[range.clone()] {
+                let t = cmd.world_transform;
+                let _ = writeln!(out, "  at {},{}", n(t.tx()), n(t.ty()));
+                dump_command(&cmd.command, 2, "draw", &mut out);
+            }
+        }
+    }
     out
 }
 
@@ -124,10 +162,14 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
         None => String::new(),
     };
     let partial = if node.partial { " partial" } else { "" };
+    let merge = match &node.merge {
+        Some(merge) => format!(" merge(distance={})", n(merge.distance)),
+        None => String::new(),
+    };
 
     let _ = writeln!(
         out,
-        "{pad}node {}{transform}{origin}{clip}{partial}",
+        "{pad}node {}{transform}{origin}{clip}{merge}{partial}",
         rect(&node.bounds)
     );
 
@@ -189,6 +231,7 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
             border,
             shadow,
             gradient,
+            ..
         } => {
             let mut line = format!(
                 "{pad}{kind} rect {} fill={} radius={}/{}/{}/{}",
@@ -228,6 +271,51 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
                 );
             }
             let _ = writeln!(out, "{line}");
+        }
+        DrawCommand::MergedShape {
+            members,
+            distance,
+            border,
+            shadows,
+            bounds,
+        } => {
+            let mut line = format!(
+                "{pad}{kind} merged {} distance={}",
+                rect(bounds),
+                n(*distance)
+            );
+            if let Some(b) = border {
+                let _ = write!(line, " border={}@{}", color(&b.color), n(b.width));
+            }
+            for s in shadows.as_slice() {
+                let _ = write!(
+                    line,
+                    " shadow={}+{},{} blur={}",
+                    color(&s.color),
+                    n(s.offset.0),
+                    n(s.offset.1),
+                    n(s.blur)
+                );
+            }
+            let _ = writeln!(out, "{line}");
+            for m in members {
+                let t = m.placement;
+                let mut line = format!(
+                    "{pad}  member {} at {},{} fill={} radius={}",
+                    rect(&m.rect),
+                    n(t.tx()),
+                    n(t.ty()),
+                    color(&m.color),
+                    n(m.radius.top_left),
+                );
+                if let Some(b) = m.border {
+                    let _ = write!(line, " border={}@{}", color(&b.color), n(b.width));
+                }
+                if m.opacity != 1.0 {
+                    let _ = write!(line, " opacity={}", n(m.opacity));
+                }
+                let _ = writeln!(out, "{line}");
+            }
         }
         DrawCommand::Circle {
             center,
@@ -1003,4 +1091,36 @@ fn children_that_do_not_fit_share_the_overflow() {
         .child(column);
 
     assert_snapshot("children_that_do_not_fit", render(view, 400.0, 200.0));
+}
+
+/// A container merging its children's backgrounds: the merged command appears
+/// once, at the container's place in paint order — after its own background,
+/// before what its children hold — and the backgrounds it stands in for are
+/// not drawn on their own as well.
+#[test]
+fn merged_children_are_drawn_once_where_their_container_is() {
+    let island = container()
+        .width(120.0)
+        .height(36.0)
+        .corners(18.0)
+        .background(Color::BLACK)
+        .border(1.0, Color::WHITE)
+        .padding(10.0)
+        .child(swatch(16.0, 16.0, Color::GREEN));
+    let bubble = swatch(36.0, 36.0, Color::BLACK)
+        .corners(18.0)
+        .translate((6.0, 0.0));
+    let view = container().padding(8.0).child(
+        container()
+            .layout(Flex::row())
+            .background(Color::rgba(1.0, 1.0, 1.0, 0.1))
+            .merge_children(14.0)
+            .child(island)
+            .child(bubble),
+    );
+
+    assert_snapshot(
+        "merged_children_are_drawn_once_where_their_container_is",
+        render_flattened(view, 240.0, 60.0),
+    );
 }

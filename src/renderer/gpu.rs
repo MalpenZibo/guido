@@ -230,6 +230,20 @@ pub const SHAPE_ARC_BUTT: u32 = 1;
 pub const SHAPE_ARC_ROUND: u32 = 2;
 /// An arc with a half square on each end.
 pub const SHAPE_ARC_SQUARE: u32 = 3;
+/// The members of a merged shape, drawn by a pipeline of their own — see
+/// [`ShapeInstance::merged`].
+pub const SHAPE_MERGED: u32 = 4;
+
+/// Set in [`ShapeInstance::shape_kind`] on a merged shape drawn for its
+/// shadow alone: a merging container that casts more than one outer shadow
+/// draws the merged shape once per further shadow, under it, as a box draws
+/// a rect per further shadow.
+pub const MERGED_SHADOW_ONLY: u32 = 1 << 9;
+
+/// The kind in [`ShapeInstance::shape_kind`], without the bits above it.
+pub fn kind_of(shape_kind: u32) -> u32 {
+    shape_kind & 0xff
+}
 
 impl Default for ShapeInstance {
     fn default() -> Self {
@@ -316,6 +330,22 @@ impl ShapeInstance {
                 super::path::Cap::Round => SHAPE_ARC_ROUND,
                 super::path::Cap::Square => SHAPE_ARC_SQUARE,
             },
+            ..Default::default()
+        }
+    }
+
+    /// A merged shape, over `rect` in physical world pixels, whose members
+    /// begin at record `first` of the frame's merge records.
+    ///
+    /// Drawn by `fs_merged` rather than `fs_main`. It has no transform — each
+    /// member carries its own placement — and no gradient, so `gradient_type`
+    /// is where it names its first member: one field read two ways by two
+    /// entry points, as an arc reads the corner radii.
+    pub fn merged(rect: [f32; 4], first: u32) -> Self {
+        Self {
+            rect,
+            gradient_type: first,
+            shape_kind: SHAPE_MERGED,
             ..Default::default()
         }
     }
@@ -614,6 +644,8 @@ mod tests {
             ("SHAPE_ARC_ROUND", SHAPE_ARC_ROUND),
             ("SHAPE_ARC_SQUARE", SHAPE_ARC_SQUARE),
             ("SHADOW_INSET", SHADOW_INSET),
+            ("SHAPE_MERGED", SHAPE_MERGED),
+            ("MERGED_SHADOW_ONLY", MERGED_SHADOW_ONLY),
         ] {
             assert!(
                 shader.contains(&format!("const {name}: u32 = {value}u;")),

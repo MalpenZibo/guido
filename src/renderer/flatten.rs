@@ -522,6 +522,34 @@ impl FlattenScratch {
         result
     }
 
+    /// Remove the commands at `taken`, by address, from what was added after
+    /// `mark`.
+    ///
+    /// Their bounds stay recorded in the group they landed in: a group that
+    /// split for one of them stays split, which can only cost a draw call.
+    fn take_out_since(&mut self, mark: Mark, taken: &[*const DrawCommand]) {
+        let groups = &mut self.groups[mark.groups - 1..self.used];
+        for (index, group) in groups.iter_mut().enumerate() {
+            for (bucket_index, bucket) in group.buckets_mut().into_iter().enumerate() {
+                let from = if index == 0 {
+                    mark.buckets[bucket_index]
+                } else {
+                    0
+                };
+                // One pass, keeping order: what stays is moved down over what
+                // goes, and the tail cut off.
+                let mut kept = from;
+                for at in from..bucket.len() {
+                    if !taken.contains(&Rc::as_ptr(&bucket[at].command)) {
+                        bucket.swap(kept, at);
+                        kept += 1;
+                    }
+                }
+                bucket.truncate(kept);
+            }
+        }
+    }
+
     /// The part of each bucket that was added after `mark`, in draw order.
     fn tails_since(&self, mark: Mark) -> impl Iterator<Item = &[FlattenedCommand]> {
         self.live()
@@ -682,12 +710,7 @@ fn flatten_node(
     out: &mut FlattenScratch,
 ) -> bool {
     // Compose transforms: parent first, then local about its own pivot
-    let local_centered = if node.local_transform.is_identity() {
-        Transform::IDENTITY
-    } else {
-        node.local_transform.about(node.pivot, node.bounds)
-    };
-    let world_transform = parent_world_transform.then(&local_centered);
+    let world_transform = parent_world_transform.then(&node.placement());
     let opacity = parent_opacity * node.opacity;
 
     // What this node is cut by before it says anything of its own — read once,
@@ -788,10 +811,49 @@ fn flatten_node(
         });
     }
 
+    // The children's backgrounds, merged into one shape at this node's place
+    // in paint order: after what it drew itself, before what they draw.
+    let merged = node.merge.as_deref().and_then(|merge| {
+        super::merge::gather(node, merge, |why| {
+            crate::reactive::diagnostics::merge_member_left_out(node.id, why.reason());
+        })
+    });
+    if let Some(merged) = &merged {
+        for (index, shadow) in &merged.shadows {
+            let child = &node.children[*index];
+            out.push(FlattenedCommand {
+                command: Rc::clone(shadow),
+                world_transform: world_transform.then(&child.placement()),
+                layer: RenderLayer::Shapes,
+                opacity: opacity * child.opacity,
+                clip: effective_clip.clone(),
+            });
+        }
+        out.push(FlattenedCommand {
+            command: Rc::clone(&merged.command),
+            world_transform,
+            layer: RenderLayer::Shapes,
+            opacity,
+            clip: effective_clip.clone(),
+        });
+    }
+
     // Recurse to children with effective clip
     let mut subtree_partial = node.partial;
-    for child in &node.children {
+    for (index, child) in node.children.iter().enumerate() {
+        let taken = merged
+            .as_ref()
+            .map(|merged| &merged.taken[index])
+            .filter(|taken| !taken.is_empty());
+        let mark = taken.map(|_| out.mark());
         subtree_partial |= flatten_node(child, world_transform, clip_index, opacity, true, out);
+        // Taken back out of what the child drew rather than kept from it: the
+        // child's own entry is made inside that call and has to hold its
+        // background, because the next frame may replay it under a parent
+        // that no longer merges it.
+        if let (Some(taken), Some(mark)) = (taken, mark) {
+            out.take_out_since(mark, taken);
+        }
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.
@@ -871,7 +933,7 @@ const EVERYTHING: Rect = Rect {
     height: f32::MAX,
 };
 
-fn union_of(a: Rect, b: Rect) -> Rect {
+pub(super) fn union_of(a: Rect, b: Rect) -> Rect {
     let x = a.x.min(b.x);
     let y = a.y.min(b.y);
     let right = (a.x + a.width).max(b.x + b.width);
@@ -892,23 +954,14 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             border,
             shadow,
             ..
-        } => {
-            // A shadow spills well outside the rect, and a border straddles
-            // its edge.
-            let mut grow: f32 = border.map_or(0.0, |b| b.width);
-            let mut offset: (f32, f32) = (0.0, 0.0);
-            // An inset one is drawn inside the rect, and reaches nothing.
-            if let Some(shadow) = shadow.filter(|s| !s.inset) {
-                grow = grow.max(shadow.spill());
-                offset = shadow.offset;
-            }
-            Rect::new(
-                rect.x - grow + offset.0.min(0.0),
-                rect.y - grow + offset.1.min(0.0),
-                rect.width + grow * 2.0 + offset.0.abs(),
-                rect.height + grow * 2.0 + offset.1.abs(),
-            )
-        }
+        } => spilled(*rect, border.map_or(0.0, |b| b.width), shadow.as_ref()),
+        // Its border runs inside the merged outline, which `bounds` already
+        // holds.
+        DrawCommand::MergedShape {
+            bounds, shadows, ..
+        } => shadows.as_slice().iter().fold(*bounds, |held, shadow| {
+            union_of(held, spilled(*bounds, 0.0, Some(shadow)))
+        }),
         DrawCommand::Circle { center, radius, .. } => Rect::new(
             center.0 - radius,
             center.1 - radius,
@@ -963,6 +1016,24 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
         local.width,
         local.height,
     ))
+}
+
+/// `rect` grown by what spills past it: a shadow well outside, and a border
+/// that straddles its edge.
+fn spilled(rect: Rect, border: f32, shadow: Option<&crate::renderer::Shadow>) -> Rect {
+    let mut grow = border;
+    let mut offset: (f32, f32) = (0.0, 0.0);
+    // An inset one is drawn inside the rect, and reaches nothing.
+    if let Some(shadow) = shadow.filter(|s| !s.inset) {
+        grow = grow.max(shadow.spill());
+        offset = shadow.offset;
+    }
+    Rect::new(
+        rect.x - grow + offset.0.min(0.0),
+        rect.y - grow + offset.1.min(0.0),
+        rect.width + grow * 2.0 + offset.0.abs(),
+        rect.height + grow * 2.0 + offset.1.abs(),
+    )
 }
 
 #[cfg(test)]
@@ -1248,6 +1319,7 @@ mod tests {
                 border: None,
                 shadow: Some(shadow),
                 gradient: None,
+                background: false,
             }),
             ..command(Shapes)
         });

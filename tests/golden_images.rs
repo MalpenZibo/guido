@@ -4380,3 +4380,301 @@ fn a_dense_translucent_sparkline() {
             })),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Merged shapes
+// ---------------------------------------------------------------------------
+
+/// How close two pills under `merge_children` come before they join.
+const MERGE_DISTANCE: f32 = 24.0;
+const PILL: Color = Color::rgb(0.95, 0.72, 0.28);
+
+/// A long pill and a round one beside it, `gap` past it — the second carried
+/// there by a translation, which is how a bubble leaves its island.
+fn pills(long: Container, round: Container, gap: f32) -> Container {
+    container()
+        .layout(Flex::row())
+        .child(long.width(80.0).height(36.0).corners(18.0))
+        .child(
+            round
+                .width(36.0)
+                .height(36.0)
+                .corners(18.0)
+                .translate((gap, 0.0)),
+        )
+}
+
+/// Two plain pills `gap` apart, merged or not.
+fn pill_row(gap: f32, merge: bool) -> Container {
+    let row = pills(
+        container().background(PILL),
+        container().background(PILL),
+        gap,
+    );
+    if merge {
+        row.merge_children(MERGE_DISTANCE)
+    } else {
+        row
+    }
+}
+
+/// Two pills under `merge_children`, at three gaps: overlapping, they are one
+/// shape with no seam; closer than the distance, a concave neck joins them;
+/// further apart, they are two shapes. That last row is held to the scene
+/// without a merge, pixel for pixel, by the test after this one.
+#[test]
+fn merged_pills_at_three_gaps() {
+    golden(
+        "merged_pills_at_three_gaps",
+        (220.0, 188.0),
+        1.0,
+        BACKDROP,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(20.0))
+            .children([-12.0, 6.0, 30.0].map(|gap| pill_row(gap, true))),
+    );
+}
+
+/// Further apart than the distance, two merged pills are the two pills drawn
+/// alone: a smooth minimum leaves two distances further apart than its reach
+/// as `min` leaves them, and each member is measured in its own space, as a
+/// shape drawn alone is.
+///
+/// Up to one thing, which is not the shape: a shape drawn alone is drawn over
+/// a quad exactly its own box, so the outer half of the antialiasing along a
+/// straight side — the pixel row just outside it, which the edge covers by a
+/// sixth — is cut off with the quad. A merged shape's quad has to reach the
+/// neck, so it keeps that row. Every pixel that differs has to be that row: one
+/// the pills alone leave as backdrop, and the merged ones cover by less than a
+/// quarter.
+#[test]
+fn merged_pills_apart_are_the_pills_alone() {
+    const NAME: &str = "merged_pills_apart_are_the_pills_alone";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let apart = |merge: bool| {
+        render_with_own_renderer(
+            ctx,
+            container().padding(20.0).child(pill_row(30.0, merge)),
+            (180.0, 76.0),
+            1.0,
+            BACKDROP,
+        )
+    };
+    let (merged, alone) = (apart(true), apart(false));
+    let backdrop = BACKDROP.to_rgba8();
+    let backdrop = [backdrop.0, backdrop.1, backdrop.2];
+    let pill = PILL.to_rgba8();
+    let pill = [pill.0, pill.1, pill.2];
+    let mut edge = 0;
+    for (index, (m, a)) in merged.data.chunks(4).zip(alone.data.chunks(4)).enumerate() {
+        if m.iter().zip(a).all(|(x, y)| x.abs_diff(*y) <= 1) {
+            continue;
+        }
+        let (x, y) = (index as u32 % merged.width, index as u32 / merged.width);
+        let coverage = (m[0] as f32 - backdrop[0] as f32) / (pill[0] as f32 - backdrop[0] as f32);
+        assert!(
+            a[..3] == backdrop && coverage < 0.25,
+            "({x}, {y}) is {m:?} merged and {a:?} alone: not the antialiasing just \
+             outside a straight side, so the merged pills are not the pills alone"
+        );
+        edge += 1;
+    }
+    assert!(
+        edge > 0,
+        "nothing differs, so the quad a merged shape is drawn over has stopped \
+         reaching past its members — and a neck is drawn past them"
+    );
+}
+
+/// Two members whose borders differ — 1 px of one colour, 2 px of another —
+/// and whose fills differ, close enough to join. The border runs along the
+/// merged outline and is not drawn where they meet; its width and colour, and
+/// the fill, blend from one to the other along the neck.
+fn bordered_pills() -> Container {
+    container().padding(20.0).child(
+        pills(
+            container()
+                .background(Color::rgb(0.20, 0.35, 0.80))
+                .border(1.0, Color::rgb(0.95, 0.95, 0.95)),
+            container()
+                .background(Color::rgb(0.65, 0.25, 0.60))
+                .border(2.0, Color::rgb(0.30, 0.90, 0.70)),
+            6.0,
+        )
+        .merge_children(MERGE_DISTANCE),
+    )
+}
+
+#[test]
+fn merged_borders_blend_along_the_neck() {
+    golden(
+        "merged_borders_blend_along_the_neck",
+        (162.0, 76.0),
+        1.0,
+        BACKDROP,
+        bordered_pills(),
+    );
+}
+
+/// The same at twice the scale: the distances, the borders and the reach of
+/// the smooth minimum are all lengths, and a length scaled twice or not at
+/// all is invisible at 1x.
+#[test]
+fn merged_borders_blend_along_the_neck_at_scale_2x() {
+    golden(
+        "merged_borders_blend_along_the_neck_at_scale_2x",
+        (162.0, 76.0),
+        2.0,
+        BACKDROP,
+        bordered_pills(),
+    );
+}
+
+/// A member with a gradient does not merge: it is drawn on its own, as it is
+/// without `merge_children`, and its neighbour is a merged shape of one. No
+/// neck forms between them although they are as close as the bordered pairs.
+#[test]
+fn a_gradient_member_is_drawn_unmerged() {
+    golden(
+        "a_gradient_member_is_drawn_unmerged",
+        (162.0, 76.0),
+        1.0,
+        BACKDROP,
+        container().padding(20.0).child(
+            pills(
+                container().gradient(LinearGradient::horizontal(
+                    Color::rgb(0.20, 0.35, 0.80),
+                    Color::rgb(0.30, 0.90, 0.70),
+                )),
+                container().background(PILL),
+                6.0,
+            )
+            .merge_children(MERGE_DISTANCE),
+        ),
+    );
+}
+
+/// The merging container's shadow is the merged shape's: cast around the
+/// neck as well as the members, once, rather than around the container's box
+/// or around each member. The round member is turned, which it shows nothing
+/// of, but which carries its distance through a placement that is not a
+/// translation.
+#[test]
+fn a_merged_shape_casts_one_shadow() {
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    golden(
+        "a_merged_shape_casts_one_shadow",
+        (190.0, 110.0),
+        1.0,
+        light,
+        container().padding(36.0).child(
+            container()
+                .layout(Flex::row())
+                .merge_children(MERGE_DISTANCE)
+                .shadow(Shadow::new(
+                    (0.0, 6.0),
+                    8.0,
+                    0.0,
+                    Color::BLACK.with_alpha(0.45),
+                ))
+                .child(swatch(80.0, 36.0, Color::WHITE).corners(18.0))
+                .child(
+                    swatch(36.0, 36.0, Color::WHITE)
+                        .corners(12.0)
+                        .rotate(45.0)
+                        .translate((8.0, 0.0)),
+                ),
+        ),
+    );
+}
+
+/// A merging container that casts two outer shadows casts both from the
+/// merged shape — the second drawn as the merged shape again, beneath it, for
+/// that shadow alone — and a member's own shadow is drawn beneath the merged
+/// shape rather than over it.
+#[test]
+fn a_merged_shape_casts_every_outer_shadow() {
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    golden(
+        "a_merged_shape_casts_every_outer_shadow",
+        (190.0, 110.0),
+        1.0,
+        light,
+        container().padding(36.0).child(
+            container()
+                .layout(Flex::row())
+                .merge_children(MERGE_DISTANCE)
+                .shadow([
+                    Shadow::new((0.0, 2.0), 2.0, 0.0, Color::BLACK.with_alpha(0.4)),
+                    Shadow::new(
+                        (10.0, 8.0),
+                        6.0,
+                        0.0,
+                        Color::rgb(0.2, 0.3, 0.9).with_alpha(0.5),
+                    ),
+                ])
+                .child(swatch(80.0, 36.0, Color::WHITE).corners(18.0))
+                .child(
+                    swatch(36.0, 36.0, Color::WHITE)
+                        .corners(18.0)
+                        .shadow(Shadow::new(
+                            (0.0, -8.0),
+                            4.0,
+                            0.0,
+                            Color::rgb(0.9, 0.2, 0.2),
+                        ))
+                        .translate((6.0, 0.0)),
+                ),
+        ),
+    );
+}
+
+/// A distance of zero is a plain union: two pills that overlap are one shape
+/// with no seam, and two that do not overlap are left exactly apart, with no
+/// neck however close.
+#[test]
+fn a_merge_at_distance_zero_is_a_plain_union() {
+    golden(
+        "a_merge_at_distance_zero_is_a_plain_union",
+        (220.0, 132.0),
+        1.0,
+        BACKDROP,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(20.0))
+            .children([-12.0, 2.0].map(|gap| {
+                pills(
+                    container().background(PILL),
+                    container().background(Color::rgb(0.30, 0.70, 0.90)),
+                    gap,
+                )
+                .merge_children(0.0)
+            })),
+    );
+}
+
+/// A merged shape is drawn in world space, unlike any other instance, and is
+/// cut by the clip its container sits under all the same: here a rounded
+/// card that hides its overflow, with the bubble half outside it.
+#[test]
+fn a_merged_shape_is_cut_by_its_clip() {
+    golden(
+        "a_merged_shape_is_cut_by_its_clip",
+        (180.0, 96.0),
+        1.0,
+        BACKDROP,
+        container().padding(10.0).child(
+            container()
+                .width(130.0)
+                .height(76.0)
+                .corners(24.0)
+                .overflow(Overflow::Hidden)
+                .background(Color::rgb(0.20, 0.20, 0.26))
+                .padding(20.0)
+                .child(pill_row(6.0, true)),
+        ),
+    );
+}

@@ -32,7 +32,7 @@ use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
-use crate::renderer::{GradientDir, PaintContext, Shadow, Shadows};
+use crate::renderer::{GradientDir, MergeChildren, PaintContext, Shadow, Shadows};
 use crate::transform::{Scale, Transform, Translate};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
@@ -212,19 +212,22 @@ pub(super) struct LayerProps {
     pub(super) position: Option<crate::animation::TransitionConfig>,
 }
 
-/// The two decorations a container rarely has. Boxed and absent by default,
-/// for the reason [`LayerProps`] above is.
+/// The decorations a container rarely has. Boxed and absent by default, for
+/// the reason [`LayerProps`] above is.
 ///
 /// What earns a place here is being **both large and rarely declared**. A
 /// `LinearGradient` is two colours and a direction and a `Shadow` is an offset,
 /// a blur, a spread and a colour — 36 bytes each, and since #450 a property
 /// field holds its value inline, so `Prop::Unset` occupies all 36 whether
 /// anything was declared or not. `backdrop_blur` is as rare and fails the other
-/// half at 12 bytes, so it stays where it is.
+/// half at 12 bytes, so it stays where it is. `merge_children` is small and
+/// rarer than either, and lives here because `Container` has no room left for
+/// a field of any size.
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
     pub(super) shadow: Prop<Shadows>,
+    pub(super) merge_children: Prop<f32>,
 }
 
 bitflags::bitflags! {
@@ -591,6 +594,15 @@ impl Container {
         let (dx, dy) = self.position_offset(tree, id);
         let reach = self.max_transform_reach(bounds, shadow_extent) + dx.abs().max(dy.abs());
         tree.set_own_paint_reach(id, reach);
+        // A merged shape changes within five quarters of the distance of a
+        // member that moves — the smooth minimum acts only where the two
+        // distances are within its reach of each other, and takes a quarter of
+        // it off — and casts this container's shadow around all of it.
+        tree.set_merge_reach(
+            id,
+            self.merge_distance(id)
+                .map(|distance| distance * 1.25 + shadow_extent),
+        );
     }
 
     /// Resolve the declared scroll measurements for this pass.
@@ -693,6 +705,12 @@ impl Container {
 
     pub(super) fn shadow_prop(&self) -> Prop<Shadows> {
         self.decoration.as_deref().map_or(Prop::Unset, |d| d.shadow)
+    }
+
+    pub(super) fn merge_children_prop(&self) -> Prop<f32> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.merge_children)
     }
 
     pub(super) fn translate_prop(&self) -> Prop<Translate> {
@@ -1351,6 +1369,60 @@ impl Container {
         transition: impl Into<crate::animation::TransitionConfig>,
     ) -> Self {
         self.layer_mut().position = Some(transition.into());
+        self
+    }
+
+    /// Draw the backgrounds of this container's direct children as one shape,
+    /// reaching for each other once two come within `distance` logical pixels.
+    ///
+    /// Further apart than `distance`, two children do not touch each other's
+    /// outline at all, so one that moves away splits off by itself. Closer,
+    /// their outlines lean towards each other, and a concave neck joins them
+    /// once the gap is half the distance or less. `0.0` is a plain union:
+    /// overlapping children become one shape with no seam, and no neck forms.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// let bubble_x = create_signal(0.0f32);
+    /// let pill = Color::rgb(0.1, 0.1, 0.12);
+    /// let _ = container()
+    ///     .layout(ZStack::new())
+    ///     .merge_children(14.0)
+    ///     .shadow(Shadow::new((0.0, 10.0), 26.0, 0.0, Color::BLACK.with_alpha(0.5)))
+    ///     .child(container().width(160.0).height(36.0).corners(18.0).background(pill))
+    ///     .child(
+    ///         container()
+    ///             .width(34.0)
+    ///             .height(34.0)
+    ///             .corners(17.0)
+    ///             .background(pill)
+    ///             .translate(move || (bubble_x.get(), 0.0)),
+    ///     );
+    /// ```
+    ///
+    /// What merges is each child's own box — its fill and its border, with
+    /// its corners and wherever its transform puts it. What the children hold
+    /// is drawn as it always is, over the merged shape. Fills that differ
+    /// blend across the neck, and so do borders, which run along the merged
+    /// outline rather than around each child; a child without one fades the
+    /// border out along the neck.
+    ///
+    /// This container's own [`border`](Self::border) and
+    /// [`shadow`](Self::shadow) belong to the merged shape: the border is drawn
+    /// along its outline in place of the children's, and every outer shadow is
+    /// cast by it. Its inset shadows, and its own background, stay on its own
+    /// box, drawn underneath as usual.
+    ///
+    /// Three things do not merge, and are drawn on their own: a child whose
+    /// fill is a [`gradient`](Self::gradient), every child after the first
+    /// [`MAX_MEMBERS`](crate::renderer::MAX_MEMBERS), and anything below the
+    /// direct children. A debug build says so for the first two. The neck
+    /// takes no input — each child answers clicks in its own box. A container
+    /// that also [scrolls](Self::scroll) merges its scrollbar track too, since
+    /// the track is one of its children.
+    pub fn merge_children<M>(mut self, distance: impl IntoSignal<f32, M>) -> Self {
+        self.decoration_mut().merge_children = distance.into_prop();
         self
     }
 
@@ -2243,19 +2315,32 @@ impl Widget for Container {
             ctx.declare_input_region(local_bounds, corner_radii, corner_curvature, takes);
         }
 
-        self.paint_decoration(
-            ctx,
-            local_bounds,
-            &Decoration {
-                background,
-                gradient,
-                corner_radii,
-                corner_curvature,
-                shadow,
-                border_width,
-                border_color,
-            },
-        );
+        let decoration = Decoration {
+            background,
+            gradient,
+            corner_radii,
+            corner_curvature,
+            shadow,
+            border_width,
+            border_color,
+        };
+        // A container that merges hands its border and shadow to the merged
+        // shape.
+        let decoration = match self.merge_distance(id) {
+            Some(distance) => {
+                let (shadows, border) = decoration.for_merged_shape();
+                ctx.merge_children(MergeChildren {
+                    distance,
+                    border,
+                    shadows,
+                });
+                decoration.without_its_own_edge()
+            }
+            None => decoration,
+        };
+        // Marked, so that a parent merging its children takes this box into
+        // the shape it merges.
+        ctx.background(|ctx| self.paint_decoration(ctx, local_bounds, &decoration));
 
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;

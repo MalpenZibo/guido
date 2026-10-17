@@ -1,5 +1,6 @@
 //! Draw command definitions for the render tree.
 
+use super::merge::MergeMember;
 use super::path::{Cap, Fill, Path, Stroke};
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
@@ -10,7 +11,7 @@ use crate::widgets::text_style::TextStroke;
 use crate::widgets::{Color, Point, Rect, TextAlign};
 
 /// Border definition for shapes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Border {
     /// Border width in logical pixels
     pub width: f32,
@@ -231,6 +232,32 @@ pub enum DrawCommand {
         shadow: Option<Shadow>,
         /// Optional gradient (overrides solid color)
         gradient: Option<Gradient>,
+        /// Whether this is the box a container draws for itself — its fill
+        /// or its border frame. A parent that merges its children's shapes
+        /// takes these into the merged shape and draws them there instead;
+        /// see [`Container::merge_children`](crate::widgets::Container::merge_children).
+        background: bool,
+    },
+
+    /// The backgrounds of a container's direct children, drawn as one shape
+    /// whose members join where they come within `distance` of each other.
+    ///
+    /// Never painted: flatten builds it, in place of the members' own
+    /// backgrounds, from the children of a node that declared
+    /// [`MergeChildren`](super::merge::MergeChildren).
+    MergedShape {
+        /// Each member, placed in this command's own space.
+        members: Vec<MergeMember>,
+        /// How close two members come before they reach for each other, in
+        /// logical pixels; they join at half of it.
+        distance: f32,
+        /// Drawn along the merged outline in place of the members' own.
+        border: Option<Border>,
+        /// Cast by the merged shape, all outer.
+        shadows: super::types::Shadows,
+        /// What the members and the necks between them can cover, in this
+        /// command's own space.
+        bounds: Rect,
     },
 
     /// Draw a circle (used for ripple effects).
@@ -421,6 +448,7 @@ impl DrawCommand {
             border: None,
             shadow: None,
             gradient: None,
+            background: false,
         }
     }
 
@@ -439,6 +467,7 @@ impl DrawCommand {
             border: None,
             shadow: None,
             gradient: None,
+            background: false,
         }
     }
 
