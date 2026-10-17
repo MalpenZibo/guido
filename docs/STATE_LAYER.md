@@ -159,6 +159,13 @@ style:
 text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong))
 ```
 
+A text, a field and an image are the leaves that take them. An image's
+override is its `tint`, so an icon follows the control it is in as the label beside it does:
+
+```rust
+image("./power.svg").tint(theme.weak).when_disabled(|s| s.tint(theme.dim))
+```
+
 ### Nesting scopes resolution, not state
 
 Every control notices its own state independently: a list row is hovered

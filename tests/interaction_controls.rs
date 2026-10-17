@@ -34,6 +34,20 @@ impl H {
         out
     }
 
+    /// The tint of the one image drawn, `None` where it is drawn untinted.
+    fn tint(&mut self) -> Option<Color> {
+        fn find(node: &RenderNode) -> Option<Option<Color>> {
+            node.commands
+                .iter()
+                .find_map(|cmd| match &**cmd {
+                    DrawCommand::Image { tint, .. } => Some(*tint),
+                    _ => None,
+                })
+                .or_else(|| node.children.iter().find_map(|c| find(c)))
+        }
+        find(&self.surface.paint()).expect("an image command")
+    }
+
     fn colour_of(&mut self, content: &str) -> Color {
         self.texts()
             .into_iter()
@@ -56,6 +70,17 @@ fn collect(node: &RenderNode, out: &mut Vec<(String, Color)>) {
 
 const WEAK: Color = Color::rgb(0.5, 0.5, 0.5);
 const STRONG: Color = Color::rgb(1.0, 1.0, 1.0);
+const DIM: Color = Color::rgb(0.2, 0.2, 0.2);
+
+/// A one-pixel icon, decoded already, so painting it needs neither a file nor
+/// a decoder.
+fn icon() -> Image {
+    image(ImageSource::Rgba {
+        width: 1,
+        height: 1,
+        pixels: vec![0, 0, 0, 255].into(),
+    })
+}
 
 /// A label lights up while the pointer is on the button's *padding*, nowhere
 /// near the glyphs. This is the case that rules out "my own bounds".
@@ -168,6 +193,91 @@ fn a_label_reacts_to_the_focus_of_the_input_beside_it() {
 
     clear_focus();
     assert_eq!(h.colour_of("Password"), WEAK);
+}
+
+/// An icon follows its control as the label beside it does (#780): a list
+/// row's glyph brightens with its label on hover, and dims with it when the
+/// row is disabled.
+///
+/// Disabled is declared after hovered, so it outranks it while both hold —
+/// the reverse declaration order every state layer resolves in.
+#[test]
+fn an_icon_follows_its_control_as_its_label_does() {
+    let enabled = create_signal(true);
+    let mut h = H::new(
+        container()
+            .layout(Flex::row())
+            .padding(20.0)
+            .enabled(enabled)
+            .on_click(|| {})
+            .child(
+                container().width(16.0).height(16.0).child(
+                    icon()
+                        .tint(WEAK)
+                        .when_hovered(|s| s.tint(STRONG))
+                        .when_disabled(|s| s.tint(DIM)),
+                ),
+            )
+            .child(
+                text("Power off")
+                    .color(WEAK)
+                    .when_hovered(|s| s.color(STRONG))
+                    .when_disabled(|s| s.color(DIM)),
+            ),
+    );
+
+    assert_eq!((h.tint(), h.colour_of("Power off")), (Some(WEAK), WEAK));
+
+    // On the row's padding, nowhere near the icon or the glyphs.
+    h.point_at(3.0, 3.0);
+    assert_eq!((h.tint(), h.colour_of("Power off")), (Some(STRONG), STRONG));
+
+    enabled.set(false);
+    assert_eq!((h.tint(), h.colour_of("Power off")), (Some(DIM), DIM));
+
+    enabled.set(true);
+    h.point_at(-50.0, -50.0);
+    assert_eq!((h.tint(), h.colour_of("Power off")), (Some(WEAK), WEAK));
+}
+
+/// An override needs no base tint to supply a value for: an icon drawn in its
+/// own colours takes one only while the state holds, and gives it back after.
+#[test]
+fn an_untinted_icon_is_tinted_only_while_the_state_holds() {
+    let mut h = H::new(
+        container().padding(20.0).on_click(|| {}).child(
+            container()
+                .width(16.0)
+                .height(16.0)
+                .child(icon().when_hovered(|s| s.tint(STRONG))),
+        ),
+    );
+
+    assert_eq!(h.tint(), None);
+    h.point_at(3.0, 3.0);
+    assert_eq!(h.tint(), Some(STRONG));
+    h.point_at(-50.0, -50.0);
+    assert_eq!(h.tint(), None);
+}
+
+/// With nothing marked above it, an image is its own unit, as a text is, and
+/// notices the pointer over its own bounds.
+#[test]
+fn an_image_with_no_control_above_it_is_its_own_unit() {
+    let mut h = H::new(
+        container().layout(Flex::row()).child(
+            container()
+                .width(16.0)
+                .height(16.0)
+                .child(icon().tint(WEAK).when_hovered(|s| s.tint(STRONG))),
+        ),
+    );
+
+    assert_eq!(h.tint(), Some(WEAK));
+    h.point_at(8.0, 8.0);
+    assert_eq!(h.tint(), Some(STRONG));
+    h.point_at(-50.0, -50.0);
+    assert_eq!(h.tint(), Some(WEAK));
 }
 
 /// With nothing marked above it, a text is its own unit and notices the

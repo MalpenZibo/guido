@@ -52,7 +52,7 @@ everything `IntoSignal` accepts plus a value carrying its own motion:
 `background`, `corners`, `padding`, `border` (each half), `outline` (each of
 its three), `shadow`, `width`,
 `height`, `translate`, `rotate`, `scale`, `opacity`, `blur` — and beyond `Container`,
-`Text`'s `color` and `font_size` and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
+`Text`'s `color` and `font_size`, `Image`'s `tint`, and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
 property somebody else declared, so a timing there is a compile error rather
 than a value quietly ignored.

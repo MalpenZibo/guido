@@ -15,10 +15,12 @@
 //!     .child(text("Interactive button"));
 //! ```
 
-use crate::reactive::{IntoSignal, Prop, Signal, create_stored};
+use crate::reactive::{IntoSignal, Prop, RwSignal, Signal, create_stored};
 use crate::renderer::Shadows;
 use crate::transform::{Scale, Translate};
-use crate::widgets::Color;
+use crate::tree::{Tree, WidgetId};
+use crate::widgets::control::Control;
+use crate::widgets::{Color, Event, EventResponse};
 
 /// Configuration for ripple effect animation.
 #[derive(Clone, Copy)]
@@ -479,10 +481,75 @@ pub fn resolve_background(base: Color, override_: &BackgroundOverride) -> Color 
     }
 }
 
+/// Whether a state override applies to a widget that answers its states from
+/// its control: a text, an image, a field. Reading the answer is what
+/// subscribes the widget to its control, so it is asked only for a state the
+/// widget declares.
+///
+/// `own_hover` is the widget's own answer for the pointer, used when no
+/// control encloses it — a text or an image keeps one only once it declares a
+/// pointer state (see [`notice_own_hover`]), and a field always tracks it.
+pub(crate) fn state_is_active(
+    id: WidgetId,
+    control: Option<&Control>,
+    when: &StateWhen,
+    own_hover: Option<RwSignal<bool>>,
+) -> bool {
+    match (when, control) {
+        (StateWhen::When(condition), _) => condition.get(),
+        // Inside a unit, every state is that unit's answer, whatever the
+        // state is — the whole point of `Control`.
+        (_, Some(control)) => control.is_active(when),
+        // No control above: the widget is its own unit. It can notice the
+        // pointer over its own bounds, and it can hold the focus — but it is
+        // not pressed, because being pressed means being activated and a unit
+        // of one has nothing to activate, and it is not disabled, because
+        // nothing above it declared `enabled`.
+        (StateWhen::Hovered, None) => own_hover.is_some_and(|h| h.get()),
+        (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
+        (StateWhen::Pressed | StateWhen::Disabled, None) => false,
+    }
+}
+
+/// Notice the pointer over a leaf, but only one that is its own interaction
+/// unit. Inside a control it is the control that tracks, and asking twice
+/// would light the leaf on its own pixels rather than on the button it
+/// belongs to.
+pub(crate) fn notice_own_hover(
+    own_hover: Option<RwSignal<bool>>,
+    tree: &Tree,
+    id: WidgetId,
+    event: &Event,
+) -> EventResponse {
+    let Some(hover) = own_hover else {
+        return EventResponse::Ignored;
+    };
+    if tree.nearest_control(id).is_some() {
+        return EventResponse::Ignored;
+    }
+
+    let inside = match event {
+        // A pointer with no position is over nothing — the same answer a
+        // `MouseLeave` gives, and `contains_at` is where that is decided.
+        Event::MouseMove { at, .. } | Event::MouseEnter { at } => tree
+            .get_bounds(id)
+            .is_some_and(|bounds| bounds.contains_at(*at)),
+        Event::MouseLeave => false,
+        _ => return EventResponse::Ignored,
+    };
+    // Written only on a change: an unchanged pointer move must not wake
+    // every subscriber.
+    if hover.get_untracked() != inside {
+        hover.set(inside);
+    }
+    // Never handled: noticing the pointer is not consuming it.
+    EventResponse::Ignored
+}
+
 /// Declaring how a widget looks while its control is in a state.
 ///
 /// The unit that holds the state is the widget's
-/// [`Control`](crate::widgets::Control) — the nearest enclosing container
+/// [`Control`] — the nearest enclosing container
 /// marked as one — so a button's label reacts to the button being hovered, and
 /// a form label reacts to the focus of the input beside it. A widget with no
 /// control above it is its own unit, and notices the pointer over its own

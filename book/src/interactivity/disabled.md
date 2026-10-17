@@ -63,6 +63,9 @@ The text asks its **control** — the nearest enclosing interaction unit, which
 declaring `enabled` makes the container into. That is why the label greys with
 the form around it without being handed the signal itself.
 
+An icon greys the same way, with `when_disabled(|s| s.tint(..))` on the
+image — see [Images](../building-ui/images.md#tinting).
+
 A condition you already hold reads the same at one call site:
 `state(busy, |s| s.darker(0.2))`. What it cannot do is promise that two widgets
 in two files mean the same thing by it. `Disabled` is the control's answer, with
