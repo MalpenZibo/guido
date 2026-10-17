@@ -248,6 +248,12 @@ impl Length {
         }
     }
 
+    /// This length held at `size`, its bounds kept: what a content-sized box
+    /// in flight is on the frame it is laid out in, as an exact length is.
+    pub(crate) fn held_at(self, size: f32) -> Self {
+        self.with(Extent::Exact(size))
+    }
+
     /// The length this one describes, with its extent replaced.
     fn with(self, extent: Extent) -> Self {
         Self { extent, ..self }

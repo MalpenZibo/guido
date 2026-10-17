@@ -4277,6 +4277,12 @@ impl LayoutCtx<'_> {
         self.minimum
     }
 
+    /// Forget what was recorded, for a layout run again in the same pass whose
+    /// second answer is the one that stands.
+    pub(crate) fn forget_minimum(&mut self) {
+        self.minimum = None;
+    }
+
     /// A context for the tests of what a layout *reads*, which are about the
     /// values rather than about any widget: a layout pass, over a tree, with
     /// nothing in it.
