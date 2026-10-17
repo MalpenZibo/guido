@@ -45,6 +45,16 @@ use super::{Alignment, Constraints, Layout, Size};
 /// [`Flex`](super::Flex): a stack whose only leader is hidden has nothing to
 /// follow either.
 ///
+/// A child on its way out — removed from a dynamic children list and playing
+/// the exit it declared with
+/// [`exiting_to`](crate::animation::Animated::exiting_to) — leads only an axis
+/// no staying child leads. So a stack that sizes to its content starts moving
+/// toward the view that replaces the leaving one on the first frame after the
+/// swap, and a view removed with nothing in its place fades out at the size it
+/// had. The leaving child is still laid out at its own size, placed by its
+/// alignment and painted, and a leaving follower still follows the stack's
+/// size. When the exit settles nothing moves, since nothing was following it.
+///
 /// # Positioning
 ///
 /// Every child is placed by an [`Alignment`]: the stack's own, set with
@@ -138,8 +148,11 @@ impl Layout for ZStack {
         // Pass 1: children that don't fill an axis establish the stack size on
         // that axis. A child that fills both can only follow, so it is left
         // for pass 2 — laying it out here would just be thrown away.
-        let mut stack = Size::zero();
-        let (mut led_width, mut led_height) = (false, false);
+        //
+        // A child on its way out leads only where nothing staying does, so
+        // the stack moves toward the view that replaces it at once, and keeps
+        // its size when nothing does.
+        let (mut staying, mut leaving) = (Leaders::default(), Leaders::default());
         // An axis with no maximum and nothing to lead it has no space to take
         // either, and the stack is as big as its children there — so a child
         // that fills both axes has to be measured after all. A hidden child
@@ -168,33 +181,25 @@ impl Layout for ZStack {
             }
             largest.width = largest.width.max(child_size.width);
             largest.height = largest.height.max(child_size.height);
-            if !hints.fill_width {
-                stack.width = stack.width.max(child_size.width);
-                led_width = true;
-            }
-            if !hints.fill_height {
-                stack.height = stack.height.max(child_size.height);
-                led_height = true;
-            }
+            let leaders = if hints.leaving {
+                &mut leaving
+            } else {
+                &mut staying
+            };
+            leaders.lead(child_size, hints);
         }
+        let led = staying.or(leaving);
 
         // Nothing leads this axis: there is no sibling size to follow, so the
         // stack takes the space it was offered — or, with none to offer, the
         // size of its children.
-        if !led_width {
-            stack.width = if constraints.max_width.is_finite() {
-                constraints.max_width
-            } else {
-                largest.width
-            };
-        }
-        if !led_height {
-            stack.height = if constraints.max_height.is_finite() {
-                constraints.max_height
-            } else {
-                largest.height
-            };
-        }
+        let unled_extent = |max: f32, largest: f32| if max.is_finite() { max } else { largest };
+        let stack = Size::new(
+            led.width
+                .unwrap_or_else(|| unled_extent(constraints.max_width, largest.width)),
+            led.height
+                .unwrap_or_else(|| unled_extent(constraints.max_height, largest.height)),
+        );
         let size = constraints.constrain(stack);
 
         // Pass 2: followers resolve against the stack size — tight on the axes
@@ -238,13 +243,49 @@ impl Layout for ZStack {
                 .offset(size, child_size);
             ctx.tree()
                 .set_origin(child_id, origin.0 + dx, origin.1 + dy);
+            // Nor does a leaving child hold open the least it can be, where
+            // something staying leads.
             let child = ctx.tree_ref().minimum(child_id).unwrap_or_default();
-            least.width = least.width.max(child.width);
-            least.height = least.height.max(child.height);
+            let leaving = self.hints[i].leaving;
+            if !(leaving && staying.width.is_some()) {
+                least.width = least.width.max(child.width);
+            }
+            if !(leaving && staying.height.is_some()) {
+                least.height = least.height.max(child.height);
+            }
         }
         ctx.set_minimum(least);
 
         size
+    }
+}
+
+/// The size the children that lead an axis give the stack there, on the axes
+/// any of them led.
+#[derive(Default, Clone, Copy)]
+struct Leaders {
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+impl Leaders {
+    /// A child of `size` leads every axis it does not fill.
+    fn lead(&mut self, size: Size, hints: LayoutHints) {
+        let grow = |led: Option<f32>, by: f32| Some(led.map_or(by, |led| led.max(by)));
+        if !hints.fill_width {
+            self.width = grow(self.width, size.width);
+        }
+        if !hints.fill_height {
+            self.height = grow(self.height, size.height);
+        }
+    }
+
+    /// These leaders, and `others` on an axis none of these led.
+    fn or(self, others: Self) -> Self {
+        Self {
+            width: self.width.or(others.width),
+            height: self.height.or(others.height),
+        }
     }
 }
 
@@ -402,6 +443,172 @@ mod tests {
         assert_eq!(frame(&mut tree), Size::new(10.0, 10.0));
         shown.set(false);
         assert_eq!(frame(&mut tree), Size::new(400.0, 200.0));
+    }
+
+    /// `widget`, with a 300 ms fade to play when it is removed.
+    fn fading(widget: crate::widgets::Container) -> crate::widgets::Container {
+        use crate::animation::{Animate, TimingFunction, Transition};
+        widget.opacity(
+            1.0f32
+                .transition(Transition::new(300.0, TimingFunction::Linear))
+                .exiting_to(0.0f32),
+        )
+    }
+
+    /// A box of `width` × `height` that fades out when it is removed.
+    fn leaving(width: f32, height: f32) -> crate::widgets::Container {
+        fading(container().width(width).height(height))
+    }
+
+    /// Ask the root's `index`th child what the reconciler asks it, inside a
+    /// frame, and lay the stack out again at `constraints`.
+    fn reconcile_child(
+        tree: &mut Tree,
+        root: WidgetId,
+        index: usize,
+        constraints: Constraints,
+        ask: impl FnOnce(&mut dyn crate::widgets::Widget, WidgetId, &mut Tree),
+    ) {
+        let child = tree.get_children(root)[index];
+        tree.set_frame_instant(Some(std::time::Instant::now()));
+        tree.with_widget_mut(child, |w, id, t| ask(w, id, t));
+        tree.set_frame_instant(None);
+        tree.mark_needs_layout(root);
+        tree.layout_widget(root, constraints);
+    }
+
+    /// Begin the exit of the root's `index`th child, as the reconciler does
+    /// when its key goes.
+    fn leave(tree: &mut Tree, root: WidgetId, index: usize, constraints: Constraints) {
+        reconcile_child(tree, root, index, constraints, |w, id, t| {
+            assert!(w.begin_exit(t, id), "the child declares an exit");
+        });
+    }
+
+    /// A child on its way out does not hold the stack open: the stack is the
+    /// size of the child that stays, and the leaving one keeps its own size,
+    /// placed by the stack's alignment against the stack's new size.
+    #[test]
+    fn a_leaving_child_does_not_lead_the_size() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (mut tree, id) = layout_root(
+            container()
+                .layout(ZStack::new().align(Alignment::TOP_CENTER))
+                .child(leaving(300.0, 40.0))
+                .child(container().width(100).height(30)),
+            offered,
+        );
+        assert_eq!(tree.cached_size(id), Some(Size::new(300.0, 40.0)));
+
+        leave(&mut tree, id, 0, offered);
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(300.0, 40.0));
+        assert_eq!(
+            tree.get_origin(tree.get_children(id)[0]),
+            Some((-100.0, 0.0))
+        );
+        assert_eq!(
+            tree.minimum(id),
+            Some(Size::new(100.0, 30.0)),
+            "and it holds no minimum open either"
+        );
+    }
+
+    /// With nothing staying, what is leaving is all there is to be sized by:
+    /// the stack keeps its size, so the view fades out where it was.
+    #[test]
+    fn a_stack_whose_only_children_are_leaving_keeps_its_size() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (mut tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(fill()).height(fill()))
+                .child(leaving(300.0, 40.0)),
+            offered,
+        );
+        leave(&mut tree, id, 1, offered);
+        assert_eq!(tree.cached_size(id), Some(Size::new(300.0, 40.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(300.0, 40.0));
+        assert_eq!(tree.minimum(id), Some(Size::new(300.0, 40.0)));
+    }
+
+    /// The fallback is per axis: a staying child that fills the height leads
+    /// only the width, so the leaving one still leads the height.
+    #[test]
+    fn a_leaving_child_leads_only_the_axis_nothing_staying_leads() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (mut tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(leaving(300.0, 40.0))
+                .child(container().width(100).height(fill())),
+            offered,
+        );
+        leave(&mut tree, id, 0, offered);
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 40.0)));
+        assert_eq!(child_size(&tree, id, 1), Size::new(100.0, 40.0));
+    }
+
+    /// A leaving follower still follows: a background on its way out shrinks
+    /// with the stack rather than holding the size it had.
+    #[test]
+    fn a_leaving_follower_follows_the_new_size() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (mut tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(fading(container().width(fill()).height(fill())))
+                .child(leaving(300.0, 40.0))
+                .child(container().width(100).height(30)),
+            offered,
+        );
+        assert_eq!(child_size(&tree, id, 0), Size::new(300.0, 40.0));
+        leave(&mut tree, id, 0, offered);
+        leave(&mut tree, id, 1, offered);
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(100.0, 30.0));
+    }
+
+    /// A child whose exit is cancelled is staying again, and leads again.
+    #[test]
+    fn a_child_whose_exit_is_cancelled_leads_again() {
+        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
+        let (mut tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(leaving(300.0, 40.0))
+                .child(container().width(100).height(30)),
+            offered,
+        );
+        leave(&mut tree, id, 0, offered);
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
+
+        reconcile_child(&mut tree, id, 0, offered, |w, id, t| w.cancel_exit(t, id));
+        assert_eq!(tree.cached_size(id), Some(Size::new(300.0, 40.0)));
+    }
+
+    /// Any widget that is exiting is leaving, not only a container: the
+    /// default hints say so, so a widget of its own needs nothing more.
+    #[test]
+    fn a_widget_of_its_own_that_is_exiting_does_not_lead() {
+        struct Exiting;
+        impl crate::widgets::Widget for Exiting {
+            fn layout(&mut self, _: &mut LayoutCtx, _: Constraints) -> Size {
+                Size::new(300.0, 40.0)
+            }
+            fn paint(&self, _: &mut crate::renderer::PaintContext) {}
+            fn is_exiting(&self) -> bool {
+                true
+            }
+        }
+        let (tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(Exiting)
+                .child(container().width(100).height(30)),
+            Constraints::new(0.0, 0.0, 400.0, 400.0),
+        );
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
     }
 
     /// A visible child that measures nothing still leads: being empty is not
