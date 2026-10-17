@@ -622,6 +622,15 @@ pub struct Modifiers {
     pub caps_lock: bool,
 }
 
+impl Modifiers {
+    /// Whether Ctrl, Alt or Super is held: the key is a shortcut, and what a
+    /// key does by default — Tab moving the focus, Page Down paging — is not
+    /// what it asks for.
+    pub(crate) fn holds_a_shortcut(&self) -> bool {
+        self.ctrl || self.alt || self.logo
+    }
+}
+
 /// Named keys for special keyboard keys
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {

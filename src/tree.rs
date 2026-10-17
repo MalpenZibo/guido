@@ -1699,7 +1699,7 @@ impl Tree {
                 modifiers,
                 ..
             } = event
-            && !(modifiers.ctrl || modifiers.alt || modifiers.logo)
+            && !modifiers.holds_a_shortcut()
         {
             let from = focus.widget().filter(|_| focus.root() == Some(root));
             if let Some(next) = self.next_tab_stop(root, from, modifiers.shift) {
