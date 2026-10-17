@@ -1072,6 +1072,10 @@ pub struct LayoutHints {
     /// Hidden, as CSS's `display: none`: it takes no space, so a parent that
     /// sizes itself from its children leaves it out.
     pub hidden: bool,
+    /// Where it sits in its parent, where it says so itself, as CSS's
+    /// `align-self`. A [`ZStack`](crate::layout::ZStack) reads it in place of
+    /// its own alignment.
+    pub align_self: Option<crate::layout::Alignment>,
 }
 
 /// Where a widget draws itself and its children, against where it was laid

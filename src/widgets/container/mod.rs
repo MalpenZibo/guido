@@ -26,7 +26,7 @@ use std::rc::Rc;
 use crate::animation::{Animatable, IntoAnimated, Motion};
 use crate::backdrop::BackdropBlur;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
-use crate::layout::{Axis, Constraints, Flex, Layout, Length, Size};
+use crate::layout::{Alignment, Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
@@ -228,7 +228,8 @@ pub(super) struct LayerProps {
 /// half at 12 bytes, so it stays where it is. `merge_children` is small and
 /// rarer than either, and lives here because `Container` has no room left for
 /// a field of any size. The outline's three halves are here for the same
-/// reason: a focus ring is declared on a control or two per screen.
+/// reason: a focus ring is declared on a control or two per screen, and so is
+/// `align_self`, which only a stack's badge or overlay declares.
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
@@ -237,6 +238,7 @@ pub(super) struct DecorationProps {
     pub(super) outline_width: Prop<f32>,
     pub(super) outline_color: Prop<Color>,
     pub(super) outline_offset: Prop<f32>,
+    pub(super) align_self: Prop<Alignment>,
 }
 
 bitflags::bitflags! {
@@ -743,6 +745,12 @@ impl Container {
         self.decoration
             .as_deref()
             .map_or(Prop::Unset, |d| d.outline_offset)
+    }
+
+    pub(super) fn align_self_prop(&self) -> Prop<Alignment> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.align_self)
     }
 
     pub(super) fn merge_children_prop(&self) -> Prop<f32> {
@@ -1512,6 +1520,34 @@ impl Container {
         self
     }
 
+    /// Where this container sits in a [`ZStack`](crate::layout::ZStack), in
+    /// place of the alignment the stack gives every child — CSS's
+    /// `align-self`.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// container()
+    ///     .layout(ZStack::new().align(Alignment::CENTER))
+    ///     .child(container().width(40).height(40).background(Color::BLUE))
+    ///     // A badge on the top-right corner of the centred square
+    ///     .child(
+    ///         container()
+    ///             .width(8)
+    ///             .height(8)
+    ///             .corners(4)
+    ///             .background(Color::RED)
+    ///             .align_self(Alignment::TOP_END),
+    ///     );
+    /// ```
+    ///
+    /// Only a `ZStack` reads it; any other layout places the container as it
+    /// always does.
+    pub fn align_self<M>(mut self, alignment: impl IntoSignal<Alignment, M>) -> Self {
+        self.decoration_mut().align_self = alignment.into_prop();
+        self
+    }
+
     /// Displace this container from where it was laid out.
     ///
     /// In logical pixels, or in fractions of the container's own size with
@@ -2008,6 +2044,7 @@ impl Widget for Container {
             fill_width: self.width.get_or_untracked(Length::default()).is_fill(),
             fill_height: self.height.get_or_untracked(Length::default()).is_fill(),
             hidden: false,
+            align_self: self.align_self_prop().get_untracked(),
         }
     }
 
@@ -2018,6 +2055,10 @@ impl Widget for Container {
             ctx.tree().set_relayout_boundary(id, true);
             return Size::zero();
         }
+        // The parent places this container by it, through `layout_hints`,
+        // which subscribes to nothing: this read is what lays the parent out
+        // again when it changes.
+        let _ = self.align_self_prop().get();
 
         // Before `ensure_scrollbar_containers`, which reads the resolved
         // visibility to decide whether to build the parts at all — and before

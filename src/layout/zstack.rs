@@ -47,9 +47,10 @@ use super::{Alignment, Constraints, Layout, Size};
 ///
 /// # Positioning
 ///
-/// Every child is placed by the stack's [`Alignment`], set with
-/// [`align`](Self::align). It defaults to the top start, so a stack that says
-/// nothing puts every child at its origin.
+/// Every child is placed by an [`Alignment`]: the stack's own, set with
+/// [`align`](Self::align), or one the child declares for itself with
+/// [`align_self`](crate::widgets::Container::align_self). Both default to
+/// the top start, so a stack that says nothing puts every child at its origin.
 ///
 /// ```
 /// use guido::prelude::*;
@@ -59,7 +60,16 @@ use super::{Alignment, Constraints, Layout, Size};
 ///     // Leads: the stack is as big as this, and it fills the stack
 ///     .child(container().width(40).height(40).background(Color::BLUE))
 ///     // Centred over it, as the stack says
-///     .child(text("3"));
+///     .child(text("3"))
+///     // A badge on the top-right corner, as it says itself
+///     .child(
+///         container()
+///             .width(8)
+///             .height(8)
+///             .corners(4)
+///             .background(Color::RED)
+///             .align_self(Alignment::TOP_END),
+///     );
 /// ```
 ///
 /// A child narrower than the stack has free space to be placed in, and the
@@ -81,7 +91,9 @@ impl ZStack {
         Self::default()
     }
 
-    /// Where every child sits in the stack. Top start by default.
+    /// Where every child sits in the stack, unless it declares its own with
+    /// [`align_self`](crate::widgets::Container::align_self). Top start by
+    /// default.
     pub fn align<M>(mut self, alignment: impl IntoSignal<Alignment, M>) -> Self {
         self.align = alignment.into_prop();
         self
@@ -204,9 +216,12 @@ impl Layout for ZStack {
         // own: the stack is as small as the largest of them can be.
         let stack_align = self.align.get_or(Alignment::default());
         let mut least = Size::zero();
-        for &child_id in children.iter() {
+        for (i, &child_id) in children.iter().enumerate() {
             let child_size = ctx.tree_ref().cached_size(child_id).unwrap_or_default();
-            let (dx, dy) = stack_align.offset(size, child_size);
+            let (dx, dy) = self.hints[i]
+                .align_self
+                .unwrap_or(stack_align)
+                .offset(size, child_size);
             ctx.tree()
                 .set_origin(child_id, origin.0 + dx, origin.1 + dy);
             let child = ctx.tree_ref().minimum(child_id).unwrap_or_default();
@@ -472,8 +487,24 @@ mod tests {
         }
     }
 
-    /// The stack's alignment is a property like any other: a write moves
-    /// its children on the next frame.
+    /// The alignment a child declares is a property like any other: a write
+    /// moves the child on the next frame.
+    #[test]
+    fn a_child_moves_when_its_own_alignment_changes() {
+        let alignment = crate::reactive::create_signal(Alignment::TOP_START);
+        let mut frame = first_child_per_frame(
+            container()
+                .width(100)
+                .height(60)
+                .layout(ZStack::new())
+                .child(container().width(40).height(20).align_self(alignment)),
+        );
+        assert_eq!(frame(), (0.0, 0.0));
+        alignment.set(Alignment::BOTTOM_END);
+        assert_eq!(frame(), (60.0, 40.0));
+    }
+
+    /// And so is the stack's.
     #[test]
     fn a_stack_moves_its_children_when_its_alignment_changes() {
         let alignment = crate::reactive::create_signal(Alignment::TOP_START);

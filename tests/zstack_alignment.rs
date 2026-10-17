@@ -1,4 +1,5 @@
-//! A `ZStack` places each child by an alignment (#781).
+//! A `ZStack` places each child by an alignment: the stack's own, or the one
+//! the child declares for itself (#781).
 //!
 //! Every case is a 100×60 stack, so the free space on each axis is the
 //! stack's size less the child's, and an alignment takes a share of it: none
@@ -73,6 +74,20 @@ fn a_stack_that_declares_nothing_aligns_to_the_top_start() {
     assert_eq!(
         child_at(stack(ZStack::new(), container().width(40.0).height(20.0))),
         (0.0, 0.0)
+    );
+}
+
+#[test]
+fn a_child_that_declares_its_own_alignment_overrides_the_stacks() {
+    assert_eq!(
+        child_at(stack(
+            ZStack::new().align(Alignment::CENTER),
+            container()
+                .width(40.0)
+                .height(20.0)
+                .align_self(Alignment::BOTTOM_END),
+        )),
+        (60.0, 40.0)
     );
 }
 

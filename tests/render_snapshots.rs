@@ -1116,6 +1116,43 @@ fn a_dynamic_zstack_follower_fills_like_a_static_one() {
     );
 }
 
+/// A stack that aligns its children (#781): centred by the stack, a badge on
+/// the top-end corner and a tag on the bottom-start one by their own
+/// `align_self`, and a background that follows the stack's size and so stays
+/// where the stack is. A second stack sends its child to the bottom centre.
+#[test]
+fn an_aligned_stack_places_each_child_by_its_alignment() {
+    let view = container()
+        .layout(Flex::row().spacing(20.0))
+        .padding(20.0)
+        .child(
+            box_of(200.0, 100.0)
+                .layout(ZStack::new().align(Alignment::CENTER))
+                .child(
+                    container()
+                        .width(fill())
+                        .height(fill())
+                        .background(Color::WHITE),
+                )
+                .child(swatch(60.0, 30.0, Color::BLUE))
+                .child(swatch(12.0, 12.0, Color::RED).align_self(Alignment::TOP_END))
+                .child(swatch(40.0, 10.0, Color::GREEN).align_self(Alignment::BOTTOM_START)),
+        )
+        .child(
+            box_of(40.0, 100.0)
+                .layout(ZStack::new().align(Alignment::BOTTOM_CENTER))
+                .child(
+                    container()
+                        .width(fill())
+                        .height(fill())
+                        .background(Color::WHITE),
+                )
+                .child(swatch(20.0, 20.0, Color::BLUE)),
+        );
+
+    assert_snapshot("an_aligned_stack", render(view, 400.0, 200.0));
+}
+
 /// A `Flex` row of `[100, fill, 50]` in 400: the fill takes the 250 left over,
 /// whether it was added as a widget or as a closure.
 ///
