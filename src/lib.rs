@@ -578,7 +578,7 @@ fn measure_natural_size(
     fixed_h: Option<u32>,
     surface: SurfaceId,
 ) -> (u32, u32) {
-    let output_size = outputs::surface_output(surface)
+    let output_size = outputs::current_surface_output(surface)
         .and_then(|oid| {
             outputs::current_outputs()
                 .into_iter()

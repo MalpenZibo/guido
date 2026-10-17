@@ -99,6 +99,31 @@ fn diagnostics_from_full_lifecycle(widget: impl Widget + 'static) -> u64 {
     report_count() - before
 }
 
+/// What the loop does to a content-sized surface (and an auto-height popup)
+/// before laying it out: measure its natural size, capped by the output it is
+/// shown on. That runs in the main loop, where nothing tracks, so whichever
+/// output it asks about it has to ask as a snapshot.
+fn diagnostics_from_measuring_a_surface(widget: impl Widget + 'static) -> u64 {
+    let before = report_count();
+
+    let mut tree = Tree::new();
+    let root = tree.register(Box::new(widget));
+    tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+    // Inside the frame, as `layout_pass` measures it: the instant is the one
+    // `render_surface` declared before the layout pass.
+    tree.set_frame_instant(Some(std::time::Instant::now()));
+    crate::measure_natural_size(
+        &mut tree,
+        root,
+        None,
+        None,
+        crate::surface::SurfaceId::next(),
+    );
+
+    report_count() - before
+}
+
 #[track_caller]
 fn assert_quiet(what: &str, count: u64) {
     assert_eq!(
@@ -333,4 +358,15 @@ fn an_image_is_quiet() {
         }));
 
     assert_quiet("an image", diagnostics_from_full_lifecycle(widget));
+}
+
+#[test]
+fn measuring_a_content_sized_surface_is_quiet() {
+    let n = create_signal(0.0f32);
+    let widget = container().padding(move || n.get()).child(text("toast"));
+
+    assert_quiet(
+        "measuring a content-sized surface",
+        diagnostics_from_measuring_a_surface(widget),
+    );
 }
