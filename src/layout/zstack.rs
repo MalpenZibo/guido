@@ -1,11 +1,12 @@
 //! ZStack layout that stacks children on top of each other.
 
+use crate::reactive::{IntoSignal, Prop};
 #[cfg(test)]
 use crate::tree::Tree;
 use crate::tree::{LayoutCtx, WidgetId};
 use crate::widgets::LayoutHints;
 
-use super::{Constraints, Layout, Size};
+use super::{Alignment, Constraints, Layout, Size};
 
 /// Layout that places all children at the same position, stacking them along
 /// the Z axis. Later children appear on top, and a pointer event is offered to
@@ -46,27 +47,41 @@ use super::{Constraints, Layout, Size};
 ///
 /// # Positioning
 ///
-/// Every child is placed at the stack's origin. To align a follower inside
-/// the stack, give it `fill()` on both axes and let its own layout do the
-/// positioning:
+/// Every child is placed by an [`Alignment`]: the stack's own, set with
+/// [`align`](Self::align), or one the child declares for itself with
+/// [`align_self`](crate::widgets::Container::align_self). The stack's is the
+/// top start until it says otherwise, and a child that says nothing takes the
+/// stack's — so a stack nobody aligns puts every child at its origin.
 ///
 /// ```
 /// use guido::prelude::*;
 ///
 /// container()
-///     .layout(ZStack::new())
-///     .child(text("content"))
-///     // Badge pinned to the top-right corner of the content
+///     .layout(ZStack::new().align(Alignment::CENTER))
+///     // Leads: the stack is as big as this, and it fills the stack
+///     .child(container().width(40).height(40).background(Color::BLUE))
+///     // Centred over it, as the stack says
+///     .child(text("3"))
+///     // A badge on the top-right corner, as it says itself
 ///     .child(
 ///         container()
-///             .width(fill())
-///             .height(fill())
-///             .layout(Flex::row().main_alignment(MainAlignment::End))
-///             .child(container().width(4).height(4).corners(2)),
+///             .width(8)
+///             .height(8)
+///             .corners(4)
+///             .background(Color::RED)
+///             .align_self(Alignment::TOP_END),
 ///     );
 /// ```
+///
+/// A child narrower than the stack has free space to be placed in, and the
+/// alignment says where; a child that follows the stack on an axis is laid out
+/// at the stack's size there, so it has none and stays where the stack is. A
+/// child larger than the stack on an axis is shared out the same way, so
+/// `CENTER` overhangs both edges equally, as Flutter's `Stack` and SwiftUI's
+/// `ZStack` do.
 #[derive(Default)]
 pub struct ZStack {
+    align: Prop<Alignment>,
     /// Scratch buffer for per-child fill hints, reused across layouts.
     hints: Vec<LayoutHints>,
 }
@@ -75,6 +90,14 @@ impl ZStack {
     /// Create a new z-stack layout
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Where every child sits in the stack, unless it declares its own with
+    /// [`align_self`](crate::widgets::Container::align_self). Top start by
+    /// default.
+    pub fn align<M>(mut self, alignment: impl IntoSignal<Alignment, M>) -> Self {
+        self.align = alignment.into_prop();
+        self
     }
 }
 
@@ -187,11 +210,21 @@ impl Layout for ZStack {
             ctx.layout_child(child_id, child_constraints);
         }
 
+        // A follower was laid out at the stack's size on the axes it fills,
+        // so there is no free space for its alignment to share there.
+        //
         // The children are drawn over one another, so each needs all of its
         // own: the stack is as small as the largest of them can be.
+        let stack_align = self.align.get_or(Alignment::default());
         let mut least = Size::zero();
-        for &child_id in children.iter() {
-            ctx.tree().set_origin(child_id, origin.0, origin.1);
+        for (i, &child_id) in children.iter().enumerate() {
+            let child_size = ctx.tree_ref().cached_size(child_id).unwrap_or_default();
+            let (dx, dy) = self.hints[i]
+                .align_self
+                .unwrap_or(stack_align)
+                .offset(size, child_size);
+            ctx.tree()
+                .set_origin(child_id, origin.0 + dx, origin.1 + dy);
             let child = ctx.tree_ref().minimum(child_id).unwrap_or_default();
             least.width = least.width.max(child.width);
             least.height = least.height.max(child.height);
@@ -205,7 +238,7 @@ impl Layout for ZStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Flex, fill};
+    use crate::layout::{Alignment, Flex, fill};
     use crate::widgets::container;
 
     /// Lay out `widget` and return the tree plus the root id.
@@ -440,5 +473,51 @@ mod tests {
 
         assert_eq!(tree.cached_size(id), Some(Size::new(80.0, 20.0)));
         assert_eq!(child_size(&tree, id, 0), Size::new(80.0, 20.0));
+    }
+
+    /// Lay `root` out at 400×400 a frame at a time, pumping what a write
+    /// scheduled, and answer where its first child is.
+    fn first_child_per_frame(root: crate::widgets::Container) -> impl FnMut() -> (f32, f32) {
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(root));
+        tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
+        move || {
+            crate::jobs::pump_and_layout(&mut tree, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
+                .expect("the root is registered");
+            tree.get_origin(tree.get_children(id)[0]).expect("laid out")
+        }
+    }
+
+    /// The alignment a child declares is a property like any other: a write
+    /// moves the child on the next frame.
+    #[test]
+    fn a_child_moves_when_its_own_alignment_changes() {
+        let alignment = crate::reactive::create_signal(Alignment::TOP_START);
+        let mut frame = first_child_per_frame(
+            container()
+                .width(100)
+                .height(60)
+                .layout(ZStack::new())
+                .child(container().width(40).height(20).align_self(alignment)),
+        );
+        assert_eq!(frame(), (0.0, 0.0));
+        alignment.set(Alignment::BOTTOM_END);
+        assert_eq!(frame(), (60.0, 40.0));
+    }
+
+    /// And so is the stack's.
+    #[test]
+    fn a_stack_moves_its_children_when_its_alignment_changes() {
+        let alignment = crate::reactive::create_signal(Alignment::TOP_START);
+        let mut frame = first_child_per_frame(
+            container()
+                .width(100)
+                .height(60)
+                .layout(ZStack::new().align(alignment))
+                .child(container().width(40).height(20)),
+        );
+        assert_eq!(frame(), (0.0, 0.0));
+        alignment.set(Alignment::CENTER);
+        assert_eq!(frame(), (30.0, 20.0));
     }
 }

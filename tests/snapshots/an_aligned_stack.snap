@@ -1,0 +1,15 @@
+node 0,0 300x140
+  node 0,0 200x100 at 20,20
+    node 0,0 200x100
+      draw rect 0,0 200x100 fill=#ffffffff radius=0/0/0/0
+    node 0,0 60x30 at 70,35
+      draw rect 0,0 60x30 fill=#0000ffff radius=0/0/0/0
+    node 0,0 12x12 at 188,0
+      draw rect 0,0 12x12 fill=#ff0000ff radius=0/0/0/0
+    node 0,0 40x10 at 0,90
+      draw rect 0,0 40x10 fill=#00ff00ff radius=0/0/0/0
+  node 0,0 40x100 at 240,20
+    node 0,0 40x100
+      draw rect 0,0 40x100 fill=#ffffffff radius=0/0/0/0
+    node 0,0 20x20 at 10,80
+      draw rect 0,0 20x20 fill=#0000ffff radius=0/0/0/0

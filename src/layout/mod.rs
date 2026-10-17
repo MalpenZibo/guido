@@ -411,6 +411,55 @@ pub enum CrossAlignment {
     Baseline,
 }
 
+/// Where a child sits inside a box larger or smaller than itself, on both
+/// axes at once: what a [`ZStack`] places its children by.
+///
+/// Each axis is a share of the free space — the box's size less the child's
+/// — from `-1.0` at the start to `1.0` at the end, as Flutter's `Alignment`
+/// and Compose's `BiasAlignment` spell it. Start is the left and the top.
+/// A child larger than the box leaves negative free space, and the same share
+/// of it is an overhang: `CENTER` puts a child 40 pixels too wide 20 past
+/// each side, `CENTER_END` all 40 past the start.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Alignment {
+    x: f32,
+    y: f32,
+}
+
+impl Alignment {
+    pub const TOP_START: Self = Self::new(-1.0, -1.0);
+    pub const TOP_CENTER: Self = Self::new(0.0, -1.0);
+    pub const TOP_END: Self = Self::new(1.0, -1.0);
+    pub const CENTER_START: Self = Self::new(-1.0, 0.0);
+    pub const CENTER: Self = Self::new(0.0, 0.0);
+    pub const CENTER_END: Self = Self::new(1.0, 0.0);
+    pub const BOTTOM_START: Self = Self::new(-1.0, 1.0);
+    pub const BOTTOM_CENTER: Self = Self::new(0.0, 1.0);
+    pub const BOTTOM_END: Self = Self::new(1.0, 1.0);
+
+    const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    /// How far from the box's origin a child of `child` size sits in a box
+    /// of `outer` size.
+    pub(crate) fn offset(self, outer: Size, child: Size) -> (f32, f32) {
+        let share = |bias: f32, free: f32| free * (bias + 1.0) / 2.0;
+        (
+            share(self.x, outer.width - child.width),
+            share(self.y, outer.height - child.height),
+        )
+    }
+}
+
+/// Top start, which is where a box's content sits until something says
+/// otherwise.
+impl Default for Alignment {
+    fn default() -> Self {
+        Self::TOP_START
+    }
+}
+
 // Every conversion a length accepts, declared once: the closure form and the
 // three signal forms. The value form is the `From` above. See
 // `reactive::into_signal` for why the signal forms name their source type, and

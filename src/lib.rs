@@ -214,8 +214,8 @@ pub mod prelude {
     pub use crate::compositor::{CompositorEffects, compositor_effects};
     pub use crate::keyboard::keyboard_modifiers;
     pub use crate::layout::{
-        Axis, CrossAlignment, Flex, Length, MainAlignment, Size, ZStack, at_least, at_most, fill,
-        fraction,
+        Alignment, Axis, CrossAlignment, Flex, Length, MainAlignment, Size, ZStack, at_least,
+        at_most, fill, fraction,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};

@@ -132,9 +132,10 @@ pub trait Layout {
 
 Built-in implementations:
 - `Flex` - Flexbox-style row/column layout with spacing and alignment
-- `ZStack` - Children share an origin and stack along the Z axis. Children
-  that don't `fill()` an axis lead it (the stack takes their size); children
-  that do fill it follow, laid out against the size the others established
+- `ZStack` - Children stack along the Z axis, each placed by an `Alignment` —
+  the stack's, or the child's own `align_self`. Children that don't `fill()`
+  an axis lead it (the stack takes their size); children that do fill it
+  follow, laid out against the size the others established
 
 ### `renderer/` - GPU Rendering
 
@@ -536,8 +537,9 @@ pub trait Widget {
     /// children by. What a `WidgetRef`'s rect is composed from. Hidden from
     /// the docs.
     fn placement(&self, tree: &Tree, id: WidgetId) -> Placement { Placement::NONE }
-    /// Whether it fills its parent's width or height, and whether it is
-    /// hidden, asked by `Flex` and `ZStack` before they lay it out.
+    /// Whether it fills its parent's width or height, whether it is hidden,
+    /// and the alignment it declares for itself, asked by `Flex` and `ZStack`
+    /// before they lay it out.
     fn layout_hints(&self) -> LayoutHints { LayoutHints::default() }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;

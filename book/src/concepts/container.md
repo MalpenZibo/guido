@@ -142,7 +142,7 @@ container()
 # }
 ```
 
-See [Layout](layout.md) for details on flex layouts.
+See [Layout](layout.md) for details on flex layouts and stacks.
 
 ## Event Handling
 
@@ -475,6 +475,8 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 ### Layout
 - `.layout(Flex::row())` - Horizontal layout
 - `.layout(Flex::column())` - Vertical layout
+- `.layout(ZStack::new().align(Alignment::CENTER))` - Children stacked, centred
+- `.align_self(Alignment::TOP_END)` - Where this one sits in a `ZStack`
 
 ### Events
 - `.on_click(handler)` - Click events
