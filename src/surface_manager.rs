@@ -6,11 +6,12 @@
 use rustc_hash::FxHashMap;
 
 use crate::layout::Constraints;
-use crate::reactive::owner::{OwnerId, dispose_owner_now};
+use crate::reactive::owner::{OwnerId, dispose_owner_now, with_owner};
+use crate::reactive::provide_context;
 use crate::renderer::{
     CommandLayer, FlattenScratch, FlattenedCommand, GpuContext, RenderNode, RenderTarget,
 };
-use crate::surface::{SurfaceConfig, SurfaceId};
+use crate::surface::{SurfaceConfig, SurfaceId, surface_handle};
 use crate::tree::{Tree, WidgetId};
 use crate::widgets::{Rect, Widget};
 use crate::{Platform, Surface};
@@ -69,9 +70,27 @@ pub struct ManagedSurface {
 }
 
 impl ManagedSurface {
+    /// Build a surface's widget tree in a scope of its own, owning what the
+    /// factory creates, and declaring the surface's [`SurfaceHandle`] there so
+    /// the tree can reach the surface it is in.
+    ///
+    /// [`SurfaceHandle`]: crate::surface::SurfaceHandle
+    pub fn build(
+        id: SurfaceId,
+        config: SurfaceConfig,
+        widget_fn: impl FnOnce() -> Box<dyn Widget>,
+        tree: &mut Tree,
+    ) -> Self {
+        let (widget, owner_id) = with_owner(|| {
+            provide_context(surface_handle(id));
+            widget_fn()
+        });
+        Self::new(id, config, widget, owner_id, tree)
+    }
+
     /// Create a new managed surface (wgpu_surface is None until GPU init).
     /// The root widget and its children are registered in the tree.
-    pub fn new(
+    fn new(
         id: SurfaceId,
         config: SurfaceConfig,
         widget: Box<dyn Widget>,
