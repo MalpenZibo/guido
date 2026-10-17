@@ -2091,21 +2091,31 @@ impl Widget for Container {
         self.seed_animations(ctx, id);
 
         let lengths = self.read_box_lengths(ctx, id, constraints);
-        let child = self.child_layout(ctx, &lengths, constraints);
+        let mut child = self.child_layout(ctx, &lengths, constraints);
         let padding = lengths.padding;
 
-        let children = self.children_source.reconcile_and_get(ctx.tree());
+        self.children_source.reconcile_and_get(ctx.tree());
+        let mut content_size = self.lay_out_children(ctx, &child);
 
-        // A layout reads its own reactive properties — Flex's spacing and
-        // alignment, whatever a user-written `Layout` declares — and those
-        // reads belong to this container, which is whose scope the call is
-        // already inside.
-        let content_size = if !children.is_empty() {
-            self.layout
-                .layout(ctx, children, child.constraints, child.origin)
-        } else {
-            Size::zero()
-        };
+        // The content just measured is where a size in flight is heading, and
+        // only that: nothing below this feeds back into the target.
+        self.update_size_targets(ctx, id, &lengths, content_size);
+
+        // A content-sized axis in flight has a box the children were not laid
+        // out in, so they are laid out again in the one it has on this frame,
+        // and that placement stands: what the box reports below — its minimum,
+        // baseline, scroll extents, and its size on an axis not in flight — is
+        // of the content as it is now. Only while something is in flight, and
+        // only where the content does not already fill that box exactly.
+        if let Some(in_flight) = self.lengths_in_flight(ctx, &lengths) {
+            let frame = self.child_layout(ctx, &in_flight, constraints);
+            if frame.constraints.constrain(content_size) != content_size {
+                ctx.forget_minimum();
+                content_size = self.lay_out_children(ctx, &frame);
+                child = frame;
+            }
+        }
+        let children = self.children_source.get();
 
         // A box sits on the baseline of its content, as CSS has it: without
         // this a styled label reports nothing, and a parent aligning on the
@@ -2132,8 +2142,6 @@ impl Widget for Container {
             sd.scroll_state.viewport_height = child.seen_through.height;
             sd.scroll_state.clamp_offsets();
         }
-
-        self.update_size_targets(ctx, id, &lengths, content_size);
 
         let size = self.resolve_size(ctx, &lengths, constraints, content_size);
         // What the layout recorded its children can be arranged in, or — a

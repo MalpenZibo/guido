@@ -169,7 +169,12 @@ container()
 ```
 
 A size follows the content it holds as well as the length declared here, so the
-animation is over the resolved extent. These are the one pair that cannot carry
+animation is over the resolved extent. What the box holds is laid out in the
+box as it is on each frame, as CSS's `interpolate-size` has it, so a centred
+child stays centred while a box that sizes to its content grows or shrinks
+toward it. Content that is not [`natural()`](../concepts/layout.md#natural-size)
+is laid out in that box too, and a label in it may wrap differently until the
+box arrives. These are the one pair that cannot carry
 a timeline: they declare a `Length`, which is not an animatable value in itself.
 
 ## Position

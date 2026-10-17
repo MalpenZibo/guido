@@ -34,6 +34,7 @@ use crate::layout::{Axis, Extent};
 use crate::tree::LayoutCtx;
 
 /// The container's own size declarations, resolved for one layout pass.
+#[derive(Clone, Copy)]
 pub(super) struct BoxLengths {
     pub padding: Padding,
     /// The border's width: room the box keeps inside its edge, as CSS's
@@ -174,7 +175,9 @@ impl Container {
     /// in-flight value so alignment tracks the box as it glides. A shrink-to-fit
     /// length keeps using the declared value instead: feeding the animated size
     /// back in would make the content define the target that defines the
-    /// content.
+    /// content. Its in-flight value reaches the children in a second layout,
+    /// through [`lengths_in_flight`](Self::lengths_in_flight), once the first
+    /// has set the target.
     ///
     /// Everything outside the running-animation case falls through to the same
     /// answer, cap included: what children are offered must not depend on
@@ -337,6 +340,56 @@ impl Container {
         }
     }
 
+    /// Lay the children out into `child`, and answer with the content's size.
+    ///
+    /// A layout reads its own reactive properties — Flex's spacing and
+    /// alignment, whatever a user-written `Layout` declares — and those reads
+    /// belong to this container, which is whose scope the call is already
+    /// inside.
+    pub(super) fn lay_out_children(&mut self, ctx: &mut LayoutCtx, child: &ChildLayout) -> Size {
+        let children = self.children_source.get();
+        if children.is_empty() {
+            return Size::zero();
+        }
+        self.layout
+            .layout(ctx, children, child.constraints, child.origin)
+    }
+
+    /// The lengths this box has on this frame, where a content-sized axis is
+    /// in flight: that axis held where the animation has it, as an exact
+    /// length is held. `None` where no such axis is in flight.
+    ///
+    /// What the children are laid out in a second time, once the first layout
+    /// has measured the content and set the target from it — the CSS
+    /// `interpolate-size` model, where the box animates between two content
+    /// sizes and what is inside is laid out in the box as it is. A scrolled
+    /// axis is left alone: its children are never laid out against the box.
+    pub(super) fn lengths_in_flight(
+        &self,
+        ctx: &mut LayoutCtx,
+        lengths: &BoxLengths,
+    ) -> Option<BoxLengths> {
+        // A measure reads where the size is going, which is what the content
+        // was just laid out for.
+        if ctx.measuring() {
+            return None;
+        }
+        let mut in_flight = |axis: Axis, length: Length| {
+            if length.exact_size().is_some() || self.scrolls(axis) {
+                return None;
+            }
+            let anim = self.size_anim(axis).filter(|a| a.is_animating())?;
+            Some(length.held_at(anim.displayed_in(ctx)))
+        };
+        let width = in_flight(Axis::Horizontal, lengths.width);
+        let height = in_flight(Axis::Vertical, lengths.height);
+        (width.is_some() || height.is_some()).then(|| BoxLengths {
+            width: width.unwrap_or(lengths.width),
+            height: height.unwrap_or(lengths.height),
+            ..*lengths
+        })
+    }
+
     /// The container's final size, given what its content measured.
     pub(super) fn resolve_size(
         &self,
@@ -427,11 +480,15 @@ impl Container {
     /// Whether what this box holds may run past it along `axis` — cut off, or
     /// scrolled to — so that the box need not be as long as its content.
     fn content_may_overflow(&self, axis: Axis, overflow: Overflow) -> bool {
-        overflow == Overflow::Hidden
-            || match axis {
-                Axis::Horizontal => self.scroll_axis.allows_horizontal(),
-                Axis::Vertical => self.scroll_axis.allows_vertical(),
-            }
+        overflow == Overflow::Hidden || self.scrolls(axis)
+    }
+
+    /// Whether this box scrolls along `axis`.
+    fn scrolls(&self, axis: Axis) -> bool {
+        match axis {
+            Axis::Horizontal => self.scroll_axis.allows_horizontal(),
+            Axis::Vertical => self.scroll_axis.allows_vertical(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
