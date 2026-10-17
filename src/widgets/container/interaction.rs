@@ -529,7 +529,7 @@ impl Container {
                 {
                     return EventResponse::Handled;
                 }
-                if tree.routing_the_focus_path() && self.page(*key, *modifiers, now) {
+                if tree.routing_the_focus_path() && self.scroll_by_key(*key, *modifiers, now) {
                     request_job(id, JobRequest::Paint);
                     return EventResponse::Handled;
                 }
