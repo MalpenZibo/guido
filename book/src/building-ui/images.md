@@ -280,6 +280,42 @@ The colour is applied while the image is drawn, from the texture it already
 has, so changing it costs a repaint rather than rasterizing the SVG again. The
 tint's alpha fades the image as `opacity` would.
 
+An icon inside a button rarely needs a signal of its own for this. An image
+takes state layers as a text does, and they follow the control it sits in, so
+the icon brightens and dims with its label:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let weak = Color::rgb(0.6, 0.6, 0.6);
+# let dim = Color::rgb(0.3, 0.3, 0.3);
+# let busy = create_signal(false);
+container()
+    .layout(Flex::row().spacing(8.0))
+    .enabled(move || !busy.get())
+    .on_click(|| {})
+    .child(
+        container().width(16.0).height(16.0).child(
+            image("./power.svg")
+                .tint(weak.transition(150.0))
+                .when_hovered(|s| s.tint(Color::WHITE))
+                .when_disabled(|s| s.tint(dim)),
+        ),
+    )
+    .child(
+        text("Power off")
+            .color(weak.transition(150.0))
+            .when_hovered(|s| s.color(Color::WHITE))
+            .when_disabled(|s| s.color(dim)),
+    )
+# ;
+# }
+```
+
+A transition declared on the tint eases the change between states; without one
+the tint switches.
+
 ## Reactive Images
 
 Image sources can be reactive, allowing dynamic image changes:
