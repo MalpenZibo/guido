@@ -279,7 +279,9 @@ pub mod widget_prelude {
     pub use crate::clock::{EventInstant, FrameInstant};
     pub use crate::layout::{Constraints, IntoF32, Layout};
     pub use crate::reactive::{JobType, with_signal_tracking};
-    pub use crate::renderer::{Fill, FillRule, Join, PaintContext, Path, RenderNode, Stroke};
+    pub use crate::renderer::{
+        Dashes, Fill, FillRule, Join, PaintContext, Path, RenderNode, Stroke,
+    };
     /// The composed matrix. An application says `translate`, `rotate` and
     /// `scale`; a widget written outside the crate positions what it paints,
     /// and for that it needs the thing those three compose into.
