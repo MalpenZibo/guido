@@ -419,7 +419,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` -
   the shape of the corner
 - `.border(width, color)` - Border
-- `.shadow(shadow)` - Shadow: offset, blur, spread and colour
+- `.shadow(shadow)` - Shadows: one `Shadow` or up to four, each an offset, blur, spread and colour, outside the box or `inset`
 
 ### Spacing
 - `.padding(all)` - Uniform padding

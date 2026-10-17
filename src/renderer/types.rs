@@ -32,6 +32,9 @@ pub struct Shadow {
     pub spread: f32,
     /// Shadow color
     pub color: Color,
+    /// Drawn inside the shape rather than outside it — see
+    /// [`inset`](Self::inset).
+    pub inset: bool,
 }
 
 impl Shadow {
@@ -47,7 +50,21 @@ impl Shadow {
             blur,
             spread,
             color,
+            ..Self::none()
         }
+    }
+
+    /// The same shadow, cast inside the shape instead of outside it, as CSS's
+    /// `inset` keyword casts one.
+    ///
+    /// It is drawn over the fill and inside the border, from the same distance
+    /// the outer shadow is: dark at the edge and fading inwards, moved by the
+    /// offset — so `(0.0, 4.0)` darkens the top edge, the way a control
+    /// pressed in looks — and with a positive spread pushing the edge further
+    /// in. A blur of zero and a spread is a hard ring inside the edge.
+    pub const fn inset(mut self) -> Self {
+        self.inset = true;
+        self
     }
 
     /// How far this shadow reaches past the box that casts it.
@@ -68,10 +85,19 @@ impl Shadow {
     /// across: every shadow pulled inside the box has an
     /// [`extent`](Self::extent) of zero, but one pulled in by 16 and one by 4
     /// are still a step apart.
+    ///
+    /// An inset shadow reaches nothing past its box, whatever its numbers.
     pub(crate) fn signed_extent(&self) -> f32 {
-        if self.color.a <= 0.0 {
+        if self.color.a <= 0.0 || self.inset {
             return 0.0;
         }
+        self.depth()
+    }
+
+    /// How far the shadow is drawn from the edge, on the side its offset
+    /// carries it furthest: out of the box for an outer shadow, into it for
+    /// an inset one.
+    pub(crate) fn depth(&self) -> f32 {
         self.spill() + self.offset.0.abs().max(self.offset.1.abs())
     }
 
@@ -109,7 +135,7 @@ impl Shadow {
             offset: (self.offset.0 * k, self.offset.1 * k),
             blur: self.blur * k,
             spread: self.spread * k,
-            color: self.color,
+            ..self
         }
     }
 
@@ -122,25 +148,15 @@ impl Shadow {
     /// `NaN` field, since every comparison against it is false. A reach below
     /// zero counts as zero, so the factor is never above one or below zero.
     pub fn shrunk_to(self, reach: f32) -> Self {
-        let reach = reach.clamp(0.0, f32::INFINITY);
-        let extent = self.extent();
-        match extent.partial_cmp(&reach) {
-            Some(std::cmp::Ordering::Greater) => self.scaled(reach / extent),
-            // Inside the reach, exactly at it, or not comparable at all — a
-            // `NaN` on either side lands here rather than scaling by a `NaN`
-            // factor, which would spread it into all four fields.
-            _ => self,
+        match shrink_factor(self.extent(), reach) {
+            Some(k) => self.scaled(k),
+            None => self,
         }
     }
 
     /// Create a shadow with no spread
     pub const fn simple(offset: (f32, f32), blur: f32, color: Color) -> Self {
-        Self {
-            offset,
-            blur,
-            spread: 0.0,
-            color,
-        }
+        Self::new(offset, blur, 0.0, color)
     }
 
     /// Create a default shadow (no shadow)
@@ -150,9 +166,171 @@ impl Shadow {
             blur: 0.0,
             spread: 0.0,
             color: Color::TRANSPARENT,
+            inset: false,
         }
     }
 }
+
+/// What a shadow reaching `extent` past its box is scaled by to reach no
+/// further than `reach`, or `None` where it already fits.
+///
+/// A reach below zero counts as zero, so the factor is never above one or below
+/// zero. Inside the reach, exactly at it, or not comparable at all is `None` —
+/// a `NaN` on either side lands there rather than scaling by a `NaN` factor,
+/// which would spread it into every field.
+fn shrink_factor(extent: f32, reach: f32) -> Option<f32> {
+    let reach = reach.clamp(0.0, f32::INFINITY);
+    (extent > reach).then(|| reach / extent)
+}
+
+/// The shadows a box casts, drawn in order with the first on top — the order
+/// CSS draws a `box-shadow` list in.
+///
+/// A short list, never longer than [`MAX`](Self::MAX), so it stays a value
+/// like the one shadow it holds more of: `Copy`, animatable, and written down
+/// as a constant. A design system whose elevation is a tight shadow under a
+/// soft one writes each step as a pair:
+///
+/// ```
+/// use guido::prelude::*;
+///
+/// const RAISED: Shadows = Shadows::new([
+///     Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3)),
+///     Shadow::new((0.0, 4.0), 8.0, 3.0, Color::rgba(0.0, 0.0, 0.0, 0.15)),
+/// ]);
+/// let _ = container().shadow(RAISED);
+/// // One shadow, or an array of them, is a list already.
+/// let _ = container().shadow(Shadow::simple((0.0, 2.0), 4.0, Color::BLACK));
+/// ```
+///
+/// Outer and [inset](Shadow::inset) shadows mix in one list: the outer ones
+/// are drawn under the box, the inset ones over its fill.
+#[derive(Debug, Clone, Copy)]
+pub struct Shadows {
+    list: [Shadow; Shadows::MAX],
+    len: u8,
+}
+
+impl Shadows {
+    /// The most shadows one box casts.
+    pub const MAX: usize = 4;
+
+    /// No shadow at all.
+    pub const fn none() -> Self {
+        Self {
+            list: [Shadow::none(); Self::MAX],
+            len: 0,
+        }
+    }
+
+    /// These shadows, the first drawn on top. More than [`MAX`](Self::MAX)
+    /// does not compile.
+    pub const fn new<const N: usize>(shadows: [Shadow; N]) -> Self {
+        const {
+            assert!(
+                N <= Shadows::MAX,
+                "a box casts at most `Shadows::MAX` shadows"
+            );
+        }
+        let mut list = [Shadow::none(); Self::MAX];
+        let mut i = 0;
+        while i < N {
+            list[i] = shadows[i];
+            i += 1;
+        }
+        Self { list, len: N as u8 }
+    }
+
+    /// The first [`MAX`](Self::MAX) of `shadows`.
+    #[cfg(test)]
+    pub(crate) fn from_slice(shadows: &[Shadow]) -> Self {
+        let mut list = Self::none();
+        for shadow in shadows {
+            list.push(*shadow);
+        }
+        list
+    }
+
+    /// The shadows, first on top.
+    pub fn as_slice(&self) -> &[Shadow] {
+        &self.list[..usize::from(self.len)]
+    }
+
+    /// One more shadow on the end, past any [`MAX`](Self::MAX) dropped.
+    pub(crate) fn push(&mut self, shadow: Shadow) {
+        if let Some(slot) = self.list.get_mut(usize::from(self.len)) {
+            *slot = shadow;
+            self.len += 1;
+        }
+    }
+
+    /// How far the furthest of these reaches past the box: what the damage
+    /// rect grows by. See [`Shadow::extent`].
+    pub fn extent(&self) -> f32 {
+        self.signed_extent().clamp(0.0, f32::INFINITY)
+    }
+
+    /// The furthest [`Shadow::signed_extent`] of the list, and zero for none.
+    pub(crate) fn signed_extent(&self) -> f32 {
+        self.as_slice()
+            .iter()
+            .map(Shadow::signed_extent)
+            .reduce(f32::max)
+            .unwrap_or(0.0)
+    }
+
+    /// These shadows, shrunk until none reaches further than `reach` past the
+    /// box.
+    ///
+    /// Every outer shadow by the same factor — the one that brings the
+    /// furthest inside the reach — so the list keeps its proportions, as
+    /// [`Shadow::shrunk_to`] keeps a shadow's. An inset shadow reaches nothing
+    /// past the box and is left as it is.
+    pub fn shrunk_to(mut self, reach: f32) -> Self {
+        if let Some(k) = shrink_factor(self.extent(), reach) {
+            for shadow in &mut self.list[..usize::from(self.len)] {
+                if !shadow.inset {
+                    *shadow = shadow.scaled(k);
+                }
+            }
+        }
+        self
+    }
+}
+
+impl Default for Shadows {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
+/// Two lists are equal when they hold the same shadows, whatever the unused
+/// slots behind them hold.
+impl PartialEq for Shadows {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl From<Shadow> for Shadows {
+    fn from(shadow: Shadow) -> Self {
+        Self::new([shadow])
+    }
+}
+
+impl<const N: usize> From<[Shadow; N]> for Shadows {
+    fn from(shadows: [Shadow; N]) -> Self {
+        Self::new(shadows)
+    }
+}
+
+crate::reactive::converts!(
+    Shadow => Shadows,
+    [Shadow; 1] => Shadows,
+    [Shadow; 2] => Shadows,
+    [Shadow; 3] => Shadows,
+    [Shadow; 4] => Shadows,
+);
 
 /// A text entry for rendering, containing all information needed to render text.
 #[derive(Debug, Clone)]
@@ -332,5 +510,120 @@ mod shadow_extent_tests {
         assert_eq!(ghost.extent(), 0.0);
         assert_eq!(ghost.shrunk_to(1.0), ghost);
         assert_eq!(Shadow::none().extent(), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod shadows_tests {
+    use super::*;
+    use crate::animation::Animatable;
+
+    const NEAR: Shadow = Shadow::new((0.0, 2.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3));
+    const FAR: Shadow = Shadow::new((0.0, 8.0), 10.0, 2.0, Color::rgba(0.0, 0.0, 0.0, 0.2));
+    const GLOW: Shadow = Shadow::new((0.0, 0.0), 30.0, 0.0, Color::BLACK).inset();
+
+    #[test]
+    fn a_list_reaches_as_far_as_its_furthest_outer_shadow() {
+        assert_eq!(Shadows::new([NEAR, FAR]).extent(), FAR.extent());
+        assert_eq!(Shadows::new([FAR, NEAR]).extent(), FAR.extent());
+        assert_eq!(Shadows::none().extent(), 0.0);
+    }
+
+    #[test]
+    fn an_inset_shadow_reaches_nothing_past_its_box() {
+        assert_eq!(GLOW.extent(), 0.0, "for all its 30 px of blur");
+        assert_eq!(Shadows::new([NEAR, GLOW]).extent(), NEAR.extent());
+    }
+
+    #[test]
+    fn a_list_shrunk_to_a_reach_scales_its_outer_shadows_together() {
+        let reach = FAR.extent() / 2.0;
+        let shrunk = Shadows::new([NEAR, FAR, GLOW]).shrunk_to(reach);
+        assert!((shrunk.extent() - reach).abs() < 1e-4);
+        assert_eq!(shrunk.as_slice()[0], NEAR.scaled(0.5), "by the same factor");
+        assert_eq!(shrunk.as_slice()[1], FAR.scaled(0.5));
+        assert_eq!(shrunk.as_slice()[2], GLOW, "and the inset one not at all");
+    }
+
+    #[test]
+    fn equal_lists_are_equal_whatever_their_unused_slots_hold() {
+        let shortened = Shadows::from_slice(&Shadows::new([NEAR, FAR]).as_slice()[..1]);
+        assert_eq!(shortened, Shadows::from(NEAR));
+        assert_ne!(Shadows::from(NEAR), Shadows::new([NEAR, FAR]));
+    }
+
+    /// A shadow arriving in a longer list fades in from nothing, in its own
+    /// colour, rather than through black.
+    #[test]
+    fn the_shorter_list_is_padded_with_shadows_that_draw_nothing() {
+        let coloured = Shadow::new((0.0, 8.0), 10.0, 0.0, Color::rgba(1.0, 0.0, 0.0, 0.4));
+        let half = Shadows::lerp(&Shadows::from(NEAR), &Shadows::new([NEAR, coloured]), 0.5);
+        assert_eq!(half.as_slice().len(), 2);
+        assert_eq!(half.as_slice()[0], NEAR);
+        let arriving = half.as_slice()[1];
+        assert_eq!(arriving.offset, (0.0, 4.0));
+        assert_eq!(arriving.blur, 5.0);
+        assert_eq!(arriving.color, Color::rgba(1.0, 0.0, 0.0, 0.2));
+    }
+
+    /// An outer shadow and an inset one have no shape between them, so the
+    /// list steps rather than drawing a halfway that is neither.
+    #[test]
+    fn inset_against_outer_steps_halfway() {
+        let (from, to) = (Shadows::from(FAR), Shadows::from(GLOW));
+        assert_eq!(Shadows::lerp(&from, &to, 0.4), from);
+        assert_eq!(Shadows::lerp(&from, &to, 0.6), to);
+        // And padding takes the inset of the shadow it stands opposite, so a
+        // glow arriving beside an outer shadow eases in.
+        let arriving = Shadows::lerp(&from, &Shadows::new([FAR, GLOW]), 0.5);
+        assert_eq!(arriving.as_slice()[1].blur, 15.0);
+        assert!(arriving.as_slice()[1].inset);
+    }
+
+    #[test]
+    fn two_inset_shadows_interpolate() {
+        let deep = Shadow::new((0.0, 4.0), 10.0, 2.0, Color::BLACK).inset();
+        let half = Shadows::lerp(&Shadows::from(GLOW), &Shadows::from(deep), 0.5);
+        assert_eq!(half.as_slice()[0].blur, 20.0);
+        assert_eq!(half.as_slice()[0].offset, (0.0, 2.0));
+        assert!(half.as_slice()[0].inset);
+    }
+
+    /// Each list answers with its own shadows' channels, and a spring
+    /// retargeted from a list of one to a list of two reads the second one's
+    /// as starting from nothing rather than indexing past the first.
+    #[test]
+    fn lists_of_different_lengths_carry_velocity_between_them() {
+        let lengths = [
+            Shadows::none(),
+            Shadows::from(NEAR),
+            Shadows::new([NEAR, FAR, GLOW, NEAR]),
+        ]
+        .map(|s| s.channels().len());
+        assert_eq!(lengths, [0, 8, 32]);
+
+        let (one, two) = (Shadows::from(NEAR), Shadows::new([NEAR, FAR]));
+        let carried = crate::animation::carry_velocity(1.0, &one, &two, &one, &two);
+        assert!(
+            (carried - 1.0).abs() < 1e-6,
+            "the same segment, so the same speed: {carried}"
+        );
+    }
+
+    #[test]
+    fn a_list_rising_is_forward_and_falling_is_reverse() {
+        let (low, high) = (Shadows::from(NEAR), Shadows::new([NEAR, FAR]));
+        assert!(!Shadows::is_reverse(&low, &high));
+        assert!(Shadows::is_reverse(&high, &low));
+        assert!(Shadows::is_reverse(&low, &Shadows::none()));
+        let (shallow, deep) = (
+            Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK).inset(),
+            Shadow::new((0.0, 0.0), 12.0, 0.0, Color::BLACK).inset(),
+        );
+        assert!(
+            !Shadow::is_reverse(&shallow, &deep),
+            "an inset shadow reaching deeper in is the larger"
+        );
+        assert!(Shadow::is_reverse(&deep, &shallow));
     }
 }

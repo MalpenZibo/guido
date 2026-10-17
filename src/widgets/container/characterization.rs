@@ -5612,6 +5612,77 @@ fn every_field_of_a_shadow_reaches_the_renderer() {
     assert_eq!(painted.color, Color::rgba(1.0, 0.0, 0.0, 0.5), "not black");
 }
 
+/// What each rounded rect a container draws carries: its fill, its shadow and
+/// whether it has a border, in paint order.
+fn decoration_layers(node: &RenderNode) -> Vec<(Color, Option<Shadow>, Option<f32>)> {
+    node.commands
+        .iter()
+        .filter_map(|c| match &**c {
+            DrawCommand::RoundedRect {
+                color,
+                shadow,
+                border,
+                ..
+            } => Some((*color, *shadow, border.map(|b| b.width))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A list of shadows is drawn as CSS stacks one, the first on top: outer
+/// shadows under the fill, the first of them on the fill's own rect and the
+/// rest on rects of their own beneath it, and inset shadows over the fill and
+/// under the border, each on a rect carrying the border's width so it is
+/// cast inside it.
+#[test]
+fn a_list_of_shadows_is_drawn_first_on_top_around_the_fill() {
+    let (near, far) = (
+        Shadow::new((0.0, 1.0), 2.0, 0.0, Color::BLACK),
+        Shadow::new((0.0, 8.0), 16.0, 0.0, Color::BLACK),
+    );
+    let (rim, glow) = (
+        Shadow::new((0.0, 0.0), 0.0, 1.5, Color::RED).inset(),
+        Shadow::new((0.0, 0.0), 10.0, 0.0, Color::BLUE).inset(),
+    );
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::WHITE)
+            .border(3.0, Color::GREEN)
+            .shadow([rim, near, glow, far]),
+    );
+    h.fit(100.0, 100.0);
+
+    assert_eq!(
+        decoration_layers(&h.paint()),
+        vec![
+            (Color::TRANSPARENT, Some(far), None),
+            (Color::WHITE, Some(near), None),
+            (Color::TRANSPARENT, Some(glow), Some(3.0)),
+            (Color::TRANSPARENT, Some(rim), Some(3.0)),
+            (Color::TRANSPARENT, None, Some(3.0)),
+        ],
+        "the far shadow, the fill casting the near one, the glow, the rim on \
+         top of it, and the border over all of them"
+    );
+}
+
+/// An outer shadow rides the fill and is not drawn without one; an inset
+/// shadow is inside the box and is.
+#[test]
+fn an_inset_shadow_needs_no_fill_and_an_outer_one_does() {
+    let outer = Shadow::new((0.0, 4.0), 8.0, 0.0, Color::BLACK);
+    let inset = Shadow::new((0.0, 0.0), 8.0, 0.0, Color::BLACK).inset();
+    let mut h = H::new(container().width(40.0).height(40.0).shadow([outer, inset]));
+    h.fit(100.0, 100.0);
+
+    assert_eq!(
+        decoration_layers(&h.paint()),
+        vec![(Color::TRANSPARENT, Some(inset), None)],
+    );
+}
+
 /// The motion rides with the declaration here like everywhere else: a shadow
 /// declared with a transition eases towards its new value, and the same shadow
 /// declared without one arrives on the next paint.
@@ -5720,6 +5791,70 @@ fn a_declared_shadow_eases_only_where_the_declaration_carries_a_motion() {
         deep,
         "and the one beside it has been there all along"
     );
+}
+
+/// A transition between two inset shadows eases every channel, as one
+/// between two outer shadows does, and stays inset all the way.
+///
+/// On a ramp no runner can finish, for the reason the test above gives.
+#[test]
+fn a_transition_between_two_inset_shadows_animates() {
+    let pressed = create_signal(false);
+    let shallow = Shadow::new((2.0, 2.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3)).inset();
+    let deep = Shadow::new((-6.0, 8.0), 12.0, 3.0, Color::rgba(0.0, 0.0, 0.0, 0.6)).inset();
+    let mut h = H::new(
+        container()
+            .width(120.0)
+            .height(120.0)
+            .background(Color::RED)
+            .shadow(
+                (move || if pressed.get() { deep } else { shallow })
+                    .transition(Transition::new(60_000.0, TimingFunction::Linear)),
+            ),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    assert_eq!(drawn_shadow(&h.paint()), Some(shallow), "at rest");
+
+    pressed.set(true);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    h.paint();
+
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        pump(&mut h);
+        h.fit(200.0, 200.0);
+        seen.push(drawn_shadow(&h.paint()).expect("an inset shadow is drawn throughout"));
+    }
+
+    assert!(
+        seen.iter().all(|s| s.inset),
+        "both ends are inset, so every frame between them is: {seen:?}"
+    );
+    let channels: [ShadowChannel; 5] = [
+        ("offset.x", |s| s.offset.0),
+        ("offset.y", |s| s.offset.1),
+        ("blur", |s| s.blur),
+        ("spread", |s| s.spread),
+        ("alpha", |s| s.color.a),
+    ];
+    for (name, read) in channels {
+        let (from, to) = (read(&shallow), read(&deep));
+        let (first, second) = (read(&seen[0]), read(&seen[1]));
+        let moving = if to > from {
+            from < first && first < second && second < to
+        } else {
+            from > first && first > second && second > to
+        };
+        assert!(
+            moving,
+            "{name} has to be on its way from {from} to {to} and still moving, \
+             got {first} then {second}"
+        );
+    }
 }
 
 /// A `.shadow(signal)` that falls has to *animate* down. It used to rise
@@ -5970,10 +6105,10 @@ fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
             .height(40.0)
             .background(Color::RED)
             .shadow(
-                deep_inside.timeline(
+                Shadows::from(deep_inside).timeline(
                     Keyframes::new(200.0)
-                        .at_with(0.0, deep_inside, overshooting.clone())
-                        .at(1.0, near_edge)
+                        .at_with(0.0, deep_inside.into(), overshooting.clone())
+                        .at(1.0, near_edge.into())
                         .played_by(plays),
                 ),
             ),
@@ -6043,10 +6178,10 @@ fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
             .height(40.0)
             .background(Color::RED)
             .shadow(
-                shallow.timeline(
+                Shadows::from(shallow).timeline(
                     Keyframes::new(200.0)
-                        .at(0.0, shallow)
-                        .at(1.0, deep)
+                        .at(0.0, shallow.into())
+                        .at(1.0, deep.into())
                         .played_by(plays),
                 ),
             ),

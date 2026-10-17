@@ -342,7 +342,7 @@ pub struct StateStyle {
     pub translate: Prop<Translate>,
     pub rotate: Prop<f32>,
     pub scale: Prop<Scale>,
-    pub shadow: Prop<Shadow>,
+    pub shadow: Option<Box<Prop<Shadows>>>,
     pub alpha: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }

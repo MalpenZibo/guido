@@ -215,7 +215,30 @@ container()
 ```
 
 All four fields interpolate — offset, blur, spread and colour — so a shadow can
-change colour as it grows, or slide from below a card to beside it.
+change colour as it grows, or slide from below a card to beside it. A list of
+shadows interpolates shadow by shadow, the shorter padded with shadows that draw
+nothing, so one arriving fades in. An inset shadow eases into another inset one;
+between an inset and an outer one there is nothing to draw halfway, and the
+list steps at the midpoint.
+
+A timeline is written over `Shadows`, the type the property holds, so each
+stop converts with `.into()`:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# const LOW: Shadow = Shadow::simple((0.0, 1.0), 3.0, Color::rgba(0.0, 0.0, 0.0, 0.12));
+# const RAISED: Shadow = Shadow::simple((0.0, 3.0), 6.0, Color::rgba(0.0, 0.0, 0.0, 0.19));
+# fn main() {
+container().shadow(Shadows::from(LOW).timeline(
+    Keyframes::new(600.0)
+        .at(0.0, LOW.into())
+        .at(0.5, RAISED.into())
+        .at(1.0, LOW.into()),
+))
+# ;
+# }
+```
 
 A shadow falls outside the box that casts it, so the container has to tell the
 layout how far its painting reaches — and the reach has to cover the deepest

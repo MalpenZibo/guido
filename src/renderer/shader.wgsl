@@ -64,7 +64,8 @@ struct InstanceInput {
     shape_curvature: f32,
     // 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
     gradient_type: u32,
-    // SHAPE_ROUNDED_RECT, or an arc and its cap — see `arc_sdf`
+    // SHAPE_ROUNDED_RECT, or an arc and its cap — see `arc_sdf` — in the low
+    // byte, and SHADOW_INSET above it where the shadow is cast inside
     shape_kind: u32,
 }
 
@@ -109,7 +110,8 @@ struct VertexOutput {
     // Gradient end color
     @location(12) gradient_end: vec4<f32>,
     // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal,
-    // 4=diagonal_reverse), and the shape kind. One location for both: the
+    // 4=diagonal_reverse), and the shape kind with its SHADOW_INSET bit. One
+    // location for both: the
     // sixteen this stage may hand on are all spoken for.
     @location(13) @interpolate(flat) kinds: vec2<u32>,
     // clip corner radii, in the clip's own space
@@ -161,7 +163,9 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
     let shadow_blur = instance.shadow_blur;
     let shadow_spread = instance.shadow_spread;
     let shadow_offset = instance.shadow_offset;
-    let has_shadow = instance.shadow_color.a > 0.0;
+    // An inset shadow is drawn inside the shape, so its quad stays the shape's.
+    let has_shadow = instance.shadow_color.a > 0.0
+        && (instance.shape_kind & SHADOW_INSET) == 0u;
 
     // Calculate shadow expansion (3x blur for smooth fadeout)
     let fadeout = 3.0;
@@ -392,6 +396,8 @@ const SHAPE_ROUNDED_RECT: u32 = 0u;
 const SHAPE_ARC_BUTT: u32 = 1u;
 const SHAPE_ARC_ROUND: u32 = 2u;
 const SHAPE_ARC_SQUARE: u32 = 3u;
+// Above the kinds, in the same word: the shadow is cast inside the shape.
+const SHADOW_INSET: u32 = 256u;
 
 // The distance to a stroked circular arc, centred in `rect`.
 //
@@ -491,7 +497,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Compute SDF for the shape
     let gradient_type = in.kinds.x;
-    let shape_kind = in.kinds.y;
+    let shape_kind = in.kinds.y & ~SHADOW_INSET;
+    let inset = (in.kinds.y & SHADOW_INSET) != 0u;
     var dist: f32;
     if (shape_kind == SHAPE_ROUNDED_RECT) {
         dist = rounded_rect_sdf(pos, in.shape_rect, radii, curvature);
@@ -515,7 +522,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // === Shadow ===
     var shadow_contribution = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    if (in.shadow_color.a > 0.0) {
+    if (in.shadow_color.a > 0.0 && !inset) {
         let shadow_offset = in.shadow_params.xy;
         let shadow_blur = in.shadow_params.z;
         let shadow_spread = in.shadow_params.w;
@@ -564,6 +571,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             } else {
                 shape_result = vec4<f32>(result_rgb / result_a, result_a);
             }
+        }
+    }
+
+    // === Inset shadow, over the fill ===
+    // The outer shadow mirrored: the box inside the border — its edge
+    // `border_width` in from the shape's, where the border's own inner edge
+    // is drawn — moved by the offset and shrunk by the spread, is the hole
+    // the shadow leaves clear, and the shadow fades across the hole's edge
+    // over the same three blurs the outer one fades across the shape's.
+    //
+    // Measured from a hole shrunk by the two blurs the fade reaches into it,
+    // so that every point of the fade is *outside* the shape it is measured
+    // from. Outside a rounded rect the distance is round at the corners;
+    // inside it, it is the nearer of two sides, and a fade measured there
+    // meets itself along the diagonals like the mitre of a picture frame.
+    if (in.shadow_color.a > 0.0 && inset) {
+        let shadow_blur = in.shadow_params.z;
+        let shrink = border_width + in.shadow_params.w + shadow_blur * 2.0;
+        // No further than the hole's middle: past it the shrunk hole is a
+        // line or a point, and the rest of the shrink is taken off the
+        // distance instead.
+        let s = min(shrink, 0.5 * min(in.shape_rect.z, in.shape_rect.w));
+        let hole_rect = vec4<f32>(in.shape_rect.xy + s, in.shape_rect.zw - 2.0 * s);
+        // A rounded corner stays rounded however far it is shrunk: a radius
+        // of zero is measured as a box is, square outside as well as in,
+        // which is what a square box's own shadow is and nothing else's.
+        let hole_radii = select(
+            vec4<f32>(0.0),
+            max(radii - vec4<f32>(s), vec4<f32>(1e-3)),
+            radii > vec4<f32>(0.0)
+        );
+        let hole = rounded_rect_sdf(pos - in.shadow_params.xy, hole_rect, hole_radii, curvature)
+            - (shrink - s);
+        let inside = 1.0 - smoothstep(-aa, aa, dist + border_width);
+        let a = in.shadow_color.a * smoothstep(0.0, shadow_blur * 3.0, hole) * inside;
+        let out_a = a + shape_result.a * (1.0 - a);
+        if (out_a > 0.0) {
+            let out_rgb = (in.shadow_color.rgb * a + shape_result.rgb * shape_result.a * (1.0 - a)) / out_a;
+            shape_result = vec4<f32>(out_rgb, out_a);
         }
     }
 

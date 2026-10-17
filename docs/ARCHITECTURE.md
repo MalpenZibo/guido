@@ -89,7 +89,7 @@ The primary building block. Supports:
 - Padding, background (solid or gradient)
 - Corner radius with superellipse curvature
 - Borders with SDF rendering
-- Shadows: offset, blur, spread and colour
+- Shadows: offset, blur, spread and colour, outside the shape or inset, up to four on one box
 - Transforms (translate, rotate, scale)
 - Opacity over the whole subtree, multiplied into every draw in it
 - State layers (hover/pressed styles)

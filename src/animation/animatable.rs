@@ -1,14 +1,16 @@
 use smallvec::SmallVec;
 
-use crate::renderer::Shadow;
+use crate::renderer::{Shadow, Shadows};
 use crate::transform::{Scale, Translate};
 use crate::widgets::{Color, Padding};
 
-/// The channels of one animatable value. `Shadow` is the widest at eight — two
-/// offsets, a blur, a spread and four colour components — and it is what sets
-/// the inline capacity: a value that spills costs four heap allocations per
-/// spring retarget in `carry_velocity`, which is a worse trade than the eight
-/// bytes eight slots cost over the six `Corners` needs.
+/// The channels of one animatable value. `Shadow` is eight — two offsets, a
+/// blur, a spread and four colour components — and it is what sets the inline
+/// capacity: a value that spills costs four heap allocations per spring
+/// retarget in `carry_velocity`, which is a worse trade than the eight bytes
+/// eight slots cost over the six `Corners` needs. A `Shadows` of more than one
+/// spills, and pays that on a retarget rather than every value paying for its
+/// thirty-two on the stack.
 pub type Channels = SmallVec<[f32; 8]>;
 
 /// Trait for types that can be animated by interpolating between values
@@ -106,11 +108,21 @@ pub(crate) fn carry_velocity<T: Animatable>(
     let (from, to) = (start.channels(), target.channels());
     let (here, there) = (current.channels(), new_target.channels());
 
+    // A channel one value has and another lacks is zero in the other: a list
+    // of shadows answers with as many as it holds, and the shorter list is the
+    // longer one with nothing drawn at the end.
+    let at = |c: &Channels, i: usize| c.get(i).copied().unwrap_or(0.0);
+    let len = [&from, &to, &here, &there]
+        .map(|c| c.len())
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+
     let mut dot = 0.0;
     let mut new_len_sq = 0.0;
-    for i in 0..here.len() {
-        let old_axis = to[i] - from[i];
-        let new_axis = there[i] - here[i];
+    for i in 0..len {
+        let old_axis = at(&to, i) - at(&from, i);
+        let new_axis = at(&there, i) - at(&here, i);
         dot += old_axis * new_axis;
         new_len_sq += new_axis * new_axis;
     }
@@ -162,6 +174,8 @@ impl Animatable for Color {
 }
 
 impl Animatable for Shadow {
+    /// Every length and the colour, continuously. Inset or not is a step,
+    /// taken halfway, as CSS takes every value it cannot interpolate.
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         let f = |a: f32, b: f32| a + (b - a) * t;
         Self {
@@ -169,6 +183,7 @@ impl Animatable for Shadow {
             blur: f(from.blur, to.blur),
             spread: f(from.spread, to.spread),
             color: Color::lerp(&from.color, &to.color, t),
+            inset: if t < 0.5 { from.inset } else { to.inset },
         }
     }
 
@@ -188,10 +203,11 @@ impl Animatable for Shadow {
     /// Showing comes before size: a transparent shadow measures zero, which is
     /// above every shadow pulled inside its box, so by extent alone fading one
     /// of those out would read as growing.
+    ///
+    /// An inset shadow is measured the same way, inwards: one reaching deeper
+    /// into the box is the larger.
     fn is_reverse(from: &Self, to: &Self) -> bool {
-        let shows = |s: &Self| s.color.a > 0.0;
-        (shows(to), to.signed_extent(), to.color.a)
-            < (shows(from), from.signed_extent(), from.color.a)
+        to.size() < from.size()
     }
 
     fn channels(&self) -> Channels {
@@ -205,6 +221,66 @@ impl Animatable for Shadow {
             self.color.b,
             self.color.a,
         ])
+    }
+}
+
+impl Shadow {
+    /// What [`Animatable::is_reverse`] orders shadows by: whether it shows,
+    /// then how deep it is drawn, then how strongly.
+    fn size(&self) -> (bool, f32, f32) {
+        let shows = self.color.a > 0.0;
+        (shows, if shows { self.depth() } else { 0.0 }, self.color.a)
+    }
+}
+
+impl Animatable for Shadows {
+    /// Shadow by shadow, the way CSS interpolates a `box-shadow` list.
+    ///
+    /// The shorter list is padded with shadows that draw nothing — no length,
+    /// and the colour of the shadow they stand opposite at no alpha, so one
+    /// arriving fades in rather than through black — each inset where its
+    /// counterpart is. Where a shadow is inset at one end and not at the
+    /// other there is no shape between the two, and the whole list steps
+    /// halfway instead.
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        let (a, b) = (from.as_slice(), to.as_slice());
+        let absent = |opposite: &Shadow| Shadow {
+            color: opposite.color.with_alpha(0.0),
+            inset: opposite.inset,
+            ..Shadow::none()
+        };
+        let mut between = Shadows::none();
+        for i in 0..a.len().max(b.len()) {
+            let (x, y) = match (a.get(i), b.get(i)) {
+                (Some(x), Some(y)) => (*x, *y),
+                (Some(x), None) => (*x, absent(x)),
+                (None, Some(y)) => (absent(y), *y),
+                (None, None) => unreachable!("`i` is below the longer length"),
+            };
+            if x.inset != y.inset {
+                return if t < 0.5 { *from } else { *to };
+            }
+            between.push(Shadow::lerp(&x, &y, t));
+        }
+        between
+    }
+
+    /// By the largest shadow in each list, measured as one shadow is.
+    fn is_reverse(from: &Self, to: &Self) -> bool {
+        let largest = |s: &Self| {
+            s.as_slice()
+                .iter()
+                .map(Shadow::size)
+                .reduce(|a, b| if b > a { b } else { a })
+                .unwrap_or((false, 0.0, 0.0))
+        };
+        largest(to) < largest(from)
+    }
+
+    /// Each shadow's, one after another. A shorter list has fewer, which
+    /// `carry_velocity` reads as zero — as `lerp` pads it.
+    fn channels(&self) -> Channels {
+        self.as_slice().iter().flat_map(Shadow::channels).collect()
     }
 }
 

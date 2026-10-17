@@ -897,7 +897,8 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             // its edge.
             let mut grow: f32 = border.map_or(0.0, |b| b.width);
             let mut offset: (f32, f32) = (0.0, 0.0);
-            if let Some(shadow) = shadow {
+            // An inset one is drawn inside the rect, and reaches nothing.
+            if let Some(shadow) = shadow.filter(|s| !s.inset) {
                 grow = grow.max(shadow.spill());
                 offset = shadow.offset;
             }

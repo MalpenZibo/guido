@@ -182,7 +182,7 @@ impl Container {
     pub(super) fn max_shadow_extent(&self, id: WidgetId) -> f32 {
         let base = self
             .shadow_prop()
-            .get_finite_or(Shadow::none(), id, "shadow");
+            .get_finite_or(Shadows::none(), id, "shadow");
         let anim = self.anims.as_ref().and_then(|a| a.shadow());
         // Signed, because a step between two shadows pulled inside the box can
         // overshoot past its edge though neither end reaches it. The low end
@@ -193,7 +193,7 @@ impl Container {
             .interaction
             .iter()
             .flat_map(|ix| ix.states.iter())
-            .filter_map(|(_, state)| state.shadow.get())
+            .filter_map(|(_, state)| state.shadow.as_deref()?.get())
             .filter(AllFinite::all_finite)
             .map(|shadow| shadow.signed_extent())
             .fold((resting.min(0.0), resting), |(low, high), extent| {
@@ -214,7 +214,7 @@ impl Container {
             // for not sizing every rect to a resonant gain.
             Some(anim) => (deepest + (deepest - floor) * anim.peak_overshoot())
                 .max(anim.current().extent())
-                .max(anim.sequence_reach(Shadow::signed_extent)),
+                .max(anim.sequence_reach(Shadows::signed_extent)),
             None => deepest.max(0.0),
         }
     }
@@ -406,11 +406,11 @@ impl Container {
         reach
     }
 
-    pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadow {
+    pub(super) fn effective_shadow_target(&self, id: WidgetId) -> Shadows {
         let base = self
             .shadow_prop()
-            .get_finite_or(Shadow::none(), id, "shadow");
-        self.resolve_state_value(id, base, |state| state.shadow.get())
+            .get_finite_or(Shadows::none(), id, "shadow");
+        self.resolve_state_value(id, base, |state| state.shadow.as_deref()?.get())
     }
 
     // -----------------------------------------------------------------------
@@ -500,7 +500,7 @@ impl Container {
     /// ζ = 0.05, and sizing every damage rect for that is not a trade worth
     /// making for the tip of a bounce nobody asked for. See
     /// `hover_flicker_cannot_push_a_shadow_outside_its_damage_rect`.
-    pub(super) fn animated_shadow(&self, id: WidgetId) -> Shadow {
+    pub(super) fn animated_shadow(&self, id: WidgetId) -> Shadows {
         let anim = self.anims.as_ref().and_then(|a| a.shadow());
         let shadow = get_animated_value(anim, || self.effective_shadow_target(id));
         match anim {
@@ -601,7 +601,7 @@ pub(super) struct Decoration {
     pub gradient: Option<LinearGradient>,
     pub corner_radii: crate::renderer::CornerRadii,
     pub corner_curvature: f32,
-    pub shadow: Shadow,
+    pub shadow: Shadows,
     pub border_width: f32,
     pub border_color: Color,
 }
@@ -630,13 +630,37 @@ impl Container {
         // frames of a lift out of `Shadow::none()` carry an alpha of ~0.001,
         // where the shadow rounds to nothing and every frame would still push a
         // rect carrying it. The same gate the border gets.
-        let shadow = (d.shadow.color.a > SHADOW_ALPHA_FLOOR).then_some(d.shadow);
+        let shows = |s: &&Shadow| s.color.a > SHADOW_ALPHA_FLOOR;
+        let shadows = d.shadow.as_slice();
 
         // Gated like the fill, the border and the shadow: a gradient between two
         // fully transparent colours draws nothing, and with both endpoints
         // reactive one animating out through transparent would push a rect per
         // frame to do it. One end still visible is still a gradient.
         let gradient = d.gradient.filter(gradient_shows);
+        let fills = gradient.is_some() || d.background.a > 0.0;
+
+        // The first outer shadow rides the fill's own instance, as the only
+        // shadow always did, so a box with one costs what it did. Every other
+        // one is a rect of its own that draws nothing but its shadow, under the
+        // fill and the last of them first, so the first in the list ends on top
+        // as CSS stacks them — the order a box per shadow, each on the last,
+        // would draw them in.
+        let mut shadow = None;
+        if fills {
+            let mut outer = shadows.iter().filter(|s| !s.inset).filter(shows);
+            shadow = outer.next().copied();
+            for under in outer.rev() {
+                ctx.draw_rounded_rect_with_shadow(
+                    bounds,
+                    Color::TRANSPARENT,
+                    d.corner_radii,
+                    d.corner_curvature,
+                    *under,
+                );
+            }
+        }
+
         if let Some(ref gradient) = gradient {
             ctx.draw_rounded_rect_full(
                 bounds,
@@ -667,6 +691,33 @@ impl Container {
                     d.corner_curvature,
                 ),
             }
+        }
+
+        // Inset shadows go over the fill and under the border, a rect each,
+        // the last first so the first is on top. They need no fill to be seen
+        // — a glow inside an empty box is a glow — so unlike the outer ones
+        // they are not gated on one.
+        //
+        // Each is cast inside the border, as CSS casts one inside the padding
+        // box. **On these rects the `border` field is not a border to draw: it
+        // carries the padding-box inset**, the container's border width in a
+        // colour that draws nothing, and the shader casts the shadow inside
+        // `dist + border_width` — the same edge the border frame drawn next is
+        // cut along, so the two meet exactly. Anything that drops or culls a
+        // transparent border has to leave these alone, or an inset shadow
+        // slides under the border.
+        let inside_border = (d.border_width > 0.0)
+            .then(|| crate::renderer::Border::new(d.border_width, Color::TRANSPARENT));
+        for inset in shadows.iter().filter(|s| s.inset).filter(shows).rev() {
+            ctx.draw_rounded_rect_full(
+                bounds,
+                Color::TRANSPARENT,
+                d.corner_radii,
+                d.corner_curvature,
+                inside_border,
+                Some(*inset),
+                None,
+            );
         }
 
         // A border that resolves to nothing visible must not reach the instance

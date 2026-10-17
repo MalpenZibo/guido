@@ -962,6 +962,181 @@ fn a_blur_below_zero_draws_a_hard_shadow() {
     }
 }
 
+/// The red channel of one pixel.
+fn red_at(pixels: &Pixels, x: u32, y: u32) -> u8 {
+    pixels.data[((y * pixels.width + x) * 4) as usize]
+}
+
+/// An inset shadow is drawn inside the shape it belongs to: dark at the edge,
+/// gone by the centre, and nothing of it outside.
+///
+/// Zero offset and a 30 px blur inside a rounded rect, which fades out at three
+/// blurs in — so the box is wide enough that its centre is past that. Beside it
+/// the same box with the shadow offset down and to the right, the "pressed in"
+/// look: dark along the top and the left, clear along the other two.
+#[test]
+fn an_inset_shadow_darkens_the_edge_and_leaves_the_centre() {
+    const NAME: &str = "an_inset_shadow_darkens_the_edge_and_leaves_the_centre";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let dark = Color::rgba(0.0, 0.0, 0.0, 0.6);
+    let glow = Shadow::new((0.0, 0.0), 30.0, 0.0, dark).inset();
+    let pressed = Shadow::new((6.0, 6.0), 6.0, 0.0, dark).inset();
+    let view = container()
+        .background(light)
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .children([
+            swatch(200.0, 200.0, Color::WHITE)
+                .corners(24.0)
+                .shadow(glow),
+            swatch(120.0, 120.0, Color::WHITE)
+                .corners(16.0)
+                .shadow(pressed),
+        ]);
+    let pixels = render_with_own_renderer(ctx, view, (440.0, 260.0), 1.0, light);
+
+    let (edge, centre, outside) = (
+        red_at(&pixels, 31, 130),
+        red_at(&pixels, 130, 130),
+        red_at(&pixels, 20, 130),
+    );
+    assert!(
+        edge < 170,
+        "just inside the edge the shadow is dark, and it is {edge}"
+    );
+    assert!(
+        centre >= 255 - TOLERANCE,
+        "the centre is three blurs in and clear of it, and it is {centre}"
+    );
+    assert_eq!(
+        outside,
+        red_at(&pixels, 0, 0),
+        "an inset shadow draws nothing outside its box"
+    );
+    // The pressed one is dark where its offset pulls the shadow in from, and
+    // clear on the opposite edges.
+    let (top, bottom) = (red_at(&pixels, 320, 31), red_at(&pixels, 320, 148));
+    assert!(
+        top + 40 < bottom,
+        "offset down, the shadow lies along the top ({top}) and not the bottom ({bottom})"
+    );
+
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// An inset shadow with no blur and a 1.5 px spread is a ring inside the
+/// edge, at scale 2 so it is three whole pixels deep.
+///
+/// The second box has a border, and the ring starts where the border ends:
+/// an inset shadow is drawn inside the padding box, as CSS draws one, so the
+/// border does not cover it.
+#[test]
+fn an_inset_spread_is_a_ring_inside_the_edge() {
+    const NAME: &str = "an_inset_spread_is_a_ring_inside_the_edge";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let ring = Shadow::new((0.0, 0.0), 0.0, 1.5, Color::rgb(0.85, 0.1, 0.2)).inset();
+    let view = container()
+        .background(light)
+        .padding(20.0)
+        .layout(Flex::row().spacing(20.0))
+        .children([
+            swatch(80.0, 60.0, Color::WHITE).corners(12.0).shadow(ring),
+            swatch(80.0, 60.0, Color::WHITE)
+                .corners(12.0)
+                .border(4.0, Color::rgb(0.2, 0.3, 0.8))
+                .shadow(ring),
+        ]);
+    let pixels = render_with_own_renderer(ctx, view, (220.0, 100.0), 2.0, light);
+
+    // Halfway down each box's left side, in physical pixels: the first box
+    // starts at 40, the second at 240 with its border 8 deep.
+    let green = |x: u32| pixels.data[((100 * pixels.width + x) * 4) as usize + 1];
+    for (what, ring_at, clear_at) in [("without a border", 41, 46), ("inside a border", 249, 254)] {
+        assert!(
+            green(ring_at) < 60,
+            "{what}, the ring is drawn at x = {ring_at}, and that pixel's green is {}",
+            green(ring_at)
+        );
+        assert!(
+            green(clear_at) >= 255 - TOLERANCE,
+            "{what}, the ring is three pixels deep and x = {clear_at} is past it, \
+             but its green is {}",
+            green(clear_at)
+        );
+    }
+
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// Two shadows on one box are drawn as two boxes stacked on each other would
+/// draw them: the first in the list on top, as CSS orders `box-shadow`.
+///
+/// A tight shadow and a soft one, which is how most design systems spell an
+/// elevation. The comparison is the oracle; the golden keeps the picture.
+#[test]
+fn two_shadows_draw_as_two_stacked_boxes() {
+    const NAME: &str = "two_shadows_draw_as_two_stacked_boxes";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let tight = Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3));
+    let soft = Shadow::new((0.0, 8.0), 16.0, 4.0, Color::rgba(0.1, 0.1, 0.4, 0.25));
+    let render = |card: Container| {
+        let view = container().background(light).padding(40.0).child(card);
+        render_with_own_renderer(ctx, view, (180.0, 160.0), 1.0, light)
+    };
+    let card = || swatch(100.0, 80.0, Color::WHITE).corners(12.0);
+
+    let layered = render(card().shadow([tight, soft]));
+    let stacked = render(card().shadow(soft).child(card().shadow(tight)));
+    assert!(
+        red_at(&layered, 90, 130) + 20 < red_at(&layered, 0, 0),
+        "the soft shadow has to be drawn below the box for the comparison to mean anything"
+    );
+    // Everywhere but the box's own antialiased outline, which the two stacked
+    // boxes draw twice over — their two fills each cover a fraction of those
+    // pixels — and the one box once. That is the boxes differing, not the
+    // shadows: a band two pixels either side of the edge.
+    let outline = |x: u32, y: u32| {
+        let (cx, cy, hw, hh, r) = (90.0, 80.0, 50.0, 40.0, 12.0);
+        let qx = (x as f32 + 0.5 - cx).abs() - hw + r;
+        let qy = (y as f32 + 0.5 - cy).abs() - hh + r;
+        let outside = qx.max(0.0).hypot(qy.max(0.0));
+        let distance = outside + qx.max(qy).min(0.0) - r;
+        distance.abs() <= 2.5
+    };
+    let off_the_outline = |pixels: &Pixels| Pixels {
+        width: pixels.width,
+        height: pixels.height,
+        data: pixels
+            .data
+            .chunks(4)
+            .enumerate()
+            .flat_map(|(i, p)| {
+                let (x, y) = (i as u32 % pixels.width, i as u32 / pixels.width);
+                if outline(x, y) {
+                    [0; 4]
+                } else {
+                    [p[0], p[1], p[2], p[3]]
+                }
+            })
+            .collect(),
+    };
+    if let Some(report) = differences(NAME, &off_the_outline(&stacked), &off_the_outline(&layered))
+    {
+        panic!("two shadows on one box are not drawn as two stacked boxes: {report}");
+    }
+
+    assert_golden(NAME, adapter, layered);
+}
+
 /// Rotation, scale and translation, including a transform inherited through a
 /// parent — the case where the world transform is a chain and not a matrix
 /// somebody wrote down.

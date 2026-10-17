@@ -16,7 +16,7 @@
 //! ```
 
 use crate::reactive::{IntoSignal, Prop, Signal, create_stored};
-use crate::renderer::Shadow;
+use crate::renderer::Shadows;
 use crate::transform::{Scale, Translate};
 use crate::widgets::Color;
 
@@ -133,8 +133,9 @@ pub struct StateStyle {
     pub rotate: Prop<f32>,
     /// Scale override (e.g., the shrink on press)
     pub scale: Prop<Scale>,
-    /// Shadow override
-    pub shadow: Prop<Shadow>,
+    /// Shadow override. Behind a box, because a `Shadows` is four shadows
+    /// wide and every state layer would otherwise carry them, declared or not.
+    pub shadow: Option<Box<Prop<Shadows>>>,
     /// Override the background alpha channel (applied after background override)
     pub alpha: Prop<f32>,
     /// Ripple effect configuration (typically used in a pressed layer)
@@ -332,8 +333,8 @@ impl StateStyle {
     ///     .shadow(Shadow::none())
     ///     .when_hovered(|s| s.shadow(LIFTED.transition(80.0)));
     /// ```
-    pub fn shadow<M>(mut self, shadow: impl IntoSignal<Shadow, M>) -> Self {
-        self.shadow = shadow.into_prop();
+    pub fn shadow<M>(mut self, shadow: impl IntoSignal<Shadows, M>) -> Self {
+        self.shadow = Some(Box::new(shadow.into_prop()));
         self
     }
 
