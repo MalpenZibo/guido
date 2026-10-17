@@ -597,12 +597,15 @@ impl Container {
         // split is what lets this run from a Paint job without walking
         // anything.
         // A blur spreads in the container's own space, as a shadow does, so
-        // its reach is carried by the transform with the shadow's.
-        // The blur reaches as far on every side; the shadow each its own.
+        // its reach is carried by the transform with the shadow's. The blur
+        // reaches as far on every side; the shadow each its own.
         let extent = shadow_extent + Outsets::all(self.max_blur_reach());
-        // A slide carries the whole box by its offset, after everything else.
+        // A slide carries the whole box by its offset, after everything else,
+        // and only toward where it is drawn: a box drawn above its place
+        // reaches further up and no further either side.
         let (dx, dy) = self.position_offset(tree, id);
-        let reach = self.max_transform_reach(bounds, extent) + Outsets::all(dx.abs().max(dy.abs()));
+        let toward = bounds.offset(dx, dy).outset_beyond(bounds);
+        let reach = self.max_transform_reach(bounds, extent) + toward;
         tree.set_own_paint_reach(id, reach);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two

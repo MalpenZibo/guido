@@ -3974,6 +3974,81 @@ mod tests {
         );
     }
 
+    /// A card sliding 200 pixels down a column, with `animate_position`, is
+    /// drawn above where it was laid out and nowhere else: each frame of the
+    /// slide damages a rect no wider than the card and its own horizontal
+    /// reach — none here.
+    ///
+    /// One number for the four sides gave the slide's 200 to the left and the
+    /// right as well, and every frame of it damaged 440 pixels across for a
+    /// card 40 wide.
+    #[test]
+    fn a_vertical_slide_damages_no_wider_than_its_box() {
+        let gap = crate::reactive::create_signal(0.0f32);
+        let t0 = std::time::Instant::now();
+        let mut tree = Tree::new();
+        tree.set_frame_instant(Some(t0));
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .width(300.0)
+                .height(300.0)
+                .padding(50.0)
+                .child(
+                    crate::widgets::container()
+                        .layout(crate::layout::Flex::column())
+                        .child(crate::widgets::container().width(40.0).height(gap))
+                        .child(
+                            crate::widgets::container()
+                                .width(40.0)
+                                .height(40.0)
+                                .animate_position(crate::animation::Transition::new(
+                                    200.0,
+                                    crate::animation::TimingFunction::Linear,
+                                )),
+                        ),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let cons = Constraints::new(0.0, 0.0, 300.0, 300.0);
+        tree.layout_widget(root, cons);
+        let column = tree.get_children(root)[0];
+        let card = tree.get_children(column)[1];
+
+        // The gap opens, and the card is laid out 200 further down while it
+        // goes on being drawn where it was.
+        gap.set(200.0);
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(16)));
+        tree.mark_needs_layout(tree.get_children(column)[0]);
+        tree.layout_widget(root, cons);
+        assert_eq!(tree.position_offset(card), (0.0, -200.0), "the setup");
+        let _ = tree.take_damage(root);
+
+        // One frame of the slide, as the loop runs it: the motion advances,
+        // the reach is refreshed from it, and the card is marked.
+        let mid = t0 + std::time::Duration::from_millis(116);
+        tree.set_frame_instant(Some(mid));
+        assert_eq!(tree.advance_position(card, mid.into()), Some(true));
+        tree.set_frame_instant(None);
+        tree.with_widget_mut(card, |widget, id, tree| {
+            refresh_paint_reach(&*widget, tree, id)
+        });
+        tree.mark_needs_paint(card);
+
+        let reach = tree.paint_overflow(card);
+        assert_eq!(
+            (reach.left, reach.right, reach.bottom),
+            (0.0, 0.0, 0.0),
+            "a card drawn above its box reaches past no other side: {reach:?}"
+        );
+        assert!(reach.top > 0.0, "and above it by what is left of the slide");
+        let rect = partial_damage(&mut tree, root);
+        assert!(
+            rect.width <= 40.0,
+            "a frame of a vertical slide damaged {rect:?}, wider than the 40 \
+             pixel card it moves"
+        );
+    }
+
     /// A widget's bounds are not grown by what it or its children paint
     /// outside it: how far that reaches is damage's question, and
     /// `WidgetRef::rect` reads these. A reach of 20 carries the child past the
