@@ -21,7 +21,7 @@
 use bytemuck::Zeroable;
 use wgpu::util::DeviceExt;
 
-use crate::render_stats::{self, Pipeline};
+use crate::render_stats::{self, GpuObject, Pipeline};
 use crate::shape::PlacedShape;
 use crate::widgets::{Color, Rect};
 
@@ -491,6 +491,8 @@ impl BackdropRenderer {
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
+        render_stats::record_backdrop_allocation(GpuObject::Buffer);
+        render_stats::record_backdrop_allocation(GpuObject::BindGroup);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Backdrop Bind Group"),
             layout: &self.bind_group_layout,
@@ -524,6 +526,8 @@ impl BackdropRenderer {
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
+        render_stats::record_backdrop_allocation(GpuObject::Buffer);
+        render_stats::record_backdrop_allocation(GpuObject::BindGroup);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Backdrop Mask Bind Group"),
             layout: &self.mask_bind_group_layout,

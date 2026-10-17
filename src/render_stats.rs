@@ -92,15 +92,28 @@ impl DrawCalls {
     }
 }
 
-/// GPU objects the textured-quad pipelines created while preparing frames.
+/// Buffers and bind groups a pipeline created while drawing frames.
 ///
-/// A texture that is already cached should cost a frame nothing to draw again,
-/// and these are the two things that drawing it could still create: a vertex
-/// buffer for its corners and a bind group for its texture.
+/// Counted for the pipelines that keep theirs from frame to frame, where what
+/// a frame should create is nothing. A textured quad whose texture is cached
+/// could still create a vertex buffer for its corners and a bind group for its
+/// texture; a backdrop pass reads its uniforms from one buffer and its textures
+/// through a bind group kept while frames bind it, so it creates the buffer
+/// only when it grows and a bind group only for a texture it has not bound.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct QuadAllocations {
+pub struct GpuAllocations {
     pub buffers: u64,
     pub bind_groups: u64,
+}
+
+impl GpuAllocations {
+    #[cfg(feature = "render-stats")]
+    fn count(&mut self, object: GpuObject) {
+        match object {
+            GpuObject::Buffer => self.buffers += 1,
+            GpuObject::BindGroup => self.bind_groups += 1,
+        }
+    }
 }
 
 /// Fills and strokes drawn, by whether their triangles had to be made.
@@ -116,9 +129,9 @@ pub struct PathMeshes {
     pub reused: u64,
 }
 
-/// A GPU object a textured-quad pipeline created.
+/// A GPU object a pipeline created.
 #[derive(Debug, Clone, Copy)]
-pub enum QuadObject {
+pub enum GpuObject {
     Buffer,
     BindGroup,
 }
@@ -180,7 +193,9 @@ pub struct StatsSnapshot {
     /// The draw calls these frames issued.
     pub draw_calls: DrawCalls,
     /// The buffers and bind groups preparing images and transformed text made.
-    pub quad_allocations: QuadAllocations,
+    pub quad_allocations: GpuAllocations,
+    /// The buffers and bind groups the backdrop passes made.
+    pub backdrop_allocations: GpuAllocations,
     /// The fills and strokes drawn, and how many were tessellated.
     pub path_meshes: PathMeshes,
 }
@@ -209,8 +224,8 @@ macro_rules! time_phase {
 #[cfg(feature = "render-stats")]
 mod inner {
     use super::{
-        DrawCalls, LayoutReasons, PathMeshes, Phase, PhaseTiming, Pipeline, QuadAllocations,
-        QuadObject,
+        DrawCalls, GpuAllocations, GpuObject, LayoutReasons, PathMeshes, Phase, PhaseTiming,
+        Pipeline,
     };
     use crate::tree::DamageRegion;
     use std::cell::RefCell;
@@ -297,7 +312,8 @@ mod inner {
         bytes_allocated: u64,
         heap_mark: (u64, u64),
         draw_calls: DrawCalls,
-        quad_allocations: QuadAllocations,
+        quad_allocations: GpuAllocations,
+        backdrop_allocations: GpuAllocations,
         path_meshes: PathMeshes,
         // Report timing
         last_print: Instant,
@@ -341,7 +357,8 @@ mod inner {
                 bytes_allocated: 0,
                 heap_mark: heap_now(),
                 draw_calls: DrawCalls::default(),
-                quad_allocations: QuadAllocations::default(),
+                quad_allocations: GpuAllocations::default(),
+                backdrop_allocations: GpuAllocations::default(),
                 path_meshes: PathMeshes::default(),
                 last_print: Instant::now(),
             }
@@ -512,13 +529,17 @@ mod inner {
 
     /// Record a buffer or bind group a textured-quad pipeline created.
     #[inline]
-    pub fn record_quad_allocation(object: QuadObject) {
+    pub fn record_quad_allocation(object: GpuObject) {
         STATS.with(|s| {
-            let mut stats = s.borrow_mut();
-            match object {
-                QuadObject::Buffer => stats.quad_allocations.buffers += 1,
-                QuadObject::BindGroup => stats.quad_allocations.bind_groups += 1,
-            }
+            s.borrow_mut().quad_allocations.count(object);
+        });
+    }
+
+    /// Record a buffer or bind group a backdrop pass created.
+    #[inline]
+    pub fn record_backdrop_allocation(object: GpuObject) {
+        STATS.with(|s| {
+            s.borrow_mut().backdrop_allocations.count(object);
         });
     }
 
@@ -569,6 +590,7 @@ mod inner {
                 bytes_allocated: stats.bytes_allocated,
                 draw_calls: stats.draw_calls,
                 quad_allocations: stats.quad_allocations,
+                backdrop_allocations: stats.backdrop_allocations,
                 path_meshes: stats.path_meshes,
             }
         })
@@ -728,6 +750,12 @@ mod inner {
                     stats.path_meshes.tessellated, stats.path_meshes.reused
                 );
             }
+            if stats.backdrop_allocations != GpuAllocations::default() {
+                eprintln!(
+                    "  backdrop allocations: buffers={} bind_groups={}",
+                    stats.backdrop_allocations.buffers, stats.backdrop_allocations.bind_groups
+                );
+            }
             eprintln!(
                 "  quad allocations: buffers={} bind_groups={}",
                 stats.quad_allocations.buffers, stats.quad_allocations.bind_groups
@@ -822,7 +850,11 @@ pub fn record_draw_calls(_pipeline: Pipeline, _count: u64) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
-pub fn record_quad_allocation(_object: QuadObject) {}
+pub fn record_quad_allocation(_object: GpuObject) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_backdrop_allocation(_object: GpuObject) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

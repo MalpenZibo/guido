@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use guido::prelude::*;
 use guido::render_stats::{
-    self, DrawCalls, PathMeshes, PhaseTiming, QuadAllocations, StatsSnapshot,
+    self, DrawCalls, GpuAllocations, PathMeshes, PhaseTiming, StatsSnapshot,
 };
 use guido::testing::Headless;
 
@@ -108,7 +108,7 @@ pub struct Counts {
     /// The draw calls the painted frames issued, pipeline by pipeline.
     pub draw_calls: DrawCalls,
     /// The vertex buffers and bind groups preparing textured quads created.
-    pub quad_allocations: QuadAllocations,
+    pub quad_allocations: GpuAllocations,
     /// The fills and strokes drawn, by whether they were tessellated.
     pub path_meshes: PathMeshes,
 }

@@ -11,7 +11,7 @@
 mod common;
 
 use guido::prelude::*;
-use guido::render_stats::{self, DrawCalls, PathMeshes, QuadAllocations, StatsSnapshot};
+use guido::render_stats::{self, DrawCalls, GpuAllocations, PathMeshes, StatsSnapshot};
 use guido::widget_prelude::*;
 
 const IMAGES: usize = 7;
@@ -316,7 +316,7 @@ fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
 
     assert_eq!(
         stats.quad_allocations,
-        QuadAllocations {
+        GpuAllocations {
             buffers: 2,
             bind_groups: 1,
         }
@@ -351,7 +351,7 @@ fn a_frame_that_draws_cached_textures_again_makes_no_buffer_and_no_bind_group() 
         stats.draw_calls.images > 0,
         "the second frame drew no image"
     );
-    assert_eq!(stats.quad_allocations, QuadAllocations::default());
+    assert_eq!(stats.quad_allocations, GpuAllocations::default());
 }
 
 /// A distinct `side`×`side` source per index.
