@@ -203,7 +203,7 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .when_pressed(|s| s.darker(0.1))  // 10% darker
 ```
 
-On a container with a gradient, `lighter`, `darker` and `alpha` apply to both
+On a container with a gradient, `lighter`, `darker` and `background_alpha` apply to both
 of its ends, and an explicit `background` replaces the gradient while the state
 is active.
 
@@ -369,7 +369,7 @@ pub struct StateStyle {
     pub rotate: Prop<f32>,
     pub scale: Prop<Scale>,
     pub shadow: Option<Box<Prop<Shadows>>>,
-    pub alpha: Prop<f32>,
+    pub background_alpha: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```

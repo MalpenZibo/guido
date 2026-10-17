@@ -147,8 +147,8 @@ pub struct StateStyle {
     /// Shadow override. Behind a box, because a `Shadows` is four shadows
     /// wide and every state layer would otherwise carry them, declared or not.
     pub shadow: Option<Box<Prop<Shadows>>>,
-    /// Override the background alpha channel (applied after background override)
-    pub alpha: Prop<f32>,
+    /// Background alpha override, applied after the background override
+    pub background_alpha: Prop<f32>,
     /// Ripple effect configuration (typically used in a pressed layer)
     pub ripple: Option<RippleConfig>,
 }
@@ -377,20 +377,21 @@ impl StateStyle {
         self
     }
 
-    /// Override the background alpha channel.
+    /// Override the alpha of the background, and of nothing else.
     ///
     /// Applied after any background color override (lighter/darker/exact).
     /// Useful for making semi-transparent elements more visible on hover.
+    /// What is drawn inside the container keeps its own colours.
     ///
     /// # Example
     /// ```no_run
     /// # use guido::prelude::*;
     /// container()
     ///     .background(Color::rgba(1.0, 0.5, 0.0, 0.4))
-    ///     .when_hovered(|s| s.lighter(0.1).alpha(0.7)); // boost alpha on hover
+    ///     .when_hovered(|s| s.lighter(0.1).background_alpha(0.7)); // boost alpha on hover
     /// ```
-    pub fn alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
-        self.alpha = alpha.into_prop();
+    pub fn background_alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
+        self.background_alpha = alpha.into_prop();
         self
     }
 

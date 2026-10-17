@@ -1096,7 +1096,7 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
 /// A colour as a state layer resolves it: its background override, then its
 /// alpha, or `None` where the layer declares neither.
 fn state_colour(base: Color, state: &StateStyle) -> Option<Color> {
-    let alpha = state.alpha.get();
+    let alpha = state.background_alpha.get();
     if state.background.is_none() && alpha.is_none() {
         return None;
     }

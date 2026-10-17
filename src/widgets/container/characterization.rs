@@ -3907,7 +3907,7 @@ fn hovering_a_gradient_lightens_both_of_its_ends() {
             .width(50.0)
             .height(20.0)
             .gradient(LinearGradient::horizontal(Color::RED, Color::BLUE))
-            .when_hovered(|s| s.lighter(0.1).alpha(0.5)),
+            .when_hovered(|s| s.lighter(0.1).background_alpha(0.5)),
     );
     h.fit(500.0, 500.0);
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
