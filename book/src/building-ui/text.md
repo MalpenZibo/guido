@@ -395,6 +395,46 @@ container().child(text("Body").font_size(14.0).line_height(LineHeight::Absolute(
 A `TextInput` is one line tall, so a field and a label with the same style
 have the same height.
 
+### Centring on the Capitals
+
+A text's box is its line box, and the line box holds the face's whole ascent
+and descent. Most faces leave more room below their capitals than above them,
+so a capitalised label centred in a button or a chip sits a little high — next
+to an icon centred by its own box, enough to read as misaligned.
+
+`text_box` says which lines of the font the box ends on: the first edge above
+the first line, the second below the last. Trimmed to the capitals and the
+baseline, a line of capitals is exactly a capital tall, and centring the box
+centres what is drawn:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .height(28.0)
+    .padding([0.0, 12.0])
+    .corners(14.0)
+    .background(Color::rgb(0.2, 0.2, 0.3))
+    .layout(Flex::row().spacing(6.0).cross_alignment(CrossAlignment::Center))
+    .child(container().width(14.0).height(14.0).background(Color::WHITE))
+    .child(text("Night light").text_box(TextEdge::Cap, TextEdge::Alphabetic))
+# ;
+# }
+```
+
+It is CSS's `text-box: trim-both cap alphabetic`. The top edge is
+`TextEdge::Text` (no trim, the default), `TextEdge::Cap` or `TextEdge::Ex` (the
+top of the lowercase); the bottom is `TextEdge::Text` or
+`TextEdge::Alphabetic`. The cap height and x-height are the face's own, from its
+`OS/2` table, or the top of its `H` and its `x` when it does not declare them.
+
+Only the box moves. The glyphs are drawn where they were, so accents and
+descenders reach past it, and in a text of several lines only the first line's
+top and the last line's bottom are trimmed. A row aligned with
+`CrossAlignment::Baseline` still lines it up on its baseline. Both edges take
+signals, like every other property.
+
 ### Letter Spacing
 
 Extra room after every character, in logical pixels — the unit a design token
@@ -748,5 +788,6 @@ impl Text {
     pub fn align<M>(self, align: impl IntoSignal<TextAlign, M>) -> Self;
     pub fn max_lines<M>(self, lines: impl IntoSignal<Option<u32>, M>) -> Self;  // .max_lines(2)
     pub fn overflow<M>(self, overflow: impl IntoSignal<TextOverflow, M>) -> Self;
+    pub fn text_box<M1, M2>(self, top: impl IntoSignal<TextEdge, M1>, bottom: impl IntoSignal<TextEdge, M2>) -> Self;
 }
 ```

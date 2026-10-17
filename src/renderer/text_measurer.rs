@@ -1,7 +1,7 @@
 use crate::app_state::with_app_state;
 use crate::layout::Size;
 use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
-use crate::widgets::{TextAlign, TextOverflow};
+use crate::widgets::{TextAlign, TextEdge, TextOverflow};
 use cosmic_text::{Buffer, FontSystem};
 use rustc_hash::FxHashMap;
 
@@ -154,6 +154,35 @@ pub struct Measured {
     /// finds words — for a text measured to wrap: the narrowest it can be
     /// before a line runs past its box. Nothing for one that does not wrap.
     pub longest_word: f32,
+    /// Distance from the baseline of the last line down to the bottom edge.
+    pub last_descent: f32,
+    /// How far above the baseline the capitals reach, in the face that draws
+    /// the text: its declared cap height, or the top of its `H`.
+    pub cap_height: f32,
+    /// How far above the baseline the lowercase reaches: the face's x-height,
+    /// or the top of its `x`.
+    pub x_height: f32,
+}
+
+impl Measured {
+    /// How much a box ending on `top` above its first line and on `bottom`
+    /// below its last takes off the line box, at the top and at the bottom.
+    ///
+    /// Negative where the edge lies outside the line box — a cap height taller
+    /// than a tight line — which grows the box rather than trimming it, as CSS
+    /// does.
+    pub fn trim(&self, top: TextEdge, bottom: TextEdge) -> (f32, f32) {
+        let above_baseline = |edge| match edge {
+            TextEdge::Text => None,
+            TextEdge::Cap => Some(self.cap_height),
+            TextEdge::Ex => Some(self.x_height),
+            TextEdge::Alphabetic => Some(0.0),
+        };
+        (
+            above_baseline(top).map_or(0.0, |h| self.baseline - h),
+            above_baseline(bottom).map_or(0.0, |h| self.last_descent + h),
+        )
+    }
 }
 
 pub struct TextMeasurer {
@@ -276,22 +305,35 @@ impl TextMeasurer {
             // Where the first line sits: everything a baseline alignment
             // needs, since that is the line a parent lines its children up on.
             let mut baseline = None;
+            // And where the last line sits on its own, which is the edge a box
+            // trimmed at the bottom is trimmed from.
+            let mut last_baseline = None;
             for run in buffer.layout_runs() {
                 width = width.max(run.line_w);
                 height += run.line_height;
                 baseline.get_or_insert(run.line_y);
+                last_baseline = Some(run.line_y);
             }
 
             // Empty text is still one line tall, of the height it would have.
             if height == 0.0 {
                 height = buffer.metrics().line_height;
             }
+            // Empty text still sits on a line, so a lone label in a baseline
+            // row does not jump when its content clears.
+            let baseline = baseline.unwrap_or(font_size);
+            let face = super::text::resolve_font(
+                &mut self.font_system,
+                font_family,
+                font_weight,
+                font_style,
+            );
+            let px = buffer.metrics().font_size;
 
             // Read off the shaping already done: cosmic-text splits each
             // paragraph into words at the places a line may break, whatever
             // width it then lays them out in.
             let longest_word = if fit.wrap {
-                let font_size = buffer.metrics().font_size;
                 buffer
                     .lines
                     .iter()
@@ -299,7 +341,7 @@ impl TextMeasurer {
                     .flat_map(|shape| &shape.spans)
                     .flat_map(|span| &span.words)
                     .filter(|word| !word.blank)
-                    .map(|word| word.width(font_size))
+                    .map(|word| word.width(px))
                     .fold(0.0, f32::max)
             } else {
                 0.0
@@ -308,9 +350,10 @@ impl TextMeasurer {
             Measured {
                 size: Size::new(width, height),
                 longest_word,
-                // Empty text still sits on a line, so a lone label in a
-                // baseline row does not jump when its content clears.
-                baseline: baseline.unwrap_or(font_size),
+                baseline,
+                last_descent: height - last_baseline.unwrap_or(baseline),
+                cap_height: face.cap_ratio * px,
+                x_height: face.x_ratio * px,
                 wraps: buffer
                     .lines
                     .iter()

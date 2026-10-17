@@ -196,11 +196,7 @@ pub(super) fn shape(
     scale: f32,
 ) -> Buffer {
     let px = crate::renderer::text_measurer::shapeable_size(font_size);
-    let weight = if font_weight == FontWeight::default() {
-        FontWeight::NORMAL
-    } else {
-        font_weight
-    };
+    let weight = drawn_weight(font_weight);
     let declared = match line_height {
         LineHeight::Normal => None,
         LineHeight::Relative(factor) => Some(factor * px),
@@ -240,6 +236,15 @@ pub(super) fn shape(
     buffer
 }
 
+/// The weight a declared one is drawn at: the default is the normal weight.
+pub(super) fn drawn_weight(weight: FontWeight) -> FontWeight {
+    if weight == FontWeight::default() {
+        FontWeight::NORMAL
+    } else {
+        weight
+    }
+}
+
 /// What a declared family, weight and style are drawn in: the installed family
 /// that draws it, and the line height over its size of that family's face
 /// nearest the weight and the style.
@@ -247,6 +252,10 @@ pub(super) fn shape(
 pub(crate) struct ResolvedFont {
     family: FontFamily,
     line_ratio: f32,
+    /// How far above the baseline the capitals and the lowercase reach, over
+    /// the em: what a text's box is trimmed to (`TextEdge`).
+    pub(super) cap_ratio: f32,
+    pub(super) x_ratio: f32,
 }
 
 /// Resolve a declared family, weight and style to the face that draws them.
@@ -279,12 +288,13 @@ pub(crate) struct ResolvedFont {
 /// Kept per family, weight and style in the application's state: the faces every font
 /// system holds are the same ones, fixed once the first of them is built, and a
 /// probe is a shaping.
-fn resolve_font(
+pub(super) fn resolve_font(
     font_system: &mut FontSystem,
     family: FontFamily,
     weight: FontWeight,
     style: FontStyle,
 ) -> ResolvedFont {
+    let weight = drawn_weight(weight);
     let key = (family, weight, style);
     let known = with_app_state(|app| app.resolved_fonts.borrow().get(&key).copied());
     if let Some(resolved) = known {
@@ -305,16 +315,28 @@ fn resolve_font(
         _ => drawing_family_of_a_space(font_system, family),
     };
     let nearest = drawing_family.and_then(|drawing| nearest_face(font_system, drawing));
-    let line_ratio = nearest
-        .and_then(|(id, weight)| font_system.get_font(id, weight.to_cosmic()))
-        .and_then(|font| {
+    let face = nearest.and_then(|(id, weight)| {
+        let index = font_system.db().face(id)?.index;
+        Some((font_system.get_font(id, weight.to_cosmic())?, index))
+    });
+    let line_ratio = face
+        .as_ref()
+        .and_then(|(font, _)| {
             let m = font.metrics();
             line_ratio(m.ascent, m.descent, m.leading, m.units_per_em)
         })
         .unwrap_or(RATIO_WITHOUT_A_FACE);
+    let height_ratio = |declared: Option<f32>, ink, otherwise| {
+        face.as_ref()
+            .and_then(|(font, index)| height_over_em(font, *index, declared, ink))
+            .unwrap_or(otherwise)
+    };
+    let metrics = face.as_ref().map(|(font, _)| font.metrics());
     let resolved = ResolvedFont {
         family: drawing_family.unwrap_or(family),
         line_ratio,
+        cap_ratio: height_ratio(metrics.and_then(|m| m.cap_height), 'H', CAP_WITHOUT_A_FACE),
+        x_ratio: height_ratio(metrics.and_then(|m| m.x_height), 'x', EX_WITHOUT_A_FACE),
     };
     with_app_state(|app| app.resolved_fonts.borrow_mut().insert(key, resolved));
     resolved
@@ -352,6 +374,39 @@ fn line_ratio(ascent: f32, descent: f32, line_gap: f32, units_per_em: u16) -> Op
     let ratio = (ascent - descent + line_gap) / f32::from(units_per_em);
     (ratio.is_finite() && ratio > 0.0).then_some(ratio)
 }
+
+/// How far above the baseline a line of a face reaches, over its em: the
+/// height its `OS/2` table declares, or, where it declares none or zero — a
+/// version-1 table has no field for it — the top of the ink of `ink` in the
+/// face. `None` for a face that says nothing either way.
+///
+/// The ink is read at the face's default instance: the declared height is the
+/// instance's own, and the ink only stands in for a face that does not have
+/// one.
+fn height_over_em(
+    font: &glyphon::cosmic_text::Font,
+    index: u32,
+    declared: Option<f32>,
+    ink: char,
+) -> Option<f32> {
+    use glyphon::cosmic_text::skrifa::{FontRef, MetadataProvider, instance};
+    let from_ink = || {
+        let face = FontRef::from_index(font.data(), index).ok()?;
+        let glyph = face.charmap().map(ink)?;
+        let metrics =
+            face.glyph_metrics(instance::Size::unscaled(), instance::LocationRef::default());
+        metrics.bounds(glyph).map(|bounds| bounds.y_max)
+    };
+    let ratio =
+        declared.filter(|h| *h > 0.0).or_else(from_ink)? / f32::from(font.metrics().units_per_em);
+    (ratio.is_finite() && ratio > 0.0).then_some(ratio)
+}
+
+/// The cap height and x-height over the em where no face says either: the
+/// usual proportions of a Latin face, so a trimmed box is still about the
+/// height of its letters.
+const CAP_WITHOUT_A_FACE: f32 = 0.7;
+const EX_WITHOUT_A_FACE: f32 = 0.5;
 
 /// The line height over the size when no face draws even a space — a font
 /// system with no faces at all, where nothing draws. CSS 2.1 suggests 1.0 to 1.2 for `normal`.
@@ -2152,4 +2207,51 @@ pub(super) mod the_glyph_atlas_holds_a_frame_not_a_history {
     fn a_text_that_changes_every_frame_needs_no_more_atlas_than_one_frame() {
         holds_one_page(atlas_after);
     }
+}
+
+/// A face's cap height and x-height are what its `OS/2` table declares, the
+/// top of its `H` and its `x` where it declares none, and the proportions of
+/// a Latin face where it has neither.
+///
+/// `GuidoCaps.ttf` declares 700 and 500 on a 1000 em (`make_caps_fixture.py`).
+/// DejaVu Sans Mono's table is version 1, which has no field for either, and
+/// its `H` and `x` stand 1493 and 1120 units tall on 2048. Guido Figures
+/// declares zero and has no letters at all.
+#[cfg(test)]
+#[test]
+fn a_faces_cap_height_is_declared_or_read_off_its_ink() {
+    const CAPS: &[u8] = include_bytes!("../../tests/assets/GuidoCaps.ttf");
+    const MONO: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const FIGURES: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Regular.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    for font in [CAPS, MONO, FIGURES] {
+        db.load_font_data(font.to_vec());
+    }
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let mut ratios = |family: &str| {
+        let face = resolve_font(
+            &mut font_system,
+            FontFamily::name(family),
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+        );
+        (face.cap_ratio, face.x_ratio)
+    };
+    let near = |(cap, x): (f32, f32), (want_cap, want_x): (f32, f32), what: &str| {
+        assert!(
+            (cap - want_cap).abs() < 1e-4 && (x - want_x).abs() < 1e-4,
+            "{what}: cap {cap} and x {x}, not {want_cap} and {want_x}"
+        );
+    };
+    near(ratios("Guido Caps"), (0.7, 0.5), "declared");
+    near(
+        ratios("DejaVu Sans Mono"),
+        (1493.0 / 2048.0, 1120.0 / 2048.0),
+        "read off the ink",
+    );
+    near(
+        ratios("Guido Figures"),
+        (CAP_WITHOUT_A_FACE, EX_WITHOUT_A_FACE),
+        "neither",
+    );
 }
