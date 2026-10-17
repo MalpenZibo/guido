@@ -1,0 +1,22 @@
+node 0,0 360x100
+  node 0,0 60x60 at 20,20
+    draw rect 0,0 60x60 fill=#33334dff radius=10/10/10/10
+    node 0,0 60x20
+      draw rect 0,0 60x20 fill=#00ff00ff radius=0/0/0/0
+    overlay rect -5,-5 70x70 fill=#00000000 radius=15/15/15/15 border=#ffffffff@2
+  node 0,0 20x60 at 90,20
+    draw rect 0,0 20x60 fill=#ff0000ff radius=0/0/0/0
+  node 0,0 60x60 at 120,20
+    draw rect 0,0 60x60 fill=#33334dff radius=0/0/0/0
+    overlay rect -6,-6 72x72 fill=#00000000 radius=0/0/0/0 border=#ffffffff@2
+  node 0,0 60x60 at 190,20
+    draw rect 0,0 60x60 fill=#33334dff radius=12/12/12/12 curvature=2
+    overlay rect 3,3 54x54 fill=#00000000 radius=9/9/9/9 curvature=2 border=#ffffffff@3
+  node 0,0 80x60 at 260,20 children_clip(0,0 80x60 r=0)
+    draw rect 0,0 80x60 fill=#33334dff radius=0/0/0/0
+    node 0,0 70x200
+    node 0,0 6x56 at 72,2
+      draw rect 0,0 6x56 fill=#ffffff0d radius=100/100/100/100
+    node 0,0 6x20 at 72,2
+      draw rect 0,0 6x20 fill=#ffffff4d radius=100/100/100/100
+    overlay rect -4,-4 88x68 fill=#00000000 radius=0/0/0/0 border=#ffffffff@2

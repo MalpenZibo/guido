@@ -116,6 +116,27 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.border.map(|b| b.color.get()))
     }
 
+    pub(super) fn effective_outline_width_target(&self, id: WidgetId) -> f32 {
+        let base = self
+            .outline_width_prop()
+            .get_finite_or(0.0, id, "outline_width");
+        self.resolve_state_value(id, base, |state| state.outline.map(|o| o.width.get()))
+    }
+
+    pub(super) fn effective_outline_color_target(&self, id: WidgetId) -> Color {
+        let base = self
+            .outline_color_prop()
+            .get_finite_or(Color::TRANSPARENT, id, "outline_color");
+        self.resolve_state_value(id, base, |state| state.outline.map(|o| o.color.get()))
+    }
+
+    pub(super) fn effective_outline_offset_target(&self, id: WidgetId) -> f32 {
+        let base = self
+            .outline_offset_prop()
+            .get_finite_or(0.0, id, "outline_offset");
+        self.resolve_state_value(id, base, |state| state.outline.map(|o| o.offset.get()))
+    }
+
     pub(super) fn effective_corners_target(&self, id: WidgetId) -> crate::widgets::Corners {
         let base = self
             .corners
@@ -253,6 +274,62 @@ impl Container {
             }
             None => deepest.max(Outsets::ZERO),
         }
+    }
+
+    /// How far past its own bounds this container's outline can reach — its
+    /// offset and its width — and the number its paint reach grows by.
+    ///
+    /// Paint's, not layout's: an outline never reaches layout, so the reach
+    /// is published from `refresh_paint_bounds`, which runs before each Paint
+    /// job, as a transform's is. The answer is a bound over what is declared,
+    /// for the reason [`Self::max_transform_reach`] gives — the declaration,
+    /// every state layer's, inflated by the overshoot a spring still has to
+    /// come, whatever is in flight and every stop of a timeline — so a ring
+    /// that a hover brings up is inside the rect its parent culls against
+    /// before it shows.
+    ///
+    /// The declaration is read tracked, inside the Paint scope both callers
+    /// open; the state layers are snapshots, as the transform's are.
+    pub(super) fn max_outline_reach(&self) -> f32 {
+        if !self.declares_outline() {
+            return 0.0;
+        }
+        let reach = |width: f32, offset: f32| (width.max(0.0) + offset).max(0.0);
+        let width = self.outline_width_prop().get_finite_or_quietly(0.0);
+        let offset = self.outline_offset_prop().get_finite_or_quietly(0.0);
+        let mut declared = reach(width, offset);
+        if let Some(ref ix) = self.interaction {
+            for outline in ix.states.iter().filter_map(|(_, state)| state.outline) {
+                let (w, o) = (
+                    outline.width.get_untracked(),
+                    outline.offset.get_untracked(),
+                );
+                if w.is_finite() && o.is_finite() {
+                    declared = declared.max(reach(w, o));
+                }
+            }
+        }
+
+        let anims = self.anims.as_ref();
+        let (width_anim, offset_anim) = (
+            anims.and_then(|a| a.outline_width()),
+            anims.and_then(|a| a.outline_offset()),
+        );
+        let overshoot = [width_anim, offset_anim]
+            .into_iter()
+            .flatten()
+            .map(|a| a.peak_overshoot())
+            .fold(0.0f32, f32::max);
+        let flying = reach(
+            width_anim.map_or(width, |a| *a.current()),
+            offset_anim.map_or(offset, |a| *a.current()),
+        );
+        // A timeline's stops are values no declaration mentions.
+        let sequenced = reach(
+            width_anim.map_or(width, |a| a.sequence_reach(|w| *w).max(width)),
+            offset_anim.map_or(offset, |a| a.sequence_reach(|o| *o).max(offset)),
+        );
+        (declared * (1.0 + overshoot)).max(flying).max(sequenced)
     }
 
     /// Which of the three components anything can move — the declaration, a
@@ -543,6 +620,36 @@ impl Container {
         })
     }
 
+    /// Whether anything can draw an outline — the declaration, which an
+    /// animation of one comes with, or a state layer. Asked first, so that a
+    /// container without one, which is nearly all of them, walks no state
+    /// layer three times over to find that out.
+    fn declares_outline(&self) -> bool {
+        self.outline_width_prop().is_set()
+            || self
+                .interaction
+                .as_ref()
+                .is_some_and(|ix| ix.states.iter().any(|(_, s)| s.outline.is_some()))
+    }
+
+    pub(super) fn animated_outline(&self, id: WidgetId) -> Option<Outline> {
+        if !self.declares_outline() {
+            return None;
+        }
+        let anims = self.anims.as_ref();
+        Some(Outline {
+            width: get_animated_value(anims.and_then(|a| a.outline_width()), || {
+                self.effective_outline_width_target(id)
+            }),
+            color: get_animated_value(anims.and_then(|a| a.outline_color()), || {
+                self.effective_outline_color_target(id)
+            }),
+            offset: get_animated_value(anims.and_then(|a| a.outline_offset()), || {
+                self.effective_outline_offset_target(id)
+            }),
+        })
+    }
+
     pub(super) fn animated_opacity(&self, id: WidgetId) -> f32 {
         get_animated_value(self.anims.as_ref().and_then(|a| a.opacity()), || {
             self.effective_opacity_target(id)
@@ -690,6 +797,47 @@ pub(super) fn inside_border(
         ..corners
     };
     (bounds.inset(border_width), inner)
+}
+
+/// A container's outline, resolved for one frame.
+#[derive(Clone, Copy)]
+pub(super) struct Outline {
+    pub width: f32,
+    pub color: Color,
+    pub offset: f32,
+}
+
+impl Outline {
+    /// The ring this outline draws around `bounds`, as a border frame: its
+    /// outer edge `offset + width` past the box, its inner edge `offset` past
+    /// it, each rounded corner grown by as much, as CSS grows an outline's —
+    /// a square one stays square — and the curvature kept. `None` where it
+    /// draws nothing.
+    pub(super) fn ring(
+        &self,
+        bounds: Rect,
+        corners: crate::widgets::Corners,
+    ) -> Option<(Rect, crate::widgets::Corners)> {
+        if !border_shows(self.width, self.color) {
+            return None;
+        }
+        let out = self.offset + self.width;
+        let grow = |radius: f32| {
+            if radius > 0.0 {
+                (radius + out).max(0.0)
+            } else {
+                0.0
+            }
+        };
+        let rect = bounds.outset(out);
+        (rect.width > 0.0 && rect.height > 0.0).then(|| {
+            let ring = crate::widgets::Corners {
+                radii: corners.radii.to_array().map(grow).into(),
+                ..corners
+            };
+            (rect, ring)
+        })
+    }
 }
 
 /// The container's own surface, resolved for one frame.

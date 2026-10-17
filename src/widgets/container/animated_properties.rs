@@ -1,4 +1,4 @@
-//! The thirteen animated properties of `Container`, declared in one table.
+//! The sixteen animated properties of `Container`, declared in one table.
 //!
 //! An animated property used to be written out by name in nine places that
 //! nothing kept in step — the field, the seed, the target, the drift check,
@@ -74,8 +74,8 @@ use crate::widgets::Corners;
 ///   declared at, which is `from` for every row but `shadow`'s, for the reason
 ///   written there.
 ///
-/// The test half names `H`, `container()`, `box_of`, `rects`, `borders` and
-/// `painted_style`: it is written here and resolved in
+/// The test half names `H`, `container()`, `box_of`, `rects`, `borders`,
+/// `outlines` and `painted_style`: it is written here and resolved in
 /// `characterization.rs`, which is the only module that asks for those rows.
 macro_rules! animated_properties {
     ($emit:ident) => {
@@ -163,6 +163,33 @@ macro_rules! animated_properties {
                         .background(Color::RED).border(2.0, v),
                     probe: |h: &mut H| borders(&h.paint())[0].1.r,
                     from: 0.0, to: 1.0, then: 0.5, base: 0.0,
+                };
+            outline_width: f32 as f32, target: effective_outline_width_target, layout: no,
+                timeline: yes, state: yes,
+                test {
+                    value: |k| k,
+                    declared_as: |v| container().width(200.0).height(100.0)
+                        .outline(v, Color::WHITE, 0.0),
+                    probe: |h: &mut H| outlines(&h.paint())[0].0,
+                    from: 1.0, to: 10.0, then: 4.0, base: 1.0,
+                };
+            outline_color: Color as Color, target: effective_outline_color_target, layout: no,
+                timeline: yes, state: yes,
+                test {
+                    value: |k| Color::rgb(k, 0.0, 0.0),
+                    declared_as: |v| container().width(200.0).height(100.0)
+                        .outline(2.0, v, 0.0),
+                    probe: |h: &mut H| outlines(&h.paint())[0].1.r,
+                    from: 0.0, to: 1.0, then: 0.5, base: 0.0,
+                };
+            outline_offset: f32 as f32, target: effective_outline_offset_target, layout: no,
+                timeline: yes, state: yes,
+                test {
+                    value: |k| k,
+                    declared_as: |v| container().width(200.0).height(100.0)
+                        .outline(2.0, Color::WHITE, v),
+                    probe: |h: &mut H| outlines(&h.paint())[0].2,
+                    from: 1.0, to: 10.0, then: 4.0, base: 1.0,
                 };
             translate: Translate as Translate, target: effective_translate_target, layout: no,
                 timeline: yes, state: yes,

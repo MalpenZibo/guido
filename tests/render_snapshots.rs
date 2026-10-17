@@ -669,6 +669,46 @@ fn a_border_takes_room_inside_its_box() {
     );
 }
 
+/// An outline is a ring outside its box, drawn after everything the box holds
+/// and taking no room (#767): the siblings of an outlined box sit where they
+/// would without it, a rounded corner grows by the ring's reach and a square
+/// one stays square, a negative offset draws the ring inside the box, and a
+/// scroller's outline is drawn over its scrollbar.
+#[test]
+fn an_outline_takes_no_room() {
+    let view = container()
+        .layout(Flex::row().spacing(10.0))
+        .padding(20.0)
+        .child(
+            box_of(60.0, 60.0)
+                .background(Color::rgb(0.2, 0.2, 0.3))
+                .corners(10.0)
+                .outline(2.0, Color::WHITE, 3.0)
+                .child(swatch(80.0, 20.0, Color::GREEN)),
+        )
+        .child(swatch(20.0, 60.0, Color::RED))
+        .child(
+            box_of(60.0, 60.0)
+                .background(Color::rgb(0.2, 0.2, 0.3))
+                .outline(2.0, Color::WHITE, 4.0),
+        )
+        .child(
+            box_of(60.0, 60.0)
+                .background(Color::rgb(0.2, 0.2, 0.3))
+                .corners(Corners::squircle(12.0))
+                .outline(3.0, Color::WHITE, -6.0),
+        )
+        .child(
+            box_of(80.0, 60.0)
+                .background(Color::rgb(0.2, 0.2, 0.3))
+                .outline(2.0, Color::WHITE, 2.0)
+                .scroll(Scroll::vertical())
+                .child(box_of(80.0, 200.0)),
+        );
+
+    assert_snapshot("an_outline_takes_no_room", render(view, 500.0, 120.0));
+}
+
 /// After `examples/blur_example.rs`: the backdrop blur, which is the one command
 /// carrying a property the golden is the only reader of — `sources` decides
 /// which half of the effect runs, and until this scene existed no golden held a

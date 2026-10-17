@@ -5531,3 +5531,61 @@ fn a_frost_over_a_frost_blurs_it_again() {
             .child(frost(188.0, 20.0, 50.0)),
     );
 }
+
+/// An outline is a ring outside its box, above what the box holds, following
+/// its corners (#767). Four cards ask four things of it: a rounded one with
+/// the ring 3 out and a row that runs out from under it, which the ring is
+/// drawn over; a square one, whose ring stays square; a squircle whose ring is
+/// drawn 6 inside its edge; and one whose ring sits on its edge, with no gap.
+#[test]
+fn an_outline_is_drawn_outside_its_box() {
+    golden(
+        "an_outline_is_drawn_outside_its_box",
+        OUTLINES_SIZE,
+        1.0,
+        BACKDROP,
+        outlines(),
+    );
+}
+
+/// The same four at scale 2, where the ring's width and its offset are both
+/// doubled, and a ring that missed the scale would sit a pixel off its corner
+/// or come out half as wide.
+#[test]
+fn an_outline_is_drawn_outside_its_box_at_scale_2x() {
+    golden(
+        "an_outline_is_drawn_outside_its_box_at_scale_2x",
+        OUTLINES_SIZE,
+        2.0,
+        BACKDROP,
+        outlines(),
+    );
+}
+
+const OUTLINES_SIZE: (f32, f32) = (420.0, 120.0);
+
+/// One scene for both scales.
+fn outlines() -> Container {
+    let card = || box_of(70.0, 70.0).background(Color::rgb(0.25, 0.30, 0.45));
+    container()
+        .background(BACKDROP)
+        .padding(25.0)
+        .layout(Flex::row().spacing(30.0))
+        .child(
+            card()
+                .corners(14.0)
+                .outline(2.0, Color::WHITE, 3.0)
+                .child(swatch(70.0, 20.0, Color::rgb(0.95, 0.45, 0.25)).translate((20.0, 25.0))),
+        )
+        .child(card().outline(3.0, Color::rgb(0.40, 0.75, 1.0), 4.0))
+        .child(
+            card()
+                .corners(Corners::squircle(20.0))
+                .outline(3.0, Color::WHITE, -6.0),
+        )
+        .child(card().corners(Corners::rounded(35.0)).outline(
+            4.0,
+            Color::rgb(0.95, 0.80, 0.30),
+            0.0,
+        ))
+}
