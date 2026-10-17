@@ -78,7 +78,24 @@ use super::{Alignment, Constraints, Layout, Size};
 /// at the stack's size there, so it has none and stays where the stack is. A
 /// child larger than the stack on an axis is shared out the same way, so
 /// `CENTER` overhangs both edges equally, as Flutter's `Stack` and SwiftUI's
-/// `ZStack` do.
+/// `ZStack` do. A child is larger than the stack where its length is
+/// [`natural()`](super::natural), since every other length is cut to what the
+/// stack offers:
+///
+/// ```
+/// use guido::prelude::*;
+///
+/// container()
+///     .width(100)
+///     .overflow(Overflow::Hidden)
+///     .layout(ZStack::new().align(Alignment::CENTER))
+///     // 160 wide in a stack of 100: 30 past each side, cut off there
+///     .child(
+///         container()
+///             .width(natural())
+///             .child(container().width(160).height(20)),
+///     );
+/// ```
 #[derive(Default)]
 pub struct ZStack {
     align: Prop<Alignment>,

@@ -2059,6 +2059,8 @@ impl Widget for Container {
         // which subscribes to nothing: this read is what lays the parent out
         // again when it changes.
         let _ = self.align_self_prop().get();
+        let declared = self.declared_lengths();
+        let constraints = Self::own_constraints(declared, constraints);
 
         // Before `ensure_scrollbar_containers`, which reads the resolved
         // visibility to decide whether to build the parts at all — and before
@@ -2066,7 +2068,7 @@ impl Widget for Container {
         // measured from the resolved width and margin.
         self.resolve_scroll();
 
-        let boundary = self.is_relayout_boundary_for(constraints);
+        let boundary = self.is_relayout_boundary_for(declared, constraints);
         ctx.tree().set_relayout_boundary(id, boundary);
         self.ensure_scrollbar_containers(ctx.tree(), id);
         // Before the parent places this container, which is the move a slide

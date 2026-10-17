@@ -77,13 +77,28 @@ pub(super) struct ChildLayout {
 }
 
 impl Container {
+    /// The declared width and height, read untracked: for the two questions
+    /// the layout asks before [`read_box_lengths`](Self::read_box_lengths)
+    /// reads the same lengths under tracking, which is what subscribes this
+    /// layout to them. Read once, as both questions take them.
+    pub(super) fn declared_lengths(&self) -> (Length, Length) {
+        (
+            self.width.get_or_untracked(Length::default()),
+            self.height.get_or_untracked(Length::default()),
+        )
+    }
+
     /// Whether this container's size is independent of its children, so a
     /// dirty descendant can stop bubbling here instead of reaching the root.
     ///
     /// Only a descendant: the size still follows this container's own
     /// signals, so its own changes go on to the parent, which places it.
     /// `Tree::mark_needs_layout` never stops at the widget that changed.
-    pub(super) fn is_relayout_boundary_for(&self, constraints: Constraints) -> bool {
+    pub(super) fn is_relayout_boundary_for(
+        &self,
+        (width, height): (Length, Length),
+        constraints: Constraints,
+    ) -> bool {
         // A layout-affecting animation re-sizes the container every frame, so
         // the parent has to keep repositioning its siblings: not a boundary.
         let has_active_layout_anim = self.anims.as_deref().is_some_and(|declared| {
@@ -95,22 +110,29 @@ impl Container {
             return false;
         }
 
-        // Snapshots: this runs inside the container's own layout, which reads
-        // the same signals under tracking right after, so the subscription
-        // exists either way.
-        let has_fixed_width = self
-            .width
-            .get_or_untracked(Length::default())
-            .exact_size()
-            .is_some();
-        let has_fixed_height = self
-            .height
-            .get_or_untracked(Length::default())
-            .exact_size()
-            .is_some();
+        let has_fixed_width = width.exact_size().is_some();
+        let has_fixed_height = height.exact_size().is_some();
         let tight_width = constraints.min_width == constraints.max_width;
         let tight_height = constraints.min_height == constraints.max_height;
         (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
+    }
+
+    /// What this box is laid out under: its parent's constraints, except on an
+    /// axis whose length is [`natural`](crate::layout::natural), which has
+    /// neither a minimum nor a maximum there — so the content is measured
+    /// unbounded, and the box is neither cut to the parent nor raised to it.
+    pub(super) fn own_constraints(
+        (width, height): (Length, Length),
+        constraints: Constraints,
+    ) -> Constraints {
+        let mut own = constraints;
+        if width.is_natural() {
+            (own.min_width, own.max_width) = (0.0, f32::INFINITY);
+        }
+        if height.is_natural() {
+            (own.min_height, own.max_height) = (0.0, f32::INFINITY);
+        }
+        own
     }
 
     /// Read the declared padding, border width and lengths, tracked so a later
@@ -350,7 +372,8 @@ impl Container {
     /// flex whose children do not fit takes it down to.
     ///
     /// An exact length is rigid, at any depth: an icon of a declared width
-    /// inside a button keeps it however crowded the row the button is in. A
+    /// inside a button keeps it however crowded the row the button is in, and
+    /// a natural one is as rigid at the size its content gave it. A
     /// box whose content may run past it — cut off, or scrolled to — need not
     /// hold it, as CSS gives a scroll container no automatic minimum, and goes
     /// down to the minimum it declares. Any other box goes no lower than its
@@ -363,6 +386,9 @@ impl Container {
             }
             if let Some(exact) = length.exact_size() {
                 return length.clamp(exact);
+            }
+            if length.is_natural() {
+                return size;
             }
             let declared = length.min().unwrap_or(0.0);
             if self.content_may_overflow(axis, lengths.overflow) {
@@ -445,7 +471,7 @@ impl Container {
                 // ran, so reaching here means the constraints were unbounded
                 // and there was no share to take — which sizes to content, as
                 // an undeclared length does.
-                Extent::Auto | Extent::Fraction(_) => content,
+                Extent::Auto | Extent::Fraction(_) | Extent::Natural => content,
             }
         };
 

@@ -1,0 +1,16 @@
+node 0,0 140x200
+  node 0,0 100x40 at 20,20 children_clip(0,0 100x40 r=0)
+    draw rect 0,0 100x40 fill=#ffffffff radius=0/0/0/0
+    node 0,0 160x20 at -30,10
+      node 0,0 160x20
+        draw rect 0,0 160x20 fill=#0000ffff radius=0/0/0/0
+  node 0,0 100x40 at 20,80
+    draw rect 0,0 100x40 fill=#ffffffff radius=0/0/0/0
+    node 0,0 160x20
+      node 0,0 160x20
+        draw rect 0,0 160x20 fill=#0000ffff radius=0/0/0/0
+  node 0,0 100x40 at 20,140 children_clip(0,0 100x40 r=0)
+    draw rect 0,0 100x40 fill=#ffffffff radius=0/0/0/0
+    node 0,0 100x20 at 0,10
+      node 0,0 100x20
+        draw rect 0,0 100x20 fill=#0000ffff radius=0/0/0/0

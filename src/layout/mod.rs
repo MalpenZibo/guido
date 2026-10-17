@@ -70,7 +70,15 @@ impl IntoF32 for u32 {
 /// // Range (both work)
 /// container().width(at_least(50.0).at_most(400.0));
 /// container().width(at_most(400.0).at_least(50.0));
+///
+/// // Every pixel offered, a share of it, or the content's own size
+/// container().width(fill());
+/// container().width(fraction(0.5));
+/// container().width(natural());
 /// ```
+///
+/// Every length but [`natural()`] is cut to the parent's maximum: a box is
+/// never wider than its parent offers unless it is the content's own size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Length {
     extent: Extent,
@@ -82,7 +90,7 @@ pub struct Length {
 
 /// How big the box is, before its bounds are applied.
 ///
-/// Four cases, and exactly one holds — which is the point of it being one
+/// Five cases, and exactly one holds — which is the point of it being one
 /// field. A box cannot be both an exact size and a share of its parent, and a
 /// representation that can say so is one the layout has to pick a winner from.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -102,6 +110,8 @@ pub enum Extent {
     ///
     /// [`Exact`]: Extent::Exact
     Fraction(f32),
+    /// The size of the content, whatever the parent offers — see [`natural`].
+    Natural,
 }
 
 impl Extent {
@@ -112,7 +122,7 @@ impl Extent {
     pub fn declared_size(&self) -> Option<f32> {
         match self {
             Extent::Exact(size) | Extent::Fraction(size) => Some(*size),
-            Extent::Auto | Extent::Fill => None,
+            Extent::Auto | Extent::Fill | Extent::Natural => None,
         }
     }
 }
@@ -173,6 +183,11 @@ impl Length {
         matches!(self.extent, Extent::Fill)
     }
 
+    /// Whether this length is the content's size whatever the parent offers.
+    pub fn is_natural(&self) -> bool {
+        matches!(self.extent, Extent::Natural)
+    }
+
     /// Whether the size is settled without measuring the content.
     ///
     /// What the layout asks before passing a minimum down: an exact length and
@@ -184,7 +199,7 @@ impl Length {
         match self.extent {
             Extent::Exact(_) => true,
             Extent::Fill => available.is_finite(),
-            Extent::Auto | Extent::Fraction(_) => false,
+            Extent::Auto | Extent::Fraction(_) | Extent::Natural => false,
         }
     }
 
@@ -325,6 +340,40 @@ pub fn fill() -> Length {
 /// ```
 pub fn fraction(f: impl IntoF32) -> Length {
     Length::default().with(Extent::Fraction(f.into_f32()))
+}
+
+/// Create a length that is the content's own size, whatever the parent
+/// offers — CSS's `max-content` that a flex never shrinks, SwiftUI's
+/// `fixedSize`.
+///
+/// The content is measured with no maximum on this axis, so a label neither
+/// wraps nor ellipsizes, and the box is never cut to its parent's maximum: a
+/// row too short for it holds it at its size as it holds an exact length, and
+/// it runs past the parent's edge. It is cut off there only where the parent
+/// hides its overflow. Its own bounds still apply, so `natural().at_most(300)`
+/// is the content's size up to 300.
+///
+/// What it is for is a box whose content must not change while the box around
+/// it does: an island that shrinks from one view's size to the next uncovers
+/// and covers what it holds, rather than re-wrapping it every frame.
+///
+/// # Examples
+/// ```
+/// use guido::prelude::*;
+///
+/// let wide = create_signal(true);
+/// container()
+///     .width((move || if wide.get() { 320.0 } else { 120.0 }).transition(SpringConfig::SNAPPY))
+///     .overflow(Overflow::Hidden)
+///     .layout(ZStack::new().align(Alignment::CENTER))
+///     .child(
+///         container()
+///             .width(natural())
+///             .child(text("A label that keeps its one line")),
+///     );
+/// ```
+pub fn natural() -> Length {
+    Length::default().with(Extent::Natural)
 }
 
 /// f32 converts to exact sizing
@@ -522,6 +571,11 @@ mod a_length_is_what_it_carries {
             None,
             "nor is taking what is offered"
         );
+        assert_eq!(
+            Extent::Natural.declared_size(),
+            None,
+            "nor is being the content's size"
+        );
         assert_eq!(Extent::Exact(12.0).declared_size(), Some(12.0));
         assert_eq!(Extent::Fraction(0.25).declared_size(), Some(0.25));
 
@@ -540,21 +594,23 @@ mod a_length_is_what_it_carries {
         );
     }
 
-    /// The four sizing cases are four, and each one says only itself.
+    /// The five sizing cases are five, and each one says only itself.
     ///
     /// They were three independent fields, so `exact(10)` and `fill` and
     /// `fraction(0.5)` could all be set at once and the layout would silently
     /// honour whichever its `if / else if` chain reached first.
     #[test]
-    fn the_four_sizing_cases_are_mutually_exclusive() {
+    fn the_five_sizing_cases_are_mutually_exclusive() {
         assert_eq!(Length::default().extent(), Extent::Auto);
         assert_eq!(Length::from(10.0f32).extent(), Extent::Exact(10.0));
         assert_eq!(fill().extent(), Extent::Fill);
         assert_eq!(fraction(0.5).extent(), Extent::Fraction(0.5));
+        assert_eq!(natural().extent(), Extent::Natural);
 
         // A bound is orthogonal to the extent and does not disturb it.
         assert_eq!(fill().at_least(4.0).extent(), Extent::Fill);
         assert_eq!(at_least(4.0).extent(), Extent::Auto);
+        assert_eq!(natural().at_most(4.0).extent(), Extent::Natural);
     }
 
     /// An absent bound reads as absent, although it is stored as a number.
