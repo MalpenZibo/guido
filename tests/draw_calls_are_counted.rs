@@ -200,6 +200,79 @@ fn a_group_s_paths_are_one_call_whatever_lies_between_them() {
     );
 }
 
+/// A zigzag stroked with dashes ten pixels to a period, started `offset` in.
+struct Dashed(f32);
+
+impl Widget for Dashed {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        constraints.constrain(Size::new(16.0, 16.0))
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        let zigzag = Path::new()
+            .move_to((1.0, 14.0))
+            .line_to((6.0, 2.0))
+            .line_to((10.0, 12.0))
+            .line_to((15.0, 3.0));
+        let line = Stroke::new(1.6, Color::WHITE).dashes(&[6.0, 4.0], self.0);
+        ctx.draw_path(&zigzag, None, line);
+    }
+}
+
+/// A dashed mesh is cached by its pattern and offset as well as its path, and
+/// the offset modulo the pattern: two offsets a period apart are one mesh,
+/// which is what lets dashes marching along a path reuse what they drew a
+/// period ago, and an offset between them is a mesh of its own — kept beside
+/// the first rather than in its place, so a second frame of the same strokes
+/// tessellates nothing.
+#[test]
+fn dashes_a_period_apart_are_one_mesh() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .background(backdrop)
+                .layout(Flex::row().spacing(8.0))
+                .child(Dashed(3.0))
+                .child(Dashed(13.0))
+                .child(Dashed(4.0))
+                .child(Drawn::Line)
+        },
+    );
+    app.configure(surface, 240, 20, 1.0);
+    render_stats::reset_stats();
+    app.step();
+    assert_eq!(
+        render_stats::get_stats().path_meshes,
+        PathMeshes {
+            tessellated: 3,
+            reused: 1,
+        },
+        "3 and 13 are one offset; 4 is another, and the same path undashed a \
+         third mesh"
+    );
+
+    backdrop.set(Color::rgb(0.2, 0.2, 0.2));
+    render_stats::reset_stats();
+    app.step();
+    let stats = render_stats::get_stats();
+    assert_eq!(stats.frames_painted, 1, "the second frame was not painted");
+    assert_eq!(
+        stats.path_meshes,
+        PathMeshes {
+            tessellated: 0,
+            reused: 4,
+        },
+        "a mesh was tessellated again for the strokes the first frame drew"
+    );
+}
+
 /// A shape painted over a path is drawn over it: the group splits there, as
 /// it splits for a shape over an image, and each half draws its own shapes
 /// and its own paths.

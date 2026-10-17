@@ -537,11 +537,15 @@ impl<'a> PaintContext<'a> {
 
     /// Stroke `sweep` degrees of the circle of `radius` around `center`,
     /// starting `start` degrees clockwise from twelve o'clock — the line's
-    /// width, colour and cap are `stroke`'s, and its join is not used.
+    /// width, colour, cap and [dashes](Stroke::dashes) are `stroke`'s, and
+    /// its join is not used.
     ///
-    /// Drawn exactly as one shape rather than tessellated, so an arc whose
-    /// sweep animates costs every frame the same. A sweep of zero draws
-    /// nothing, whatever the cap; a full turn or more draws a ring.
+    /// A solid arc is drawn exactly as one shape rather than tessellated, so
+    /// an arc whose sweep animates costs every frame the same. A dashed arc is
+    /// drawn as a path, cut and tessellated as [`draw_path`](Self::draw_path)
+    /// cuts any other — a new sweep or offset is a new tessellation. A sweep
+    /// of zero draws nothing, whatever the cap; a full turn or more draws a
+    /// ring.
     ///
     /// ```
     /// # use guido::prelude::*;
@@ -571,6 +575,11 @@ impl<'a> PaintContext<'a> {
         if sweep == 0.0 || stroke.width.is_nan() || stroke.width <= 0.0 {
             return;
         }
+        if stroke.dashes.is_some() {
+            let path = Path::arc(center.into(), radius, start, sweep);
+            self.draw_path(&path, None, stroke);
+            return;
+        }
         self.node.commands.push(Rc::new(DrawCommand::Arc {
             center: center.into(),
             radius,
@@ -588,7 +597,8 @@ impl<'a> PaintContext<'a> {
     /// Either may be `None`, and a bare `Fill` or `Stroke` is taken as it is.
     /// The path is tessellated the first time it is drawn at a scale and kept,
     /// so drawing the same path again — moved, turned, faded or recoloured —
-    /// costs no tessellation; a path with new segments does.
+    /// costs no tessellation; a path with new segments does, and so does a
+    /// stroke with a new dash pattern or offset.
     ///
     /// ```
     /// # use guido::prelude::*;

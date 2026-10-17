@@ -128,6 +128,39 @@ impl Path {
         self.push(PathElement::Close)
     }
 
+    /// `sweep` degrees of the circle of `radius` around `center`, from
+    /// `start` degrees clockwise from twelve o'clock, as
+    /// [`draw_arc`](super::PaintContext::draw_arc) measures it: one cubic
+    /// per quarter turn or less, and closed once the sweep is a full turn.
+    pub(crate) fn arc(center: Point, radius: f32, start: f32, sweep: f32) -> Self {
+        let ring = sweep.abs() >= 360.0;
+        let sweep = if ring { 360.0 } else { sweep };
+        let at = |angle: f32| {
+            let (sin, cos) = angle.to_radians().sin_cos();
+            Point::new(center.x + radius * sin, center.y - radius * cos)
+        };
+        // The tangent at `angle`, a radius long, in the direction of growing
+        // angles.
+        let along = |angle: f32| {
+            let (sin, cos) = angle.to_radians().sin_cos();
+            Point::new(radius * cos, radius * sin)
+        };
+        let pieces = (sweep.abs() / 90.0).ceil().max(1.0) as usize;
+        let step = sweep / pieces as f32;
+        let k = 4.0 / 3.0 * (step.to_radians() / 4.0).tan();
+        let mut path = Path::new().move_to(at(start));
+        for i in 0..pieces {
+            let (from, to) = (start + step * i as f32, start + step * (i + 1) as f32);
+            let (p0, p1, t0, t1) = (at(from), at(to), along(from), along(to));
+            path = path.cubic_to(
+                (p0.x + k * t0.x, p0.y + k * t0.y),
+                (p1.x - k * t1.x, p1.y - k * t1.y),
+                p1,
+            );
+        }
+        if ring { path.close() } else { path }
+    }
+
     /// The segments, in order.
     pub fn elements(&self) -> &[PathElement] {
         &self.inner.elements
@@ -246,9 +279,58 @@ pub enum Join {
     Bevel,
 }
 
+/// How a stroke is cut into dashes: lengths along the path, in logical
+/// pixels, taken in turn as a dash and a gap and repeated, starting `offset`
+/// pixels into the pattern. Made by [`Stroke::dashes`], which is what keeps it
+/// a pattern that draws something.
+///
+/// Two are equal when their lengths and offsets are the same bits, which is
+/// what lets a dashed mesh be cached by its `Dashes` as well as its path.
+#[derive(Debug, Clone)]
+pub struct Dashes {
+    pattern: Rc<[f32]>,
+    offset: f32,
+}
+
+impl Dashes {
+    /// The lengths, dash first, always an even number of them.
+    pub fn pattern(&self) -> &[f32] {
+        &self.pattern
+    }
+
+    /// How far into the pattern the path starts, from zero up to one period.
+    pub fn offset(&self) -> f32 {
+        self.offset
+    }
+}
+
+impl PartialEq for Dashes {
+    fn eq(&self, other: &Self) -> bool {
+        let bits = |l: &f32| l.to_bits();
+        self.offset.to_bits() == other.offset.to_bits()
+            && (Rc::ptr_eq(&self.pattern, &other.pattern)
+                || self
+                    .pattern
+                    .iter()
+                    .map(bits)
+                    .eq(other.pattern.iter().map(bits)))
+    }
+}
+
+impl Eq for Dashes {}
+
+impl Hash for Dashes {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for length in self.pattern.iter() {
+            length.to_bits().hash(state);
+        }
+        self.offset.to_bits().hash(state);
+    }
+}
+
 /// How the outline of a path is painted: a line `width` logical pixels wide,
-/// centred on it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// centred on it, solid unless it has [dashes](Stroke::dashes).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Stroke {
     pub width: f32,
     pub color: Color,
@@ -257,6 +339,8 @@ pub struct Stroke {
     /// How far a miter may reach past the corner, as a multiple of half the
     /// width, before it is cut square. 4 is SVG's default.
     pub miter_limit: f32,
+    /// Where the line is cut into dashes; `None` draws it solid.
+    pub dashes: Option<Dashes>,
 }
 
 impl Stroke {
@@ -268,6 +352,7 @@ impl Stroke {
             cap: Cap::Butt,
             join: Join::Miter,
             miter_limit: 4.0,
+            dashes: None,
         }
     }
 
@@ -287,6 +372,56 @@ impl Stroke {
     /// Held at 1 or more, where SVG holds it.
     pub fn miter_limit(mut self, limit: f32) -> Self {
         self.miter_limit = limit.max(1.0);
+        self
+    }
+
+    /// Cut the line into dashes: `pattern` is the lengths of a dash, a gap, a
+    /// dash and so on, in logical pixels, repeated along each subpath, and the
+    /// path starts `offset` pixels into it — a larger offset moves the dashes
+    /// back towards the start, as SVG's `stroke-dashoffset` does.
+    ///
+    /// Each dash is a line of its own, with the stroke's caps at both ends and
+    /// its joins wherever it turns a corner, so a dash of zero length with
+    /// round caps is a dot. On a closed subpath a dash that runs through the
+    /// start is one dash, joined there.
+    ///
+    /// An odd number of lengths is repeated to make an even one, as SVG and
+    /// Canvas repeat it. A pattern that adds up to nothing, or holds a
+    /// negative or non-finite length, draws the line solid.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # use guido::widget_prelude::*;
+    /// let dotted = Stroke::new(2.0, Color::WHITE)
+    ///     .caps(Cap::Round)
+    ///     .dashes(&[0.0, 6.0], 0.0);
+    /// assert_eq!(dotted.dashes.unwrap().pattern(), [0.0, 6.0]);
+    ///
+    /// let solid = Stroke::new(2.0, Color::WHITE).dashes(&[0.0, 0.0], 3.0);
+    /// assert_eq!(solid.dashes, None);
+    /// ```
+    ///
+    /// The offset is kept modulo the pattern's length, so an offset that
+    /// grows every frame draws the same few meshes over and over — but each
+    /// new offset is a new tessellation of the whole path.
+    pub fn dashes(mut self, pattern: &[f32], offset: f32) -> Self {
+        let valid = pattern.iter().all(|l| l.is_finite() && *l >= 0.0);
+        let period: f32 = pattern.iter().sum();
+        self.dashes = (valid && period > 0.0 && period.is_finite()).then(|| {
+            let (pattern, period) = if pattern.len() % 2 == 1 {
+                ([pattern, pattern].concat(), period * 2.0)
+            } else {
+                (pattern.to_vec(), period)
+            };
+            let offset = if offset.is_finite() { offset } else { 0.0 };
+            // Plus zero turns a negative zero positive, so it keys one mesh.
+            let offset = offset.rem_euclid(period) + 0.0;
+            Dashes {
+                pattern: pattern.into(),
+                // `rem_euclid` can round up to the period itself, which is zero.
+                offset: if offset < period { offset } else { 0.0 },
+            }
+        });
         self
     }
 
@@ -348,12 +483,77 @@ mod tests {
         assert_eq!(Path::new().bounds(), Rect::default());
     }
 
+    /// An arc's path starts and ends where the arc does, runs through the
+    /// circle in between, and is closed only for a full turn.
+    #[test]
+    fn an_arc_s_path_lies_on_its_circle() {
+        let center = Point::new(10.0, 20.0);
+        let near = |p: Point, x: f32, y: f32| (p.x - x).abs() < 1e-3 && (p.y - y).abs() < 1e-3;
+        let arc = Path::arc(center, 5.0, 0.0, 90.0);
+        assert!(near(arc.elements()[0].points().next().unwrap(), 10.0, 15.0));
+        let PathElement::CubicTo { to, .. } = *arc.elements().last().unwrap() else {
+            panic!("an arc is cubics");
+        };
+        assert!(
+            near(to, 15.0, 20.0),
+            "a quarter turn clockwise ends at three o'clock"
+        );
+        // The midpoint of a cubic is within a hair of the circle.
+        let PathElement::CubicTo { first, second, to } = arc.elements()[1] else {
+            unreachable!()
+        };
+        let from = Point::new(10.0, 15.0);
+        let mid = Point::new(
+            (from.x + 3.0 * first.x + 3.0 * second.x + to.x) / 8.0,
+            (from.y + 3.0 * first.y + 3.0 * second.y + to.y) / 8.0,
+        );
+        let r = ((mid.x - center.x).powi(2) + (mid.y - center.y).powi(2)).sqrt();
+        assert!(
+            (r - 5.0).abs() < 0.01,
+            "the midpoint is {r} from the centre"
+        );
+
+        let back = Path::arc(center, 5.0, 0.0, -90.0);
+        let PathElement::CubicTo { to, .. } = *back.elements().last().unwrap() else {
+            unreachable!()
+        };
+        assert!(near(to, 5.0, 20.0), "a negative sweep runs anticlockwise");
+
+        assert_eq!(Path::arc(center, 5.0, 0.0, 270.0).elements().len(), 4);
+        let ring = Path::arc(center, 5.0, 30.0, 400.0);
+        assert_eq!(
+            ring.elements().len(),
+            6,
+            "four quarters, a move and a close"
+        );
+        assert_eq!(ring.elements().last(), Some(&PathElement::Close));
+    }
+
     #[test]
     fn a_stroke_reaches_as_far_as_its_corners_and_ends_can() {
         let s = Stroke::new(2.0, Color::WHITE);
         assert_eq!(s.reach(), 4.0, "a miter of four half-widths");
-        assert_eq!(s.joins(Join::Round).reach(), 1.0);
+        assert_eq!(s.clone().joins(Join::Round).reach(), 1.0);
         let square = s.joins(Join::Bevel).caps(Cap::Square).reach();
         assert!((square - std::f32::consts::SQRT_2).abs() < 1e-6);
+    }
+
+    /// An odd pattern is said twice, and the offset is kept inside one
+    /// period, so two offsets a period apart are one stroke.
+    #[test]
+    fn a_pattern_is_kept_even_and_its_offset_inside_one_period() {
+        let s = Stroke::new(1.0, Color::WHITE);
+        let odd = s.clone().dashes(&[3.0, 1.0, 2.0], 0.0);
+        assert_eq!(
+            odd.dashes.as_ref().unwrap().pattern(),
+            [3.0, 1.0, 2.0, 3.0, 1.0, 2.0]
+        );
+        let at = |offset| s.clone().dashes(&[4.0, 6.0], offset);
+        assert_eq!(at(3.0), at(13.0));
+        assert_eq!(at(3.0), at(-7.0));
+        assert_eq!(at(10.0).dashes.unwrap().offset(), 0.0);
+        assert_eq!(at(f32::INFINITY).dashes.unwrap().offset(), 0.0);
+        assert_ne!(at(3.0), at(4.0));
+        assert_eq!(at(-0.0), at(0.0));
     }
 }

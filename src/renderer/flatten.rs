@@ -982,7 +982,7 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             // them by its half width, its miters and its caps — and the fringe
             // by half a pixel more.
             path.bounds()
-                .outset(stroke.map_or(0.0, |s| s.reach()) + 1.0)
+                .outset(stroke.as_ref().map_or(0.0, |s| s.reach()) + 1.0)
         }
         DrawCommand::Image { rect, .. } => *rect,
         DrawCommand::BackdropBlur { rect, .. } | DrawCommand::InputRegion { rect, .. } => *rect,

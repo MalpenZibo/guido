@@ -4174,18 +4174,59 @@ fn a_sparkline_has_one_tone_at_every_join() {
     );
 }
 
+/// Dashed arcs are cut like any path: a three-quarter arc with butt caps and
+/// one with round caps, each pattern started part of the way in, an arc
+/// swept the other way, and a full ring whose last dash runs into its first.
+/// Before dashes reached arcs, each of these drew a solid line.
+#[test]
+fn a_dashed_arc_is_cut_like_a_path() {
+    let teal = Color::rgb(0.40, 0.85, 0.75);
+    golden(
+        "a_dashed_arc_is_cut_like_a_path",
+        (380.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                let line = Stroke::new(5.0, teal).dashes(&[14.0, 6.0], 4.0);
+                ctx.draw_arc((40.0, 40.0), 32.0, -135.0, 270.0, line);
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                let line = Stroke::new(5.0, teal)
+                    .caps(Cap::Round)
+                    .dashes(&[12.0, 9.0], 4.0);
+                ctx.draw_arc((40.0, 40.0), 32.0, -135.0, 270.0, line);
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                let line = Stroke::new(4.0, teal)
+                    .caps(Cap::Round)
+                    .dashes(&[0.0, 8.0], 0.0);
+                ctx.draw_arc((40.0, 40.0), 32.0, 90.0, -200.0, line);
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                let line = Stroke::new(4.0, teal).dashes(&[15.0, 5.0], 7.0);
+                ctx.draw_arc((40.0, 40.0), 32.0, 0.0, 360.0, line);
+            })),
+    );
+}
+
+/// A blob of curves, closed.
+fn blob() -> VectorPath {
+    VectorPath::new()
+        .move_to((10.0, 40.0))
+        .cubic_to((10.0, 5.0), (60.0, 0.0), (70.0, 30.0))
+        .quad_to((85.0, 70.0), (40.0, 70.0))
+        .close()
+}
+
 /// Closed paths, filled: a star by each rule, curves filled and stroked, and
 /// a ring cut by even-odd. Half alpha on the stroke over the fill, so where
 /// the stroke's inner half lies over the fill is visible as a band of its own.
 #[test]
 fn closed_paths_are_filled() {
-    let blob = || {
-        VectorPath::new()
-            .move_to((10.0, 40.0))
-            .cubic_to((10.0, 5.0), (60.0, 0.0), (70.0, 30.0))
-            .quad_to((85.0, 70.0), (40.0, 70.0))
-            .close()
-    };
     let ring = || {
         let square = |path: VectorPath, x: f32, side: f32| {
             path.move_to((x, x))
@@ -4228,6 +4269,108 @@ fn closed_paths_are_filled() {
                     &ring(),
                     Fill::color(Color::rgb(0.85, 0.35, 0.30)).rule(FillRule::EvenOdd),
                     None,
+                );
+            })),
+    );
+}
+
+/// Dashed strokes, each pattern started part of the way in: a polyline with
+/// butt caps and miters and the same polyline with round caps and joins,
+/// whose dashes keep every corner they turn and are capped only at their
+/// ends; a closed blob of curves, whose dash through its start is one dash
+/// joined there rather than two capped; a closed square of round dots; and
+/// last a polyline given a pattern of no length, which draws it solid.
+#[test]
+fn dashed_strokes_keep_their_caps_and_joins() {
+    let blue = Color::rgb(0.45, 0.80, 1.0);
+    let gold = Color::rgb(0.95, 0.75, 0.25);
+    golden(
+        "dashed_strokes_keep_their_caps_and_joins",
+        (470.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(3.0, blue).dashes(&[12.0, 5.0], 3.0),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(3.0, blue)
+                        .caps(Cap::Round)
+                        .joins(Join::Round)
+                        .dashes(&[12.0, 7.0], 3.0),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &blob(),
+                    None,
+                    Stroke::new(4.0, gold).dashes(&[14.0, 6.0], 5.0),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                let square = VectorPath::new()
+                    .move_to((8.0, 8.0))
+                    .line_to((72.0, 8.0))
+                    .line_to((72.0, 72.0))
+                    .line_to((8.0, 72.0))
+                    .close();
+                ctx.draw_path(
+                    &square,
+                    None,
+                    Stroke::new(5.0, gold)
+                        .caps(Cap::Round)
+                        .dashes(&[0.0, 9.0, 6.0, 9.0], 2.0),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(3.0, Color::WHITE).dashes(&[0.0, 0.0], 3.0),
+                );
+            })),
+    );
+}
+
+/// The same dashes at a fractional scale: the pattern is in logical pixels,
+/// as the path is, so the dashes fall where they fell at 1x and only the
+/// edges are finer.
+#[test]
+fn dashed_strokes_keep_their_caps_and_joins_at_scale_1_5() {
+    golden(
+        "dashed_strokes_keep_their_caps_and_joins_at_scale_1_5",
+        (200.0, 100.0),
+        1.5,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(3.0, Color::rgb(0.45, 0.80, 1.0))
+                        .caps(Cap::Round)
+                        .joins(Join::Round)
+                        .dashes(&[12.0, 7.0], 3.0),
+                );
+            }))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &blob(),
+                    None,
+                    Stroke::new(4.0, Color::rgb(0.95, 0.75, 0.25)).dashes(&[14.0, 6.0], 5.0),
                 );
             })),
     );

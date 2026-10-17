@@ -10,7 +10,9 @@
 //! tessellated paths that a timer gives new readings — so `draw.paths` says
 //! how many calls the paths cost a frame, and `path.tessellated` against
 //! `path.reused` how much of that was tessellation and how much a mesh drawn
-//! again.
+//! again. Above the rows, one dashed outline marches every frame, which is a
+//! tessellation every frame — what #755 asked an animated dash to be measured
+//! by.
 //!
 //! Run by hand, not by CI, for the reason `scroll_list` gives. What CI watches
 //! is `tests/sparkline_ring_benchmark_is_repeatable.rs`.

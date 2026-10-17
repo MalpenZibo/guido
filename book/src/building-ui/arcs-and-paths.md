@@ -133,6 +133,35 @@ line — `Butt`, `Round` or `Square` — a `Join` where two segments meet —
 The edges are anti-aliased, a pixel wide at any scale, and a translucent stroke
 is one tone from end to end: a join is not drawn twice.
 
+### Dashes
+
+`Stroke::dashes` cuts the line into dashes: the lengths of a dash, a gap, a dash
+and so on, in logical pixels, and how far into that pattern the path starts.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use guido::widget_prelude::*;
+# fn main() {
+let threshold = Stroke::new(1.0, Color::WHITE).dashes(&[6.0, 4.0], 0.0);
+let dotted = Stroke::new(2.0, Color::WHITE)
+    .caps(Cap::Round)
+    .dashes(&[0.0, 5.0], 0.0);
+# let _ = (threshold, dotted);
+# }
+```
+
+Each dash is a line of its own, capped at both ends and joined at every corner
+it turns, so a dash of no length with round caps is a dot. The pattern starts
+again on each subpath, and on a closed one the dash that runs through the start
+is one dash. An odd number of lengths is repeated, as in SVG and Canvas; a
+pattern that adds up to nothing draws the line solid.
+
+`draw_arc` takes a dashed `Stroke` too. A solid arc is one exact shape, cheap
+to animate; a dashed one is drawn as a path, so it is cut and its triangles
+kept like any other, and a sweep or an offset that moves every frame is new
+triangles every frame.
+
 ### What a path costs
 
 A path is cut into triangles the first time it is drawn at a scale, and the
@@ -142,8 +171,13 @@ colour — costs no new triangles. New segments do: a sparkline that shifts by a
 sample is a new path, which is fine once a second and worth knowing about at
 sixty frames a second. An animated sweep is what `arc()` is for.
 
+The dash pattern and its offset are part of that key, the offset kept within
+one pass of the pattern. Dashes that march along a path — an offset that moves
+every frame — are new triangles every frame for that one path, until the
+offset comes back round to one it has drawn.
+
 ### What there is not
 
-No dashes, no gradient fills, no boolean operations between paths, no text
+No gradient fills, no boolean operations between paths, no text
 along a path, and no reading an SVG into a path — an SVG is an
 [image](images.md).
