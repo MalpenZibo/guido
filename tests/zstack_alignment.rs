@@ -7,12 +7,12 @@
 //! the stack leaves negative free space, and the share of that is an overhang.
 
 use guido::prelude::*;
-use guido::widget_prelude::*;
+use guido::widgets::Rect;
 
 mod common;
 use common::Harness;
 
-fn stack(layout: ZStack, child: impl Widget + 'static) -> Container {
+fn stack(layout: ZStack, child: Container) -> Container {
     container()
         .width(100.0)
         .height(60.0)
@@ -35,17 +35,12 @@ fn child_at(widget: Container) -> (f32, f32) {
     (x, y)
 }
 
-/// A leaf that is the size it says whatever it is offered. A container's
-/// exact length is cut to what its parent offers, so nothing built from one
-/// is ever wider than the stack — but a widget's layout can answer anything.
-struct Fixed(Size);
-
-impl Widget for Fixed {
-    fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
-        self.0
-    }
-
-    fn paint(&self, _ctx: &mut PaintContext) {}
+/// A child 140 wide at its natural size, which a 100-wide stack does not cut.
+fn wider_than_the_stack() -> Container {
+    container()
+        .width(natural())
+        .height(natural())
+        .child(container().width(140.0).height(20.0))
 }
 
 /// Flutter's `Stack(alignment:)` and SwiftUI's `ZStack(alignment:)` do the
@@ -60,7 +55,7 @@ fn a_child_wider_than_the_stack_overhangs_both_sides_equally() {
         assert_eq!(
             child_at(stack(
                 ZStack::new().align(alignment),
-                Fixed(Size::new(140.0, 20.0)),
+                wider_than_the_stack(),
             )),
             at,
             "{alignment:?}"

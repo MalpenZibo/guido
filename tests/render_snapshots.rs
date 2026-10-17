@@ -1153,6 +1153,45 @@ fn an_aligned_stack_places_each_child_by_its_alignment() {
     assert_snapshot("an_aligned_stack", render(view, 400.0, 200.0));
 }
 
+/// A child at its natural size inside parents narrower than it (#782): in a
+/// clipping stack that centres it, overhanging both sides by 30 and cut there;
+/// in a parent that does not clip, running past its end as it paints; and,
+/// for the difference, an undeclared length in the same clipping stack, cut
+/// to the parent's 100.
+#[test]
+fn a_natural_child_overhangs_a_narrower_parent() {
+    let content = |width: Length| {
+        container()
+            .width(width)
+            .height(natural())
+            .child(swatch(160.0, 20.0, Color::BLUE))
+    };
+    let view = container()
+        .layout(Flex::column().spacing(20.0))
+        .padding(20.0)
+        .child(
+            box_of(100.0, 40.0)
+                .overflow(Overflow::Hidden)
+                .background(Color::WHITE)
+                .layout(ZStack::new().align(Alignment::CENTER))
+                .child(content(natural())),
+        )
+        .child(
+            box_of(100.0, 40.0)
+                .background(Color::WHITE)
+                .child(content(natural())),
+        )
+        .child(
+            box_of(100.0, 40.0)
+                .overflow(Overflow::Hidden)
+                .background(Color::WHITE)
+                .layout(ZStack::new().align(Alignment::CENTER))
+                .child(content(Length::default())),
+        );
+
+    assert_snapshot("a_natural_child", render(view, 300.0, 200.0));
+}
+
 /// A `Flex` row of `[100, fill, 50]` in 400: the fill takes the 250 left over,
 /// whether it was added as a widget or as a closure.
 ///

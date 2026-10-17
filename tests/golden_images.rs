@@ -5793,3 +5793,50 @@ fn capitals_trimmed_to_their_box_line_up_with_an_icon_at_scale_2x() {
             .child(column(CAPS_FAMILY)),
     );
 }
+
+/// An island at three widths of the shrink from one view to the next, each
+/// holding the same content at its natural size (#782), centred: the rounded
+/// clip uncovers and covers it, and the label stays on its one line. Last, the
+/// narrowest island again with content that is not natural, which is squeezed
+/// to the island instead — the difference is what `natural()` is for.
+#[test]
+fn a_natural_child_is_cut_by_its_rounded_parent() {
+    let island = |width: f32, length: Length| {
+        container()
+            .width(width)
+            .height(48.0)
+            .corners(24.0)
+            .overflow(Overflow::Hidden)
+            .background(Color::rgb(0.36, 0.38, 0.46))
+            .layout(ZStack::new().align(Alignment::CENTER))
+            .child(
+                container()
+                    .width(length)
+                    .height(36.0)
+                    .padding([0.0, 12.0])
+                    .corners(8.0)
+                    .background(Color::rgb(0.22, 0.30, 0.52))
+                    .layout(
+                        Flex::row()
+                            .spacing(8.0)
+                            .cross_alignment(CrossAlignment::Center),
+                    )
+                    .child(swatch(16.0, 16.0, Color::rgb(0.95, 0.65, 0.25)))
+                    .child(label("Now playing", 16.0)),
+            )
+    };
+    golden(
+        "a_natural_child_is_cut_by_its_rounded_parent",
+        (564.0, 72.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(12.0)
+            .layout(Flex::row().spacing(16.0))
+            .child(island(200.0, natural()))
+            .child(island(130.0, natural()))
+            .child(island(80.0, natural()))
+            .child(island(80.0, Length::default())),
+    );
+}
