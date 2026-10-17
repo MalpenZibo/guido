@@ -110,6 +110,11 @@ fn the_values_that_became_signals_take_every_form() {
     let _ = text("value").align(TextAlign::Center);
     let _ = text("closure").align(move || align.get());
     let _ = text("signal").align(align);
+
+    let edge = create_signal(TextEdge::Cap);
+    let _ = text("value").text_box(TextEdge::Cap, TextEdge::Alphabetic);
+    let _ = text("closure").text_box(move || edge.get(), move || TextEdge::Alphabetic);
+    let _ = text("signal").text_box(edge, TextEdge::Alphabetic);
     // An optional count: a bare number, one the closure returns, a signal of
     // one, and a signal that can lift the limit with `None`.
     let lines = create_signal(2u32);

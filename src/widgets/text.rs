@@ -10,7 +10,7 @@ use super::control::Control;
 use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful};
 use super::text_style::{DEFAULT_FONT_SIZE, TextAnims, TextShadow, TextStroke, TextStyle};
-use super::widget::{Color, Event, EventResponse, Rect, Widget};
+use super::widget::{Color, Event, EventResponse, Outsets, Rect, Widget};
 
 /// How far a stroke and a shadow reach past the glyphs they decorate.
 ///
@@ -150,6 +150,9 @@ pub struct Text {
     /// Blur radius for the backdrop the glyphs cut out of what is behind them.
     /// `None` for every text that is not made of glass.
     backdrop_blur: Prop<f32>,
+    /// Which lines the box ends on, above the first line and below the last.
+    /// Absent for every text whose box is its line box.
+    text_box: Option<Box<(Prop<TextEdge>, Prop<TextEdge>)>>,
     /// How the declared colour and size move, when they were declared with a
     /// motion. Absent for every text that only says what it is.
     anims: Option<Box<TextAnims>>,
@@ -170,6 +173,10 @@ pub struct Text {
     /// Whether the last layout gave this text a box narrower than its line,
     /// which only an unwrapped text can be given.
     cached_overflows: bool,
+    /// What the box takes off its line box at the top and at the bottom, as
+    /// the last layout found them: paint draws the lines that far up, and as
+    /// tall as they are.
+    cached_trim: (f32, f32),
 }
 
 impl Text {
@@ -189,6 +196,7 @@ impl Text {
             overflow: Prop::Unset,
             align: Prop::Unset,
             backdrop_blur: Prop::Unset,
+            text_box: None,
             anims: None,
             cached_text: String::new(), // Will be set during first layout
             cached_font_size: DEFAULT_FONT_SIZE,
@@ -201,6 +209,7 @@ impl Text {
             cached_wrap: true,
             cached_fit: None,
             cached_overflows: false,
+            cached_trim: (0.0, 0.0),
         }
     }
 
@@ -271,6 +280,38 @@ impl Text {
     /// again.
     pub fn align<M>(mut self, align: impl IntoSignal<TextAlign, M>) -> Self {
         self.align = align.into_prop();
+        self
+    }
+
+    /// Which lines of the font the text's box ends on: `top` above its first
+    /// line, `bottom` below its last.
+    ///
+    /// A text's box is its line box by default, and the line box holds the
+    /// face's whole ascent and descent — for most faces more room below the
+    /// capitals than above them, so a capitalised label centred in a pill sits
+    /// high. Trimmed to the capitals and the baseline, the box is as tall as a
+    /// capital, and centring it centres what is drawn:
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container()
+    ///     .height(28.0)
+    ///     .layout(Flex::row().cross_alignment(CrossAlignment::Center))
+    ///     .child(text("Night light").text_box(TextEdge::Cap, TextEdge::Alphabetic));
+    /// ```
+    ///
+    /// CSS's `text-box: trim-both cap alphabetic`. Only the box moves: the
+    /// glyphs are drawn where they were, so ascenders and descenders reach
+    /// past it, and the lines between the first and the last keep their
+    /// height. A [`Baseline`](crate::layout::CrossAlignment::Baseline) row
+    /// reads the baseline where it now sits in the box. A layout decision, so
+    /// a write re-measures.
+    pub fn text_box<M1, M2>(
+        mut self,
+        top: impl IntoSignal<TextEdge, M1>,
+        bottom: impl IntoSignal<TextEdge, M2>,
+    ) -> Self {
+        self.text_box = Some(Box::new((top.into_prop(), bottom.into_prop())));
         self
     }
 
@@ -411,7 +452,6 @@ impl Widget for Text {
             declared_color.unwrap_or(Color::WHITE),
             self.cached_font_size,
         );
-        ctx.tree().set_own_paint_reach(id, reach);
 
         let offered = constraints
             .max_width
@@ -453,9 +493,30 @@ impl Widget for Text {
             self.cached_fit,
         );
 
+        // The box ends on the lines it was told to, and the glyphs stay where
+        // they were: what the trim takes off the line box, they now reach past
+        // the box by.
+        self.cached_trim = self.text_box.as_ref().map_or((0.0, 0.0), |edges| {
+            measured.trim(
+                edges.0.get_or(TextEdge::Text),
+                edges.1.get_or(TextEdge::Text),
+            )
+        });
+        let (above, below) = self.cached_trim;
+        let height = (measured.size.height - above - below).max(0.0);
+        ctx.tree().set_own_paint_reach(
+            id,
+            Outsets {
+                top: reach + above,
+                bottom: reach + below,
+                ..Outsets::all(reach)
+            },
+        );
+
         // A parent aligning on the baseline needs this; it comes out of the
-        // same shaping pass, so reporting it is free.
-        ctx.tree().set_baseline(id, measured.baseline);
+        // same shaping pass, so reporting it is free. Read in the box the trim
+        // left, so the baseline stays where the glyphs stand.
+        ctx.tree().set_baseline(id, measured.baseline - above);
 
         // A text no line of which broke, and that no limit cuts, is the same
         // lines at any width it fits in, so paint is handed the width of those
@@ -490,9 +551,7 @@ impl Widget for Text {
         self.cached_overflows = width < measured.size.width;
         let size = Size::new(
             width,
-            measured
-                .size
-                .height
+            height
                 .max(constraints.min_height)
                 .min(constraints.max_height),
         );
@@ -521,7 +580,7 @@ impl Widget for Text {
         } else {
             measured.size.width
         };
-        ctx.set_minimum(Size::new(least, measured.size.height));
+        ctx.set_minimum(Size::new(least, height));
         size
     }
 
@@ -560,7 +619,13 @@ impl Widget for Text {
         // Draw in LOCAL coordinates (0,0 is widget origin)
         // Parent Container sets position transform
         let size = tree.cached_size(id).unwrap_or_default();
-        let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
+        // The lines are drawn as tall as they are, from where the trim took
+        // the top of the box off.
+        let (above, below) = self.cached_trim;
+        // Offset rather than placed at `-above`, which is `-0.0` untrimmed and
+        // would make the command of every text that has no trim a new one.
+        let local_bounds =
+            Rect::new(0.0, 0.0, size.width, size.height + above + below).offset(0.0, -above);
         // Read inside the scope the framework opened around this call, so a
         // change on whichever ancestor supplied them repaints this text and
         // nothing else.
@@ -654,7 +719,7 @@ mod tests {
     use crate::widgets::container;
 
     /// Lay out after draining queued jobs, and hand back the measured size.
-    fn measured(tree: &mut Tree, root: WidgetId, width: f32) -> crate::layout::Size {
+    pub(super) fn measured(tree: &mut Tree, root: WidgetId, width: f32) -> crate::layout::Size {
         jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, width, 600.0))
             .expect("the root is registered")
     }
@@ -2199,7 +2264,7 @@ mod letter_spacing_tests {
         (width, spacings)
     }
 
-    fn assert_near(actual: f32, expected: f32, what: &str) {
+    pub(super) fn assert_near(actual: f32, expected: f32, what: &str) {
         assert!(
             (actual - expected).abs() < 0.01,
             "{what}: got {actual}, expected {expected}"
@@ -2422,5 +2487,119 @@ mod font_style_and_feature_tests {
         assert_eq!(frame(&mut tree, root), [(FontStyle::Italic, tnum())]);
         hot.set(false);
         assert_eq!(frame(&mut tree, root), [(FontStyle::Normal, declared)]);
+    }
+}
+
+/// A text's box ends on the lines `text_box` names, and the glyphs stay where
+/// they were drawn.
+///
+/// In `GuidoCaps.ttf` at 20 px the line is 25 tall (an ascent of 1100 and a
+/// descent of 150 on a 1000 em), the baseline 22 down it, the capitals 14
+/// above it and the lowercase 10 — so every number here can be worked out by
+/// hand.
+#[cfg(test)]
+mod a_text_box {
+    use super::letter_spacing_tests::assert_near;
+    use super::*;
+    use crate::jobs;
+    use crate::reactive::create_signal;
+    use crate::renderer::{DrawCommand, RenderNode};
+
+    fn caps(content: &str) -> Text {
+        crate::load_font(include_bytes!("../../tests/assets/GuidoCaps.ttf").to_vec());
+        Text::new(content.to_string())
+            .font_family(FontFamily::name("Guido Caps"))
+            .font_size(20.0)
+    }
+
+    fn mounted(text: Text) -> (Tree, WidgetId) {
+        // A tree dropped earlier in the test can leave jobs for ids this one
+        // will reuse.
+        jobs::clear_pending_jobs();
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(text));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        (tree, root)
+    }
+
+    /// The box's height, and its baseline, after a layout.
+    fn laid_out(tree: &mut Tree, root: WidgetId) -> (f32, f32) {
+        let size = jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 400.0, 600.0))
+            .expect("the root is registered");
+        (
+            size.height,
+            tree.baseline(root).expect("a text reports one"),
+        )
+    }
+
+    fn near(actual: (f32, f32), expected: (f32, f32)) {
+        assert_near(actual.0, expected.0, "height");
+        assert_near(actual.1, expected.1, "baseline");
+    }
+
+    #[test]
+    fn its_line_box_is_the_box_until_it_is_told_otherwise() {
+        let (mut tree, root) = mounted(caps("HH"));
+        near(laid_out(&mut tree, root), (25.0, 22.0));
+    }
+
+    /// Trimmed to the capitals and the baseline, a line of capitals is as tall
+    /// as a capital, and stands on the bottom of its box.
+    #[test]
+    fn trimmed_to_its_capitals_it_is_a_capital_tall() {
+        let (mut tree, root) = mounted(caps("HH").text_box(TextEdge::Cap, TextEdge::Alphabetic));
+        near(laid_out(&mut tree, root), (14.0, 14.0));
+    }
+
+    #[test]
+    fn each_edge_is_its_own_line() {
+        let (mut tree, root) = mounted(caps("xx").text_box(TextEdge::Ex, TextEdge::Text));
+        near(laid_out(&mut tree, root), (13.0, 10.0));
+        let (mut tree, root) = mounted(caps("xx").text_box(TextEdge::Text, TextEdge::Alphabetic));
+        near(laid_out(&mut tree, root), (22.0, 22.0));
+    }
+
+    /// Only the first line's top and the last line's bottom are trimmed: the
+    /// lines between are as tall as they were.
+    #[test]
+    fn a_second_line_adds_a_whole_line() {
+        let (mut tree, root) = mounted(caps("H\nH").text_box(TextEdge::Cap, TextEdge::Alphabetic));
+        near(laid_out(&mut tree, root), (39.0, 14.0));
+    }
+
+    #[test]
+    fn the_edges_answer_to_signals() {
+        let top = create_signal(TextEdge::Text);
+        let bottom = create_signal(TextEdge::Text);
+        let (mut tree, root) = mounted(caps("HH").text_box(top, bottom));
+        near(laid_out(&mut tree, root), (25.0, 22.0));
+        top.set(TextEdge::Cap);
+        near(laid_out(&mut tree, root), (17.0, 14.0));
+        bottom.set(TextEdge::Alphabetic);
+        near(laid_out(&mut tree, root), (14.0, 14.0));
+    }
+
+    /// The glyphs are drawn where the line box put them: from above the box by
+    /// what the top lost, as tall as the line, and the box says it paints that
+    /// far past itself so nothing culls or forgets to damage what hangs out.
+    #[test]
+    fn the_glyphs_stay_where_the_line_box_put_them() {
+        let (mut tree, root) = mounted(caps("Hp").text_box(TextEdge::Cap, TextEdge::Alphabetic));
+        laid_out(&mut tree, root);
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node, 1.0);
+        let rect = node
+            .commands
+            .iter()
+            .find_map(|cmd| match &**cmd {
+                DrawCommand::Text { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("the text draws");
+        assert_near(rect.y, -8.0, "the line's top");
+        assert_near(rect.height, 25.0, "the line's height");
+        let reach = tree.paint_overflow(root);
+        assert_near(reach.top, 8.0, "the reach above");
+        assert_near(reach.bottom, 3.0, "the reach below");
     }
 }
