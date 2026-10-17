@@ -5318,3 +5318,19 @@ fn a_layout_pending_in_the_frame_a_surface_is_resized_does_not_keep_the_old_size
     assert_eq!(app.root_size(surface), (100.0, 40.0));
     assert_eq!(pill, Rect::new(0.0, 0.0, 100.0, 40.0));
 }
+
+/// A surface whose logical size changes while its buffer stays the same is
+/// laid out at the new size: 2560 by 32 at 1.5 and 3840 by 48 at 1 are one
+/// 3840 by 48 buffer, and only one of them is 3840 wide.
+#[test]
+fn a_resize_that_keeps_the_buffer_still_lays_the_surface_out_again() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
+    app.configure(surface, 2560, 32, 1.5);
+    app.step();
+    app.configure(surface, 3840, 48, 1.0);
+    app.step();
+
+    assert_eq!(app.physical_size(surface), (3840, 48), "the same buffer");
+    assert_eq!(app.root_size(surface), (3840.0, 48.0));
+}
