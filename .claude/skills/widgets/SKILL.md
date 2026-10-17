@@ -52,7 +52,7 @@ everything `IntoSignal` accepts plus a value carrying its own motion:
 `background`, `corners`, `padding`, `border` (each half), `outline` (each of
 its three), `shadow`, `width`,
 `height`, `translate`, `rotate`, `scale`, `opacity`, `blur` — and beyond `Container`,
-`Text`'s `color` and `font_size` and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
+`Text`'s `color` and `font_size`, `Image`'s `tint`, and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
 property somebody else declared, so a timing there is a compile error rather
 than a value quietly ignored.
@@ -183,7 +183,8 @@ container()
 ```
 
 The closure receives a default style and returns the overrides; only what it
-sets is overridden, and the rest is inherited. See
+sets is overridden, and the rest is inherited. A layer's `opacity` overrides the container's own
+(children included); `background_alpha` touches only the background. See
 [docs/STATE_LAYER.md](../../../docs/STATE_LAYER.md).
 
 ## Corners

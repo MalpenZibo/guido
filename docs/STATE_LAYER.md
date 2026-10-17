@@ -159,6 +159,13 @@ style:
 text("Save").color(theme.weak).when_hovered(|s| s.color(theme.strong))
 ```
 
+A text, a field and an image are the leaves that take them. An image's
+override is its `tint`, so an icon follows the control it is in as the label beside it does:
+
+```rust
+image("./power.svg").tint(theme.weak).when_disabled(|s| s.tint(theme.dim))
+```
+
 ### Nesting scopes resolution, not state
 
 Every control notices its own state independently: a list row is hovered
@@ -203,7 +210,7 @@ Note that a layer *replaces* the base value rather than ranking against it. A pr
 .when_pressed(|s| s.darker(0.1))  // 10% darker
 ```
 
-On a container with a gradient, `lighter`, `darker` and `alpha` apply to both
+On a container with a gradient, `lighter`, `darker` and `background_alpha` apply to both
 of its ends, and an explicit `background` replaces the gradient while the state
 is active.
 
@@ -232,6 +239,18 @@ moves nothing.
 
 An outline takes no room and never reaches layout, so a layer that shows,
 thickens or moves it only repaints: the ring for a hover or a focus.
+
+### Opacity
+
+```rust
+// The whole control at 40% while it is disabled, eased both ways
+.opacity(1.0.transition(150.0))
+.when_disabled(|s| s.opacity(0.4))
+```
+
+`opacity` overrides the container's own `opacity` — the whole subtree, by the
+declared `opacity_mode` — and the transition declared on `opacity` carries it.
+`background_alpha` touches only the background.
 
 ### Transform
 
@@ -369,7 +388,8 @@ pub struct StateStyle {
     pub rotate: Prop<f32>,
     pub scale: Prop<Scale>,
     pub shadow: Option<Box<Prop<Shadows>>>,
-    pub alpha: Prop<f32>,
+    pub background_alpha: Prop<f32>,
+    pub opacity: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```

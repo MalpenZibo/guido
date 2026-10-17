@@ -5054,6 +5054,61 @@ fn group_opacity_fades_an_overlap_as_one_picture_at_scale_1_5x() {
     );
 }
 
+/// A control with a fill, a label and an icon, at whatever `fade` does to it —
+/// `card_with_a_tile` with an image where its tile is, so the fade reaches all
+/// three pipelines a control draws with.
+fn control_faded(fade: impl FnOnce(Container) -> Container) -> Container {
+    container().padding(20.0).child(fade(
+        swatch(160.0, 64.0, CARD_RED)
+            .corners(12.0)
+            .padding(12.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(
+                box_of(40.0, 40.0).child(image(checkerboard(40, 8)).content_fit(ContentFit::Fill)),
+            )
+            .child(label("Off", 22.0)),
+    ))
+}
+
+/// A disabled state that declares an opacity fades the whole control — its
+/// fill, its label and its icon — as the same opacity declared on it does, to
+/// the pixel: the override is a value for the container's own `opacity`, not a
+/// second way of fading.
+#[test]
+fn a_disabled_opacity_fades_the_control_as_its_own_opacity_does() {
+    let name = "a_disabled_opacity_fades_the_control_as_its_own_opacity_does";
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let logical = (200.0, 104.0);
+    let disabled = render_with_own_renderer(
+        ctx,
+        control_faded(|c| c.enabled(false).when_disabled(|s| s.opacity(0.4))),
+        logical,
+        1.0,
+        BACKDROP,
+    );
+    let declared = render_with_own_renderer(
+        ctx,
+        control_faded(|c| c.opacity(0.4)),
+        logical,
+        1.0,
+        BACKDROP,
+    );
+    if let Some(report) = differences(&format!("{name}.declared"), &declared, &disabled) {
+        panic!(
+            "a disabled opacity of 0.4 is not the control at `opacity(0.4)`: {report} \
+             (expected is the declared opacity, actual is the disabled state)"
+        );
+    }
+    assert!(
+        disabled.data == declared.data,
+        "within tolerance of `opacity(0.4)`, but not the same picture: the two \
+         are one value through one path, so not a byte may differ"
+    );
+    assert_golden(name, adapter, disabled);
+}
+
 /// A fade over draws that never overlap is drawn without a layer, and is the
 /// picture modulation draws — to the pixel, since it *is* modulation.
 ///

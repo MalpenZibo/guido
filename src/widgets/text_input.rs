@@ -33,7 +33,7 @@ use crate::widget_ref::{WidgetRef, register_widget_ref};
 
 use super::control::Control;
 use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
-use super::state_layer::{StateWhen, Stateful};
+use super::state_layer::{StateWhen, Stateful, state_is_active};
 use super::text_style::{DEFAULT_FONT_SIZE, TextStyle};
 use super::widget::{Color, Event, EventResponse, Key, MouseButton, Rect, Widget};
 
@@ -668,21 +668,11 @@ impl<C: Content> TextInput<C> {
         }
     }
 
-    /// Whether an override applies. Reading the answer subscribes the field to
-    /// its control, so it is asked only for a state it declares.
+    /// Whether an override applies — see [`state_is_active`]. With no control
+    /// above, the field is its own unit, and it already tracks the pointer for
+    /// its cursor.
     fn is_state_active(&self, id: WidgetId, control: Option<&Control>, when: &StateWhen) -> bool {
-        match (when, control) {
-            (StateWhen::When(condition), _) => condition.get(),
-            (_, Some(control)) => control.is_active(when),
-            // No control above: the field is its own unit. It already tracks
-            // the pointer for its cursor, and it is the thing that holds the
-            // focus, so both answers are its own.
-            (StateWhen::Hovered, None) => self.hover.get(),
-            (StateWhen::Focused, None) => crate::reactive::focus::focus_path().contains(id),
-            // Nothing above it declared `enabled`, so nothing switched it off —
-            // and being read-only is not being disabled.
-            (StateWhen::Pressed | StateWhen::Disabled, None) => false,
-        }
+        state_is_active(id, control, when, Some(self.hover))
     }
 
     fn resolved_input_style(&self) -> InputStyle {

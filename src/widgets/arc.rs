@@ -2,7 +2,7 @@
 
 use crate::animation::IntoAnimated;
 use crate::clock::FrameInstant;
-use crate::jobs::{JobRequest, RequiredJob, request_job};
+use crate::jobs::{JobRequest, RequiredJob, request_animation_frame, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, Prop};
 use crate::renderer::{Cap, PaintContext, Stroke};
@@ -171,12 +171,7 @@ impl Arc {
 impl Widget for Arc {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let (moved, running) = self.advance(tree.frame_instant());
-        if moved {
-            request_job(id, JobRequest::Animation(RequiredJob::Paint));
-        } else if running {
-            // Inside a delay: on its way, with nothing new to draw.
-            request_job(id, JobRequest::Animation(RequiredJob::None));
-        }
+        request_animation_frame(id, moved.then_some(RequiredJob::Paint), running);
         running
     }
 
