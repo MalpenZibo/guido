@@ -513,6 +513,10 @@ impl StateStyleBuilder {
     pub fn background(self, color: Color) -> Self;
     pub fn lighter(self, amount: f32) -> Self;
     pub fn darker(self, amount: f32) -> Self;
+    pub fn background_alpha<M>(self, alpha: impl IntoSignal<f32, M>) -> Self;
+
+    // The whole container, children included — its own `opacity`
+    pub fn opacity<M>(self, opacity: impl IntoSignal<f32, M>) -> Self;
 
     // Border — both halves, always; half a border is no border
     pub fn border(self, width: f32, color: Color) -> Self;

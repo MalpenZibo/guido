@@ -47,8 +47,8 @@ impl Container {
             return base;
         }
 
-        // Built once for the whole walk rather than per layer: eight properties
-        // resolve per paint, each walking these same layers.
+        // Built once for the whole walk rather than per layer: every
+        // overridable property resolves per paint, each walking these layers.
         let control = ix.as_control(id);
 
         // Backwards: the last layer declared wins. A layer that says nothing
@@ -161,10 +161,9 @@ impl Container {
         self.resolve_state_value(id, base, |state| state.scale.get())
     }
 
-    /// The declared opacity. No state layer overrides one, so the declaration
-    /// is the whole of it.
     pub(super) fn effective_opacity_target(&self, id: WidgetId) -> f32 {
-        self.opacity_prop().get_finite_or(1.0, id, "opacity")
+        let base = self.opacity_prop().get_finite_or(1.0, id, "opacity");
+        self.resolve_state_value(id, base, |state| state.opacity.get())
     }
 
     /// The declared blur radius. No state layer overrides one; a negative
@@ -1096,7 +1095,7 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
 /// A colour as a state layer resolves it: its background override, then its
 /// alpha, or `None` where the layer declares neither.
 fn state_colour(base: Color, state: &StateStyle) -> Option<Color> {
-    let alpha = state.alpha.get();
+    let alpha = state.background_alpha.get();
     if state.background.is_none() && alpha.is_none() {
         return None;
     }
