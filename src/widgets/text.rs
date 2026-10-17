@@ -79,6 +79,33 @@ pub enum TextAlign {
     Justified,
 }
 
+/// A line a text's box can end on, above or below its glyphs: which of the
+/// font's lines counts as the edge of the text for layout.
+///
+/// By default a text's box is its line box, which holds the face's whole
+/// ascent and descent. A box trimmed to the capitals on top and to the
+/// baseline below is exactly as tall as a capital, so a label centred in a
+/// button is centred on what a reader sees — CSS's `text-box-edge`, and
+/// Figma's "vertical trim". See [`Text::text_box`].
+///
+/// `Cap` and `Ex` are for the top edge and `Alphabetic` for the bottom, as
+/// CSS allows them. Each names a line at a height above the baseline, so on
+/// the other side it means the same line, and a box trimmed past its own
+/// middle is as short as nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TextEdge {
+    /// The line box's own edge: no trim.
+    #[default]
+    Text,
+    /// The top of the capitals: the face's cap height, from its `OS/2` table,
+    /// or the top of its `H` when the face does not say.
+    Cap,
+    /// The top of the lowercase: the face's x-height, or the top of its `x`.
+    Ex,
+    /// The alphabetic baseline the glyphs stand on.
+    Alphabetic,
+}
+
 /// A run of text.
 ///
 /// Style is declared here — see `declares_text_style` — because this is the
