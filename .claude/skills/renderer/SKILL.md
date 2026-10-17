@@ -189,6 +189,23 @@ own attachment: a frame that uses one draws into an offscreen target and is
 blitted over at the end. Frames without one draw straight to the swapchain and
 never allocate it.
 
+## Layers
+
+A container fading below one with `OpacityMode::Auto`, or declaring a `blur`,
+is flattened in its own space — nudged onto the device's pixel grid where it
+stands — and then asked what it drew. A fade whose draws never overlap, or one
+over a backdrop blur, is put back as modulation: the same picture, no texture,
+and a frost that keeps frosting the surface. Anything else becomes a
+`LayerPass`: its content in its own texture, drawn before the surface, and one
+`DrawCommand::Layer` composited where the node stands, through the image
+pipeline, cut by the clips around it. The texture is kept while the content is
+the same, so a fade, a whole-pixel move or a blur that animates draws nothing
+into it; and the composite is cached like any command, so a subtree holding a
+still layer replays (`FlatFrame::kept`). A backdrop inside a layer filters the
+layer. `docs/RENDERER.md` ("Layers") has the whole of it; the goldens are the
+`*layer*`, `*frost*` and `group_opacity_*` scenarios, and `benches/fade` the
+cost.
+
 ## Rendering somewhere other than a screen
 
 `Renderer::render(target, frame, clear)` takes a `RenderTarget` and a
@@ -240,8 +257,10 @@ stands still, `benches/icon_grid` over a grid of a few hundred distinct
 small images, half raster and half SVG, `benches/nested_clip` over rounded
 cards that each clip a clipped child, merged exactly in some and not in others
 — its `scene.rs` lists which — with shapes, text, text quads and images under
-both clips, and `benches/sparkline_ring` over rows of progress rings and line
-charts that a timer feeds, so its paths are tessellated anew and drawn again. Each prints `draw.*` — the draw calls
+both clips, `benches/sparkline_ring` over rows of progress rings and line
+charts that a timer feeds, so its paths are tessellated anew and drawn again, and `benches/fade` fades cards as layers, as modulation and under a
+moving blur, and prints `layer.*` — layers drawn, kept, blurred, and the
+textures they took. Each prints `draw.*` — the draw calls
 per pipeline — and `quad.*` — the buffers and bind groups the image and
 transformed-text quads made — among its counts, so a claim about batching has
 a number that repeats.

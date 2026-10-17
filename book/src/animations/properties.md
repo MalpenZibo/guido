@@ -125,6 +125,29 @@ container faded to nothing still takes clicks. See
 [Opacity](../building-ui/styling.md#opacity) for what a fade does where children
 overlap.
 
+A fade is cheap however much is inside it. A container whose children overlap
+is drawn once into a texture, and each frame of the fade lays that texture down
+again at the new opacity; nothing inside is painted or drawn again until it
+changes. One that moves by whole pixels keeps its texture too; one that moves
+to a new fraction of a pixel is drawn again there, so it stays as sharp as it
+would be without the fade. One that turns or scales keeps its texture and is
+resampled while it does.
+
+## Blur
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().blur(0.0.transition(200.0).entering_from(8.0).exiting_to(8.0))
+# ;
+# }
+```
+
+A view that arrives out of focus and sharpens — and leaves the way it came.
+Each frame blurs the texture the container was drawn into once, rather than
+drawing the container again. See [Blur](../building-ui/styling.md#blur).
+
 ## Width and Height
 
 ```rust
@@ -385,6 +408,7 @@ container()
 | Rotate | `rotate(..)` | Spring or Duration |
 | Scale | `scale(..)` | Spring or Duration |
 | Opacity | `opacity(..)` | Duration, EaseOut |
+| Blur | `blur(..)` | Duration, EaseOut |
 | Width, height | `width(..)`, `height(..)` | Spring |
 | Position given by layout | `animate_position(..)` | Spring |
 | Shadow | `shadow(..)` | Duration, EaseOut |

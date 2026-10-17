@@ -136,6 +136,34 @@ pub enum GpuObject {
     BindGroup,
 }
 
+/// What happened to the layers a frame composited offscreen.
+///
+/// A layer whose content has not changed keeps the texture an earlier frame
+/// drew, which is what makes a fade cheap — so the two are counted apart, and
+/// a change that stopped the texture being kept moves `drawn` up and `kept`
+/// down by the same number.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct LayerWork {
+    /// Layers whose content was drawn into their texture.
+    pub drawn: u64,
+    /// Layers composited from the texture an earlier frame drew.
+    pub kept: u64,
+    /// Blurs run over a layer's texture.
+    pub blurred: u64,
+    /// Textures allocated for layers and their blurs, rather than taken from
+    /// the pool.
+    pub textures: u64,
+}
+
+/// One thing that happened to a layer.
+#[derive(Debug, Clone, Copy)]
+pub enum LayerEvent {
+    Drawn,
+    Kept,
+    Blurred,
+    TextureAllocated,
+}
+
 /// Per-phase timing statistics (microseconds).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct PhaseTiming {
@@ -198,6 +226,8 @@ pub struct StatsSnapshot {
     pub backdrop_allocations: GpuAllocations,
     /// The fills and strokes drawn, and how many were tessellated.
     pub path_meshes: PathMeshes,
+    /// What the layers these frames composited cost.
+    pub layers: LayerWork,
 }
 
 /// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
@@ -224,8 +254,8 @@ macro_rules! time_phase {
 #[cfg(feature = "render-stats")]
 mod inner {
     use super::{
-        DrawCalls, GpuAllocations, GpuObject, LayoutReasons, PathMeshes, Phase, PhaseTiming,
-        Pipeline,
+        DrawCalls, GpuAllocations, GpuObject, LayerEvent, LayerWork, LayoutReasons, PathMeshes,
+        Phase, PhaseTiming, Pipeline,
     };
     use crate::tree::DamageRegion;
     use std::cell::RefCell;
@@ -315,6 +345,7 @@ mod inner {
         quad_allocations: GpuAllocations,
         backdrop_allocations: GpuAllocations,
         path_meshes: PathMeshes,
+        layers: LayerWork,
         // Report timing
         last_print: Instant,
     }
@@ -360,6 +391,7 @@ mod inner {
                 quad_allocations: GpuAllocations::default(),
                 backdrop_allocations: GpuAllocations::default(),
                 path_meshes: PathMeshes::default(),
+                layers: LayerWork::default(),
                 last_print: Instant::now(),
             }
         }
@@ -556,6 +588,20 @@ mod inner {
         });
     }
 
+    /// Record what happened to one layer.
+    #[inline]
+    pub fn record_layer(event: LayerEvent) {
+        STATS.with(|s| {
+            let layers = &mut s.borrow_mut().layers;
+            match event {
+                LayerEvent::Drawn => layers.drawn += 1,
+                LayerEvent::Kept => layers.kept += 1,
+                LayerEvent::Blurred => layers.blurred += 1,
+                LayerEvent::TextureAllocated => layers.textures += 1,
+            }
+        });
+    }
+
     /// Return a snapshot of the current stats (for testing).
     pub fn get_stats() -> super::StatsSnapshot {
         STATS.with(|s| {
@@ -592,6 +638,7 @@ mod inner {
                 quad_allocations: stats.quad_allocations,
                 backdrop_allocations: stats.backdrop_allocations,
                 path_meshes: stats.path_meshes,
+                layers: stats.layers,
             }
         })
     }
@@ -760,6 +807,15 @@ mod inner {
                 "  quad allocations: buffers={} bind_groups={}",
                 stats.quad_allocations.buffers, stats.quad_allocations.bind_groups
             );
+            if stats.layers != LayerWork::default() {
+                eprintln!(
+                    "  layers: drawn={} kept={} blurred={} textures={}",
+                    stats.layers.drawn,
+                    stats.layers.kept,
+                    stats.layers.blurred,
+                    stats.layers.textures
+                );
+            }
 
             // The paint window, and what it could not narrow.
             if stats.window_children_total > 0 || stats.window_declined_children > 0 {
@@ -859,6 +915,10 @@ pub fn record_backdrop_allocation(_object: GpuObject) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_path_mesh(_reused: bool) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_layer(_event: LayerEvent) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

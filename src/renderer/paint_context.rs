@@ -274,6 +274,23 @@ impl<'a> PaintContext<'a> {
         }
     }
 
+    /// How this node's opacity applies to what is under it — see
+    /// [`OpacityMode`](super::tree::OpacityMode).
+    pub fn set_opacity_mode(&mut self, mode: super::tree::OpacityMode) {
+        self.node.opacity_mode = mode;
+    }
+
+    /// Blur everything this node and its subtree draw by `radius` logical
+    /// pixels, which composites the subtree as a layer — zero included, the
+    /// way a CSS `filter` does. A negative radius is no blur at all.
+    pub fn set_blur(&mut self, radius: f32) {
+        self.node.blur = Some(if radius.is_finite() {
+            radius.max(0.0)
+        } else {
+            0.0
+        });
+    }
+
     /// Set this node's transform origin.
     pub fn set_pivot(&mut self, origin: Pivot) {
         self.node.pivot = origin;

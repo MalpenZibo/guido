@@ -21,9 +21,7 @@
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{
-    FlatFrame, FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into,
-};
+use guido::renderer::{FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -77,12 +75,8 @@ fn glyph_pixels_of(
     let mut commands = Vec::new();
     let mut layers = Vec::new();
     let mut scratch = FlattenScratch::default();
-    let _ = flatten_root_into(&node, &mut commands, &mut layers, &mut scratch);
-    let frame = FlatFrame {
-        commands: &commands,
-        layers: &layers,
-        clips: scratch.clip_chains(),
-    };
+    let _ = flatten_root_into(&node, 1.0, &mut commands, &mut layers, &mut scratch);
+    let frame = scratch.frame(&commands, &layers);
 
     let extent = wgpu::Extent3d {
         width: WIDTH,

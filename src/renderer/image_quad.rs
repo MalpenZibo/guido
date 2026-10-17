@@ -30,13 +30,28 @@ use crate::widgets::image::{ContentFit, ImageSource};
 /// A prepared image quad ready for rendering: the texture it samples, and
 /// where its corners are among the frame's quads.
 pub struct PreparedImageQuad {
-    texture: Rc<CachedTexture>,
+    /// What it samples through: its cached texture's, or a layer's.
+    bind_group: Rc<BindGroup>,
+    /// The cached texture, held until the frame is drawn — an image evicted
+    /// while a quad still names it keeps its place on its atlas page until
+    /// then. `None` for a layer's composite, whose texture the renderer holds.
+    _texture: Option<Rc<CachedTexture>>,
     quad: u32,
+}
+
+/// A layer's texture, as the image bucket lays it down: what to sample it
+/// through, where its texels land in the layer node's own space, and which of
+/// them to read.
+pub(super) struct Composite {
+    pub(super) bind_group: Rc<BindGroup>,
+    pub(super) rect: Rect,
+    /// `(u_min, v_min, u_max, v_max)`.
+    pub(super) uv: (f32, f32, f32, f32),
 }
 
 impl QuadDraw for PreparedImageQuad {
     fn bind_group(&self) -> &Rc<BindGroup> {
-        &self.texture.bind_group
+        &self.bind_group
     }
 
     fn quad(&self) -> u32 {
@@ -269,6 +284,14 @@ pub struct ImageQuadRenderer {
     frame_started: Instant,
     /// The sum of every cached texture's `bytes`.
     cached_bytes: usize,
+    /// How many times an image has been drawn as something other than what
+    /// it will settle into — not at all, while its pixels are on their way, or
+    /// from an SVG's last raster while a new size is. Only ever counts up.
+    ///
+    /// A layer drawn while this moved has to be drawn again: its texture
+    /// holds the picture as it was, and the frame the pixels land in may
+    /// not change a single command inside it.
+    unsettled: u64,
 }
 
 /// What a quad's vertices carry for its opacity and its tint. A tint's own
@@ -314,7 +337,18 @@ impl ImageQuadRenderer {
             last_svg_raster: FxHashMap::default(),
             frame_started: Instant::now(),
             cached_bytes: 0,
+            unsettled: 0,
         }
+    }
+
+    /// How many images have been drawn unsettled so far — see the field.
+    pub(super) fn unsettled(&self) -> u64 {
+        self.unsettled
+    }
+
+    /// Bind a layer's texture for sampling by this pipeline, once per texture.
+    pub(super) fn bind_texture(&self, device: &Device, view: &wgpu::TextureView) -> Rc<BindGroup> {
+        self.quad.bind_texture(device, view, "Layer Bind Group")
     }
 
     /// Update screen dimensions for NDC conversion.
@@ -468,7 +502,10 @@ impl ImageQuadRenderer {
                         })
                     });
                 match (last, decoded) {
-                    (Some(last), _) => last.clone(),
+                    (Some(last), _) => {
+                        self.unsettled += 1;
+                        last.clone()
+                    }
                     (None, Some(decoded)) if extent.is_some() => {
                         decoded.drew_nothing();
                         return None;
@@ -625,19 +662,40 @@ impl ImageQuadRenderer {
     /// The caller's buffer rather than one of ours: every group's quads end up
     /// in the same frame-long `Vec` addressed by range, so a `Vec` returned
     /// here would be allocated per group only to be drained into that one.
-    pub fn prepare(
+    ///
+    /// A layer's composite is in the same bucket, in paint order between the
+    /// images around it, and `composite` says what it samples.
+    pub(super) fn prepare(
         &mut self,
         device: &Device,
         queue: &Queue,
         commands: &[FlattenedCommand],
         scale_factor: f32,
+        composite: &dyn Fn(&FlattenedCommand) -> Option<Composite>,
         out: &mut Vec<PreparedImageQuad>,
     ) {
-        out.extend(
-            commands
-                .iter()
-                .filter_map(|cmd| self.prepare_single(device, queue, cmd, scale_factor)),
-        );
+        out.extend(commands.iter().filter_map(|cmd| {
+            if let DrawCommand::Layer { .. } = &*cmd.command {
+                let laid = composite(cmd)?;
+                let clip = cmd.clip().map_or(QuadClip::NONE, |clip| {
+                    QuadClip::resolved(&clip, scale_factor)
+                });
+                let corners = self.compute_vertices(
+                    &laid.rect,
+                    &cmd.world_transform,
+                    laid.uv,
+                    scale_factor,
+                    clip,
+                    (cmd.opacity, NO_TINT),
+                );
+                return Some(PreparedImageQuad {
+                    bind_group: laid.bind_group,
+                    _texture: None,
+                    quad: self.quad.push(corners),
+                });
+            }
+            self.prepare_single(device, queue, cmd, scale_factor)
+        }));
     }
 
     /// Prepare a single image command.
@@ -675,14 +733,17 @@ impl ImageQuadRenderer {
             1.0
         };
 
-        let cached = self.get_or_create_texture(
+        let Some(cached) = self.get_or_create_texture(
             device,
             queue,
             source,
             render_scale,
             svg_target,
             decoded.as_ref(),
-        )?;
+        ) else {
+            self.unsettled += 1;
+            return None;
+        };
 
         // Calculate display rect and UV coordinates based on content fit
         let (display_rect, (u_min, v_min, u_max, v_max)) = self.calculate_display_rect_and_uv(
@@ -718,7 +779,8 @@ impl ImageQuadRenderer {
 
         Some(PreparedImageQuad {
             quad: self.quad.push(corners),
-            texture: cached,
+            bind_group: cached.bind_group.clone(),
+            _texture: Some(cached),
         })
     }
 

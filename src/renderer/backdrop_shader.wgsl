@@ -316,8 +316,13 @@ fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
 @fragment
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
+    return vec4<f32>(blurred.rgb, blurred.a * shape_coverage(in.uv));
+}
 
-    let p = in_shape_space(in.uv);
+// How much of the blur the region lays down at this fragment: its shape, cut
+// by its clip and faded by its opacity.
+fn shape_coverage(uv: vec2<f32>) -> f32 {
+    let p = in_shape_space(uv);
     let distance = rounded_rect_sdf(p, params.shape_rect, params.radii, params.curvature);
     // One pixel of feathering, however the shape is placed. The distance is in
     // shape space now, so the fixed half-pixel threshold this used to carry
@@ -332,8 +337,28 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
     // perimeter, none of them off by more than 8 of 255.
     let aa = max(fwidth(distance) * 0.5, 0.0001);
     let mask = 1.0 - smoothstep(-aa, aa, distance);
+    return mask * clip_coverage(uv) * params.opacity;
+}
 
-    return vec4<f32>(blurred.rgb, blurred.a * mask * clip_coverage(in.uv) * params.opacity);
+// The same blur laid into a layer's texture, in two steps.
+//
+// A backdrop replaces what is beneath it with the blur of it. Over the
+// surface, which is opaque, one straight-alpha blend does that: every alpha
+// there is one. A layer's texture is transparent wherever its content is not,
+// and the blur of it is premultiplied and partly transparent too, so one blend
+// would lay the blur *over* the content rather than in place of it, and the
+// sharp content would show through. So the region is first erased by its
+// coverage, and the blur then added into it, premultiplied, by the same
+// coverage: what was there times one minus the coverage, plus the blur times
+// the coverage, in every channel.
+@fragment
+fn fs_erase(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, shape_coverage(in.uv));
+}
+
+@fragment
+fn fs_replace(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, source_uv(in.uv)) * shape_coverage(in.uv);
 }
 
 // A contour around the coverage, drawn outside it.
@@ -385,7 +410,24 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let blurred = textureSample(t_source, s_source, source_uv(in.uv));
-    let coverage = textureSample(t_mask, s_source, mask_uv(in.uv)).a;
+    return vec4<f32>(blurred.rgb, blurred.a * mask_coverage(in.uv));
+}
 
-    return vec4<f32>(blurred.rgb, blurred.a * coverage * clip_coverage(in.uv) * params.opacity);
+// How much of the blur a coverage mask lays down at this fragment, cut by the
+// clip and faded by the opacity.
+fn mask_coverage(uv: vec2<f32>) -> f32 {
+    let coverage = textureSample(t_mask, s_source, mask_uv(uv)).a;
+    return coverage * clip_coverage(uv) * params.opacity;
+}
+
+// `fs_erase` and `fs_replace` again, cut by the mask — for a frosted text
+// inside a layer.
+@fragment
+fn fs_erase_mask(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, mask_coverage(in.uv));
+}
+
+@fragment
+fn fs_replace_mask(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, source_uv(in.uv)) * mask_coverage(in.uv);
 }

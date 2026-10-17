@@ -41,12 +41,7 @@ use super::clip_records::ClipRecord;
 /// only smooths what the shrink left behind — at a sixteenth of the fragments.
 const WORKING_SCALE: u32 = 4;
 
-/// Frames without any backdrop effect before the offscreen target is freed.
-const IDLE_FRAMES_BEFORE_RELEASE: u32 = 120;
-
-/// Cap on gaussian taps per axis. Beyond this the shrink is doing the work
-/// anyway, and an unbounded loop would let one huge radius stall a frame.
-const MAX_TAPS: f32 = 24.0;
+use super::layer_blur::{BlurPlan, IDLE_FRAMES_BEFORE_RELEASE};
 
 /// Slots the uniform buffer starts with: a frosted panel's four passes and the
 /// blit, with room for a second panel before it has to grow.
@@ -236,19 +231,37 @@ impl BackdropRegion {
     }
 }
 
-/// Offscreen target plus the working textures the blur ping-pongs between.
-struct Targets {
+/// What a backdrop effect filters in place: the surface's offscreen target,
+/// or a layer's texture — inside a layer, a backdrop sees only what the layer
+/// has drawn beneath it, as CSS's Backdrop Root says.
+#[derive(Clone)]
+pub struct Scene {
+    pub view: wgpu::TextureView,
+    pub width: u32,
+    pub height: u32,
+    /// Whether it is a layer's texture, transparent wherever its content is
+    /// not, rather than the surface's.
+    pub layer: bool,
+}
+
+/// The surface's offscreen target, drawn into when a backdrop effect is on it.
+struct SceneTarget {
     width: u32,
     height: u32,
-    /// Size of the working textures, `WORKING_SCALE` smaller than the scene.
+    // Held for the view, which addresses it.
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// Offscreen target plus the working textures the blur ping-pongs between.
+struct Targets {
+    /// `None` for a frame whose only backdrop effects are inside layers,
+    /// which filter their layer's texture and need no target of the surface's.
+    scene: Option<SceneTarget>,
+    /// Size of the working textures, `WORKING_SCALE` smaller than the largest
+    /// scene they serve.
     work_width: u32,
     work_height: u32,
-    // The textures are held only to keep their views alive; everything is
-    // addressed through the views.
-    #[allow(dead_code)]
-    scene: wgpu::Texture,
-    /// Where the frame is drawn when any backdrop blur is present.
-    scene_view: wgpu::TextureView,
     #[allow(dead_code)]
     working: [wgpu::Texture; 2],
     working_views: [wgpu::TextureView; 2],
@@ -265,6 +278,10 @@ pub struct BackdropRenderer {
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
     composite_mask: wgpu::RenderPipeline,
+    /// The composite into a layer's texture, as an erase and an add — see
+    /// `fs_erase` in the shader — by the shape and by a mask.
+    layer_composite: [wgpu::RenderPipeline; 2],
+    layer_composite_mask: [wgpu::RenderPipeline; 2],
     outline: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
     targets: Option<Targets>,
@@ -525,9 +542,54 @@ impl BackdropRenderer {
         // Everything else writes a fresh working texture.
         let composite_blend = super::gpu::STRAIGHT_ALPHA_BLEND;
 
+        // Into a layer: what is there scaled by one minus the coverage, then
+        // the premultiplied blur added by it — the same in every channel.
+        let both = |component: wgpu::BlendComponent| wgpu::BlendState {
+            color: component,
+            alpha: component,
+        };
+        let erase = both(wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        });
+        let add = both(wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        });
+
         Self {
             format,
             sampler,
+            layer_composite: [
+                build(
+                    "Layer Backdrop Erase",
+                    "fs_erase",
+                    Some(erase),
+                    &clipped_layout,
+                ),
+                build(
+                    "Layer Backdrop Add",
+                    "fs_replace",
+                    Some(add),
+                    &clipped_layout,
+                ),
+            ],
+            layer_composite_mask: [
+                build(
+                    "Layer Backdrop Erase Mask",
+                    "fs_erase_mask",
+                    Some(erase),
+                    &mask_layout,
+                ),
+                build(
+                    "Layer Backdrop Add Mask",
+                    "fs_replace_mask",
+                    Some(add),
+                    &mask_layout,
+                ),
+            ],
             downsample: pipeline("Backdrop Downsample", "fs_downsample", None),
             blur: pipeline("Backdrop Blur", "fs_blur", None),
             composite: build(
@@ -558,21 +620,48 @@ impl BackdropRenderer {
     }
 
     /// Allocate the offscreen target, or reallocate it after a resize.
-    pub fn ensure_targets(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    ///
+    /// `scene` is the surface's size when a backdrop effect is drawn onto the
+    /// surface itself; `largest` is the largest scene any effect this frame
+    /// filters — the surface or a layer's texture — which the working
+    /// textures are sized against.
+    pub fn ensure_targets(
+        &mut self,
+        device: &wgpu::Device,
+        scene: Option<(u32, u32)>,
+        largest: (u32, u32),
+    ) {
+        let work = (
+            (largest.0.max(1) / WORKING_SCALE).max(1),
+            (largest.1.max(1) / WORKING_SCALE).max(1),
+        );
+        // A frame whose only effects are inside layers keeps the surface's
+        // target it already has: the next frame may frost the surface again.
         let stale = match &self.targets {
-            Some(targets) => targets.width != width || targets.height != height,
+            Some(targets) => {
+                scene.is_some_and(|size| {
+                    targets.scene.as_ref().map(|s| (s.width, s.height)) != Some(size)
+                }) || targets.work_width < work.0
+                    || targets.work_height < work.1
+            }
             None => true,
         };
         if stale {
-            self.targets = Some(Targets::new(device, self.format, width, height));
+            self.targets = Some(Targets::new(device, self.format, scene, work));
         }
         self.idle_frames = 0;
     }
 
-    /// The view the frame should be drawn into. `None` until
-    /// [`ensure_targets`](Self::ensure_targets) has run.
-    pub fn scene_view(&self) -> Option<&wgpu::TextureView> {
-        self.targets.as_ref().map(|targets| &targets.scene_view)
+    /// The surface's offscreen target, which the frame should be drawn into.
+    /// `None` until [`ensure_targets`](Self::ensure_targets) has asked for one.
+    pub fn scene(&self) -> Option<Scene> {
+        let scene = self.targets.as_ref()?.scene.as_ref()?;
+        Some(Scene {
+            view: scene.view.clone(),
+            width: scene.width,
+            height: scene.height,
+            layer: false,
+        })
     }
 
     /// Note a frame that needed no backdrop effect, releasing the offscreen
@@ -582,7 +671,9 @@ impl BackdropRenderer {
     /// would otherwise reallocate a surface-sized target every time it opens,
     /// which costs far more than holding it across a few idle frames.
     pub fn note_unused(&mut self) {
-        if self.targets.is_none() {
+        // The bindings too: a layer's blur stages its passes through them
+        // without asking for a target, and they are let go the same way.
+        if self.targets.is_none() && self.bindings.get_mut().buffer.is_none() {
             return;
         }
         self.idle_frames += 1;
@@ -591,6 +682,12 @@ impl BackdropRenderer {
             self.bindings.get_mut().release();
             self.idle_frames = 0;
         }
+    }
+
+    /// Note a frame whose only blur ran over a layer's texture: it used the
+    /// passes and their bindings, if not the targets, and is not an idle one.
+    pub fn note_used(&mut self) {
+        self.idle_frames = 0;
     }
 
     /// Write the uniforms this frame's passes staged, before the frame's
@@ -737,10 +834,11 @@ impl BackdropRenderer {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
         region: &BackdropRegion,
         clip_records: &wgpu::BindGroup,
     ) {
-        self.filter(device, encoder, region, clip_records, None);
+        self.filter(device, encoder, scene, region, clip_records, None);
     }
 
     /// The same, cut out by `mask`'s alpha instead of the corners.
@@ -754,11 +852,12 @@ impl BackdropRenderer {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
         region: &BackdropRegion,
         clip_records: &wgpu::BindGroup,
         mask: CoverageMask<'_>,
     ) {
-        self.filter(device, encoder, region, clip_records, Some(mask));
+        self.filter(device, encoder, scene, region, clip_records, Some(mask));
     }
 
     /// Draw a contour just outside `mask`'s coverage.
@@ -770,10 +869,12 @@ impl BackdropRenderer {
     ///
     /// Ordered after the frost and before the glyphs, so the letter keeps what
     /// the frost put in it.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_outline(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
         region: &BackdropRegion,
         clip_records: &wgpu::BindGroup,
         mask: CoverageMask<'_>,
@@ -782,7 +883,7 @@ impl BackdropRenderer {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some(viewport) = region.clamped(targets.width, targets.height) else {
+        let Some(viewport) = region.clamped(scene.width, scene.height) else {
             return;
         };
         let (x, y, dst_width, dst_height) = viewport;
@@ -804,7 +905,7 @@ impl BackdropRenderer {
         self.pass(
             encoder,
             &self.outline,
-            &targets.scene_view,
+            &scene.view,
             wgpu::LoadOp::Load,
             &bind,
             Some(clip_records),
@@ -817,6 +918,7 @@ impl BackdropRenderer {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        scene: &Scene,
         region: &BackdropRegion,
         clip_records: &wgpu::BindGroup,
         mask: Option<CoverageMask<'_>>,
@@ -824,7 +926,7 @@ impl BackdropRenderer {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some((x, y, width, height)) = region.clamped(targets.width, targets.height) else {
+        let Some((x, y, width, height)) = region.clamped(scene.width, scene.height) else {
             return;
         };
 
@@ -833,27 +935,17 @@ impl BackdropRenderer {
 
         // Radius shrinks with the working texture; the downsample already
         // spent the rest of it.
-        let sigma = (region.radius * region.scale / WORKING_SCALE as f32 / 2.0).max(0.5);
-        let taps = (sigma * 2.5).ceil().min(MAX_TAPS);
+        let BlurPlan { sigma, taps, .. } =
+            BlurPlan::shrunk(region.radius, region.scale, WORKING_SCALE);
 
         let scene_rect = [
-            x as f32 / targets.width as f32,
-            y as f32 / targets.height as f32,
-            width as f32 / targets.width as f32,
-            height as f32 / targets.height as f32,
-        ];
-        // Only the working textures' top-left corner holds this region, so
-        // reads have to stay inside it — normalised against the working size,
-        // not the scene's.
-        let work_rect = [
-            0.0,
-            0.0,
-            work_width as f32 / targets.work_width as f32,
-            work_height as f32 / targets.work_height as f32,
+            x as f32 / scene.width as f32,
+            y as f32 / scene.height as f32,
+            width as f32 / scene.width as f32,
+            height as f32 / scene.height as f32,
         ];
 
         let base = Params {
-            src_rect: scene_rect,
             sigma,
             taps,
             dst_size: [width as f32, height as f32],
@@ -863,28 +955,104 @@ impl BackdropRenderer {
             }
         };
 
-        // 1. Scene region → working[0], shrunk.
-        let bind = self.bind(device, &targets.scene_view, None, base);
+        // 1 and 2: shrunk into the working textures and blurred both ways.
+        let work_rect = self.gaussian(
+            device,
+            encoder,
+            (&scene.view, scene_rect),
+            targets.working(),
+            (work_width, work_height),
+            base,
+        );
+
+        // 3. Back over the scene, cut out by the shape or by the mask.
+        let params = Params {
+            src_rect: work_rect,
+            ..base
+        };
+        let (pipelines, bind, label): (&[wgpu::RenderPipeline], _, _) = match mask {
+            Some(mask) => (
+                if scene.layer {
+                    &self.layer_composite_mask
+                } else {
+                    std::slice::from_ref(&self.composite_mask)
+                },
+                self.bind(device, &targets.working_views[0], Some(mask.view), params),
+                "Backdrop Composite Mask",
+            ),
+            None => (
+                if scene.layer {
+                    &self.layer_composite
+                } else {
+                    std::slice::from_ref(&self.composite)
+                },
+                self.bind(device, &targets.working_views[0], None, params),
+                "Backdrop Composite",
+            ),
+        };
+        for pipeline in pipelines {
+            self.pass(
+                encoder,
+                pipeline,
+                &scene.view,
+                wgpu::LoadOp::Load,
+                &bind,
+                Some(clip_records),
+                (x, y, width, height),
+                label,
+            );
+        }
+    }
+
+    /// Shrink `source`'s `src_rect` into the first working texture and blur it
+    /// both ways, leaving the result there, in its top-left `region` texels —
+    /// whose rect within that texture, normalised, is returned.
+    ///
+    /// The two steps every blur here takes, the backdrop's and a layer's:
+    /// rendering into a smaller target through a linear sampler is the box
+    /// filter, and the gaussian smooths what it left behind.
+    fn gaussian(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        (source, src_rect): (&wgpu::TextureView, [f32; 4]),
+        working: Working<'_>,
+        (region_width, region_height): (u32, u32),
+        base: Params,
+    ) -> [f32; 4] {
+        // 1. Source region → working[0], shrunk.
+        let bind = self.bind(device, source, None, Params { src_rect, ..base });
         self.pass(
             encoder,
             &self.downsample,
-            &targets.working_views[0],
+            working.views[0],
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &bind,
             None,
-            (0, 0, work_width, work_height),
+            (0, 0, region_width, region_height),
             "Backdrop Downsample",
         );
 
+        // Only the working textures' top-left corner holds this region, so
+        // reads have to stay inside it — normalised against the working size,
+        // not the source's.
+        let work_rect = [
+            0.0,
+            0.0,
+            region_width as f32 / working.size.0 as f32,
+            region_height as f32 / working.size.1 as f32,
+        ];
+
         // 2. Two separable gaussian passes, ping-ponging. The step is a texel
         // of the *working* texture, which is what the blur samples — stepping
-        // by a scene texel would blur `WORKING_SCALE` times too narrowly.
-        let texel_x = 1.0 / targets.work_width as f32;
-        let texel_y = 1.0 / targets.work_height as f32;
+        // by a source texel would blur as many times too narrowly as the
+        // shrink.
+        let texel_x = 1.0 / working.size.0 as f32;
+        let texel_y = 1.0 / working.size.1 as f32;
         for (index, direction) in [[texel_x, 0.0], [0.0, texel_y]].into_iter().enumerate() {
             let bind = self.bind(
                 device,
-                &targets.working_views[index],
+                working.views[index],
                 None,
                 Params {
                     src_rect: work_rect,
@@ -895,41 +1063,56 @@ impl BackdropRenderer {
             self.pass(
                 encoder,
                 &self.blur,
-                &targets.working_views[1 - index],
+                working.views[1 - index],
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                 &bind,
                 None,
-                (0, 0, work_width, work_height),
+                (0, 0, region_width, region_height),
                 "Backdrop Blur",
             );
         }
+        work_rect
+    }
 
-        // 3. Back over the scene, cut out by the shape or by the mask.
-        let params = Params {
-            src_rect: work_rect,
-            ..base
-        };
-        let (pipeline, bind, label) = match mask {
-            Some(mask) => (
-                &self.composite_mask,
-                self.bind(device, &targets.working_views[0], Some(mask.view), params),
-                "Backdrop Composite Mask",
-            ),
-            None => (
-                &self.composite,
-                self.bind(device, &targets.working_views[0], None, params),
-                "Backdrop Composite",
-            ),
-        };
-        self.pass(
+    /// Blur a layer's texture into `into`, by `plan`.
+    ///
+    /// `source` holds the layer's content in its top-left `content` texels;
+    /// the result covers that and `plan.reach()` pixels beyond it on every
+    /// side, shrunk by `plan.shrink`, in `into.views[0]`'s top-left `region`
+    /// texels. Past the content the source reads transparent — the layer
+    /// keeps a texel of empty edge, and the clamped sampler repeats it.
+    pub(super) fn blur_layer(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: (&wgpu::TextureView, (u32, u32)),
+        into: Working<'_>,
+        region: (u32, u32),
+        plan: super::layer_blur::BlurPlan,
+    ) {
+        let (view, (width, height)) = source;
+        let reach = plan.reach() as f32;
+        let span = (
+            (region.0 * plan.shrink) as f32,
+            (region.1 * plan.shrink) as f32,
+        );
+        let src_rect = [
+            -reach / width as f32,
+            -reach / height as f32,
+            span.0 / width as f32,
+            span.1 / height as f32,
+        ];
+        self.gaussian(
+            device,
             encoder,
-            pipeline,
-            &targets.scene_view,
-            wgpu::LoadOp::Load,
-            &bind,
-            Some(clip_records),
-            (x, y, width, height),
-            label,
+            (view, src_rect),
+            into,
+            region,
+            Params {
+                sigma: plan.sigma,
+                taps: plan.taps,
+                ..Params::zeroed()
+            },
         );
     }
 
@@ -940,12 +1123,12 @@ impl BackdropRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
     ) {
-        let Some(targets) = &self.targets else {
+        let Some(scene) = self.scene() else {
             return;
         };
         let bind = self.bind(
             device,
-            &targets.scene_view,
+            &scene.view,
             None,
             // The blit runs `fs_downsample`, which reads `src_rect` and
             // nothing else. A `curvature` and a `dst_size` were set here too
@@ -964,41 +1147,44 @@ impl BackdropRenderer {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             &bind,
             None,
-            (0, 0, targets.width, targets.height),
+            (0, 0, scene.width, scene.height),
             "Backdrop Blit",
         );
     }
 }
 
+/// Two textures a blur ping-pongs between, and how large they are.
+#[derive(Clone, Copy)]
+pub(super) struct Working<'a> {
+    pub(super) views: [&'a wgpu::TextureView; 2],
+    pub(super) size: (u32, u32),
+}
+
 impl Targets {
-    fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
-        let width = width.max(1);
-        let height = height.max(1);
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        scene: Option<(u32, u32)>,
+        (work_width, work_height): (u32, u32),
+    ) -> Self {
         let make = |label: &str, width: u32, height: u32| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
+            make_target(device, format, label, (width, height))
         };
 
-        let scene = make("Backdrop Scene", width, height);
-        let scene_view = scene.create_view(&Default::default());
+        let scene = scene.map(|(width, height)| {
+            let (width, height) = (width.max(1), height.max(1));
+            let texture = make("Backdrop Scene", width, height);
+            let view = texture.create_view(&Default::default());
+            SceneTarget {
+                width,
+                height,
+                _texture: texture,
+                view,
+            }
+        });
         // One allocation serves every card on screen — each writes only the
         // corner it needs — and at `WORKING_SCALE` down it costs a sixteenth
         // of a full-size target.
-        let work_width = (width / WORKING_SCALE).max(1);
-        let work_height = (height / WORKING_SCALE).max(1);
         let working = [
             make("Backdrop Working 0", work_width, work_height),
             make("Backdrop Working 1", work_width, work_height),
@@ -1009,16 +1195,43 @@ impl Targets {
         ];
 
         Self {
-            width,
-            height,
+            scene,
             work_width,
             work_height,
-            scene,
-            scene_view,
             working,
             working_views,
         }
     }
+
+    fn working(&self) -> Working<'_> {
+        Working {
+            views: [&self.working_views[0], &self.working_views[1]],
+            size: (self.work_width, self.work_height),
+        }
+    }
+}
+
+/// A texture the passes here can draw into and read back from.
+pub(super) fn make_target(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+    (width, height): (u32, u32),
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    })
 }
 
 #[cfg(test)]

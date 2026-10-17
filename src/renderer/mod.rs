@@ -20,6 +20,8 @@ mod gpu;
 mod gpu_context;
 mod image_atlas;
 mod image_quad;
+pub(crate) mod layer_blur;
+mod layer_pass;
 mod merge;
 mod paint_context;
 mod path;
@@ -44,8 +46,8 @@ pub use commands::{Border, CornerRadii, DrawCommand};
 // always handed one out, so a caller could read the field and not name what it
 // got back.
 pub use flatten::{
-    CommandLayer, FlatFrame, FlattenScratch, FlattenedCommand, RegionsCarried, RenderLayer,
-    ScratchCapacity, flatten_root_into,
+    CommandLayer, FlatFrame, FlattenScratch, FlattenedCommand, LayerPass, RegionsCarried,
+    RenderLayer, ScratchCapacity, flatten_root_into,
 };
 #[cfg(test)]
 pub(crate) use gpu_context::GPU_GRACE;
@@ -64,5 +66,5 @@ pub use text_measurer::{
     measure_text_to_char_styled,
 };
 pub(crate) use text_measurer::{TextMeasurer, measure_line_height};
-pub use tree::{NodeId, RenderNode};
+pub use tree::{NodeId, OpacityMode, RenderNode};
 pub use types::{Gradient, GradientDir, Shadow, Shadows, TextEntry};

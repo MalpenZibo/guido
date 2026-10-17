@@ -1,4 +1,4 @@
-//! The twelve animated properties of `Container`, declared in one table.
+//! The thirteen animated properties of `Container`, declared in one table.
 //!
 //! An animated property used to be written out by name in nine places that
 //! nothing kept in step — the field, the seed, the target, the drift check,
@@ -192,6 +192,15 @@ macro_rules! animated_properties {
                         .background(Color::RED).opacity(v),
                     probe: |h: &mut H| h.paint().opacity,
                     from: 0.2, to: 1.0, then: 0.5, base: 0.2,
+                };
+            blur: f32 as f32, target: effective_blur_target, layout: no,
+                timeline: yes,
+                test {
+                    value: |k| k,
+                    declared_as: |v| container().width(200.0).height(100.0)
+                        .background(Color::RED).blur(v),
+                    probe: |h: &mut H| h.paint().blur.unwrap(),
+                    from: 1.0, to: 12.0, then: 4.0, base: 1.0,
                 };
         }
     };

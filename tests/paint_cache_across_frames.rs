@@ -390,7 +390,7 @@ impl Surface {
             ..
         } = self;
         tree.paint_widget(*root, root_node, 1.0);
-        let _ = flatten_root_into(root_node, commands, layers, scratch);
+        let _ = flatten_root_into(root_node, 1.0, commands, layers, scratch);
         for child in &root_node.children {
             guido::cache_paint_results(tree, child);
         }
@@ -1313,7 +1313,13 @@ fn a_frame_flattens_into_the_buffers_the_last_one_left() {
         CLIPPED_FILL,
         0.0,
     )));
-    let _ = flatten_root_into(&one_box, &mut s.commands, &mut s.layers, &mut s.scratch);
+    let _ = flatten_root_into(
+        &one_box,
+        1.0,
+        &mut s.commands,
+        &mut s.layers,
+        &mut s.scratch,
+    );
 
     assert_eq!(
         s.commands.len(),
@@ -1478,5 +1484,291 @@ fn a_group_that_moves_replays_its_merged_shape() {
     assert!(
         !s.drawn_alone(MEMBER_FILL) && !s.drawn_alone(BUBBLE_FILL),
         "a replay put a member's background back beside the merged shape"
+    );
+}
+
+// The layer scenarios. A container that fades over content that overlaps —
+// a label on its own background — is drawn into a texture, and the renderer
+// keeps that texture for as long as the content handed to it is the content
+// it drew. These say flatten hands it the same content when nothing in it
+// changed: the commands of a child the paint cache served are the very ones
+// it drew last frame, and the container's own background is equal to the one
+// before.
+
+/// The layer's fill, which is how its own background is picked out.
+const LAYER_FILL: Color = Color::rgb(0.8, 0.2, 0.2);
+/// And the box inside it, which overlaps that background.
+const LAYERED_FILL: Color = Color::rgb(0.2, 0.2, 0.8);
+
+/// A card at `opacity` holding a box that overlaps its background, moved by
+/// `nudge`, beside a box that is only there to be poked.
+fn layered_card(opacity: RwSignal<f32>, nudge: RwSignal<f32>) -> Container {
+    container()
+        .layout(Flex::column().spacing(GAP))
+        .padding(PAD)
+        .child(
+            container()
+                .width(PUSHED_WIDTH * 2.0)
+                .height(BOX_HEIGHT * 2.0)
+                .padding(PAD)
+                .background(LAYER_FILL)
+                .translate(move || (nudge.get(), 0.0))
+                .opacity(opacity)
+                .child(
+                    container()
+                        .width(PUSHED_WIDTH)
+                        .height(BOX_HEIGHT)
+                        .background(LAYERED_FILL),
+                ),
+        )
+        .child(container().width(POKER).height(POKER))
+}
+
+impl Surface {
+    /// The one layer the last frame composited, and its content.
+    fn layer_content(&self) -> Vec<FlattenedCommand> {
+        let passes = self.scratch.passes();
+        assert_eq!(passes.len(), 1, "the card is composited as one layer");
+        self.commands[passes[0].commands.clone()].to_vec()
+    }
+
+    /// The command the layer's composite contributed to the last frame.
+    fn composite(&self) -> &FlattenedCommand {
+        let mut composites = self
+            .commands
+            .iter()
+            .filter(|cmd| matches!(&*cmd.command, DrawCommand::Layer { .. }));
+        let found = composites.next().expect("the layer was composited");
+        assert!(composites.next().is_none(), "and once");
+        found
+    }
+}
+
+/// Two frames of a layer's content are the same content when the only thing
+/// that moved is the layer's own opacity — which is what lets the renderer
+/// lay down the texture it already has.
+///
+/// The card repaints, because its opacity is its own; its box does not, and
+/// its command is the very `Rc` it drew a frame ago. The card's background is
+/// painted afresh and comes out equal. Nothing in the content carries the
+/// opacity: that is the composite's, which is what moved.
+#[test]
+fn a_fading_layer_hands_over_the_content_it_drew_without_painting_it_again() {
+    let opacity = create_signal(0.5f32);
+    let nudge = create_signal(0.0f32);
+    let mut s = Surface::new(
+        layered_card(opacity, nudge),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+    s.frame();
+    let before = s.layer_content();
+    assert_eq!(s.composite().opacity, 0.5);
+
+    opacity.set(0.25);
+    let card = s.surface.tree.get_children(s.surface.root)[0];
+    s.surface.tree.mark_needs_paint(card);
+    s.frame();
+    let after = s.layer_content();
+
+    assert_eq!(
+        s.composite().opacity,
+        0.25,
+        "the composite carries the fade"
+    );
+    assert_eq!(before.len(), after.len());
+    for (was, now) in before.iter().zip(&after) {
+        assert!(
+            *was.command == *now.command
+                && was.world_transform == now.world_transform
+                && was.opacity == now.opacity
+                && was.layer == now.layer,
+            "the layer's content changed when only its opacity did: {was:?} \
+             became {now:?}"
+        );
+        assert_eq!(now.opacity, 1.0, "content is drawn at full strength");
+    }
+    let shared = |fill: Color| {
+        let of = |content: &[FlattenedCommand]| {
+            content
+                .iter()
+                .find(|cmd| {
+                    matches!(&*cmd.command, DrawCommand::RoundedRect { color, .. } if *color == fill)
+                })
+                .map(|cmd| Rc::clone(&cmd.command))
+                .expect("drawn in the layer")
+        };
+        Rc::ptr_eq(&of(&before), &of(&after))
+    };
+    assert!(
+        shared(LAYERED_FILL),
+        "the box under the card was painted again: its command is a new one"
+    );
+    assert!(
+        !shared(LAYER_FILL),
+        "the card itself repainted for its opacity, so its background is a new \
+         command — equal, and that is what the renderer compares"
+    );
+}
+
+/// A layer moved by whole pixels hands over the same content, in the same
+/// place in its texture: the move is the composite's. Moved to a new fraction
+/// of a pixel, its content is drawn that fraction across, so the texture's
+/// texels still land on the surface's pixels where the layer now stands.
+#[test]
+fn a_layer_keeps_its_content_on_the_pixel_grid_where_it_stands() {
+    let opacity = create_signal(0.5f32);
+    let nudge = create_signal(0.0f32);
+    let mut s = Surface::new(
+        layered_card(opacity, nudge),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+    s.frame();
+    let before = s.layer_content();
+    let at = s.composite().world_transform.tx();
+    let card = s.surface.tree.get_children(s.surface.root)[0];
+    let moved_by = |s: &Surface| -> Vec<f32> {
+        before
+            .iter()
+            .zip(&s.layer_content())
+            .map(|(was, now)| now.world_transform.tx() - was.world_transform.tx())
+            .collect()
+    };
+
+    nudge.set(3.0);
+    s.surface.tree.mark_needs_paint(card);
+    s.frame();
+    assert_eq!(s.composite().world_transform.tx(), at + 3.0);
+    assert!(
+        moved_by(&s).iter().all(|dx| *dx == 0.0),
+        "three whole pixels moved the content inside the texture: {:?}",
+        moved_by(&s)
+    );
+
+    nudge.set(3.5);
+    s.surface.tree.mark_needs_paint(card);
+    s.frame();
+    assert_eq!(s.composite().world_transform.tx(), at + 3.5);
+    assert!(
+        moved_by(&s).iter().all(|dx| *dx == 0.5),
+        "half a pixel more is drawn half a pixel across the texture: {:?}",
+        moved_by(&s)
+    );
+}
+
+#[test]
+fn an_ancestor_of_a_still_layer_is_replayed_on_an_unrelated_repaint() {
+    let opacity = create_signal(0.5f32);
+    let nudge = create_signal(0.0f32);
+    let mut s = Surface::new(
+        layered_card(opacity, nudge),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+    s.frame();
+    let children = s.surface.tree.get_children(s.surface.root);
+    let (card, poker) = (children[0], children[1]);
+    assert_eq!(s.scratch.passes().len(), 1, "the dimmed card is a layer");
+    s.frames(poker, 1);
+    let entry = s
+        .node_of(card)
+        .cached_flatten
+        .borrow()
+        .clone()
+        .expect("the layer keeps a flatten entry, composite and all");
+
+    s.frames(poker, 1);
+    assert!(
+        Rc::ptr_eq(
+            &entry,
+            &s.node_of(card).cached_flatten.borrow().clone().unwrap()
+        ),
+        "the layer was flattened again for a repaint beside it"
+    );
+    assert_eq!(s.composite().opacity, 0.5, "and still composited");
+}
+
+/// A dimmed card whose box overlaps its background, inside a container that
+/// slides it by `slide` — the card itself never repaints, so a slide replays
+/// it from its flatten entry.
+fn sliding_card(slide: RwSignal<f32>) -> Container {
+    container()
+        .layout(Flex::column().spacing(GAP))
+        .padding(PAD)
+        .child(
+            container().translate(move || (slide.get(), 0.0)).child(
+                container()
+                    .width(PUSHED_WIDTH * 2.0)
+                    .height(BOX_HEIGHT * 2.0)
+                    .padding(PAD)
+                    .background(LAYER_FILL)
+                    .opacity(0.5)
+                    .child(
+                        container()
+                            .width(PUSHED_WIDTH)
+                            .height(BOX_HEIGHT)
+                            .background(LAYERED_FILL),
+                    ),
+            ),
+        )
+        .child(container().width(POKER).height(POKER))
+}
+
+/// A layer cut by the surface's edge holds only the part that was on it, so
+/// moved by whole pixels it is not laid down again from that texture — the part
+/// newly in view would be empty — but drawn again where it now stands.
+#[test]
+fn a_layer_cut_by_the_surface_is_drawn_again_when_it_moves() {
+    let slide = create_signal(-60.0f32);
+    let mut s = Surface::new(
+        sliding_card(slide),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+    s.frame();
+    let cut = s.scratch.passes().to_vec();
+    assert_eq!(
+        cut.len(),
+        1,
+        "the card is a layer, cut by the surface's left edge"
+    );
+
+    let slider = s.surface.tree.get_children(s.surface.root)[0];
+    slide.set(-50.0);
+    s.surface.tree.mark_needs_paint(slider);
+    s.frame();
+    let moved = s.scratch.passes();
+    assert_eq!(
+        moved.len(),
+        1,
+        "moved ten whole pixels, the cut layer was laid down from the texture \
+         of what the edge left of it"
+    );
+    assert!(moved[0].size.0 > cut[0].size.0, "and more of it is in view");
+}
+
+/// A layer wholly off the surface draws nothing and needs no texture; moved
+/// into view, it is a layer again, not the plain commands it was put back as.
+#[test]
+fn a_layer_off_the_surface_is_a_layer_again_once_it_moves_into_view() {
+    let slide = create_signal(-500.0f32);
+    let mut s = Surface::new(
+        sliding_card(slide),
+        PAD + VIEWPORT + PAD,
+        PAD + VIEWPORT + PAD,
+    );
+    s.frame();
+    assert!(s.scratch.passes().is_empty(), "off the surface: no texture");
+
+    let slider = s.surface.tree.get_children(s.surface.root)[0];
+    slide.set(0.0);
+    s.surface.tree.mark_needs_paint(slider);
+    s.frame();
+    assert_eq!(
+        s.scratch.passes().len(),
+        1,
+        "moved into view, the card was replayed as the plain commands it was \
+         put back as off the surface: its overlap fades draw by draw"
     );
 }

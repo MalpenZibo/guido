@@ -32,6 +32,29 @@ pub struct ClipRegion {
 /// Unique identifier for a render node (typically matches widget ID).
 pub type NodeId = u64;
 
+/// How an [`opacity`](RenderNode::opacity) below one is applied to a subtree.
+///
+/// Compose's `CompositingStrategy` makes the same choice under the same two
+/// names' worth of meaning, and CSS has only the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpacityMode {
+    /// The subtree fades as one picture: where two of its draws overlap, the
+    /// overlap fades with the rest instead of showing through.
+    ///
+    /// The subtree is drawn into a texture of its own and composited once —
+    /// but only when two of its draws actually overlap. Where none does,
+    /// fading each draw on its own is the same picture, and that is what is
+    /// drawn instead, for nothing. A subtree holding a backdrop blur is faded
+    /// draw by draw too, so its frost keeps frosting what guido drew beneath
+    /// it in the surface rather than only what the subtree drew.
+    #[default]
+    Auto,
+    /// Every draw of the subtree fades on its own, so an overlap shows
+    /// through darker. Never drawn offscreen: what a container that knows its
+    /// children never overlap, or that wants the old picture, asks for.
+    Modulate,
+}
+
 /// Cached flattened commands from a previous frame.
 ///
 /// Stored on each RenderNode after flattening, enabling incremental
@@ -54,6 +77,18 @@ pub struct CachedFlatten {
     /// command in it was multiplied by from above. See
     /// [`replay_fade`](Self::replay_fade).
     pub opacity: f32,
+    /// Whether the subtree composites a layer. Its content is not among the
+    /// commands kept here — it is drawn from the layer's texture, which a
+    /// replay leaves where it is — so the entry stands in only where that
+    /// texture is still right: moved by whole device pixels, see
+    /// [`replays_layers_by`](Self::replays_layers_by).
+    pub holds_layers: bool,
+    /// Whether a layer in the subtree was cut by the surface's edge, or put
+    /// back as plain commands because none of it was on the surface. What was
+    /// kept is then true only where the subtree stood: moved, more of the
+    /// layer may be in view than its texture holds, or it may be in view at
+    /// all. Such an entry replays only where it was made.
+    pub cut_by_surface: bool,
 }
 
 impl CachedFlatten {
@@ -76,6 +111,23 @@ impl CachedFlatten {
             world_transform.tx() - self.world_transform.tx(),
             world_transform.ty() - self.world_transform.ty(),
         ))
+    }
+
+    /// Whether a replay by `(dx, dy)` keeps every layer this entry composites
+    /// right: always, for an entry that composites none; for one that does,
+    /// only a move by whole device pixels, since a layer's content is drawn on
+    /// the device grid where it stands and a new fraction of a pixel draws it
+    /// again.
+    ///
+    /// And an entry whose layer the surface's edge cut, or left out entirely,
+    /// only where it was made — see
+    /// [`cut_by_surface`](Self::cut_by_surface).
+    pub fn replays_layers_by(&self, (dx, dy): (f32, f32), scale: f32) -> bool {
+        if self.cut_by_surface {
+            return dx.abs() < 1e-6 && dy.abs() < 1e-6;
+        }
+        let whole = |at: f32| ((at * scale) - (at * scale).round()).abs() < 1e-3;
+        !self.holds_layers || (whole(dx) && whole(dy))
     }
 
     /// What this entry's commands have to be multiplied by to stand in for a
@@ -142,7 +194,23 @@ pub struct RenderNode {
     /// down, and into every colour the subtree draws — each draw on its own,
     /// so where two children overlap, the overlap shows through. `1.0` by
     /// default, which multiplies nothing.
+    ///
+    /// That is [`OpacityMode::Modulate`], and only what happens when the
+    /// subtree is not composited as a layer — see
+    /// [`opacity_mode`](Self::opacity_mode).
     pub opacity: f32,
+
+    /// Whether an `opacity` below one fades the subtree as one picture or each
+    /// of its draws on its own.
+    pub opacity_mode: OpacityMode,
+
+    /// A gaussian blur over everything the subtree draws, as a radius in
+    /// logical pixels — the same radius a backdrop blur takes.
+    ///
+    /// Declaring one, zero included, composites the subtree as a layer: the
+    /// blur needs the subtree as one picture to run over, as a CSS `filter`
+    /// does. `None` by default.
+    pub blur: Option<f32>,
 
     /// Bounds in local coordinates (for transform origin resolution)
     pub bounds: Rect,
@@ -213,6 +281,8 @@ impl RenderNode {
             parent_position: Transform::IDENTITY,
             pivot: Pivot::CENTER,
             opacity: 1.0,
+            opacity_mode: OpacityMode::Auto,
+            blur: None,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             commands: SmallVec::new(),
             children: Vec::new(),
@@ -251,6 +321,8 @@ impl RenderNode {
         self.parent_position = Transform::IDENTITY;
         self.pivot = Pivot::CENTER;
         self.opacity = 1.0;
+        self.opacity_mode = OpacityMode::Auto;
+        self.blur = None;
         self.commands.clear();
         self.children.clear();
         self.overlay_commands.clear();

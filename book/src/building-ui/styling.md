@@ -119,12 +119,62 @@ container()
 # }
 ```
 
-Each thing drawn is faded on its own, as if its colour's alpha were scaled.
-Where two children overlap, the overlap shows through darker than either,
-rather than the whole subtree fading as one flat picture. For a subtree whose
-children do not overlap — most of them — the two are the same.
+The container fades as one picture, the way CSS's `opacity` does: where a
+label sits on its own background, or a cover under a title, the overlap fades
+with the rest instead of showing through. To get that, the container is drawn
+into a texture of its own and laid down once — but only when two of the
+things it draws actually overlap. Where nothing overlaps, fading each thing on
+its own is the same picture, and that is what is drawn, for nothing.
+
+`opacity_mode` chooses the other behaviour: every draw fades on its own, an
+overlap shows through darker, and nothing is drawn offscreen.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .background(Color::rgb(0.2, 0.2, 0.3))
+    .opacity(0.5)
+    .opacity_mode(OpacityMode::Modulate)
+    .child(text("the background shows through the letters"))
+# ;
+# }
+```
+
+A container with a backdrop blur in it fades draw by draw, whatever overlaps:
+its frost keeps frosting what guido drew beneath it in the surface for the
+whole of the fade. Faded as one picture, the frost would see only what the
+container itself drew — CSS calls that a backdrop root — and snap back to the
+surface when the fade ended. A blur the compositor runs behind the surface is
+not affected either way.
 
 A faded container still takes up its space and still takes input.
+
+## Blur
+
+`blur` softens everything a container draws, its children included, by a
+radius in logical pixels — the radius a backdrop blur takes:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .blur(4.0)
+    .child(text("out of focus"))
+# ;
+# }
+```
+
+A blur, like a CSS `filter`, always draws the container into a texture of its
+own and blurs that. The texture covers what the container draws, its children
+included, plus the reach of the blur, cut to the part that can be on the
+surface. A radius of zero is drawn the same way and looks exactly like no
+blur. A backdrop blur
+inside a blurred container frosts only what the container drew beneath it. The blur spreads
+past the container's edges by about one and a quarter of its radius. It
+animates — see [Animated Properties](../animations/properties.md#blur).
 
 ## Padding
 
