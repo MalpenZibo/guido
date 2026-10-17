@@ -53,6 +53,29 @@ On a container with a gradient, `lighter`, `darker` and `background_alpha` apply
 of its ends, and an explicit `background` replaces the gradient while the state
 is active.
 
+`background_alpha` sets the alpha of the background and of nothing else: what
+the container draws inside it keeps its colours. To fade the whole control, use
+`opacity`.
+
+### Opacity
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .opacity(1.0.transition(150.0))
+    .when_disabled(|s| s.opacity(0.4))
+    .child(text("Power off"))
+# ;
+# }
+```
+
+The container's own [`opacity`](../building-ui/styling.md#opacity), replaced
+while the state holds: the background, the border and everything inside it fade
+together, by the declared `opacity_mode`, and the transition declared on
+`opacity` carries the change both ways.
+
 ### Border
 
 ```rust
@@ -238,6 +261,7 @@ pub struct StateStyle {
     pub scale: Prop<Scale>,
     pub shadow: Option<Box<Prop<Shadows>>>,
     pub background_alpha: Prop<f32>,
+    pub opacity: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```

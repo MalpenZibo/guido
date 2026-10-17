@@ -55,6 +55,10 @@ container()
 # }
 ```
 
+To fade the whole control instead — fill, label and icon together —
+`when_disabled(|s| s.opacity(0.4))` overrides its
+[opacity](state-layer.md#opacity).
+
 The text asks its **control** — the nearest enclosing interaction unit, which
 declaring `enabled` makes the container into. That is why the label greys with
 the form around it without being handed the signal itself.

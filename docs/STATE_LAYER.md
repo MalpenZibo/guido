@@ -233,6 +233,18 @@ moves nothing.
 An outline takes no room and never reaches layout, so a layer that shows,
 thickens or moves it only repaints: the ring for a hover or a focus.
 
+### Opacity
+
+```rust
+// The whole control at 40% while it is disabled, eased both ways
+.opacity(1.0.transition(150.0))
+.when_disabled(|s| s.opacity(0.4))
+```
+
+`opacity` overrides the container's own `opacity` — the whole subtree, by the
+declared `opacity_mode` — and the transition declared on `opacity` carries it.
+`background_alpha` touches only the background.
+
 ### Transform
 
 ```rust
@@ -370,6 +382,7 @@ pub struct StateStyle {
     pub scale: Prop<Scale>,
     pub shadow: Option<Box<Prop<Shadows>>>,
     pub background_alpha: Prop<f32>,
+    pub opacity: Prop<f32>,
     pub ripple: Option<RippleConfig>,
 }
 ```

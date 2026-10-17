@@ -216,7 +216,7 @@ macro_rules! animated_properties {
                     from: 0.5, to: 2.0, then: 1.25, base: 0.5,
                 };
             opacity: f32 as f32, target: effective_opacity_target, layout: no,
-                timeline: yes, state: no,
+                timeline: yes, state: yes,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(100.0)

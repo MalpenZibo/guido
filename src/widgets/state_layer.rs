@@ -149,6 +149,8 @@ pub struct StateStyle {
     pub shadow: Option<Box<Prop<Shadows>>>,
     /// Background alpha override, applied after the background override
     pub background_alpha: Prop<f32>,
+    /// Opacity override — the container's own subtree opacity
+    pub opacity: Prop<f32>,
     /// Ripple effect configuration (typically used in a pressed layer)
     pub ripple: Option<RippleConfig>,
 }
@@ -381,7 +383,8 @@ impl StateStyle {
     ///
     /// Applied after any background color override (lighter/darker/exact).
     /// Useful for making semi-transparent elements more visible on hover.
-    /// What is drawn inside the container keeps its own colours.
+    /// What is drawn inside the container keeps its own colours — to fade the
+    /// whole control, use [`opacity`](Self::opacity).
     ///
     /// # Example
     /// ```no_run
@@ -392,6 +395,26 @@ impl StateStyle {
     /// ```
     pub fn background_alpha<M>(mut self, alpha: impl IntoSignal<f32, M>) -> Self {
         self.background_alpha = alpha.into_prop();
+        self
+    }
+
+    /// Fade the whole container — its background, its border and everything
+    /// inside it — while this state is active.
+    ///
+    /// It overrides the container's own
+    /// [`opacity`](crate::widgets::Container::opacity), faded by the declared
+    /// [`opacity_mode`](crate::widgets::Container::opacity_mode), and moves by
+    /// the transition declared there:
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container()
+    ///     .opacity(1.0.transition(150.0))
+    ///     .when_disabled(|s| s.opacity(0.4))
+    ///     .child(text("Power off"));
+    /// ```
+    pub fn opacity<M>(mut self, opacity: impl IntoSignal<f32, M>) -> Self {
+        self.opacity = opacity.into_prop();
         self
     }
 

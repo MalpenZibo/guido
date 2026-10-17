@@ -175,7 +175,8 @@ container()
 ```
 
 The closure receives a default style and returns the overrides; only what it
-sets is overridden, and the rest is inherited. See
+sets is overridden, and the rest is inherited. A layer's `opacity` overrides the container's own
+(children included); `background_alpha` touches only the background. See
 [docs/STATE_LAYER.md](../../../docs/STATE_LAYER.md).
 
 ## Corners

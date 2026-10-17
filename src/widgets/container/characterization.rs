@@ -1719,6 +1719,20 @@ fn corners_alone_are_an_animated_state_property() {
     );
 }
 
+/// And opacity, which a state layer overrides too: a hover that fades the
+/// container has to ask for an Animation job, since nothing else drives the
+/// clock for a pointer flag.
+#[test]
+fn opacity_alone_is_an_animated_state_property() {
+    assert!(
+        container()
+            .opacity(1.0.transition(Transition::new(80.0, TimingFunction::Linear)))
+            .when_hovered(|s| s.opacity(0.5))
+            .has_animated_state_properties(),
+        "hovering moves the opacity, so it needs an Animation job"
+    );
+}
+
 /// A shadow that has arrived stops asking for frames.
 ///
 /// `resync_animation_targets` compares the target it holds against the one the
@@ -7519,6 +7533,44 @@ fn a_text_below_a_disabled_container_styles_itself_from_it() {
     assert_eq!(painted_text_color(&mut h), Color::GRAY);
     enabled.set(true);
     assert_eq!(painted_text_color(&mut h), Color::WHITE);
+}
+
+/// A disabled opacity replaces the declared one while the state holds, and
+/// enabling the control again eases back through the transition declared on
+/// the container's own `opacity` — the override carries no timing of its own.
+#[test]
+fn enabling_a_faded_control_eases_its_opacity_back_through_the_declared_transition() {
+    let enabled = create_signal(false);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(40.0)
+            .background(Color::RED)
+            .opacity(1.0.transition(Transition::new(100.0, TimingFunction::Linear)))
+            .enabled(enabled)
+            .when_disabled(|s| s.opacity(0.4)),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 500.0, 500.0);
+    assert_eq!(
+        h.paint().opacity,
+        0.4,
+        "disabled, the override is the opacity"
+    );
+
+    enabled.set(true);
+    let t1 = after(t0, 500);
+    frame_at(&mut h, t1, 500.0, 500.0);
+    h.paint();
+    frame_at(&mut h, after(t1, 50), 500.0, 500.0);
+    let halfway = h.paint().opacity;
+    assert!(
+        (halfway - 0.7).abs() < 1e-4,
+        "halfway through the declared hundred milliseconds is halfway back: {halfway}"
+    );
+
+    frame_at(&mut h, after(t1, 200), 500.0, 500.0);
+    assert_eq!(h.paint().opacity, 1.0, "enabled, the declaration is back");
 }
 
 /// The question the issue left to the implementation: a disabled subtree does
