@@ -26,7 +26,7 @@ pub use container::{
 pub use control::Control;
 pub use corners::Corners;
 pub use font::{FamilyId, FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
-pub use image::{ContentFit, Image, ImageSource, image};
+pub use image::{ContentFit, Image, ImageSource, ImageStyle, image};
 pub use into_child::{
     DynamicChildren, ForwardedChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,
     StaticChildren, keyed,
