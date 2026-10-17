@@ -1771,15 +1771,9 @@ const NESTED_CLIPS_SIZE: (f32, f32) = (514.0, 270.0);
 
 /// One scene for both scales.
 fn nested_clips() -> Container {
-    let rows = container().layout(Flex::column()).children(
-        [
-            Color::rgb(0.90, 0.35, 0.25),
-            Color::rgb(0.95, 0.75, 0.25),
-            Color::rgb(0.30, 0.70, 0.45),
-            Color::rgb(0.25, 0.50, 0.90),
-        ]
-        .map(|c| swatch(NESTED_CARD, NESTED_CARD / 4.0, c)),
-    );
+    let rows = container()
+        .layout(Flex::column())
+        .children(ROW_COLOURS.map(|c| swatch(NESTED_CARD, NESTED_CARD / 4.0, c)));
     let content = || {
         container()
             .width(fill())
@@ -1790,6 +1784,26 @@ fn nested_clips() -> Container {
 }
 
 const NESTED_CARD: f32 = 96.0;
+
+/// Four colours far enough apart that where one row ends and the next begins,
+/// and where a clip cuts either, reads at a glance.
+const ROW_COLOURS: [Color; 4] = [
+    Color::rgb(0.90, 0.35, 0.25),
+    Color::rgb(0.95, 0.75, 0.25),
+    Color::rgb(0.30, 0.70, 0.45),
+    Color::rgb(0.25, 0.50, 0.90),
+];
+
+/// A column of full-width rows `height` tall, in `ROW_COLOURS`, `repeat`
+/// times over.
+fn colour_rows(height: f32, repeat: usize) -> Container {
+    container().layout(Flex::column()).children(
+        ROW_COLOURS
+            .repeat(repeat)
+            .into_iter()
+            .map(move |c| container().width(fill()).height(height).background(c)),
+    )
+}
 
 /// The seven pairs of clips, each cutting `content`; the first cell scrolls
 /// `scrolled` instead.
@@ -4818,6 +4832,91 @@ fn a_merged_shape_is_cut_by_its_clip() {
                 .background(Color::rgb(0.20, 0.20, 0.26))
                 .padding(20.0)
                 .child(pill_row(6.0, true)),
+        ),
+    );
+}
+
+/// A scroller is cut inside its border, as CSS cuts at the padding box: the
+/// content, filling every scroller past each edge, leaves the whole border
+/// showing, corners included (#764).
+///
+/// The inner corners are the outer radius less the border, the curvature kept,
+/// so each cell asks a different question of that subtraction: a circle, a
+/// squircle under a thick border, and a radius smaller than its border, whose
+/// inner corner is square. Content cut at the outer edge instead covers the
+/// border on every side of all three.
+#[test]
+fn a_scroller_is_cut_inside_its_border() {
+    golden(
+        "a_scroller_is_cut_inside_its_border",
+        BORDERED_SCROLLERS_SIZE,
+        1.0,
+        BACKDROP,
+        bordered_scrollers(),
+    );
+}
+
+/// The same three at scale 2, where a border two pixels wide at scale 1 is four
+/// and an inset that missed the scale would show as a seam.
+#[test]
+fn a_scroller_is_cut_inside_its_border_at_scale_2x() {
+    golden(
+        "a_scroller_is_cut_inside_its_border_at_scale_2x",
+        BORDERED_SCROLLERS_SIZE,
+        2.0,
+        BACKDROP,
+        bordered_scrollers(),
+    );
+}
+
+const BORDERED_SCROLLERS_SIZE: (f32, f32) = (380.0, 140.0);
+
+/// One scene for both scales.
+fn bordered_scrollers() -> Container {
+    let scroller = |corners: Corners, border: f32| {
+        box_of(100.0, 100.0)
+            .corners(corners)
+            .border(border, Color::WHITE)
+            .scroll(Scroll::vertical().visibility(ScrollbarVisibility::Hidden))
+            .child(colour_rows(30.0, 2))
+    };
+
+    container()
+        .background(BACKDROP)
+        .padding(20.0)
+        .layout(Flex::row().spacing(20.0))
+        .child(scroller(Corners::rounded(28.0), 3.0))
+        .child(scroller(Corners::squircle(32.0), 8.0))
+        .child(scroller(Corners::rounded(4.0), 6.0))
+}
+
+/// A card that hides its overflow still casts its shadow: the clip cuts what
+/// it holds, not the card itself, as CSS's overflow clip leaves the box's own
+/// shadow alone. The card's own clip used to cut its own commands too, and
+/// erased the whole shadow (#764).
+///
+/// Its rows fill it side to side and run past its bottom, so the same picture
+/// says the border is not covered either.
+#[test]
+fn a_card_that_hides_its_overflow_keeps_its_shadow() {
+    golden(
+        "a_card_that_hides_its_overflow_keeps_its_shadow",
+        (170.0, 170.0),
+        1.0,
+        Color::rgb(0.55, 0.57, 0.62),
+        container().padding(25.0).child(
+            box_of(110.0, 110.0)
+                .corners(24.0)
+                .border(3.0, Color::WHITE)
+                .background(Color::rgb(0.20, 0.22, 0.30))
+                .shadow(Shadow::new(
+                    (6.0, 10.0),
+                    14.0,
+                    0.0,
+                    Color::rgba(0.0, 0.0, 0.0, 0.9),
+                ))
+                .overflow(Overflow::Hidden)
+                .child(colour_rows(34.0, 1)),
         ),
     );
 }

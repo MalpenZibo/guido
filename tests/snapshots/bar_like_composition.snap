@@ -9,7 +9,7 @@ node 0,0 600x36
     node 0,0 70x14 at 8,4
       draw rect 0,0 70x14 fill=#ffffffcc radius=0/0/0/0
   node 0,0 254x1 at 166,17.5
-  node 0,0 90x24 at 428,6 clip(0,0 90x24 r=6)
+  node 0,0 90x24 at 428,6 children_clip(0,0 90x24 r=6)
     draw rect 0,0 90x24 fill=#262633ff radius=6/6/6/6
     node 0,0 200x14 partial
       node 0,0 30x14

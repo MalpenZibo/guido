@@ -1281,7 +1281,7 @@ fn hidden_overflow_sets_a_clip_region() {
             .child(box_of(400.0, 10.0)),
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_some());
+    assert!(h.paint().children_clip.is_some());
 
     let mut visible = H::new(
         container()
@@ -1290,7 +1290,7 @@ fn hidden_overflow_sets_a_clip_region() {
             .child(box_of(400.0, 10.0)),
     );
     visible.fit(500.0, 500.0);
-    assert!(visible.paint().clip.is_none());
+    assert!(visible.paint().children_clip.is_none());
 }
 
 #[test]
@@ -3966,7 +3966,7 @@ fn overflow_is_reactive_and_invalidates_layout() {
             .child(box_of(400.0, 10.0)),
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_none());
+    assert!(h.paint().children_clip.is_none());
 
     let queued = h.jobs_from(|| clipped.set(true));
     assert!(
@@ -3974,7 +3974,7 @@ fn overflow_is_reactive_and_invalidates_layout() {
         "got {queued:?}"
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_some());
+    assert!(h.paint().children_clip.is_some());
 }
 
 /// A blur can be switched off by the same signal that switches it on: a radius
@@ -4115,9 +4115,9 @@ fn the_clip_carries_every_corner() {
     let node = h.frame(200.0, 200.0).node;
 
     let clip = node.children[0]
-        .clip
+        .children_clip
         .as_ref()
-        .or(node.clip.as_ref())
+        .or(node.children_clip.as_ref())
         .expect("a hidden overflow clips");
     assert_eq!(clip.corner_radius.top_left, 16.0);
     assert_eq!(clip.corner_radius.top_right, 16.0);

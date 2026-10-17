@@ -152,6 +152,13 @@ fn a_stretched_clip_cuts_in_its_own_frame() {
 // A scroller's own scrollbar is drawn inside its clip too
 // ---------------------------------------------------------------------------
 
+/// 800px of rows, four times what a 200px scroller shows.
+fn rows_800_tall() -> Container {
+    container()
+        .layout(Flex::column())
+        .children((0..20).map(|_| container().width(fill()).height(40.0)))
+}
+
 /// A 200×200 scroller with 40px corners over 800px of rows. Its vertical
 /// scrollbar answers across x 188..198 (hover width 10, margin 2) along the
 /// whole track; the corners are circles about (160, 40) and (160, 160), so
@@ -164,11 +171,7 @@ fn rounded_scroller() -> Harness {
             .height(200.0)
             .corners(40.0)
             .scroll(Scroll::vertical())
-            .child(
-                container()
-                    .layout(Flex::column())
-                    .children((0..20).map(|_| container().width(fill()).height(40.0))),
-            ),
+            .child(rows_800_tall()),
         200.0,
         200.0,
     )
@@ -233,4 +236,39 @@ fn a_handle_drag_goes_on_into_the_corner() {
         scrolled_by(&mut h) > 0.0,
         "a drag already held stopped at the clip"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A clip is cut inside the border, so the border is not the content's (#764)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_press_on_the_border_of_a_clipping_card_does_not_reach_the_row_inside() {
+    let card = |row| {
+        container()
+            .width(200.0)
+            .height(200.0)
+            .border(6.0, Color::WHITE)
+            .overflow(Overflow::Hidden)
+            .child(row)
+    };
+    // On the left border, and just inside it.
+    assert_eq!(clicks_at(card, &[(3.0, 100.0), (8.0, 100.0)]), [0, 1]);
+}
+
+#[test]
+fn a_scrollers_inner_corner_is_its_radius_less_its_border() {
+    let card = |row| {
+        container()
+            .width(200.0)
+            .height(200.0)
+            .corners(20.0)
+            .border(6.0, Color::WHITE)
+            .scroll(Scroll::vertical())
+            .child(row)
+    };
+    // The inner corner is a circle of radius 14 about (20, 20). (9, 9) is 15.6
+    // from it — on the border, though inside the outer corner of radius 20 —
+    // and (12, 12) is 11.3 from it, inside.
+    assert_eq!(clicks_at(card, &[(9.0, 9.0), (12.0, 12.0)]), [0, 1]);
 }
