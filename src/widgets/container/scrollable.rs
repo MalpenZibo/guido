@@ -13,7 +13,7 @@ use crate::widgets::scroll::{
     ContentDrag, ScrollAxis, ScrollbarAxis, ScrollbarVisibility, TOUCH_SLOP,
 };
 use crate::widgets::widget::{
-    Event, EventResponse, MouseButton, Point, PointerKind, Rect, ScrollSource,
+    Event, EventResponse, Key, Modifiers, MouseButton, Point, PointerKind, Rect, ScrollSource,
 };
 
 use super::Container;
@@ -1100,6 +1100,23 @@ impl Container {
             });
         }
         self.pointer_left(tree, id);
+    }
+
+    /// Page Up or Page Down: one viewport height up or down, and whether
+    /// that moved anything — a scroller at its end lets the key go on to the
+    /// next one out, as Chromium's scroll chain does. With Ctrl, Alt or Super
+    /// held the key is somebody else's shortcut, as Tab's default is.
+    pub(super) fn page(&mut self, key: Key, modifiers: Modifiers, at: EventInstant) -> bool {
+        let direction = match key {
+            Key::PageDown => 1.0,
+            Key::PageUp => -1.0,
+            _ => return false,
+        };
+        if self.scroll_axis == ScrollAxis::None || modifiers.holds_a_shortcut() {
+            return false;
+        }
+        let page = self.scroll_data().scroll_state.viewport_height;
+        self.apply_scroll(0.0, direction * page, ScrollSource::Wheel, at)
     }
 
     /// Apply scroll delta and return true if any scrolling occurred

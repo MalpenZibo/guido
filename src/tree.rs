@@ -1831,6 +1831,14 @@ impl Tree {
             .is_some_and(|path| path.contains(id))
     }
 
+    /// Whether the key being routed is going up the focus path, rather than
+    /// down to the listeners nobody on it took the key for. A scroller pages
+    /// only on the first: a key with nothing focused, or on its way to a
+    /// listener inside it, was not pressed in it (#747).
+    pub(crate) fn routing_the_focus_path(&self) -> bool {
+        self.key_heard_by.is_none()
+    }
+
     /// Hand `event` to `root`, to travel the key route set beside it.
     fn route_through(
         &mut self,
