@@ -1,14 +1,14 @@
 node 0,0 216x150
   node 0,0 200x24 at 8,8
-    node 0,0 76x24 clip(0,0 76x24 r=0)
+    node 0,0 76x24 children_clip(0,0 76x24 r=0)
       draw rect 0,0 76x24 fill=#ff0000ff radius=0/0/0/0
       node 0,0 76x20
-    node 0,0 38x24 at 80,0 clip(0,0 38x24 r=0)
+    node 0,0 38x24 at 80,0 children_clip(0,0 38x24 r=0)
       draw rect 0,0 38x24 fill=#00ff00ff radius=0/0/0/0
       node 0,0 38x20
     node 0,0 50x24 at 122,0
       draw rect 0,0 50x24 fill=#0000ffff radius=0/0/0/0
-      node 0,0 0x20 at 25,2 clip(0,0 0x20 r=0)
+      node 0,0 0x20 at 25,2 children_clip(0,0 0x20 r=0)
         draw rect 0,0 0x20 fill=#000000ff radius=0/0/0/0
     node 0,0 24x24 at 176,0
       draw rect 0,0 24x24 fill=#ffffffff radius=0/0/0/0
@@ -17,7 +17,7 @@ node 0,0 216x150
   node 0,0 200x100 at 8,42
     node 0,0 40x30
       draw rect 0,0 40x30 fill=#ff0000ff radius=0/0/0/0
-    node 0,0 200x70 at 0,30 clip(0,0 200x70 r=0)
+    node 0,0 200x70 at 0,30 children_clip(0,0 200x70 r=0)
       draw rect 0,0 200x70 fill=#00ff00ff radius=0/0/0/0
       node 0,0 40x200
       node 0,0 6x66 at 192,2

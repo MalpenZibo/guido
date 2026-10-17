@@ -1281,7 +1281,7 @@ fn hidden_overflow_sets_a_clip_region() {
             .child(box_of(400.0, 10.0)),
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_some());
+    assert!(h.paint().children_clip.is_some());
 
     let mut visible = H::new(
         container()
@@ -1290,7 +1290,7 @@ fn hidden_overflow_sets_a_clip_region() {
             .child(box_of(400.0, 10.0)),
     );
     visible.fit(500.0, 500.0);
-    assert!(visible.paint().clip.is_none());
+    assert!(visible.paint().children_clip.is_none());
 }
 
 #[test]
@@ -3966,7 +3966,7 @@ fn overflow_is_reactive_and_invalidates_layout() {
             .child(box_of(400.0, 10.0)),
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_none());
+    assert!(h.paint().children_clip.is_none());
 
     let queued = h.jobs_from(|| clipped.set(true));
     assert!(
@@ -3974,7 +3974,7 @@ fn overflow_is_reactive_and_invalidates_layout() {
         "got {queued:?}"
     );
     h.fit(500.0, 500.0);
-    assert!(h.paint().clip.is_some());
+    assert!(h.paint().children_clip.is_some());
 }
 
 /// A blur can be switched off by the same signal that switches it on: a radius
@@ -4115,14 +4115,43 @@ fn the_clip_carries_every_corner() {
     let node = h.frame(200.0, 200.0).node;
 
     let clip = node.children[0]
-        .clip
+        .children_clip
         .as_ref()
-        .or(node.clip.as_ref())
+        .or(node.children_clip.as_ref())
         .expect("a hidden overflow clips");
     assert_eq!(clip.corner_radius.top_left, 16.0);
     assert_eq!(clip.corner_radius.top_right, 16.0);
     assert_eq!(clip.corner_radius.bottom_right, 0.0);
     assert_eq!(clip.corner_radius.bottom_left, 0.0);
+}
+
+/// A scroller's track is placed inside its border, by layout — so a border
+/// that changes has to bring a layout, or the track stays where the old border
+/// left it, under the new one (#764). An animated one is the case that asks:
+/// the value it displays is read untracked, and its frames run no layout.
+#[test]
+fn a_scrollbar_moves_in_when_its_border_grows() {
+    let border = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .border(border.transition(linear_100ms()), Color::WHITE)
+            .scroll(Scroll::vertical())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .children((0..20).map(|_| box_of(200.0, 40.0))),
+            ),
+    );
+    let right = |h: &mut H| {
+        let node = h.frame(200.0, 200.0).node;
+        let track = &node.children[1];
+        track.local_transform.tx() + track.bounds.width
+    };
+    assert_eq!(right(&mut h), 198.0);
+    border.set(6.0);
+    assert_eq!(right(&mut h), 192.0, "the track stayed under the border");
 }
 
 /// A state override carries the whole shape, so a squircle that only asks to

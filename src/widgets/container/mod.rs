@@ -185,7 +185,9 @@ pub enum Overflow {
     /// Content is not clipped and may overflow the container bounds
     #[default]
     Visible,
-    /// Content is clipped to the container bounds
+    /// Content is clipped inside the container's border, as CSS clips at the
+    /// padding box: the border, the background and the shadow are not cut,
+    /// and the children cannot paint over the border.
     Hidden,
 }
 
@@ -2063,13 +2065,18 @@ impl Widget for Container {
 
         let at = tree.event_instant();
 
-        // Whether the point is inside what this container clips to: its drawn
-        // shape, corners included (#704). Neither its children nor its
-        // scrollbar answer outside it, and nested clips intersect because each
-        // asks in its own frame. Asked only where there is a clip.
+        // Whether the point is inside what this container clips to: its shape
+        // inside its border, corners included (#704, #764). Neither its
+        // children nor its scrollbar answer outside it, and nested clips
+        // intersect because each asks in its own frame. Asked only where there
+        // is a clip.
         let clips_children = self.overflow_resolved.get() == Overflow::Hidden
             || self.scroll_axis != ScrollAxis::None;
-        let in_clip = clips_children && hit.contains(local_event.coords());
+        let in_clip = clips_children && {
+            let (clip, inner) =
+                style::inside_border(hit.bounds, hit.corners, self.animated_border_width(id));
+            clip.contains_shape_at(local_event.coords(), inner)
+        };
 
         // Asked once for the three that run before the children, because the
         // answer is the same one and a container that does not scroll must not
@@ -2345,10 +2352,11 @@ impl Widget for Container {
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
 
-        // Set clip region for scrollable or overflow:hidden containers
-        // This clips all children to the container bounds
+        // A scroller or an `Overflow::Hidden` box cuts its children inside
+        // its border, so they cannot paint over it.
         if is_scrollable || overflow == Overflow::Hidden {
-            ctx.set_clip(local_bounds, corner_radii, corner_curvature);
+            let (clip, inner) = style::inside_border(local_bounds, corners, border_width);
+            ctx.set_children_clip(clip, inner.radii, inner.curvature);
         }
 
         // Determine the effective cull rect for children.

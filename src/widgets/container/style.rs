@@ -595,6 +595,25 @@ impl Container {
     }
 }
 
+/// What a clipping container cuts its children to: its box inside the border,
+/// as CSS's overflow clip edge is the padding box (#764). Each radius loses the
+/// border width, floored at zero, and the curvature is kept.
+///
+/// Paint cuts to it and the event path tests against it, so a point on the
+/// border reaches no child — what is drawn and what is clicked are one shape.
+pub(super) fn inside_border(
+    bounds: Rect,
+    corners: crate::widgets::Corners,
+    border_width: f32,
+) -> (Rect, crate::widgets::Corners) {
+    let less = |radius: f32| (radius - border_width).max(0.0);
+    let inner = crate::widgets::Corners {
+        radii: corners.radii.to_array().map(less).into(),
+        ..corners
+    };
+    (bounds.inset(border_width), inner)
+}
+
 /// The container's own surface, resolved for one frame.
 #[derive(Clone, Copy)]
 pub(super) struct Decoration {

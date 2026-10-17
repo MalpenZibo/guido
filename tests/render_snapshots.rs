@@ -145,22 +145,32 @@ fn dump_node(node: &RenderNode, depth: usize, out: &mut String) {
         let o = node.pivot;
         format!(" origin={:?}/{:?}", o.horizontal, o.vertical)
     };
-    let clip = match &node.clip {
-        // One number while the four agree, so a uniform clip reads as it
-        // always did and a per-corner one is visible as four.
-        Some(c) if c.corner_radius == CornerRadii::uniform(c.corner_radius.top_left) => {
-            format!(" clip({} r={})", rect(&c.rect), n(c.corner_radius.top_left))
+    // One number while the four agree, so a uniform clip reads as it always
+    // did and a per-corner one is visible as four.
+    let clip_of = |label: &str, clip: Option<(&Rect, &CornerRadii)>| match clip {
+        Some((at, r)) if *r == CornerRadii::uniform(r.top_left) => {
+            format!(" {label}({} r={})", rect(at), n(r.top_left))
         }
-        Some(c) => format!(
-            " clip({} r={}/{}/{}/{})",
-            rect(&c.rect),
-            n(c.corner_radius.top_left),
-            n(c.corner_radius.top_right),
-            n(c.corner_radius.bottom_right),
-            n(c.corner_radius.bottom_left)
+        Some((at, r)) => format!(
+            " {label}({} r={}/{}/{}/{})",
+            rect(at),
+            n(r.top_left),
+            n(r.top_right),
+            n(r.bottom_right),
+            n(r.bottom_left)
         ),
         None => String::new(),
     };
+    // The node's own clip, then the one only its children are cut to.
+    let clip = clip_of(
+        "clip",
+        node.clip.as_ref().map(|c| (&c.rect, &c.corner_radius)),
+    ) + &clip_of(
+        "children_clip",
+        node.children_clip
+            .as_ref()
+            .map(|c| (&c.rect, &c.corner_radius)),
+    );
     let partial = if node.partial { " partial" } else { "" };
     let merge = match &node.merge {
         Some(merge) => format!(" merge(distance={})", n(merge.distance)),

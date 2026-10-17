@@ -102,6 +102,22 @@ impl Container {
         (track, handle, scale_anim)
     }
 
+    /// The box the scrollbars are placed in, in the scroller's local space:
+    /// its own, inside its border, which is where its clip cuts (#764). Every
+    /// scrollbar rect — the layout that places the track, the paint that
+    /// places the handle, the hit test — is measured from it, so none of them
+    /// is drawn under the border or answers there.
+    ///
+    /// The border's target rather than the value an animation is passing
+    /// through: the track is placed by layout, which a border animation does
+    /// not run, so the displayed value would leave it wherever the animation
+    /// stood when the last layout did. Read under the layout's tracking, the
+    /// target moves the track when it changes, and paint and the hit test ask
+    /// the same number.
+    fn scrollbar_box(&self, id: WidgetId, width: f32, height: f32) -> Rect {
+        Rect::new(0.0, 0.0, width, height).inset(self.effective_border_width_target(id))
+    }
+
     /// Layout and position scrollbar container widgets
     pub(super) fn layout_scrollbar_containers(
         &mut self,
@@ -120,10 +136,7 @@ impl Container {
         let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
         let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
 
-        // Use LOCAL bounds (0,0 origin) for scrollbar positioning.
-        // Scrollbars are positioned relative to container origin, and paint
-        // handles the translation to screen coordinates via parent transforms.
-        let local_bounds = Rect::new(0.0, 0.0, size.width, size.height);
+        let local_bounds = self.scrollbar_box(id, size.width, size.height);
 
         // Layout vertical scrollbar
         if self.scroll_axis.allows_vertical() && needs_vertical {
@@ -321,9 +334,7 @@ impl Container {
         axis: ScrollbarAxis,
     ) -> (f32, f32) {
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        // Local bounds, like every other scrollbar computation: the parent
-        // transform carries the container's own position.
-        let local_bounds = Rect::new(0.0, 0.0, bounds.width, bounds.height);
+        let local_bounds = self.scrollbar_box(id, bounds.width, bounds.height);
 
         let sd = self.scroll_data();
         let needs_other = match axis {
@@ -532,7 +543,7 @@ impl Container {
             None => Cow::Borrowed(event),
         };
         let event = local.as_ref();
-        let bounds = Rect::new(0.0, 0.0, hit.bounds.width, hit.bounds.height);
+        let bounds = self.scrollbar_box(id, hit.bounds.width, hit.bounds.height);
 
         match event {
             Event::MouseDown {

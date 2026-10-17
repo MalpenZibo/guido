@@ -10,7 +10,7 @@ use crate::widgets::Rect;
 
 use super::clip::{ClipChains, ClipIndex, ClipRef, ClipTree, ResolvedClip};
 use super::commands::DrawCommand;
-use super::tree::{CachedFlatten, RenderNode};
+use super::tree::{CachedFlatten, ClipRegion, RenderNode};
 use crate::shape::PlacedShape;
 
 /// Render layer for draw command ordering.
@@ -689,6 +689,25 @@ pub struct RegionsCarried {
     pub input_region: bool,
 }
 
+/// A node's clip placed under `under`, and the reference its commands name —
+/// or, where it declares none, what it inherits unchanged.
+fn place_clip(
+    out: &mut FlattenScratch,
+    clip: Option<&ClipRegion>,
+    world_transform: Transform,
+    under: Option<ClipIndex>,
+    inherited: &Option<ClipRef>,
+) -> (Option<ClipIndex>, Option<ClipRef>) {
+    match clip {
+        Some(clip) => {
+            let own = PlacedShape::from_clip(clip, world_transform);
+            let index = out.clips.place(own, under);
+            (Some(index), Some(out.clips.reference(index)))
+        }
+        None => (under, inherited.clone()),
+    }
+}
+
 /// Recursively flatten a node and its children.
 ///
 /// For nodes with `repainted == false` and a valid `cached_flatten`,
@@ -765,14 +784,24 @@ fn flatten_node(
     // still computed here and once — what changed is where it is written: into
     // the frame's clip tree, which every command below names, instead of into
     // each of those commands.
-    let (clip_index, effective_clip) = match &node.clip {
-        Some(clip) => {
-            let own = PlacedShape::from_clip(clip, world_transform);
-            let index = out.clips.place(own, parent_clip);
-            (Some(index), Some(out.clips.reference(index)))
-        }
-        None => (parent_clip, inherited.clone()),
-    };
+    let (clip_index, effective_clip) = place_clip(
+        out,
+        node.clip.as_ref(),
+        world_transform,
+        parent_clip,
+        &inherited,
+    );
+
+    // What the children are cut to, under the node's own clip: the node's
+    // commands above are not, so a container's border is outside the clip its
+    // content stops at (#764).
+    let (children_index, children_clip) = place_clip(
+        out,
+        node.children_clip.as_ref(),
+        world_transform,
+        clip_index,
+        &effective_clip,
+    );
 
     // Add main commands with appropriate layers and clip
     for cmd in &node.commands {
@@ -826,7 +855,7 @@ fn flatten_node(
                 world_transform: world_transform.then(&child.placement()),
                 layer: RenderLayer::Shapes,
                 opacity: opacity * child.opacity,
-                clip: effective_clip.clone(),
+                clip: children_clip.clone(),
             });
         }
         out.push(FlattenedCommand {
@@ -834,7 +863,7 @@ fn flatten_node(
             world_transform,
             layer: RenderLayer::Shapes,
             opacity,
-            clip: effective_clip.clone(),
+            clip: children_clip.clone(),
         });
     }
 
@@ -846,7 +875,7 @@ fn flatten_node(
             .map(|merged| &merged.taken[index])
             .filter(|taken| !taken.is_empty());
         let mark = taken.map(|_| out.mark());
-        subtree_partial |= flatten_node(child, world_transform, clip_index, opacity, true, out);
+        subtree_partial |= flatten_node(child, world_transform, children_index, opacity, true, out);
         // Taken back out of what the child drew rather than kept from it: the
         // child's own entry is made inside that call and has to hold its
         // background, because the next frame may replay it under a parent
@@ -2017,6 +2046,84 @@ mod world_geometry_tests {
             clip.world_aabb().width > 112.0,
             "80·√2 ≈ 113.1, got {}",
             clip.world_aabb().width
+        );
+    }
+
+    /// A children clip cuts the children and their merged backgrounds, under
+    /// the node's own clip, and leaves what the node draws itself to the own
+    /// clip alone (#764).
+    ///
+    /// The two clips are rects that overlap only in part, so a children clip
+    /// placed under the own one is their intersection and one placed under
+    /// anything else is not.
+    #[test]
+    fn a_children_clip_cuts_the_children_under_the_nodes_own_clip() {
+        let region = |x: f32, y: f32, w: f32, h: f32| ClipRegion {
+            rect: Rect::new(x, y, w, h),
+            corner_radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+        };
+        let fill = |color: Color, background: bool| {
+            let mut cmd = DrawCommand::rounded_rect(Rect::new(0.0, 0.0, 100.0, 100.0), color, 0.0);
+            if let DrawCommand::RoundedRect { background: b, .. } = &mut cmd {
+                *b = background;
+            }
+            Rc::new(cmd)
+        };
+
+        let mut child = RenderNode::new(2);
+        child.bounds = Rect::new(0.0, 0.0, 100.0, 100.0);
+        child.commands.push(fill(Color::WHITE, true));
+        child.commands.push(fill(Color::BLUE, false));
+
+        let mut root = RenderNode::new(1);
+        root.bounds = Rect::new(0.0, 0.0, 100.0, 100.0);
+        root.clip = Some(region(0.0, 0.0, 50.0, 100.0));
+        root.children_clip = Some(region(10.0, 10.0, 80.0, 80.0));
+        root.merge = Some(Box::new(super::super::merge::MergeChildren {
+            distance: 0.0,
+            border: None,
+            shadows: crate::renderer::Shadows::none(),
+        }));
+        root.commands.push(fill(Color::RED, false));
+        root.children.push(Rc::new(child));
+
+        let (mut commands, mut layers) = (Vec::new(), Vec::new());
+        flatten_root_into(
+            &root,
+            &mut commands,
+            &mut layers,
+            &mut FlattenScratch::default(),
+        );
+        let cut_to = |color: Color| {
+            let cmd = commands
+                .iter()
+                .find(|c| matches!(&*c.command, DrawCommand::RoundedRect { color: k, .. } if *k == color))
+                .unwrap_or_else(|| panic!("{color:?} is drawn"));
+            cmd.clip()
+                .expect("everything here is clipped")
+                .first
+                .world_aabb()
+        };
+        let merged = commands
+            .iter()
+            .find(|c| !matches!(&*c.command, DrawCommand::RoundedRect { .. }))
+            .expect("the merged shape is drawn");
+
+        assert_eq!(cut_to(Color::RED), Rect::new(0.0, 0.0, 50.0, 100.0), "own");
+        assert_eq!(
+            cut_to(Color::BLUE),
+            Rect::new(10.0, 10.0, 40.0, 80.0),
+            "child"
+        );
+        assert_eq!(
+            merged
+                .clip()
+                .expect("the merged shape is clipped")
+                .first
+                .world_aabb(),
+            Rect::new(10.0, 10.0, 40.0, 80.0),
+            "merged background"
         );
     }
 
