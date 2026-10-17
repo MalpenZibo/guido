@@ -22,17 +22,20 @@ Works with:
 
 ## Border
 
-A border is declared as a pair, and each half carries its own timing:
+A border is declared as a pair, and each half carries its own timing. Its width
+takes room inside the box, so each frame of a width transition lays the
+container out and the content moves with the border:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
+let thick = create_signal(false);
 container()
-    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4))
-    // A border is declared as a pair, so the layer restates the colour it is
-    // not changing — otherwise the width eases while the colour jumps.
-    .when_hovered(|s| s.border(2.0, Color::rgb(0.3, 0.3, 0.4)))
+    .border(
+        (move || if thick.get() { 4.0 } else { 1.0 }).transition(150.0),
+        Color::rgb(0.3, 0.3, 0.4),
+    )
 # ;
 # }
 ```
@@ -378,13 +381,13 @@ Each property carries its own, where it is declared:
 # fn main() {
 container()
     .background(Color::rgb(0.2, 0.2, 0.3).transition(200.0))
-    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4).transition(150.0))
+    .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
     .shadow(LOW.transition(250.0))
     .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
 
     .when_hovered(|s| s
         .lighter(0.1)
-        .border(2.0, Color::WHITE)
+        .outline(2.0, Color::WHITE, 2.0)
         .shadow(RAISED)
     )
     .when_pressed(|s| s
@@ -402,6 +405,7 @@ container()
 | Background | `background(..)` | Duration, EaseOut |
 | Border width | `border(width, _)` | Duration, EaseOut |
 | Border colour | `border(_, colour)` | Duration, EaseOut |
+| Outline width, colour, offset | `outline(width, colour, offset)` | Duration, EaseOut |
 | Corners | `corners(..)` | Duration |
 | Padding | `padding(..)` | Duration |
 | Translate | `translate(..)` | Spring or Duration |

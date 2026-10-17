@@ -1,0 +1,28 @@
+node 0,0 300x120
+  node 0,0 60x60 at 10,10
+    draw rect 0,0 60x60 fill=#00000000 radius=0/0/0/0 border=#ffffffff@4
+    node 0,0 20x20 at 4,4
+      draw rect 0,0 20x20 fill=#ff0000ff radius=0/0/0/0
+  node 0,0 30x100 at 80,10
+    draw rect 0,0 30x100 fill=#00000000 radius=0/0/0/0 border=#ffffffff@3
+    node 0,0 20x20 at 5,5
+      draw rect 0,0 20x20 fill=#00ff00ff radius=0/0/0/0
+  node 0,0 60x60 at 120,10
+    draw rect 0,0 60x60 fill=#00000000 radius=0/0/0/0 border=#ffffffff@5
+    node 0,0 50x50 at 5,5
+      draw rect 0,0 50x50 fill=#0000ffff radius=0/0/0/0
+  node 0,0 100x100 at 190,10 children_clip(5,5 90x90 r=0)
+    draw rect 0,0 100x100 fill=#00000000 radius=0/0/0/0 border=#ffffffff@5
+    node 0,0 80x180 at 5,5 partial
+      node 0,0 80x30
+        draw rect 0,0 80x30 fill=#ff0000ff radius=0/0/0/0
+      node 0,0 80x30 at 0,30
+        draw rect 0,0 80x30 fill=#0000ffff radius=0/0/0/0
+      node 0,0 80x30 at 0,60
+        draw rect 0,0 80x30 fill=#ff0000ff radius=0/0/0/0
+      node 0,0 80x30 at 0,90
+        draw rect 0,0 80x30 fill=#0000ffff radius=0/0/0/0
+    node 0,0 6x86 at 87,7
+      draw rect 0,0 6x86 fill=#ffffff0d radius=100/100/100/100
+    node 0,0 6x43 at 87,7
+      draw rect 0,0 6x43 fill=#ffffff4d radius=100/100/100/100

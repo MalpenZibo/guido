@@ -112,6 +112,15 @@ pub struct BorderOverride {
     pub color: Signal<Color>,
 }
 
+/// An outline an active state draws instead of the declared one: all three
+/// halves, as [`BorderOverride`] holds both of a border's.
+#[derive(Clone, Copy)]
+pub struct OutlineOverride {
+    pub width: Signal<f32>,
+    pub color: Signal<Color>,
+    pub offset: Signal<f32>,
+}
+
 /// Style overrides to apply during a specific interaction state.
 ///
 /// All fields are optional — `None` means use the base value from the
@@ -125,6 +134,8 @@ pub struct StateStyle {
     /// colour with no width are the same thing, which is no border, so the pair
     /// is one field rather than two that could disagree.
     pub border: Option<BorderOverride>,
+    /// Outline override — all three halves or none, for the border's reason.
+    pub outline: Option<OutlineOverride>,
     /// Corner radius override
     pub corners: Prop<crate::widgets::Corners>,
     /// Displacement override
@@ -268,6 +279,34 @@ impl StateStyle {
         self.border = Some(BorderOverride {
             width: width.into_signal(),
             color: color.into_signal(),
+        });
+        self
+    }
+
+    /// Override the outline while this state is active — the ring a focus or
+    /// hover shows, which takes no room, so the content stays where it is:
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { accent: Color }
+    /// # let theme = Theme { accent: Color::rgb(0.4, 0.6, 1.0) };
+    /// container()
+    ///     .outline(2.0, Color::TRANSPARENT, 2.0)
+    ///     .when_focused(|s| s.outline(2.0, theme.accent, 2.0));
+    /// ```
+    ///
+    /// All three halves, as on the container — see
+    /// [`Container::outline`](crate::widgets::Container::outline).
+    pub fn outline<M1, M2, M3>(
+        mut self,
+        width: impl IntoSignal<f32, M1>,
+        color: impl IntoSignal<Color, M2>,
+        offset: impl IntoSignal<f32, M3>,
+    ) -> Self {
+        self.outline = Some(OutlineOverride {
+            width: width.into_signal(),
+            color: color.into_signal(),
+            offset: offset.into_signal(),
         });
         self
     }

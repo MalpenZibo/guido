@@ -61,7 +61,7 @@ fn lock_screen(output: OutputInfo) -> Container {
                 .padding(10.0)
                 .background(Color::rgb(0.15, 0.15, 0.2))
                 .corners(8.0)
-                .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+                .when_focused(|s| s.outline(2.0, Color::rgb(0.4, 0.8, 1.0), 2.0))
                 .child(
                     password_input(attempt)
                         .cursor_color(Color::rgb(0.4, 0.8, 1.0))

@@ -38,21 +38,23 @@ container()
 # }
 ```
 
-### Border Animation
+### Border and Outline Animation
 
-A border is declared as a pair and each half carries its own timing, so the
-width can spring while the colour eases:
+A border is declared as a pair and each half carries its own timing. Its width
+takes room inside the box, so a width that animates moves the content with it;
+a hover ring is an outline, which takes none, and whose three halves animate
+the same way:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
 container()
-    .border(
-        1.0.transition(150.0),
-        Color::rgb(0.3, 0.3, 0.4).transition(150.0),
-    )
-    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+    .border(1.0, Color::rgb(0.3, 0.3, 0.4).transition(150.0))
+    .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
+    .when_hovered(|s| s
+        .border(1.0, Color::rgb(0.5, 0.5, 0.6))
+        .outline(2.0, Color::rgb(0.5, 0.5, 0.6), 2.0))
 # ;
 # }
 ```
@@ -126,16 +128,14 @@ fn animated_card() -> Container {
         .padding(20.0)
         .background(Color::rgb(0.15, 0.15, 0.2).transition(200.0))
         .corners(12.0)
-        .border(
-            1.0.transition(150.0),
-            Color::rgb(0.25, 0.25, 0.3).transition(150.0),
-        )
+        .border(1.0, Color::rgb(0.25, 0.25, 0.3))
+        .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
         .shadow(RAISED.transition(250.0))
 
         // State layers
         .when_hovered(|s| s
             .lighter(0.05)
-            .border(2.0, Color::rgb(0.4, 0.6, 0.9))
+            .outline(2.0, Color::rgb(0.4, 0.6, 0.9), 2.0)
             .shadow(HIGH)
         )
         .when_pressed(|s| s

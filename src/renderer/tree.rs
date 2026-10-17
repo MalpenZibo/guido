@@ -239,6 +239,11 @@ pub struct RenderNode {
     /// without affecting child content.
     pub overlay_clip: Option<ClipRegion>,
 
+    /// The first overlay command `overlay_clip` cuts: the ones drawn before it
+    /// was set are cut only by the clips above this node. A container's
+    /// outline is drawn there, outside the box its ripples are cut to (#767).
+    pub overlay_clip_from: usize,
+
     /// Optional clip region that applies only to the children, placed under
     /// `clip`. What a scroller or an `Overflow::Hidden` container cuts its
     /// content to: CSS's overflow clip, which is the padding box and leaves the
@@ -289,6 +294,7 @@ impl RenderNode {
             overlay_commands: SmallVec::new(),
             clip: None,
             overlay_clip: None,
+            overlay_clip_from: 0,
             children_clip: None,
             merge: None,
             repainted: Cell::new(true),
@@ -328,6 +334,7 @@ impl RenderNode {
         self.overlay_commands.clear();
         self.clip = None;
         self.overlay_clip = None;
+        self.overlay_clip_from = 0;
         self.children_clip = None;
         self.merge = None;
         self.repainted.set(true);

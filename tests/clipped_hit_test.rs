@@ -179,7 +179,11 @@ fn rounded_scroller() -> Harness {
 
 /// How far the content has scrolled, read off its painted origin.
 fn scrolled_by(h: &mut Harness) -> f32 {
-    -h.paint().children[0].local_transform.ty()
+    // From where layout put the content, which is inside the scroller's
+    // border rather than at its edge (#767).
+    let content = h.tree.get_children(h.root)[0];
+    let rest = h.tree.get_bounds(content).expect("laid out").y;
+    rest - h.paint().children[0].local_transform.ty()
 }
 
 /// The alpha of the handle's fill, which is all that tells resting, hovered

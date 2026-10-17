@@ -426,10 +426,11 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
         // Styling
         .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(8.0)
-        .border(1.0.transition(150.0), Color::rgb(0.4, 0.6, 0.9))
+        .border(1.0, Color::rgb(0.4, 0.6, 0.9))
+        .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
 
         // State layers
-        .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
+        .when_hovered(|s| s.lighter(0.1).outline(2.0, Color::rgb(0.5, 0.7, 1.0), 2.0))
         .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))
 
         // Event
@@ -457,7 +458,8 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.corners(8.0)` / `.corners([16.0, 0.0])` - Rounded corners: one, two or four values
 - `.corners(Corners::squircle(12.0))` / `Corners::bevel(..)` / `Corners::scoop(..)` -
   the shape of the corner
-- `.border(width, color)` - Border
+- `.border(width, color)` - Border, inside the box: it takes room, as CSS's `border-box`
+- `.outline(width, color, offset)` - A ring outside the box that takes no room: the focus or hover ring
 - `.shadow(shadow)` - Shadows: one `Shadow` or up to four, each an offset, blur, spread and colour, outside the box or `inset`
 
 ### Spacing

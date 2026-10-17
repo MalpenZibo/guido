@@ -357,7 +357,9 @@ impl<'a> PaintContext<'a> {
     /// Set a clip region only for overlay commands (doesn't clip children).
     ///
     /// Use this for effects like ripples that need to be clipped to the
-    /// container's rounded corners without affecting child content.
+    /// container's rounded corners without affecting child content. It cuts
+    /// the overlay commands drawn after it is set, so one drawn before — an
+    /// outline, outside the box — is left whole.
     ///
     /// # Arguments
     /// * `rect` - The clip rectangle in local coordinates
@@ -374,6 +376,7 @@ impl<'a> PaintContext<'a> {
             corner_radius,
             curvature,
         });
+        self.node.overlay_clip_from = self.node.overlay_commands.len();
     }
 
     // -------------------------------------------------------------------------
@@ -423,16 +426,13 @@ impl<'a> PaintContext<'a> {
         border_width: f32,
         curvature: f32,
     ) {
-        self.node.commands.push(Rc::new(DrawCommand::RoundedRect {
+        self.node.commands.push(Rc::new(DrawCommand::border_frame(
             rect,
-            color: Color::TRANSPARENT,
-            radius: radius.into(),
+            border_color,
+            radius,
+            border_width,
             curvature,
-            border: Some(Border::new(border_width, border_color)),
-            shadow: None,
-            gradient: None,
-            background: false,
-        }));
+        )));
     }
 
     /// Draw a rounded rectangle with shadow.
@@ -950,6 +950,27 @@ impl<'a> PaintContext<'a> {
                 radius,
                 color,
             }));
+    }
+
+    /// Draw a border frame as overlay (rendered after children): what a
+    /// container's outline is, a ring above its content.
+    pub fn draw_overlay_border_frame(
+        &mut self,
+        rect: Rect,
+        border_color: Color,
+        radius: impl Into<CornerRadii>,
+        border_width: f32,
+        curvature: f32,
+    ) {
+        self.node
+            .overlay_commands
+            .push(Rc::new(DrawCommand::border_frame(
+                rect,
+                border_color,
+                radius,
+                border_width,
+                curvature,
+            )));
     }
 
     /// Draw a rounded rectangle as overlay (rendered after children).

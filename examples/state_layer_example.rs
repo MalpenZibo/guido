@@ -105,19 +105,28 @@ fn create_animated_button() -> Container {
         .child(text("Animated transitions").color(Color::WHITE))
 }
 
-/// Button with border changes on hover/press
+/// Button with a ring on hover/press: an outline, so the label stays put
 fn create_border_button() -> Container {
+    let ease = || Transition::new(150.0, TimingFunction::EaseOut);
     container()
         .padding(16.0)
         .background(Color::rgb(0.15, 0.15, 0.2))
         .corners(8.0)
-        .border(
-            1.0.transition(Transition::new(150.0, TimingFunction::EaseOut)),
-            Color::rgb(0.3, 0.3, 0.4).transition(Transition::new(150.0, TimingFunction::EaseOut)),
+        .border(1.0, Color::rgb(0.3, 0.3, 0.4).transition(ease()))
+        .outline(
+            1.0.transition(ease()),
+            Color::TRANSPARENT.transition(ease()),
+            2.0,
         )
-        .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
-        .when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
-        .child(text("Border changes").color(Color::rgb(0.8, 0.8, 0.85)))
+        .when_hovered(|s| {
+            s.border(1.0, Color::rgb(0.5, 0.5, 0.6))
+                .outline(2.0, Color::rgb(0.5, 0.5, 0.6), 2.0)
+        })
+        .when_pressed(|s| {
+            s.border(1.0, Color::rgb(0.7, 0.7, 0.8))
+                .outline(3.0, Color::rgb(0.7, 0.7, 0.8), 2.0)
+        })
+        .child(text("Ring changes").color(Color::rgb(0.8, 0.8, 0.85)))
 }
 
 /// Button with default ripple effect

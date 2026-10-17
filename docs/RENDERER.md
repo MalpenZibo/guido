@@ -33,6 +33,7 @@ pub struct RenderNode {
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
     pub clip: Option<ClipRegion>,            // Clips this node and children
     pub overlay_clip: Option<ClipRegion>,    // Clips only overlay commands
+    pub overlay_clip_from: usize,            // ... from this one on
     pub children_clip: Option<ClipRegion>,   // Clips only the children, under `clip`
     pub merge: Option<Box<MergeChildren>>,   // Children's backgrounds drawn as one shape
     pub repainted: Cell<bool>,               // true = freshly painted this frame
@@ -110,7 +111,8 @@ ctx.set_clip(rect, corner_radius, curvature);
 // Set rectangular clip (no rounded corners)
 ctx.set_clip_rect(rect);
 
-// Set clip only for overlay commands (doesn't clip children)
+// Set clip only for overlay commands (doesn't clip children), and only for
+// those drawn after it is set
 ctx.set_overlay_clip(rect, corner_radius, curvature);
 
 // Set clip only for the children (doesn't clip this node's own commands)
@@ -180,12 +182,18 @@ paint_children(ctx, &children, &opts);
 
 ### Overlay Commands
 
-Overlay commands are drawn after all children, useful for effects like ripples:
+Overlay commands are drawn after all children, useful for effects like ripples,
+and for a container's outline — a ring above everything the box holds:
 
 ```rust
 ctx.draw_overlay_circle(cx, cy, radius, color);
 ctx.draw_overlay_rounded_rect(rect, color, radius);
+ctx.draw_overlay_border_frame(rect, color, radius, width, curvature);
 ```
+
+The overlay clip cuts only the overlay commands drawn after it was set. A
+container draws its outline first and sets the clip its ripples are cut to
+after, so the ring, which stands outside the box, is not erased by a press.
 
 ## Tree Flattening
 

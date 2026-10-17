@@ -36,9 +36,14 @@ The `when_focused` is applied when any child widget has keyboard focus. This is 
 container()
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     .corners(6.0)
-    .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))  // Highlight when focused
+    .outline(2.0, Color::TRANSPARENT, 2.0)
+    .when_focused(|s| s.outline(2.0, Color::rgb(0.4, 0.8, 1.0), 2.0))  // Ring when focused
     .child(text_input(value))
 ```
+
+The ring is an outline rather than a thicker border because a border takes room:
+widening it on focus would move the field inside it by the difference, where an
+outline is drawn outside the box and moves nothing.
 
 The declaration carries a second meaning, and it is load-bearing rather than
 decorative. `dispatch_events` takes the focus off a `MouseDown` that came back
@@ -66,7 +71,7 @@ let wrong_password = create_signal(false);
 
 container()
     .border(1.0, theme.line)
-    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .state(wrong_password, |s| s.border(1.0, theme.error))
     .child(password_input(password))
 ```
 
@@ -174,8 +179,9 @@ Layers are resolved in reverse declaration order, per property. Writing the erro
 ```rust
 container()
     .border(1.0, theme.line)
-    .when_focused(|s| s.border(2.0, theme.accent))
-    .state(wrong_password, |s| s.border(2.0, theme.error))  // wins while it holds
+    .outline(2.0, Color::TRANSPARENT, 2.0)
+    .when_focused(|s| s.outline(2.0, theme.accent, 2.0))
+    .state(wrong_password, |s| s.outline(2.0, theme.error, 2.0))  // wins while it holds
 ```
 
 A layer that says nothing about a property is passed over rather than ending the search, so a pressed layer that only scales still lets the hover's background through.
@@ -206,10 +212,26 @@ is active.
 ```rust
 // Change border on hover
 .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-.when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
-.when_pressed(|s| s.border(3.0, Color::rgb(0.7, 0.7, 0.8)))
-.when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
+.when_hovered(|s| s.border(1.0, Color::rgb(0.5, 0.5, 0.6)))
+.when_pressed(|s| s.border(1.0, Color::rgb(0.7, 0.7, 0.8)))
+.when_hovered(|s| s.border(1.0, Color::WHITE))   // both halves, always
 ```
+
+A border takes room inside the box, so a layer that changes its *width* relays
+the container out and moves its content by the difference. A colour change
+moves nothing.
+
+### Outline
+
+```rust
+// A ring outside the box, 2 out from its edge, on focus
+.outline(2.0, Color::TRANSPARENT, 2.0)
+.when_focused(|s| s.outline(2.0, Color::rgb(0.4, 0.8, 1.0), 2.0))
+.when_hovered(|s| s.outline(1.0, Color::rgb(0.5, 0.5, 0.6), 2.0))   // all three halves, always
+```
+
+An outline takes no room and never reaches layout, so a layer that shows,
+thickens or moves it only repaints: the ring for a hover or a focus.
 
 ### Transform
 
@@ -289,7 +311,8 @@ quietly ignored, because [`Animated`] is deliberately not an [`IntoSignal`]:
 ```
 
 Every animatable property takes a motion the same way — `background`, `border`
-(each half separately), `corners`, `padding`, `shadow`, `width`, `height`,
+(each half separately), `outline` (each of its three), `corners`, `padding`,
+`shadow`, `width`, `height`,
 `translate`, `rotate` and `scale` on a container, and `color` and `font_size` on
 a `text` or a `text_input`.
 
@@ -316,12 +339,13 @@ fn create_button(label: &str) -> Container {
         .padding(16.0)
         .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
         .corners(8.0)
-        .border(1.0.transition(150.0), Color::rgb(0.4, 0.6, 0.9))
+        .border(1.0, Color::rgb(0.4, 0.6, 0.9))
+        .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
 
         // The label follows the state too, not just the box
         .control()   // the text below declares .when_hovered(|s| s.color(Color::rgb(0.95, 0.98, 1.0)))
         // State overrides
-        .when_hovered(|s| s.lighter(0.1).border(2.0, Color::rgb(0.5, 0.7, 1.0)))
+        .when_hovered(|s| s.lighter(0.1).outline(2.0, Color::rgb(0.5, 0.7, 1.0), 2.0))
         .when_pressed(|s| s.ripple().darker(0.05).scale(0.98))
         .child(text(label).color(Color::WHITE))
 }
@@ -338,6 +362,8 @@ pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     /// Both halves or neither — half a border is no border.
     pub border: Option<BorderOverride>,
+    /// All three halves or none, for the same reason.
+    pub outline: Option<OutlineOverride>,
     pub corners: Prop<Corners>,
     pub translate: Prop<Translate>,
     pub rotate: Prop<f32>,

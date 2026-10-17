@@ -9,11 +9,12 @@
 //!    resolves fractional lengths against the incoming constraints. From that
 //!    point on a fraction is an ordinary exact length that happened to become
 //!    known at layout time, so nothing downstream has to know about it.
-//! 2. **What do the children get?** — [`child_layout`] subtracts the padding
-//!    and any scrollbar gutter, opens the scrolled axis to infinity so content
-//!    can exceed the viewport, and reports separately the finite box the
-//!    content is seen through, padding included but not the gutter — what
-//!    scrolling measures its content and padding against.
+//! 2. **What do the children get?** — [`child_layout`] subtracts the border,
+//!    the padding and any scrollbar gutter, opens the scrolled axis to
+//!    infinity so content can exceed the viewport, and reports separately the
+//!    finite box the content is seen through, inside the border, padding
+//!    included but not the gutter — what scrolling measures its content and
+//!    padding against.
 //! 3. **How big are we?** — [`resolve_size`] combines the declared length, the
 //!    measured content and the shrink policy, then clamps to what the parent
 //!    allows.
@@ -35,6 +36,9 @@ use crate::tree::LayoutCtx;
 /// The container's own size declarations, resolved for one layout pass.
 pub(super) struct BoxLengths {
     pub padding: Padding,
+    /// The border's width: room the box keeps inside its edge, as CSS's
+    /// `border-box` does, so the children start inside border and padding.
+    pub border: f32,
     pub width: Length,
     pub height: Length,
     /// Read here rather than at the point of use: `overflow` is reactive and
@@ -43,14 +47,29 @@ pub(super) struct BoxLengths {
     pub overflow: Overflow,
 }
 
+impl BoxLengths {
+    /// What the box keeps between its edge and its content: the border, and
+    /// the padding inside it.
+    pub fn inset(&self) -> Padding {
+        let (p, b) = (self.padding, self.border);
+        Padding {
+            top: p.top + b,
+            right: p.right + b,
+            bottom: p.bottom + b,
+            left: p.left + b,
+        }
+    }
+}
+
 /// What the children of one layout pass are laid out into.
 pub(super) struct ChildLayout {
     /// What children are offered. A scrolled axis is unbounded here.
     pub constraints: Constraints,
-    /// Where the first child starts, inside the padding.
+    /// Where the first child starts, inside the border and the padding.
     pub origin: (f32, f32),
     /// The box a scroller shows its content and padding through: the extent
-    /// it was offered less a reserved gutter, padding included. Scrolling
+    /// it was offered inside its border, less a reserved gutter, padding
+    /// included. Scrolling
     /// compares its content, which counts the padding, against this; compared
     /// with the extent inside the padding instead, the padding counted twice
     /// and a padded scroller ran past its end by it (#721).
@@ -94,16 +113,18 @@ impl Container {
         (has_fixed_width || tight_width) && (has_fixed_height || tight_height)
     }
 
-    /// Read the declared padding and lengths, tracked so a later write
-    /// re-runs this layout, with fractions resolved against `constraints`.
+    /// Read the declared padding, border width and lengths, tracked so a later
+    /// write re-runs this layout, with fractions resolved against
+    /// `constraints`.
     pub(super) fn read_box_lengths(
         &self,
         ctx: &mut LayoutCtx,
         id: WidgetId,
         constraints: Constraints,
     ) -> BoxLengths {
-        let (padding, mut width, mut height, overflow) = (
+        let (padding, border, mut width, mut height, overflow) = (
             self.animated_padding(ctx, id),
+            self.laid_out_border_width(ctx, id),
             self.width.get_finite_or(Length::default(), id, "width"),
             self.height.get_finite_or(Length::default(), id, "height"),
             self.overflow.get_or(Overflow::Visible),
@@ -118,6 +139,7 @@ impl Container {
 
         BoxLengths {
             padding,
+            border,
             width,
             height,
             overflow,
@@ -169,7 +191,7 @@ impl Container {
         lengths: &BoxLengths,
         constraints: Constraints,
     ) -> ChildLayout {
-        let padding = lengths.padding;
+        let inset = lengths.inset();
         let layout_width = self.animated_extent(
             ctx,
             self.anims.as_ref().and_then(|a| a.width()),
@@ -206,8 +228,8 @@ impl Container {
             }
             _ => (0.0, 0.0),
         };
-        let max_width = (layout_width - padding.horizontal_total() - gutter_width).max(0.0);
-        let max_height = (layout_height - padding.vertical_total() - gutter_height).max(0.0);
+        let max_width = (layout_width - inset.horizontal_total() - gutter_width).max(0.0);
+        let max_height = (layout_height - inset.vertical_total() - gutter_height).max(0.0);
 
         // Pass the effective minimum down so alignments like Center and End
         // know how much room they actually have to place children in.
@@ -219,7 +241,7 @@ impl Container {
                 .min()
                 .unwrap_or(0.0)
                 .max(constraints.min_width);
-            (effective - padding.horizontal_total())
+            (effective - inset.horizontal_total())
                 .max(0.0)
                 .min(max_width)
         };
@@ -231,16 +253,17 @@ impl Container {
                 .min()
                 .unwrap_or(0.0)
                 .max(constraints.min_height);
-            (effective - padding.vertical_total())
+            (effective - inset.vertical_total())
                 .max(0.0)
                 .min(max_height)
         };
 
         // The visible extents, captured before the scrolled axis is opened up.
         let viewport = Size::new(max_width, max_height);
+        let border = lengths.border * 2.0;
         let seen_through = Size::new(
-            (layout_width - gutter_width).max(0.0),
-            (layout_height - gutter_height).max(0.0),
+            (layout_width - border - gutter_width).max(0.0),
+            (layout_height - border - gutter_height).max(0.0),
         );
 
         // A scrolled axis is unbounded: the content is free to exceed the
@@ -287,7 +310,7 @@ impl Container {
         ChildLayout {
             constraints: child,
             // Children sit in local coordinates; the parent places the container.
-            origin: (padding.left, padding.top),
+            origin: (inset.left, inset.top),
             seen_through,
         }
     }
@@ -300,13 +323,14 @@ impl Container {
         constraints: Constraints,
         content: Size,
     ) -> Size {
+        let inset = lengths.inset();
         Size::new(
             self.resolve_axis(
                 ctx,
                 Axis::Horizontal,
                 &lengths.width,
                 lengths.overflow,
-                content.width + lengths.padding.horizontal_total(),
+                content.width + inset.horizontal_total(),
                 constraints.min_width,
                 constraints.max_width,
             ),
@@ -315,7 +339,7 @@ impl Container {
                 Axis::Vertical,
                 &lengths.height,
                 lengths.overflow,
-                content.height + lengths.padding.vertical_total(),
+                content.height + inset.vertical_total(),
                 constraints.min_height,
                 constraints.max_height,
             ),
@@ -330,7 +354,7 @@ impl Container {
     /// box whose content may run past it — cut off, or scrolled to — need not
     /// hold it, as CSS gives a scroll container no automatic minimum, and goes
     /// down to the minimum it declares. Any other box goes no lower than its
-    /// content and padding, the rule [`resolve_axis`](Self::resolve_axis)
+    /// content, padding and border, the rule [`resolve_axis`](Self::resolve_axis)
     /// holds it to. A size in flight is where the animation has it.
     pub(super) fn least_size(&self, lengths: &BoxLengths, content: Size, size: Size) -> Size {
         let least = |axis: Axis, length: &Length, padding: f32, content: f32, size: f32| {
@@ -347,18 +371,19 @@ impl Container {
                 (content + padding).max(declared)
             }
         };
+        let inset = lengths.inset();
         Size::new(
             least(
                 Axis::Horizontal,
                 &lengths.width,
-                lengths.padding.horizontal_total(),
+                inset.horizontal_total(),
                 content.width,
                 size.width,
             ),
             least(
                 Axis::Vertical,
                 &lengths.height,
-                lengths.padding.vertical_total(),
+                inset.vertical_total(),
                 content.height,
                 size.height,
             ),

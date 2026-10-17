@@ -197,9 +197,9 @@ pub fn quit_app() {
 /// who can reach a method but cannot name what it takes has half of one.
 ///
 /// Having to write it is the line, and three neighbours fall the far side of
-/// it. A type the exported methods merely *hold*: `StateStyle`'s fields name `BackgroundOverride` and
-/// `BorderOverride`, but `background`, `lighter`, `darker` and `border` take a
-/// colour and a number and build them. A type only a `#[doc(hidden)]` method
+/// it. A type the exported methods merely *hold*: `StateStyle`'s fields name `BackgroundOverride`,
+/// `BorderOverride` and `OutlineOverride`, but `background`, `lighter`,
+/// `darker`, `border` and `outline` take colours and numbers and build them. A type only a `#[doc(hidden)]` method
 /// takes: `StateWhen` is what [`Stateful`](crate::widgets::Stateful) hands
 /// `push_state_style`, the hook `when_hovered` and its siblings are written
 /// on, and every method a caller is shown takes a closure. And a bound rather

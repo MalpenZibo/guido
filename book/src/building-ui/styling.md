@@ -75,13 +75,36 @@ container()
 # }
 ```
 
+A border takes room inside the box, as CSS's `box-sizing: border-box` does: the
+children are laid out inside the border and the padding, and a box sized to its
+content grows by both. A scroller's viewport and extents are measured inside its
+border, so its content scrolls from the border's inner edge to the same edge at
+the far end. The width is a layout property for that reason: changing it, from a
+signal, a transition or a state layer, relays the container out and moves what
+it holds. A ring that should not move anything is an
+[outline](borders.md#outlines).
+
 A container that scrolls or hides its overflow cuts its children *inside* its
 border, as CSS cuts at the padding box: the border is never covered by what the
 container holds, its scrollbar sits inside the border too, and a press on the
 border does not reach a child under it. The container's own background, border
-and shadow are not cut by that clip. The border does not take room in the
-layout, though, so content laid against the edge goes under the clip by the
-border's width; padding at least as wide keeps it in view.
+and shadow are not cut by that clip.
+
+## Outlines
+
+A ring outside the box, drawn above everything it holds and taking no room — the
+focus or hover ring. See [Outlines](borders.md#outlines).
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container()
+    .corners(8.0)
+    .outline(2.0, Color::WHITE, 2.0)  // Width, colour, offset
+# ;
+# }
+```
 
 ## Shadows
 

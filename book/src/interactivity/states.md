@@ -52,10 +52,28 @@ container()
 # fn main() {
 # container()
 .border(1.0, Color::rgb(0.3, 0.3, 0.4))
-.when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+.when_hovered(|s| s.border(1.0, Color::rgb(0.5, 0.5, 0.6)))
 # ;
 # }
 ```
+
+The width stays: a border takes room inside the box, so a hover that widened it
+would move the content by the difference.
+
+**Ring:**
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
+.outline(2.0, Color::TRANSPARENT, 2.0)
+.when_hovered(|s| s.outline(2.0, Color::rgb(0.5, 0.5, 0.6), 2.0))
+# ;
+# }
+```
+
+An outline is drawn outside the box and takes no room, so showing it moves
+nothing.
 
 **Shadow lift:**
 ```rust
@@ -230,7 +248,7 @@ let wrong_password = create_signal(false);
 
 container()
     .border(1.0, theme.line)
-    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .state(wrong_password, |s| s.border(1.0, theme.error))
     .child(password_input(password))
 # ;
 # }
@@ -249,7 +267,7 @@ independently — a label beside the field does not have to be told:
 # let theme = Theme::default();
 # let wrong_password = create_signal(false);
 container()
-    .state(wrong_password, |s| s.border(2.0, theme.error))
+    .state(wrong_password, |s| s.border(1.0, theme.error))
     .child(text("Wrong password"))
 # ;
 # }
@@ -351,9 +369,10 @@ matters on a password field, where the focus is held essentially all the time:
 # let wrong_password = create_signal(false);
 container()
     .border(1.0, theme.line)
-    .when_focused(|s| s.border(2.0, theme.accent))
-    .state(wrong_password, |s| s.border(2.0, theme.error))   // written after,
-    .child(password_input(password))                             // so it wins
+    .outline(2.0, Color::TRANSPARENT, 2.0)
+    .when_focused(|s| s.outline(2.0, theme.accent, 2.0))
+    .state(wrong_password, |s| s.outline(2.0, theme.error, 2.0))   // written after,
+    .child(password_input(password))                                    // so it wins
 # ;
 # }
 ```
@@ -390,7 +409,7 @@ Each state can override multiple properties:
 # container()
 .when_hovered(|s| s
     .lighter(0.1)
-    .border(2.0, Color::rgb(0.5, 0.7, 1.0))
+    .outline(2.0, Color::rgb(0.5, 0.7, 1.0), 2.0)
     .shadow(RAISED)
 )
 
@@ -414,9 +433,9 @@ Add transitions for smooth state changes:
 # fn main() {
 container()
     .background(Color::rgb(0.3, 0.5, 0.8).transition(200.0))
-    .border(1.0.transition(150.0), Color::WHITE)
+    .outline(2.0, Color::TRANSPARENT.transition(150.0), 2.0)
     .scale(Scale::NONE.transition(Transition::spring(SpringConfig::GENTLE)))
-    .when_hovered(|s| s.lighter(0.1).border(2.0, Color::WHITE))
+    .when_hovered(|s| s.lighter(0.1).outline(2.0, Color::WHITE, 2.0))
     .when_pressed(|s| s.darker(0.1).scale(0.98))
 # ;
 # }
@@ -497,6 +516,9 @@ impl StateStyleBuilder {
 
     // Border — both halves, always; half a border is no border
     pub fn border(self, width: f32, color: Color) -> Self;
+
+    // Outline — width, colour and offset, always; it takes no room
+    pub fn outline(self, width: f32, color: Color, offset: f32) -> Self;
 
     // Other
     pub fn corners<M>(self, corners: impl IntoSignal<Corners, M>) -> Self;

@@ -205,7 +205,7 @@ fn create_text_input_field(input_value: RwSignal<String>) -> Container {
         .background(Color::rgb(0.15, 0.15, 0.2))
         .border(1.0, Color::rgb(0.3, 0.3, 0.4))
         .corners(6.0)
-        .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+        .when_focused(|s| s.outline(2.0, Color::rgb(0.4, 0.8, 1.0), 2.0))
         .child(
             text_input(input_value)
                 .selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))

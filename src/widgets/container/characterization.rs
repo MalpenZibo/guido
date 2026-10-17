@@ -242,6 +242,22 @@ fn borders(node: &RenderNode) -> Vec<(f32, Color)> {
         .collect()
 }
 
+/// The width, colour and offset of every outline drawn, in paint order: the
+/// overlay rings, whose outer edge stands `offset + width` outside the box.
+fn outlines(node: &RenderNode) -> Vec<(f32, Color, f32)> {
+    node.overlay_commands
+        .iter()
+        .filter_map(|c| match &**c {
+            DrawCommand::RoundedRect {
+                rect,
+                border: Some(border),
+                ..
+            } => Some((border.width, border.color, -rect.x - border.width)),
+            _ => None,
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Sizing — the box model matrix
 // ---------------------------------------------------------------------------
@@ -2603,7 +2619,7 @@ fn declaring_no_motion_allocates_no_animation_box() {
     );
 }
 
-/// A container pays for the animations it declared, not for the twelve it
+/// A container pays for the animations it declared, not for the sixteen it
 /// could have.
 ///
 /// The struct of eleven `Option<AnimationState<T>>`s this replaced measured
@@ -2634,7 +2650,7 @@ fn a_container_carries_one_slot_per_declared_animation() {
     assert!(
         std::mem::size_of::<ContainerAnims>()
             <= 2 * std::mem::size_of::<AnimSlot>() + 2 * std::mem::size_of::<usize>(),
-        "the store is sized by what a container declares, not by the twelve \
+        "the store is sized by what a container declares, not by the sixteen \
          properties it could declare: {} bytes",
         std::mem::size_of::<ContainerAnims>()
     );
@@ -4134,7 +4150,9 @@ fn the_clip_carries_every_corner() {
 /// A scroller's track is placed inside its border, by layout — so a border
 /// that changes has to bring a layout, or the track stays where the old border
 /// left it, under the new one (#764). An animated one is the case that asks:
-/// the value it displays is read untracked, and its frames run no layout.
+/// the track follows the border showing, frame by frame, in step with the
+/// content beside it, because a border's width takes room and each frame of
+/// its animation lays the scroller out (#767).
 #[test]
 fn a_scrollbar_moves_in_when_its_border_grows() {
     let border = create_signal(0.0f32);
@@ -4151,13 +4169,304 @@ fn a_scrollbar_moves_in_when_its_border_grows() {
             ),
     );
     let right = |h: &mut H| {
-        let node = h.frame(200.0, 200.0).node;
+        let node = h.paint();
         let track = &node.children[1];
         track.local_transform.tx() + track.bounds.width
     };
+    h.fit(200.0, 200.0);
     assert_eq!(right(&mut h), 198.0);
+
+    let t0 = std::time::Instant::now();
     border.set(6.0);
+    frame_at(&mut h, t0, 200.0, 200.0);
+    let ms = std::time::Duration::from_millis;
+    frame_at(&mut h, t0 + ms(50), 200.0, 200.0);
+    assert_eq!(right(&mut h), 195.0, "halfway, inside the border showing");
+    frame_at(&mut h, t0 + ms(100), 200.0, 200.0);
     assert_eq!(right(&mut h), 192.0, "the track stayed under the border");
+}
+
+/// A border takes room inside its box, as CSS's `border-box` does: the
+/// children start inside border and padding, are offered what is left of the
+/// box, and a box sized to them grows by both (#767).
+#[test]
+fn a_border_takes_room_inside_its_box() {
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .border(4.0, Color::WHITE)
+            .child(container().width(fill()).height(fill())),
+    );
+    h.fit(200.0, 200.0);
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!(
+        child,
+        Rect::new(4.0, 4.0, 52.0, 52.0),
+        "the child stops at the border"
+    );
+
+    let mut fitted = H::new(
+        container()
+            .border(3.0, Color::WHITE)
+            .padding(2.0)
+            .child(box_of(20.0, 20.0)),
+    );
+    assert_eq!(fitted.fit(200.0, 200.0), Size::new(30.0, 30.0));
+    let child = fitted.tree.get_bounds(fitted.children()[0]).unwrap();
+    assert_eq!((child.x, child.y), (5.0, 5.0), "inside border and padding");
+}
+
+/// A state layer that recolours a border at the width it already has moves
+/// nothing, so it must not lay anything out: a hover on a bordered button is a
+/// repaint. One that changes the width is a layout, as the width takes room.
+#[test]
+fn a_state_that_only_recolours_a_border_lays_nothing_out() {
+    let lit = create_signal(false);
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .border(1.0, Color::WHITE)
+            .state(lit, |s| s.border(1.0, Color::RED))
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    let queued = h.jobs_from(|| lit.set(true));
+    assert!(
+        queued.contains(&JobType::Paint) && !queued.contains(&JobType::Layout),
+        "got {queued:?}"
+    );
+
+    let thick = create_signal(false);
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .border(1.0, Color::WHITE)
+            .state(thick, |s| s.border(3.0, Color::WHITE))
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    thick.set(true);
+    let queued = jobs::queued_job_types(h.root);
+    assert!(queued.contains(&JobType::Layout), "got {queued:?}");
+    pump(&mut h);
+    h.fit(200.0, 200.0);
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!((child.x, child.y), (3.0, 3.0));
+}
+
+/// A scroller's viewport and extents are inside its border: its content scrolls
+/// from the border's inner edge to the same edge at the far end, rather than
+/// stopping a border short of its last row.
+#[test]
+fn a_bordered_scroller_scrolls_its_content_inside_its_border() {
+    let mut h = H::new(
+        box_of(100.0, 100.0)
+            .border(5.0, Color::WHITE)
+            .scroll(Scroll::vertical())
+            .child(box_of(90.0, 300.0)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(h.paint().children[0].local_transform.ty(), 5.0);
+
+    h.send(Event::scroll(50.0, 50.0, 0.0, 600.0, ScrollSource::Wheel));
+    // 300 of content in a 90 viewport: it ends 210 up, its bottom on the
+    // border's inner edge at 95.
+    assert_eq!(h.paint().children[0].local_transform.ty(), 5.0 - 210.0);
+}
+
+/// A border's width is a layout property now that it takes room: a write
+/// relays the container out, and so does each frame of a transition, so the
+/// child follows the border as it grows rather than jumping at the end.
+#[test]
+fn a_border_width_relays_out_and_its_transition_moves_the_children() {
+    let width = create_signal(2.0f32);
+    let mut h = H::new(
+        box_of(100.0, 100.0)
+            .border(width.transition(linear_100ms()), Color::WHITE)
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    let t0 = std::time::Instant::now();
+    width.set(12.0);
+    frame_at(&mut h, t0, 100.0, 100.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        100.0,
+        100.0,
+    );
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!(
+        (child.x, child.y),
+        (7.0, 7.0),
+        "halfway from 2 to 12, the child sits inside the border showing"
+    );
+
+    let plain = create_signal(2.0f32);
+    let mut h = H::new(
+        box_of(100.0, 100.0)
+            .border(plain, Color::WHITE)
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+    let queued = h.jobs_from(|| plain.set(6.0));
+    assert!(queued.contains(&JobType::Layout), "got {queued:?}");
+}
+
+/// An outline is a ring outside the box, `offset` from its edge, drawn after
+/// the children and taking no room: the child fills the box as if it were not
+/// there, and a rounded corner grows by the ring's reach while a square one
+/// stays square (#767).
+#[test]
+fn an_outline_takes_no_room_and_is_drawn_over_the_children() {
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .corners(CornerRadii {
+                top_left: 8.0,
+                top_right: 0.0,
+                bottom_right: 8.0,
+                bottom_left: 0.0,
+            })
+            .outline(2.0, Color::WHITE, 3.0)
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .background(Color::RED),
+            ),
+    );
+    assert_eq!(h.fit(200.0, 200.0), Size::new(60.0, 60.0));
+    let child = h.tree.get_bounds(h.children()[0]).unwrap();
+    assert_eq!(child, Rect::new(0.0, 0.0, 60.0, 60.0), "no room taken");
+
+    let node = h.paint();
+    assert_eq!(outlines(&node), vec![(2.0, Color::WHITE, 3.0)]);
+    assert!(
+        borders(&node).is_empty(),
+        "drawn above the children, not under"
+    );
+    match &*node.overlay_commands[0] {
+        DrawCommand::RoundedRect { rect, radius, .. } => {
+            assert_eq!(*rect, Rect::new(-5.0, -5.0, 70.0, 70.0));
+            assert_eq!(
+                (radius.top_left, radius.top_right),
+                (13.0, 0.0),
+                "a rounded corner grows by 5, a square one stays square"
+            );
+        }
+        other => panic!("not a ring: {other:?}"),
+    }
+}
+
+/// An outline never reaches layout: a write repaints it, a transition plays
+/// on paint alone, and a state layer that shows one moves nothing — which is
+/// what a focus ring is for, where a border that thickens on focus moves the
+/// content it surrounds (#767).
+#[test]
+fn an_outline_never_relays_anything_out() {
+    let width = create_signal(2.0f32);
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .outline(width, Color::WHITE, 2.0)
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    let queued = h.jobs_from(|| width.set(6.0));
+    assert!(
+        queued.contains(&JobType::Paint) && !queued.contains(&JobType::Layout),
+        "got {queued:?}"
+    );
+
+    let eased = create_signal(0.0f32);
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .outline(eased.transition(linear_100ms()), Color::WHITE, 2.0)
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(200.0, 200.0);
+    h.paint();
+    let t0 = std::time::Instant::now();
+    eased.set(8.0);
+    frame_at(&mut h, t0, 200.0, 200.0);
+    h.paint();
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        200.0,
+        200.0,
+    );
+    assert_eq!(outlines(&h.paint())[0].0, 4.0, "halfway from 0 to 8");
+    let queued = jobs::queued_job_types(h.root);
+    assert!(
+        !queued.contains(&JobType::Layout),
+        "a frame of the transition asked for a layout: {queued:?}"
+    );
+
+    let focused = create_signal(false);
+    let mut h = H::new(
+        box_of(60.0, 60.0)
+            .outline(2.0, Color::TRANSPARENT, 2.0)
+            .state(focused, |s| s.outline(2.0, Color::WHITE, 2.0))
+            .child(box_of(10.0, 10.0)),
+    );
+    h.fit(200.0, 200.0);
+    assert!(outlines(&h.paint()).is_empty(), "transparent draws nothing");
+    let queued = h.jobs_from(|| focused.set(true));
+    assert!(
+        queued.contains(&JobType::Paint) && !queued.contains(&JobType::Layout),
+        "got {queued:?}"
+    );
+    h.fit(200.0, 200.0);
+    assert_eq!(outlines(&h.paint()), vec![(2.0, Color::WHITE, 2.0)]);
+}
+
+/// A ring outside the box is painting outside it, so the reach a parent culls
+/// and damages by covers it — the widest one any state can show, before it
+/// shows, as a shadow's does.
+#[test]
+fn the_paint_reach_covers_the_outline_a_state_can_show() {
+    let mut h = H::new(
+        box_of(40.0, 40.0)
+            .outline(1.0, Color::TRANSPARENT, 1.0)
+            .when_focused(|s| s.outline(3.0, Color::WHITE, 4.0)),
+    );
+    h.fit(100.0, 100.0);
+    assert_eq!(h.tree.paint_overflow(h.root), Outsets::all(7.0));
+
+    let mut inset = H::new(box_of(40.0, 40.0).outline(2.0, Color::WHITE, -4.0));
+    inset.fit(100.0, 100.0);
+    assert_eq!(
+        inset.tree.paint_overflow(inset.root),
+        Outsets::all(0.0),
+        "a ring drawn inside the box reaches nothing past it"
+    );
+}
+
+/// A press's ripple is cut to the box, and the outline outside it is not: the
+/// ring is drawn before the ripples' clip is set, so a pressed control keeps
+/// its focus ring.
+#[test]
+fn a_ripple_does_not_cut_the_outline() {
+    let mut h = H::new(
+        box_of(100.0, 100.0)
+            .outline(2.0, Color::WHITE, 2.0)
+            .when_pressed(|s| s.ripple())
+            .on_click(|| {}),
+    );
+    h.fit(400.0, 400.0);
+    h.send(Event::mouse_down(50.0, 50.0, MouseButton::Left));
+    frame_at(&mut h, std::time::Instant::now(), 400.0, 400.0);
+
+    let node = h.paint();
+    assert!(node.overlay_clip.is_some(), "the press drew a ripple");
+    assert_eq!(outlines(&node).len(), 1);
+    assert_eq!(
+        node.overlay_clip_from, 1,
+        "the ring is before the ripples' clip, which cuts only what follows"
+    );
 }
 
 /// A state override carries the whole shape, so a squircle that only asks to
@@ -7707,7 +8016,7 @@ macro_rules! emit_timeline_test {
 /// without a container that animates two things noticing.
 macro_rules! emit_property_tests {
     ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
-        timeline: $timeline:ident,
+        timeline: $timeline:ident, state: $state:ident,
         test {
             value: $value:expr,
             declared_as: $declared_as:expr,
@@ -7803,9 +8112,9 @@ macro_rules! emit_property_tests {
                 /// allocated, so a constant that reaches `alloc_slot` shows up
                 /// whether or not it is later disposed.
                 ///
-                /// Over the table rather than once, because the twelve
+                /// Over the table rather than once, because the sixteen
                 /// properties do not share a setter — `width` and `height` go
-                /// through `declare_size` and the other ten through
+                /// through `declare_size` and the other fourteen through
                 /// `declare_anim`, and a constant that stays free in one is no
                 /// evidence about the other.
                 #[test]
@@ -7897,7 +8206,7 @@ crate::widgets::container::animated_properties::animated_properties!(emit_proper
 
 /// Seven constant properties on a container cost what the bare container costs.
 ///
-/// The per-property test above asks one question of each of the twelve; this
+/// The per-property test above asks one question of each of the sixteen; this
 /// asks the question #450 was opened about, which is what a *row of a list*
 /// costs. Six is the number the ablation in that issue measured — 194 MB
 /// against 149 MB at twenty thousand rows, and the 45 MB between them was

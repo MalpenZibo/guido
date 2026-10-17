@@ -227,12 +227,16 @@ pub(super) struct LayerProps {
 /// anything was declared or not. `backdrop_blur` is as rare and fails the other
 /// half at 12 bytes, so it stays where it is. `merge_children` is small and
 /// rarer than either, and lives here because `Container` has no room left for
-/// a field of any size.
+/// a field of any size. The outline's three halves are here for the same
+/// reason: a focus ring is declared on a control or two per screen.
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
     pub(super) shadow: Prop<Shadows>,
     pub(super) merge_children: Prop<f32>,
+    pub(super) outline_width: Prop<f32>,
+    pub(super) outline_color: Prop<Color>,
+    pub(super) outline_offset: Prop<f32>,
 }
 
 bitflags::bitflags! {
@@ -599,7 +603,10 @@ impl Container {
         // A blur spreads in the container's own space, as a shadow does, so
         // its reach is carried by the transform with the shadow's. The blur
         // reaches as far on every side; the shadow each its own.
-        let extent = shadow_extent + Outsets::all(self.max_blur_reach());
+        // The outline stands outside the box beside the shadow, uniformly,
+        // and the blur spreads whichever reaches further.
+        let extent = shadow_extent.max(Outsets::all(self.max_outline_reach()))
+            + Outsets::all(self.max_blur_reach());
         // A slide carries the whole box by its offset, after everything else,
         // and only toward where it is drawn: a box drawn above its place
         // reaches further up and no further either side.
@@ -718,6 +725,24 @@ impl Container {
 
     pub(super) fn shadow_prop(&self) -> Prop<Shadows> {
         self.decoration.as_deref().map_or(Prop::Unset, |d| d.shadow)
+    }
+
+    pub(super) fn outline_width_prop(&self) -> Prop<f32> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.outline_width)
+    }
+
+    pub(super) fn outline_color_prop(&self) -> Prop<Color> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.outline_color)
+    }
+
+    pub(super) fn outline_offset_prop(&self) -> Prop<f32> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.outline_offset)
     }
 
     pub(super) fn merge_children_prop(&self) -> Prop<f32> {
@@ -1035,6 +1060,44 @@ impl Container {
     ) -> Self {
         self.border_width = animated_properties::declare::border_width(&mut self.anims, width);
         self.border_color = animated_properties::declare::border_color(&mut self.anims, color);
+        self
+    }
+
+    /// Draw a ring outside the box: `width` wide, `offset` out from its edge,
+    /// above everything the box holds, following its corners — CSS's
+    /// `outline`.
+    ///
+    /// It takes no room. The children are laid out as if it were not there,
+    /// and showing, hiding or animating it repaints and never relays anything
+    /// out, which is what a focus or hover ring wants: a [`border`](Self::border)
+    /// takes room inside the box, so a border that thickens on focus moves the
+    /// content it surrounds.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # struct Theme { accent: Color }
+    /// # let theme = Theme { accent: Color::rgb(0.4, 0.6, 1.0) };
+    /// container()
+    ///     .corners(8.0)
+    ///     .outline(2.0, Color::TRANSPARENT, 2.0)
+    ///     .when_focused(|s| s.outline(2.0, theme.accent, 2.0));
+    /// ```
+    ///
+    /// A negative offset draws the ring inside the box, over its edge. Each
+    /// half carries its own timing, as the border's do.
+    pub fn outline<M1, M2, M3>(
+        mut self,
+        width: impl IntoAnimated<f32, M1>,
+        color: impl IntoAnimated<Color, M2>,
+        offset: impl IntoAnimated<f32, M3>,
+    ) -> Self {
+        let width = animated_properties::declare::outline_width(&mut self.anims, width);
+        let color = animated_properties::declare::outline_color(&mut self.anims, color);
+        let offset = animated_properties::declare::outline_offset(&mut self.anims, offset);
+        let decoration = self.decoration_mut();
+        decoration.outline_width = width;
+        decoration.outline_color = color;
+        decoration.outline_offset = offset;
         self
     }
 
@@ -2034,7 +2097,7 @@ impl Widget for Container {
         let content_least = ctx.minimum().unwrap_or(content_size);
         ctx.set_minimum(self.least_size(&lengths, content_least, size));
 
-        self.layout_scrollbar_containers(ctx, id, size);
+        self.layout_scrollbar_containers(ctx, id, size, lengths.border);
 
         // A shadow falls outside the box that casts it, so the damage this
         // container reports has to reach past its own bounds.
@@ -2422,6 +2485,21 @@ impl Widget for Container {
         // Marked, so that a parent merging its children takes this box into
         // the shape it merges.
         ctx.background(|ctx| self.paint_decoration(ctx, local_bounds, &decoration));
+
+        // An overlay, so it is drawn above the children and the scrollbar, and
+        // pushed before the ripples' clip is set, which would cut it to the
+        // box it stands outside (#767).
+        if let Some(outline) = self.animated_outline(id)
+            && let Some((ring, ring_corners)) = outline.ring(local_bounds, corners)
+        {
+            ctx.draw_overlay_border_frame(
+                ring,
+                outline.color,
+                ring_corners.radii,
+                outline.width,
+                ring_corners.curvature,
+            );
+        }
 
         // Determine if we need to clip children
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
