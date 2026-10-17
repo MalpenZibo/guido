@@ -23,14 +23,18 @@ pub enum RenderLayer {
     /// own, after the groups holding that content.
     #[default]
     Backdrop = 0,
-    /// Background shapes (filled rectangles, borders, etc.)
+    /// Background shapes (filled rectangles, borders, arcs, etc.)
     Shapes = 1,
+    /// Filled and stroked paths, drawn as triangles by a pipeline of their
+    /// own — a layer rather than a share of the shapes' bucket, so a group's
+    /// shapes stay one call and its paths one more, however the two alternate.
+    Paths = 2,
     /// Image content (after shapes, before text)
-    Images = 2,
+    Images = 3,
     /// Text content
-    Text = 3,
+    Text = 4,
     /// Overlay effects (ripples, highlights)
-    Overlay = 4,
+    Overlay = 5,
 }
 
 /// A draw command with computed world transform.
@@ -93,7 +97,8 @@ pub struct FlatFrame<'a> {
 /// are drained out of making it too.
 ///
 /// Each group buckets its commands by [`RenderLayer`], and the GPU draws a
-/// group one bucket at a time — shapes, then images, then text, then overlay.
+/// group one bucket at a time — shapes, then paths, then images, then text,
+/// then overlay.
 /// That is what lets commands of a kind share a draw call.
 ///
 /// Bucketing alone would reorder: with a single set of buckets for the whole
@@ -111,7 +116,7 @@ pub struct FlatFrame<'a> {
 /// column of buttons stays one group; a tint over a photo gets two.
 pub struct FlattenScratch {
     /// Every group this scratch has ever held, the live ones first. Dropping
-    /// the ones a narrower frame does not need would free the five buffers
+    /// the ones a narrower frame does not need would free the six buffers
     /// inside each, which is the whole of what is being kept.
     groups: Vec<LayerBuckets>,
     /// How many of `groups` this frame has opened. The rest are empty and
@@ -130,6 +135,7 @@ pub struct FlattenScratch {
 struct LayerBuckets {
     backdrop: Vec<FlattenedCommand>,
     shapes: Vec<FlattenedCommand>,
+    paths: Vec<FlattenedCommand>,
     images: Vec<FlattenedCommand>,
     text: Vec<FlattenedCommand>,
     overlay: Vec<FlattenedCommand>,
@@ -224,7 +230,7 @@ impl LayerBounds {
 }
 
 /// Number of [`RenderLayer`] variants.
-const LAYER_COUNT: usize = 5;
+const LAYER_COUNT: usize = 6;
 
 impl LayerBuckets {
     /// Does `rect` meet anything already drawn above `layer` in this group?
@@ -244,18 +250,20 @@ impl LayerBuckets {
         match layer {
             RenderLayer::Backdrop => &mut self.backdrop,
             RenderLayer::Shapes => &mut self.shapes,
+            RenderLayer::Paths => &mut self.paths,
             RenderLayer::Images => &mut self.images,
             RenderLayer::Text => &mut self.text,
             RenderLayer::Overlay => &mut self.overlay,
         }
     }
 
-    /// Every bucket, in draw order, for the one place that walks all five
+    /// Every bucket, in draw order, for the one place that walks all six
     /// without naming them.
     fn buckets_mut(&mut self) -> [&mut Vec<FlattenedCommand>; LAYER_COUNT] {
         [
             &mut self.backdrop,
             &mut self.shapes,
+            &mut self.paths,
             &mut self.images,
             &mut self.text,
             &mut self.overlay,
@@ -272,13 +280,14 @@ impl LayerBuckets {
         let Self {
             backdrop,
             shapes,
+            paths,
             images,
             text,
             overlay,
             high_water,
             bounds,
         } = self;
-        for bucket in [backdrop, shapes, images, text, overlay] {
+        for bucket in [backdrop, shapes, paths, images, text, overlay] {
             bucket.clear();
         }
         *high_water = RenderLayer::default();
@@ -291,6 +300,7 @@ impl LayerBuckets {
     fn command_capacity(&self) -> usize {
         self.backdrop.capacity()
             + self.shapes.capacity()
+            + self.paths.capacity()
             + self.images.capacity()
             + self.text.capacity()
             + self.overlay.capacity()
@@ -458,6 +468,7 @@ impl FlattenScratch {
             buckets: [
                 last.backdrop.len(),
                 last.shapes.len(),
+                last.paths.len(),
                 last.images.len(),
                 last.text.len(),
                 last.overlay.len(),
@@ -521,6 +532,7 @@ impl FlattenScratch {
                 let buckets = [
                     &group.backdrop,
                     &group.shapes,
+                    &group.paths,
                     &group.images,
                     &group.text,
                     &group.overlay,
@@ -554,6 +566,7 @@ impl FlattenScratch {
             let ranges = [
                 &mut layer.backdrop,
                 &mut layer.shapes,
+                &mut layer.paths,
                 &mut layer.images,
                 &mut layer.text,
                 &mut layer.overlay,
@@ -584,12 +597,13 @@ struct Mark {
 
 /// Where one group's commands landed in the flat command buffer.
 ///
-/// Drawn in field order: shapes, images, text, overlay.
+/// Drawn in field order: shapes, paths, images, text, overlay.
 #[derive(Debug, Clone, Default)]
 pub struct CommandLayer {
     /// Backdrop effects applied to the target before this group draws.
     pub backdrop: Range<usize>,
     pub shapes: Range<usize>,
+    pub paths: Range<usize>,
     pub images: Range<usize>,
     pub text: Range<usize>,
     pub overlay: Range<usize>,
@@ -599,6 +613,7 @@ impl CommandLayer {
     pub fn is_empty(&self) -> bool {
         self.backdrop.is_empty()
             && self.shapes.is_empty()
+            && self.paths.is_empty()
             && self.images.is_empty()
             && self.text.is_empty()
             && self.overlay.is_empty()
@@ -741,6 +756,7 @@ fn flatten_node(
         let layer = match &**cmd {
             DrawCommand::Text { .. } => RenderLayer::Text,
             DrawCommand::Image { .. } => RenderLayer::Images,
+            DrawCommand::Path { .. } => RenderLayer::Paths,
             // Only the half the renderer draws opens a backdrop group. A blur
             // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
             // by nobody here, and `Backdrop` is not a free label: it is the
@@ -898,6 +914,22 @@ fn world_bounds(cmd: &FlattenedCommand) -> Option<Rect> {
             radius * 2.0,
             radius * 2.0,
         ),
+        DrawCommand::Arc {
+            center,
+            radius,
+            width,
+            ..
+        } => {
+            let reach = super::gpu::arc_reach(*radius, width * 0.5);
+            Rect::new(center.x - reach, center.y - reach, reach * 2.0, reach * 2.0)
+        }
+        DrawCommand::Path { path, stroke, .. } => {
+            // The control points hold the curve, and a stroke reaches past
+            // them by its half width, its miters and its caps — and the fringe
+            // by half a pixel more.
+            path.bounds()
+                .outset(stroke.map_or(0.0, |s| s.reach()) + 1.0)
+        }
         DrawCommand::Image { rect, .. } => *rect,
         DrawCommand::BackdropBlur { rect, .. } | DrawCommand::InputRegion { rect, .. } => *rect,
         DrawCommand::Text {
@@ -1406,6 +1438,8 @@ mod tests {
             font_size: 10.0,
             font_family: crate::widgets::FontFamily::default(),
             font_weight: crate::widgets::FontWeight::default(),
+            font_style: Default::default(),
+            font_features: Default::default(),
             line_height: Default::default(),
             letter_spacing: 0.0,
             align: Default::default(),
@@ -1440,7 +1474,7 @@ mod tests {
     /// and `heap_rects` exist for nothing else — no frame reads them, so this
     /// is the only thing that will ever ask whether they are right. Their
     /// assertions are "not zero" and "not changed", which a `capacity` that
-    /// answered a constant, or added its five buckets up with the wrong
+    /// answered a constant, or added its six buckets up with the wrong
     /// operator, would satisfy as happily as a correct one.
     ///
     /// So the buffers are given room by hand, in distinct amounts across two
@@ -1451,9 +1485,9 @@ mod tests {
         scratch.groups.push(LayerBuckets::default());
 
         // Distinct primes, so that a sum taken with the wrong operator lands
-        // nowhere near this one: 2*3*5*7*11 is 2310, and going down from 2
-        // underflows rather than arriving at 28.
-        let rooms = [[2, 3, 5, 7, 11], [13, 17, 19, 23, 29]];
+        // nowhere near this one: 2*3*5*7*11*13 is 30030, and going down from
+        // 2 underflows rather than arriving at 41.
+        let rooms = [[2, 3, 5, 7, 11, 13], [17, 19, 23, 29, 31, 37]];
         for (group, rooms) in scratch.groups.iter_mut().zip(rooms) {
             for (bucket, room) in group.buckets_mut().into_iter().zip(rooms) {
                 bucket.reserve_exact(room);
@@ -1494,7 +1528,7 @@ mod tests {
         }
 
         assert_eq!(
-            commands, 129,
+            commands, 197,
             "the primes above add up to this and to nothing else, which is \
              what the sum below is being held to"
         );
@@ -1502,7 +1536,7 @@ mod tests {
         let reported = scratch.capacity();
         assert_eq!(
             reported.commands, commands,
-            "the commands reported are not the five buckets of both groups \
+            "the commands reported are not the six buckets of both groups \
              added together"
         );
         assert_eq!(

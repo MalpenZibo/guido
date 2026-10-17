@@ -228,7 +228,7 @@ pub mod prelude {
         current_owner, expect_context, has_context, on_cleanup, provide_context,
         provide_signal_context, set_interval, set_timeout, use_context, with_context,
     };
-    pub use crate::renderer::{Shadow, measure_text};
+    pub use crate::renderer::{Cap, Shadow, measure_text};
     pub use crate::session_lock::{
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
@@ -241,12 +241,12 @@ pub mod prelude {
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
-        EventResponse, FontFamily, FontWeight, GradientDirection, Image, ImageSource, IntoChildren,
-        IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers, MouseButton, Overflow,
-        Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig, Scroll, ScrollSource,
-        ScrollbarVisibility, Selection, StateStyle, Stateful, Text, TextAlign, TextInput,
-        TextOverflow, TextShadow, TextStroke, TextStyle, Widget, container, image, keyed,
-        password_input, text, text_input,
+        EventResponse, FontFamily, FontFeatures, FontStyle, FontWeight, GradientDirection, Image,
+        ImageSource, IntoChildren, IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers,
+        MouseButton, Overflow, Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig,
+        Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful, Text,
+        TextAlign, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle, Widget, arc,
+        container, image, keyed, password_input, text, text_input,
     };
     pub use crate::{
         App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
@@ -279,7 +279,7 @@ pub mod widget_prelude {
     pub use crate::clock::{EventInstant, FrameInstant};
     pub use crate::layout::{Constraints, IntoF32, Layout};
     pub use crate::reactive::{JobType, with_signal_tracking};
-    pub use crate::renderer::{PaintContext, RenderNode};
+    pub use crate::renderer::{Fill, FillRule, Join, PaintContext, Path, RenderNode, Stroke};
     /// The composed matrix. An application says `translate`, `rotate` and
     /// `scale`; a widget written outside the crate positions what it paints,
     /// and for that it needs the thing those three compose into.

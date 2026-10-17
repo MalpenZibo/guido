@@ -216,3 +216,42 @@ fn a_letter_spacing_takes_every_form() {
     let _ = password_input(create_password()).letter_spacing(n);
     let _ = text("x").when_hovered(|s| s.letter_spacing(n));
 }
+
+/// A style and a set of features, in every form a property takes, on every
+/// widget that draws glyphs and on the override a state supplies.
+#[test]
+fn a_font_style_and_features_take_every_form() {
+    fn tnum() -> FontFeatures {
+        FontFeatures::new().enable(b"tnum")
+    }
+    let style = create_signal(FontStyle::Italic);
+    let read_style: Signal<FontStyle> = style.read_only();
+    let features = create_signal(tnum());
+    let read_features: Signal<FontFeatures> = features.read_only();
+    let slanted = create_memo(move || style.get() != FontStyle::Normal);
+    let _ = text("x")
+        .font_style(FontStyle::Oblique)
+        .font_style(move || style.get())
+        .font_style(read_style)
+        .font_style(style)
+        .font_style(create_memo(move || {
+            if slanted.get() {
+                FontStyle::Italic
+            } else {
+                FontStyle::Normal
+            }
+        }))
+        .italic()
+        .font_features(tnum())
+        .font_features(move || features.get())
+        .font_features(read_features)
+        .font_features(features)
+        .font_features(create_memo(move || features.get()));
+    let _ = text_input(create_signal(String::new()))
+        .italic()
+        .font_features(features);
+    let _ = password_input(create_password())
+        .font_style(style)
+        .font_features(tnum());
+    let _ = text("x").when_hovered(|s| s.italic().font_style(style).font_features(features));
+}

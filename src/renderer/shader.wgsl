@@ -64,6 +64,8 @@ struct InstanceInput {
     shape_curvature: f32,
     // 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
     gradient_type: u32,
+    // SHAPE_ROUNDED_RECT, or an arc and its cap — see `arc_sdf`
+    shape_kind: u32,
 }
 
 @group(0) @binding(1) var<storage, read> instances: array<InstanceInput>;
@@ -106,8 +108,10 @@ struct VertexOutput {
     @location(11) gradient_start: vec4<f32>,
     // Gradient end color
     @location(12) gradient_end: vec4<f32>,
-    // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse)
-    @location(13) @interpolate(flat) gradient_type: u32,
+    // Gradient type (0=none, 1=horizontal, 2=vertical, 3=diagonal,
+    // 4=diagonal_reverse), and the shape kind. One location for both: the
+    // sixteen this stage may hand on are all spoken for.
+    @location(13) @interpolate(flat) kinds: vec2<u32>,
     // clip corner radii, in the clip's own space
     @location(14) clip_radii: vec4<f32>,
     // where the clip continues in `clip_records`
@@ -223,25 +227,25 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
     // Pass gradient data to fragment shader
     out.gradient_start = instance.gradient_start;
     out.gradient_end = instance.gradient_end;
-    out.gradient_type = instance.gradient_type;
+    out.kinds = vec2<u32>(instance.gradient_type, instance.shape_kind);
 
     return out;
 }
 
 // === SDF Functions ===
 
-// === SHARED SDF — three copies, kept identical by
+// === SHARED SDF — four copies, kept identical by
 // `tests/shader_sdf_is_one_definition.rs` ===
 //
 // WGSL has no include, so the corner geometry lives once per pipeline that
 // cuts a shape: the shape shader, the textured quad (images and transformed
-// text), and the backdrop composite. A clip is one shape and a corner is one
-// curve; three spellings of them is three answers to the same question, which
-// is what #403 was — the backdrop read `k` as `max(k, 0.05) * 2` where these
-// read `pow(2, k)`, so a bevel blurred a concave notch inside its own
-// octagonal border.
+// text), the backdrop composite, and the path triangles. A clip is one shape
+// and a corner is one curve; four spellings of them is four answers to the
+// same question, which is what #403 was — the backdrop read `k` as
+// `max(k, 0.05) * 2` where these read `pow(2, k)`, so a bevel blurred a
+// concave notch inside its own octagonal border.
 //
-// A fourth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
+// A fifth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
 // which is what hit-testing runs. Changing the curve here means changing it
 // there, or a click stops landing where the pixel is. The test pins that one
 // to the geometry rather than to this text.
@@ -263,7 +267,7 @@ fn k_to_n(k: f32) -> f32 {
 // sides as much as around the corners - and what a pipeline makes of inf is
 // undefined. On lavapipe the antialiasing collapses and the shape is drawn
 // as a hard-edged box a pixel wider all round. Rect::shape_distance, the
-// fourth copy of this in Rust, reads inf as outside instead, and the shape
+// fifth copy of this in Rust, reads inf as outside instead, and the shape
 // stops taking clicks over all of it but the inner square.
 //
 // Scaled, the larger term is exactly 1 and the smaller at most 1, so nothing
@@ -331,7 +335,7 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
 }
 // === END SHARED SDF ===
 
-// === SHARED CLIP CHAIN — three copies, kept identical by
+// === SHARED CLIP CHAIN — four copies, kept identical by
 // `tests/shader_sdf_is_one_definition.rs` ===
 //
 // A clip that cannot be merged with the clips above it into one rounded rect
@@ -382,6 +386,77 @@ fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
 }
 // === END SHARED CLIP CHAIN ===
 
+// === Arcs ===
+
+const SHAPE_ROUNDED_RECT: u32 = 0u;
+const SHAPE_ARC_BUTT: u32 = 1u;
+const SHAPE_ARC_ROUND: u32 = 2u;
+const SHAPE_ARC_SQUARE: u32 = 3u;
+
+// The distance to a stroked circular arc, centred in `rect`.
+//
+// `params` is how `ShapeInstance::arc` packs it into the corner radii: the
+// radius of the line's centre, half its width, the angle halfway along it and
+// half the angle it spans — radians, clockwise from twelve o'clock, in y-down
+// pixels. The fragment is turned so that the arc's middle points along +y and
+// folded about that axis, after which every arc is the one symmetric case
+// Inigo Quilez's sdArc and sdRing solve: the end the fragment is nearer is at
+// `half` from +y, and the other end is its mirror.
+fn arc_sdf(pos: vec2<f32>, rect: vec4<f32>, params: vec4<f32>, kind: u32) -> f32 {
+    let center = vec2<f32>(rect.x + rect.z * 0.5, rect.y + rect.w * 0.5);
+    let radius = params.x;
+    let half_width = params.y;
+    let middle = params.z;
+    let half = params.w;
+    let p = pos - center;
+
+    // The middle's direction is (sin m, -cos m) in y-down pixels; across it is
+    // (cos m, sin m). Folded, so the near end is the one on +x.
+    let q = vec2<f32>(
+        abs(p.x * cos(middle) + p.y * sin(middle)),
+        p.x * sin(middle) - p.y * cos(middle)
+    );
+    let ring = abs(length(q) - radius) - half_width;
+    // Half a turn either way is a whole one, and no end is left to cap.
+    if (half >= 3.14159) {
+        return ring;
+    }
+    // The near end of the line's centre, and the direction it runs on in.
+    let end = vec2<f32>(sin(half), cos(half));
+    let onward = vec2<f32>(end.y, -end.x);
+
+    if (kind == SHAPE_ARC_ROUND) {
+        // Past the end, the nearest point is the end itself.
+        if (end.y * q.x > end.x * q.y) {
+            return length(q - end * radius) - half_width;
+        }
+        return ring;
+    }
+
+    // Square ends: the ring cut by the end's radial line, as sdRing does —
+    // turn the end onto +y, and past it the distance is to that segment.
+    let t = vec2<f32>(
+        end.y * q.x - end.x * q.y,
+        end.x * q.x + end.y * q.y
+    );
+    let butt = max(ring, length(vec2<f32>(t.x, max(0.0, abs(radius - t.y) - half_width))) * sign(t.x));
+    if (kind == SHAPE_ARC_BUTT) {
+        return butt;
+    }
+
+    // A square cap: the butt end, and a box half a width long past it. The
+    // box reaches two pixels back into the arc. Two shapes that only touch
+    // along the end's line are both at distance zero there, and the union
+    // draws that line half covered through the solid stroke; overlapping by
+    // less than the pixel the edge is smoothed over still shows it faintly.
+    let back = 2.0;
+    let local = q - (end * radius + onward * (half_width - back) * 0.5);
+    let along = vec2<f32>(dot(local, onward), dot(local, end));
+    let b = abs(along) - vec2<f32>((half_width + back) * 0.5, half_width);
+    let cap = length(max(b, vec2<f32>(0.0))) + min(max(b.x, b.y), 0.0);
+    return min(butt, cap);
+}
+
 // Compute gradient color based on local UV coordinates
 fn compute_gradient_color(
     local_uv: vec2<f32>,
@@ -415,7 +490,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let border_width = in.border_params.x;
 
     // Compute SDF for the shape
-    let dist = rounded_rect_sdf(pos, in.shape_rect, radii, curvature);
+    let gradient_type = in.kinds.x;
+    let shape_kind = in.kinds.y;
+    var dist: f32;
+    if (shape_kind == SHAPE_ROUNDED_RECT) {
+        dist = rounded_rect_sdf(pos, in.shape_rect, radii, curvature);
+    } else {
+        dist = arc_sdf(pos, in.shape_rect, radii, shape_kind);
+    }
 
     // Anti-aliasing using fwidth
     let aa = fwidth(dist) * 1.0;
@@ -425,8 +507,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Determine fill color (gradient or solid)
     var fill_color: vec4<f32>;
-    if (in.gradient_type > 0u) {
-        fill_color = compute_gradient_color(local_uv, in.gradient_start, in.gradient_end, in.gradient_type);
+    if (gradient_type > 0u) {
+        fill_color = compute_gradient_color(local_uv, in.gradient_start, in.gradient_end, gradient_type);
     } else {
         fill_color = in.fill_color;
     }

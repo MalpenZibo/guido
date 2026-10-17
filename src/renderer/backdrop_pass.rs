@@ -23,12 +23,10 @@ use wgpu::util::DeviceExt;
 
 use crate::render_stats::{self, Pipeline};
 use crate::shape::PlacedShape;
-use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
 
-use super::clip::{NO_CHAIN, ResolvedClip};
+use super::clip::ResolvedClip;
 use super::clip_records::ClipRecord;
-use super::gpu::NO_CLIP_RECT;
 
 /// How much the working texture is shrunk before blurring.
 ///
@@ -204,13 +202,7 @@ impl BackdropRegion {
         // the honest answer is that nothing shows rather than everything.
         let clip = match &self.clip {
             Some(clip) => ClipRecord::new(&clip.first, clip.rest, self.scale),
-            None => ClipRecord {
-                rect: NO_CLIP_RECT,
-                radii: [0.0; 4],
-                inverse: Transform::IDENTITY.data,
-                curvature: 1.0,
-                next: NO_CHAIN,
-            },
+            None => ClipRecord::NONE,
         };
         Some(Params {
             curvature: self.shape.curvature,
@@ -420,18 +412,7 @@ impl BackdropRenderer {
         // The composite is the only step that blends: it lays the blurred
         // patch over the target, faded out by the shape mask at the edges.
         // Everything else writes a fresh working texture.
-        let composite_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::SrcAlpha,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::One,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
+        let composite_blend = super::gpu::STRAIGHT_ALPHA_BLEND;
 
         Self {
             format,

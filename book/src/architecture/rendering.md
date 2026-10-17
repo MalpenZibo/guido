@@ -93,7 +93,9 @@ fn paint(&self, ctx: &mut PaintContext) {
 ```
 
 `PaintContext` accumulates:
-- **Shapes** - Rectangles, rounded rects, gradients
+- **Shapes** - Rectangles, rounded rects, gradients, arcs
+- **Paths** - Fills and strokes, tessellated once and kept
+- **Images** - Raster and SVG sources
 - **Text** - Glyphs for text rendering
 - **Overlay shapes** - Ripples, effects on top of content
 
@@ -130,13 +132,17 @@ Benefits:
 
 ## Render Order
 
-Shapes render in three layers:
+Within a draw group, each kind of draw is one layer, in this order:
 
-1. **Background layer** - Container backgrounds, borders
-2. **Text layer** - Text content
-3. **Overlay layer** - Ripple effects, state layer overlays
+1. **Shapes** - Container backgrounds, borders, arcs
+2. **Paths** - Filled and stroked paths
+3. **Images** - Image content
+4. **Text** - Text content
+5. **Overlay** - Ripple effects, state layer overlays
 
-This ensures ripples appear on top of text.
+This ensures ripples appear on top of text. Something painted over a later
+layer — a background over an image, a box over a path — opens a new group
+where the two overlap, so the order the tree painted in is the order drawn.
 
 ## Shape Types
 

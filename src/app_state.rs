@@ -45,7 +45,7 @@ use crate::session_lock::{LockData, LockRequest};
 use crate::surface::{SurfaceCommand, SurfaceId};
 use crate::tree::WidgetId;
 use crate::widget_ref::WidgetRef;
-use crate::widgets::font::{FontFamily, FontWeight};
+use crate::widgets::font::{FontFamily, FontStyle, FontWeight};
 
 thread_local! {
     static APP: AppState = AppState::default();
@@ -142,11 +142,11 @@ pub(crate) struct AppState {
     pub(crate) custom_fonts: RefCell<Vec<Arc<Vec<u8>>>>,
     /// Which of those were already loaded, so loading twice is idempotent.
     pub(crate) custom_font_hashes: RefCell<FxHashSet<u64>>,
-    /// The face each declared family and weight is drawn in, and its line
+    /// The face each declared family, weight and style is drawn in, and its line
     /// height (`renderer::text`). The faces are fixed once the first font
     /// system takes `custom_fonts`, and finding one is a shaping.
     pub(crate) resolved_fonts:
-        RefCell<FxHashMap<(FontFamily, FontWeight), crate::renderer::ResolvedFont>>,
+        RefCell<FxHashMap<(FontFamily, FontWeight, FontStyle), crate::renderer::ResolvedFont>>,
     /// Whether a font system already took the list, so a late load can say it
     /// came too late.
     pub(crate) fonts_consumed: Cell<bool>,

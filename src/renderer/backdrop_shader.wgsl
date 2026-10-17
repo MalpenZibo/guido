@@ -159,18 +159,18 @@ fn fs_blur(in: VertexOutput) -> @location(0) vec4<f32> {
     return accum / weight_sum;
 }
 
-// === SHARED SDF — three copies, kept identical by
+// === SHARED SDF — four copies, kept identical by
 // `tests/shader_sdf_is_one_definition.rs` ===
 //
 // WGSL has no include, so the corner geometry lives once per pipeline that
 // cuts a shape: the shape shader, the textured quad (images and transformed
-// text), and the backdrop composite. A clip is one shape and a corner is one
-// curve; three spellings of them is three answers to the same question, which
-// is what #403 was — the backdrop read `k` as `max(k, 0.05) * 2` where these
-// read `pow(2, k)`, so a bevel blurred a concave notch inside its own
-// octagonal border.
+// text), the backdrop composite, and the path triangles. A clip is one shape
+// and a corner is one curve; four spellings of them is four answers to the
+// same question, which is what #403 was — the backdrop read `k` as
+// `max(k, 0.05) * 2` where these read `pow(2, k)`, so a bevel blurred a
+// concave notch inside its own octagonal border.
 //
-// A fourth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
+// A fifth copy is in Rust: `Rect::shape_distance` in `src/widgets/widget.rs`,
 // which is what hit-testing runs. Changing the curve here means changing it
 // there, or a click stops landing where the pixel is. The test pins that one
 // to the geometry rather than to this text.
@@ -192,7 +192,7 @@ fn k_to_n(k: f32) -> f32 {
 // sides as much as around the corners - and what a pipeline makes of inf is
 // undefined. On lavapipe the antialiasing collapses and the shape is drawn
 // as a hard-edged box a pixel wider all round. Rect::shape_distance, the
-// fourth copy of this in Rust, reads inf as outside instead, and the shape
+// fifth copy of this in Rust, reads inf as outside instead, and the shape
 // stops taking clicks over all of it but the inner square.
 //
 // Scaled, the larger term is exactly 1 and the smaller at most 1, so nothing
@@ -260,7 +260,7 @@ fn rounded_rect_sdf(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32) -
 }
 // === END SHARED SDF ===
 
-// === SHARED CLIP CHAIN — three copies, kept identical by
+// === SHARED CLIP CHAIN — four copies, kept identical by
 // `tests/shader_sdf_is_one_definition.rs` ===
 //
 // A clip that cannot be merged with the clips above it into one rounded rect

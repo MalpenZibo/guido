@@ -11,7 +11,8 @@
 mod common;
 
 use guido::prelude::*;
-use guido::render_stats::{self, DrawCalls, QuadAllocations, StatsSnapshot};
+use guido::render_stats::{self, DrawCalls, PathMeshes, QuadAllocations, StatsSnapshot};
+use guido::widget_prelude::*;
 
 const IMAGES: usize = 7;
 
@@ -85,6 +86,7 @@ fn seven_small_images_are_one_draw_call_and_the_rest_are_one_per_group() {
             text: 1,
             text_quads: 0,
             backdrop: 0,
+            paths: 0,
         }
     );
     assert_eq!(calls.total(), 2 + 1 + 1);
@@ -117,9 +119,116 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
             text: 1,
             text_quads: 1,
             backdrop: 9,
+            paths: 0,
         }
     );
     assert_eq!(calls.total(), 1 + 1 + 9);
+}
+
+/// A widget that draws one path, or one arc, in a 16×16 box.
+enum Drawn {
+    Line,
+    Filled,
+    Arc,
+}
+
+impl Widget for Drawn {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        constraints.constrain(Size::new(16.0, 16.0))
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        let zigzag = Path::new()
+            .move_to((1.0, 14.0))
+            .line_to((6.0, 2.0))
+            .line_to((10.0, 12.0))
+            .line_to((15.0, 3.0));
+        let line = Stroke::new(1.6, Color::WHITE);
+        match self {
+            Drawn::Line => ctx.draw_path(&zigzag, None, line),
+            Drawn::Filled => ctx.draw_path(&zigzag.close(), Fill::color(Color::BLUE), line),
+            Drawn::Arc => ctx.draw_arc((8.0, 8.0), 6.0, 0.0, 270.0, line.caps(Cap::Round)),
+        }
+    }
+}
+
+/// Paths are a layer of their own between the shapes and the images: a
+/// group's paths are one call however many shapes sit between them, as its
+/// shapes are, and an arc is a shape like any rect.
+///
+/// A fill and a stroke are two meshes, so three paths drawn on a first frame
+/// are four meshes — and two of the paths are the same zigzag, which is
+/// tessellated once and drawn twice.
+#[test]
+fn a_group_s_paths_are_one_call_whatever_lies_between_them() {
+    // Spaced, because a stroke's bounds reach past its box by as far as a
+    // miter could, and a shape those bounds meet would split the group.
+    let row = || {
+        container()
+            .layout(Flex::row().spacing(8.0))
+            .child(container().width(16.0).height(16.0).background(Color::RED))
+            .child(Drawn::Line)
+            .child(Drawn::Filled)
+            .child(
+                container()
+                    .width(16.0)
+                    .height(16.0)
+                    .background(Color::GREEN),
+            )
+            .child(Drawn::Line)
+            .child(Drawn::Arc)
+    };
+    let Some(stats) = first_frame(row) else {
+        return;
+    };
+    assert_eq!(
+        stats.draw_calls,
+        DrawCalls {
+            shapes: 1,
+            paths: 1,
+            ..DrawCalls::default()
+        }
+    );
+    assert_eq!(
+        stats.path_meshes,
+        PathMeshes {
+            tessellated: 3,
+            reused: 1,
+        },
+        "the two lines are one path, tessellated once; the closed one is a \
+         fill and a stroke"
+    );
+}
+
+/// A shape painted over a path is drawn over it: the group splits there, as
+/// it splits for a shape over an image, and each half draws its own shapes
+/// and its own paths.
+#[test]
+fn a_shape_over_a_path_opens_a_group() {
+    let Some(calls) = draw_calls_of_one_frame(|| {
+        container()
+            .layout(Flex::row())
+            .child(container().width(16.0).height(16.0).background(Color::RED))
+            .child(Drawn::Line)
+            .child(
+                container()
+                    .width(16.0)
+                    .height(16.0)
+                    .translate((-8.0, 0.0))
+                    .background(Color::GREEN),
+            )
+            .child(Drawn::Filled)
+    }) else {
+        return;
+    };
+    assert_eq!(
+        calls,
+        DrawCalls {
+            shapes: 2,
+            paths: 2,
+            ..DrawCalls::default()
+        }
+    );
 }
 
 /// A label under a chain of clips is drawn by glyphon while every clip's box
