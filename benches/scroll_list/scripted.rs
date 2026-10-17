@@ -92,6 +92,9 @@ pub struct Counts {
     pub flatten_nodes_flattened: u64,
     pub damage_partial: u64,
     pub damage_full: u64,
+    /// The buffer pixels the painted frames' damage named, clipped to the
+    /// buffer: what the compositor was asked to take again.
+    pub damage_pixels: u64,
     pub window_children_total: u64,
     pub window_children_iterated: u64,
     pub event_window_children_total: u64,
@@ -135,6 +138,7 @@ impl Counts {
         self.flatten_nodes_flattened += snapshot.flatten_nodes_flattened;
         self.damage_partial += snapshot.damage_partial;
         self.damage_full += snapshot.damage_full;
+        self.damage_pixels += snapshot.damage_pixels;
         self.window_children_total += snapshot.window_children_total;
         self.window_children_iterated += snapshot.window_children_iterated;
         self.event_window_children_total += snapshot.event_window_children_total;
@@ -440,6 +444,7 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("flatten.nodes_flattened", counts.flatten_nodes_flattened),
         ("damage.partial", counts.damage_partial),
         ("damage.full", counts.damage_full),
+        ("damage.pixels", counts.damage_pixels),
         ("draw.total", counts.draw_calls.total()),
         ("draw.shapes", counts.draw_calls.shapes),
         ("draw.images", counts.draw_calls.images),

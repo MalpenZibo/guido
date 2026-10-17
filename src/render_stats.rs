@@ -190,6 +190,9 @@ pub struct StatsSnapshot {
     pub damage_none: u64,
     pub damage_partial: u64,
     pub damage_full: u64,
+    /// The buffer pixels the damage named, clipped to the buffer: what the
+    /// compositor is told to take again.
+    pub damage_pixels: u64,
     // Timing
     pub paint_timing: PhaseTiming,
     pub flatten_timing: PhaseTiming,
@@ -328,6 +331,7 @@ mod inner {
         damage_none: u64,
         damage_partial: u64,
         damage_full: u64,
+        damage_pixels: u64,
         // Phase timing
         paint_phase: PhaseAccum,
         flatten_phase: PhaseAccum,
@@ -380,6 +384,7 @@ mod inner {
                 damage_none: 0,
                 damage_partial: 0,
                 damage_full: 0,
+                damage_pixels: 0,
                 paint_phase: PhaseAccum::new(),
                 flatten_phase: PhaseAccum::new(),
                 gpu_render_phase: PhaseAccum::new(),
@@ -465,6 +470,15 @@ mod inner {
     pub fn record_frame_skipped() {
         STATS.with(|s| {
             s.borrow_mut().frames_skipped += 1;
+        });
+    }
+
+    /// Record the buffer pixels a frame's damage named, clipped to the
+    /// buffer.
+    #[inline]
+    pub fn record_damage_pixels(pixels: u64) {
+        STATS.with(|s| {
+            s.borrow_mut().damage_pixels += pixels;
         });
     }
 
@@ -637,6 +651,7 @@ mod inner {
                 damage_none: stats.damage_none,
                 damage_partial: stats.damage_partial,
                 damage_full: stats.damage_full,
+                damage_pixels: stats.damage_pixels,
                 paint_timing: stats.paint_phase.to_timing(),
                 flatten_timing: stats.flatten_phase.to_timing(),
                 gpu_render_timing: stats.gpu_render_phase.to_timing(),
@@ -942,6 +957,10 @@ pub fn record_path_mesh(_reused: bool) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_layer(_event: LayerEvent) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_damage_pixels(_pixels: u64) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
