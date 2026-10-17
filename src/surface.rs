@@ -887,10 +887,30 @@ impl PopupConfig {
     }
 }
 
-/// Handle to a spawned surface for controlling it from widget code.
+/// Handle to a surface for controlling it from widget code.
 ///
 /// The handle can be cloned and shared between callbacks. It allows
-/// closing the surface and checking if it's still open.
+/// closing the surface and changing its properties.
+///
+/// Every surface's scope declares its own handle — one added with
+/// [`App::add_surface`](crate::App::add_surface), one from [`spawn_surface`],
+/// a popup from [`spawn_popup`] (its own, not its parent's), and a lock cover
+/// from [`lock_session`](crate::session_lock::lock_session) — so a tree finds
+/// the surface it is in with
+/// [`expect_context`](crate::reactive::expect_context). Read it in the factory
+/// body, where the scope is current, and capture it into the handlers:
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// App::new().run(|app| {
+///     app.add_surface(SurfaceConfig::new().width(300).height(32), || {
+///         let surface = expect_context::<SurfaceHandle>();
+///         container()
+///             .on_click(move || surface.set_size(300, 200))
+///             .child(text("Click to grow"))
+///     });
+/// });
+/// ```
 #[derive(Clone)]
 pub struct SurfaceHandle {
     id: SurfaceId,
@@ -1186,7 +1206,8 @@ pub(crate) fn mark_popup_dismissed(id: SurfaceId) {
 /// clicks outside: real menu semantics, no fullscreen overlay needed.
 ///
 /// The popup renders its own widget tree and shares the reactive state
-/// with the rest of the app, like any surface.
+/// with the rest of the app, like any surface — including its own
+/// [`SurfaceHandle`], not its parent's.
 ///
 /// # Example
 ///
@@ -1229,28 +1250,29 @@ where
     PopupHandle { id }
 }
 
-/// Get a handle to control an existing surface.
+/// Get a handle to control an existing surface by its id.
 ///
 /// This can be used to modify surfaces added via `add_surface()` or `spawn_surface()`.
 /// The handle allows changing surface properties like layer, keyboard interactivity,
 /// anchor, size, exclusive zone, and margin.
+///
+/// A surface's own tree does not need the id: its scope already declares the
+/// handle, read with `expect_context::<SurfaceHandle>()` — see
+/// [`SurfaceHandle`]. This is for reaching a surface from outside it.
 ///
 /// # Example
 ///
 /// ```no_run
 /// # use guido::prelude::*;
 /// # let config = SurfaceConfig::new();
-/// # let status_bar_id = SurfaceId::next();
-/// // Store the ID when adding the surface
 /// App::new().run(|app| {
-///     let status_bar_id = app.add_surface(config, move || {
+///     let status_bar_id = app.add_surface(config, || text("Status bar"));
+///
+///     // A panel whose button promotes a bar it does not belong to.
+///     app.add_surface(SurfaceConfig::new().width(200).height(80), move || {
 ///         container()
-///             .on_click(move || {
-///                 // Get handle and modify properties
-///                 let handle = surface_handle(status_bar_id);
-///                 handle.set_layer(Layer::Overlay);
-///             })
-///             .child(text("Click to promote to overlay"))
+///             .on_click(move || surface_handle(status_bar_id).set_layer(Layer::Overlay))
+///             .child(text("Promote the bar"))
 ///     });
 /// });
 /// ```
