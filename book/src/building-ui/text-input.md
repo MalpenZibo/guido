@@ -170,7 +170,8 @@ and a crash writes it into a core dump. So the field keeps its text in a
 zeroed whenever they are given back — and edits it there, in place. It keeps
 no undo history, since every entry would be a copy; nothing can be copied or
 cut out of it; and `Ctrl+Left/Right` goes to the edge rather than revealing
-where the words end. Pasting in still works, for password managers.
+where the words end, as a double click selects all of it rather than a word.
+Pasting in still works, for password managers.
 
 `Password` is a signal in everything but the copy. Reads subscribe, so state
 that follows the field is an ordinary closure, and the application reaches the
@@ -650,7 +651,10 @@ fn login_form() -> Container {
 
 ## Features
 
-- **Selection**: Click and drag to select text, or use Shift+Arrow keys
+- **Selection**: Click and drag to select text, or use Shift+Arrow keys. A
+  double click selects the word under the pointer, and dragging after it
+  extends the selection a word at a time; a triple click selects everything.
+  A word ends where `Ctrl+Left/Right` stops: at whitespace.
 - **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. Another
   application's copy is read only when you paste, off the UI thread, so a
   paste never blocks it: the text appears once that application answers.

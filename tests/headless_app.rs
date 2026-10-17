@@ -1837,6 +1837,209 @@ fn each_queued_event_arrives_at_the_moment_it_was_queued_for() {
     assert_eq!(*seen.borrow(), [pressed, released]);
 }
 
+/// A widget that writes down the count of each press it is handed.
+struct PressCounts(Rc<RefCell<Vec<u32>>>);
+
+impl Widget for PressCounts {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        Size::new(constraints.max_width, constraints.max_height)
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+
+    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
+        if let Event::MouseDown { count, .. } = event {
+            self.0.borrow_mut().push(*count);
+        }
+        EventResponse::Handled
+    }
+}
+
+/// The counts the presses among `events` reach a widget with, each event
+/// queued the given number of milliseconds after the first.
+fn press_counts(events: impl IntoIterator<Item = (u64, Event)>) -> Option<Vec<u32>> {
+    let mut app = headless()?;
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let spy = seen.clone();
+    let surface = app.surface(fixed_bar(), move || PressCounts(spy));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    queue(&mut app, surface, Instant::now(), events);
+    app.step();
+    let counts = seen.borrow().clone();
+    Some(counts)
+}
+
+/// Queue `events`, each the given number of milliseconds after `start`.
+fn queue(
+    app: &mut Headless,
+    surface: SurfaceId,
+    start: Instant,
+    events: impl IntoIterator<Item = (u64, Event)>,
+) {
+    for (ms, event) in events {
+        app.event_at(surface, event, start + Duration::from_millis(ms));
+    }
+}
+
+/// A press and its release 20 ms later, at `x`.
+fn click_at(ms: u64, x: f32, button: MouseButton) -> [(u64, Event); 2] {
+    [
+        (ms, Event::mouse_down(x, 10.0, button)),
+        (ms + 20, Event::mouse_up(x, 10.0, button)),
+    ]
+}
+
+/// Two left clicks, the second `apart` milliseconds after the first and
+/// `moved` to the right of it.
+fn two_clicks(apart: u64, moved: f32) -> Option<Vec<u32>> {
+    press_counts(
+        click_at(0, 10.0, MouseButton::Left)
+            .into_iter()
+            .chain(click_at(apart, 10.0 + moved, MouseButton::Left)),
+    )
+}
+
+/// The count is the platform's, so what the recorder is handed has none: a
+/// press reaches the widget numbered by when and where it landed against the
+/// press before it.
+#[test]
+fn two_quick_presses_in_one_place_count_one_and_two() {
+    let Some(counts) = two_clicks(100, 0.0) else {
+        return;
+    };
+    assert_eq!(counts, [1, 2]);
+}
+
+#[test]
+fn two_presses_too_far_apart_in_time_count_one_and_one() {
+    let Some(counts) = two_clicks(700, 0.0) else {
+        return;
+    };
+    assert_eq!(counts, [1, 1]);
+}
+
+#[test]
+fn two_presses_too_far_apart_in_space_count_one_and_one() {
+    let Some(counts) = two_clicks(100, 20.0) else {
+        return;
+    };
+    assert_eq!(counts, [1, 1]);
+}
+
+/// Pressed, dragged away and back, released where it began: the next press
+/// lands in time and in place, and starts a run of its own.
+#[test]
+fn a_press_after_a_drag_counts_one() {
+    let dragged = [
+        (0, Event::mouse_down(10.0, 10.0, MouseButton::Left)),
+        (20, Event::mouse_move(60.0, 10.0)),
+        (40, Event::mouse_move(10.0, 10.0)),
+        (60, Event::mouse_up(10.0, 10.0, MouseButton::Left)),
+    ];
+    let Some(counts) = press_counts(dragged.into_iter().chain(click_at(
+        100,
+        10.0,
+        MouseButton::Left,
+    ))) else {
+        return;
+    };
+    assert_eq!(counts, [1, 1]);
+}
+
+#[test]
+fn a_right_click_after_a_left_click_counts_one() {
+    let Some(counts) = press_counts(
+        click_at(0, 10.0, MouseButton::Left)
+            .into_iter()
+            .chain(click_at(100, 10.0, MouseButton::Right)),
+    ) else {
+        return;
+    };
+    assert_eq!(counts, [1, 1]);
+}
+
+/// `on_double_click` fires on the release of the second click, as the web's
+/// `dblclick` does, and only on the second: a third click in the run is a
+/// click and nothing more. `on_click` fires for every one of them.
+#[test]
+fn a_double_click_fires_on_the_second_release_and_every_click_still_clicks() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let doubles = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .on_click(move || clicks.update(|c| *c += 1))
+                .on_double_click(move || doubles.update(|c| *c += 1)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let start = Instant::now();
+    let [first_down, first_up] = click_at(0, 10.0, MouseButton::Left);
+    let [second_down, second_up] = click_at(100, 10.0, MouseButton::Left);
+    queue(
+        &mut app,
+        surface,
+        start,
+        [first_down, first_up, second_down],
+    );
+    app.step();
+    assert_eq!(
+        (clicks.get(), doubles.get()),
+        (1, 0),
+        "not before the release"
+    );
+
+    queue(&mut app, surface, start, [second_up]);
+    app.step();
+    assert_eq!((clicks.get(), doubles.get()), (2, 1));
+
+    queue(
+        &mut app,
+        surface,
+        start,
+        click_at(200, 10.0, MouseButton::Left),
+    );
+    app.step();
+    assert_eq!(
+        (clicks.get(), doubles.get()),
+        (3, 1),
+        "a triple is not two doubles"
+    );
+}
+
+/// A container with nothing but `on_double_click` claims the press, as one
+/// with an `on_click` does, so the release that makes the double click
+/// reaches it.
+#[test]
+fn a_double_click_alone_is_heard() {
+    let Some(mut app) = headless() else { return };
+    let doubles = create_signal(0u32);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).child(
+            container()
+                .width(80.0)
+                .height(20.0)
+                .on_double_click(move || doubles.update(|c| *c += 1)),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    let clicks = click_at(0, 10.0, MouseButton::Left)
+        .into_iter()
+        .chain(click_at(100, 10.0, MouseButton::Left));
+    queue(&mut app, surface, Instant::now(), clicks);
+    app.step();
+    assert_eq!(doubles.get(), 1);
+}
+
 /// A block of one colour, which is what these scroll scenes are made of: the
 /// frame says where the content is by where one gives way to the next.
 fn block(height: f32, color: Color) -> Container {

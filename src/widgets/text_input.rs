@@ -182,8 +182,31 @@ impl History {
     }
 }
 
+/// Whether a character stands between words rather than in one. The one rule
+/// for both Ctrl+arrow and a double click, so the two agree about where a word
+/// ends.
+fn separates_words(c: char) -> bool {
+    c.is_whitespace()
+}
+
+/// What a selection drag extends by, which is decided by the press that began
+/// it: the first of a run drags characters, the second words, the third the
+/// whole line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Drag {
+    Chars,
+    /// The word the double click landed on, in characters: the selection
+    /// never shrinks past it, and grows from it a word at a time.
+    Words {
+        start: usize,
+        end: usize,
+    },
+    /// A single line has nothing between a word and all of it.
+    All,
+}
+
 /// Selection state tracking anchor and cursor positions
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     /// Where selection started (anchor point)
     pub anchor: usize,
@@ -465,8 +488,8 @@ pub struct TextInput<C = Plain> {
     cursor_visible: bool,
     last_cursor_toggle: FrameInstant,
 
-    // Mouse drag selection
-    is_dragging: bool,
+    /// A selection being dragged out, and by what it grows.
+    drag: Option<Drag>,
 
     // Mouse hover state (for cursor icon)
     is_hovered: bool,
@@ -619,7 +642,7 @@ impl<C: Content> TextInput<C> {
             selection: Selection::new(0),
             cursor_visible: true,
             last_cursor_toggle: Instant::now().into(),
-            is_dragging: false,
+            drag: None,
             is_hovered: false,
             hover: crate::reactive::signal::create_signal(false),
             history: History::new(),
@@ -1311,11 +1334,11 @@ impl<C: Content> TextInput<C> {
             let mut pos = prefix.len() - 1;
 
             // Skip whitespace going backwards
-            while pos > 0 && prefix[pos].is_whitespace() {
+            while pos > 0 && separates_words(prefix[pos]) {
                 pos -= 1;
             }
             // Skip word characters going backwards
-            while pos > 0 && !prefix[pos - 1].is_whitespace() {
+            while pos > 0 && !separates_words(prefix[pos - 1]) {
                 pos -= 1;
             }
             pos
@@ -1331,7 +1354,7 @@ impl<C: Content> TextInput<C> {
 
                 // Skip word characters
                 while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() {
+                    if separates_words(c) {
                         break;
                     }
                     chars.next();
@@ -1339,7 +1362,7 @@ impl<C: Content> TextInput<C> {
                 }
                 // Skip whitespace
                 for c in chars {
-                    if !c.is_whitespace() {
+                    if !separates_words(c) {
                         break;
                     }
                     pos += 1;
@@ -1347,6 +1370,69 @@ impl<C: Content> TextInput<C> {
                 pos.min(len)
             })
         }
+    }
+
+    /// Extend the selection a drag is making to the pointer at `x`, and say
+    /// whether that moved it.
+    fn drag_to(&mut self, drag: Drag, x: f32, bounds: Rect) -> bool {
+        let before = self.selection;
+        match drag {
+            Drag::Chars => self.selection.cursor = self.char_index_at_x(x, bounds),
+            Drag::Words { start, end } => {
+                let (under_start, under_end) = self.word_around(self.char_under_x(x, bounds));
+                self.selection = if under_start < start {
+                    Selection {
+                        anchor: end,
+                        cursor: under_start,
+                    }
+                } else {
+                    Selection {
+                        anchor: start,
+                        cursor: under_end.max(end),
+                    }
+                };
+            }
+            Drag::All => {}
+        }
+        self.selection != before
+    }
+
+    /// The character drawn under `x`, rather than the caret position nearest
+    /// it: a press on the right half of the last letter of a word is on that
+    /// word, not on the space after it.
+    fn char_under_x(&self, x: f32, bounds: Rect) -> usize {
+        let nearest = self.nearest_char_index_at_x(x, bounds);
+        let relative_x = x - bounds.x + self.scroll_offset;
+        let starts_past_x = self
+            .cached_glyph_positions
+            .get(nearest)
+            .is_none_or(|&start| start > relative_x);
+        let under = if nearest > 0 && starts_past_x {
+            nearest - 1
+        } else {
+            nearest
+        };
+        under.min(self.cached_char_count.saturating_sub(1))
+    }
+
+    /// The run of characters around `at` that a double click selects: the
+    /// word it is part of, or the whitespace between two words — by the rule
+    /// Ctrl+arrow moves by, [`separates_words`]. All of a hidden text, whose
+    /// words are part of what is hidden.
+    fn word_around(&self, at: usize) -> (usize, usize) {
+        if C::HIDDEN {
+            return (0, self.cached_char_count);
+        }
+        let byte = self.char_to_byte_index(at);
+        self.content.with_text(|text| {
+            let Some(under) = text[byte..].chars().next() else {
+                return (at, at);
+            };
+            let same = |c: &char| separates_words(*c) == separates_words(under);
+            let before = text[..byte].chars().rev().take_while(same).count();
+            let after = text[byte..].chars().take_while(same).count();
+            (at - before, at + after)
+        })
     }
 
     /// Move cursor to start/end
@@ -1882,6 +1968,7 @@ impl<C: Content> Widget for TextInput<C> {
             Event::MouseDown {
                 at: Some(at),
                 button,
+                count,
                 ..
             } if bounds.contains(at.x, at.y) && *button == MouseButton::Left => {
                 // Focus, then repaint to show the caret where the click landed.
@@ -1889,10 +1976,25 @@ impl<C: Content> Widget for TextInput<C> {
                 request_focus(tree, id);
                 request_job(id, JobRequest::Paint);
 
-                // Set cursor position
-                let char_index = self.char_index_at_x(at.x, bounds);
-                self.selection = Selection::new(char_index);
-                self.is_dragging = true;
+                let drag = match count {
+                    1 => {
+                        self.selection = Selection::new(self.char_index_at_x(at.x, bounds));
+                        Drag::Chars
+                    }
+                    2 => {
+                        let (start, end) = self.word_around(self.char_under_x(at.x, bounds));
+                        self.selection = Selection {
+                            anchor: start,
+                            cursor: end,
+                        };
+                        Drag::Words { start, end }
+                    }
+                    _ => {
+                        self.select_all(edit);
+                        Drag::All
+                    }
+                };
+                self.drag = Some(drag);
                 self.reset_cursor_blink(edit.at);
                 self.ensure_cursor_visible(bounds.width);
 
@@ -1912,18 +2014,19 @@ impl<C: Content> Widget for TextInput<C> {
                 }
 
                 if let Some(at) = at
-                    && self.is_dragging
+                    && let Some(drag) = self.drag
                 {
-                    // Extend selection while dragging
-                    let char_index = self.char_index_at_x(at.x, bounds);
-                    self.selection.cursor = char_index;
-                    self.ensure_cursor_visible(bounds.width);
-                    request_job(id, JobRequest::Paint);
+                    if self.drag_to(drag, at.x, bounds) {
+                        self.ensure_cursor_visible(bounds.width);
+                        request_job(id, JobRequest::Paint);
+                    }
                     return EventResponse::Handled;
                 }
             }
-            Event::MouseUp { button, .. } if *button == MouseButton::Left && self.is_dragging => {
-                self.is_dragging = false;
+            Event::MouseUp { button, .. }
+                if *button == MouseButton::Left && self.drag.is_some() =>
+            {
+                self.drag = None;
                 // Select-to-copy: a completed mouse selection becomes the
                 // primary selection (middle-click paste elsewhere)
                 if let Some(text) = self.exportable_selection() {
@@ -1978,7 +2081,7 @@ impl<C: Content> Widget for TextInput<C> {
             // The surface losing the keyboard keeps the focus here, and the
             // caret goes until it is back; see `has_focus_with_keyboard`.
             Event::FocusOut if has_focus(id) => {
-                self.is_dragging = false;
+                self.drag = None;
                 request_job(id, JobRequest::Paint);
             }
             Event::FocusIn if has_focus(id) => {
@@ -1993,7 +2096,7 @@ impl<C: Content> Widget for TextInput<C> {
                 // deliver the release that ends it: the drag would then extend
                 // on the next move that arrived, with no button held. A touch
                 // gesture the compositor cancels is how that now happens.
-                self.is_dragging = false;
+                self.drag = None;
                 self.release_pointer();
             }
             _ => {}
@@ -2090,7 +2193,7 @@ mod tests {
             anchor: 2,
             cursor: 7,
         };
-        input.is_dragging = true;
+        input.drag = Some(Drag::Chars);
 
         let moved_to = Event::mouse_move(60.0, 5.0);
         Widget::event(&mut input, &mut tree, id, &moved_to);

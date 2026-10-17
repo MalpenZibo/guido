@@ -226,6 +226,7 @@ blocks live beside their state rather than all in one file.
 |------|---------|
 | `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
+| `platform/clicks.rs` | Which press of a run a press is — the double click — shared with the headless recorder |
 | `platform/selections.rs` | Clipboard and primary selection, read on paste |
 | `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
@@ -656,6 +657,13 @@ pointer pipeline (`src/platform/input.rs`), which is what lets a widget alias
 the two in one arm; the kind is the one thing the fold cannot alias, and a
 scroller is what reads it — a finger dragging content scrolls it, a mouse does
 not.
+
+`MouseDown` also carries a `count`: which press of a run it is, counted where
+the presses enter rather than by each widget. Wayland has no double click, so
+`ClickCounter` (`src/platform/clicks.rs`) numbers them — the same button,
+within 400 ms and 5 px of the press before, with no drag between — and both
+`Platform` implementations pass what they queue through one, so a test's
+presses are counted by the code a compositor's are.
 
 Events propagate down the widget tree. Each widget can:
 - Handle the event (`EventResponse::Handled`)

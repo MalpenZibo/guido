@@ -360,3 +360,14 @@ pub fn headless() -> Option<guido::testing::Headless> {
         }
     }
 }
+
+/// The `count`th left press of a run at a point, numbered as the platform
+/// numbers it — which a test talking to a widget directly has to do itself.
+pub fn press_numbered(x: f32, y: f32, count: u32) -> Event {
+    Event::MouseDown {
+        at: Some(Point::new(x, y)),
+        button: MouseButton::Left,
+        pointer: PointerKind::Mouse,
+        count,
+    }
+}

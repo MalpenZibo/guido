@@ -28,11 +28,15 @@ Tracked for hover states. The platform layer determines which widget the cursor 
 ### Mouse Buttons
 
 ```text
-Event::MouseDown { at, button, pointer };
+Event::MouseDown { at, button, pointer, count };
 Event::MouseUp { at, button }
 ```
 
-Used for click detection and pressed states.
+Used for click detection and pressed states. `count` is which press of a run
+this one is — 2 for the second of a double click — and the platform works it
+out where the presses enter, in `src/platform/clicks.rs`: Wayland says nothing
+about double clicks, so both the Wayland platform and the headless recorder
+pass what they queue through one `ClickCounter`.
 
 ### Which Pointer
 
