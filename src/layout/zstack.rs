@@ -49,8 +49,9 @@ use super::{Alignment, Constraints, Layout, Size};
 ///
 /// Every child is placed by an [`Alignment`]: the stack's own, set with
 /// [`align`](Self::align), or one the child declares for itself with
-/// [`align_self`](crate::widgets::Container::align_self). Both default to
-/// the top start, so a stack that says nothing puts every child at its origin.
+/// [`align_self`](crate::widgets::Container::align_self). The stack's is the
+/// top start until it says otherwise, and a child that says nothing takes the
+/// stack's — so a stack nobody aligns puts every child at its origin.
 ///
 /// ```
 /// use guido::prelude::*;

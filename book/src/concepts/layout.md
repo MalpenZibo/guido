@@ -481,8 +481,12 @@ where there is no end to the space, the size of its largest child.
 
 ### Positioning Inside the Stack
 
-Every child sits at the stack's origin. To place a follower elsewhere, let it
-fill both axes and use its own layout:
+Every child is placed by an `Alignment`. The stack gives one to all of its
+children with `ZStack::new().align(..)`, and a child can declare its own with
+`.align_self(..)`, the way CSS's `align-self` overrides `align-items`. The
+stack's is the top start until it says otherwise, and a child that says
+nothing takes the stack's — so a stack nobody aligns puts every child at its
+origin.
 
 ```rust
 # extern crate guido;
@@ -490,25 +494,32 @@ fill both axes and use its own layout:
 # fn icon_widget() -> Container { container() }
 # fn main() {
 container()
-    .layout(ZStack::new())
+    .layout(ZStack::new().align(Alignment::CENTER))
     .child(icon_widget())
-    // Alert dot pinned to the icon's top-right corner
+    // Centred over the icon, as the stack says
+    .child(text("3"))
+    // Alert dot on the icon's top-right corner, as it says itself
     .child(
         container()
-            .width(fill())
-            .height(fill())
-            .layout(Flex::row().main_alignment(MainAlignment::End))
-            .child(
-                container()
-                    .width(4)
-                    .height(4)
-                    .corners(2)
-                    .background(Color::RED)
-            )
+            .width(4)
+            .height(4)
+            .corners(2)
+            .background(Color::RED)
+            .align_self(Alignment::TOP_END)
     )
 # ;
 # }
 ```
+
+There are nine: `TOP_START`, `TOP_CENTER`, `TOP_END`, `CENTER_START`,
+`CENTER`, `CENTER_END`, `BOTTOM_START`, `BOTTOM_CENTER` and `BOTTOM_END`.
+Start is the left and the top.
+
+An alignment places a child in the room the stack has left over, so a
+follower that fills the stack on an axis has none there and stays put: a
+background behind a centred label is still exactly the stack's size. A child
+larger than the stack is shared out the same way and overhangs instead —
+`CENTER` by the same amount on both sides.
 
 ## API Reference
 
@@ -552,6 +563,25 @@ CrossAlignment::Stretch
 # }
 ```
 
+### Alignment
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+Alignment::TOP_START;
+Alignment::TOP_CENTER;
+Alignment::TOP_END;
+Alignment::CENTER_START;
+Alignment::CENTER;
+Alignment::CENTER_END;
+Alignment::BOTTOM_START;
+Alignment::BOTTOM_CENTER;
+Alignment::BOTTOM_END
+# ;
+# }
+```
+
 ### ZStack
 
 ```rust,ignore
@@ -559,7 +589,8 @@ CrossAlignment::Stretch
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-ZStack::new() -> ZStack                // Children stacked at the same origin
+ZStack::new() -> ZStack                // Children stacked, at the top start
+.align(Alignment) -> ZStack            // Where every child sits
 # ;
 # }
 ```

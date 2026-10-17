@@ -12,10 +12,10 @@ declarations do not.**
 
 Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `border`, `outline`, `translate`, `rotate`, `scale`, `pivot`, `opacity`, `opacity_mode`, `blur`, `width`, `height`,
-`padding`, `visible`, `enabled`, `takes_input`, `cursor`, `shadow` — and beyond `Container`, `Text`'s `wrap`, `align`, `max_lines`, `overflow` and `text_box`,
+`padding`, `visible`, `align_self`, `enabled`, `takes_input`, `cursor`, `shadow` — and beyond `Container`, `Text`'s `wrap`, `align`, `max_lines`, `overflow` and `text_box`,
 `Image`'s `content_fit`, `TextInput`'s `caret`, `readonly` and `cursor`, `PasswordInput`'s `mask_char` and `reveal`,
 `RippleConfig`'s colour, `Arc`'s `size`, `stroke`, `track`, `caps`, `start`
-and `sweep`, and the direction a `Flex` is built with.
+and `sweep`, the direction a `Flex` is built with, and a `ZStack`'s alignment.
 
 Structural: `layout`, `child`, `children`, `control`, `focusable`, the axis a `Scroll` is
 built with, the event handlers — and the *motion* a value is declared with,
@@ -142,6 +142,14 @@ prelude — see `tests/external_widget.rs`.
 `Container` is the one box. Layouts plug into it: `.layout(Flex::row())`,
 `Flex::column()`, `ZStack`. The `Layout` trait is public, so an application can
 write its own.
+
+A `ZStack` places each child by an `Alignment` — `ZStack::new().align(..)` for
+all of them, `.align_self(..)` on a child for itself — rather than wrapping the
+child in a `fill()` container with a `Flex` of its own: the wrapper becomes the
+child the stack sees, and an exit, a widget ref or a hit test then belongs to
+it. A child's own alignment reaches the stack in `LayoutHints`, read untracked;
+`Container::layout` reads it tracked, which is what lays the stack out again
+when it changes.
 
 Children: `.child()` for a static one — a widget, or an `Option` of one that
 is simply absent when `None`. `.children()` takes
