@@ -46,8 +46,8 @@ use super::state_layer::{
     Moves, RippleConfig, StateStyle, StateWhen, Stateful, resolve_background,
 };
 use super::widget::{
-    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Padding, Placement,
-    Point, Rect, ScrollSource, Widget,
+    Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Outsets, Padding,
+    Placement, Point, Rect, ScrollSource, Widget,
 };
 
 /// Callback for click events
@@ -605,7 +605,7 @@ impl Container {
         };
         // A slide carries the whole box by its offset, after everything else.
         let (dx, dy) = self.position_offset(tree, id);
-        let reach = self.max_transform_reach(bounds, extent) + dx.abs().max(dy.abs());
+        let reach = self.max_transform_reach(bounds, extent) + Outsets::all(dx.abs().max(dy.abs()));
         tree.set_own_paint_reach(id, reach);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two

@@ -6453,7 +6453,10 @@ fn a_declared_transform_change_invalidates_the_reach_without_a_layout() {
     pump(&mut h);
     assert_eq!(
         h.tree.paint_overflow(h.root),
-        Outsets::all(30.0),
+        Outsets {
+            top: 30.0,
+            ..Outsets::ZERO
+        },
         "the reach did not follow the transform through its Paint job"
     );
 }

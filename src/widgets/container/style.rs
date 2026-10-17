@@ -325,10 +325,10 @@ impl Container {
     /// buy nothing the schedule does not already cover — and would put every
     /// container that declares `when_hovered` on its own hover signal from
     /// the reach path, which is a wider fan-out than the case needs.
-    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: f32) -> f32 {
+    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: f32) -> Outsets {
         let moves = self.moving_components();
         if !moves.any() {
-            return shadow_extent;
+            return Outsets::all(shadow_extent);
         }
 
         // The box the transform actually carries: the container plus the
@@ -374,7 +374,7 @@ impl Container {
             .into_iter()
             .fold(0.0f32, |most, (x, y)| most.max((x - px).hypot(y - py)));
             let swept = Rect::new(px - far, py - far, far * 2.0, far * 2.0);
-            reach = reach.max(swept.outset_beyond(bounds).widest());
+            reach = reach.max(swept.outset_beyond(bounds));
         }
 
         // Each layer is a transform this container can be in, whether or not it
@@ -411,7 +411,7 @@ impl Container {
             .into_iter()
             .flatten()
             .fold(0.0f32, f32::max);
-            reach *= 1.0 + overshoot;
+            reach = reach * (1.0 + overshoot);
 
             let flying = Transform::compose(
                 anims
@@ -879,11 +879,10 @@ pub(super) const SHADOW_ALPHA_FLOOR: f32 = 0.004;
 /// transform at all the answer is the difference between them, which is the
 /// shadow, so the shadow needs no separate accounting.
 ///
-/// One number for four sides, because everything reading it grows a rect
-/// equally in every direction: a scalar cannot say a card lifts upward only,
-/// and a reach that is too generous costs paint while one that is too tight
-/// loses a widget.
-fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) -> f32 {
+/// Side by side, as the transform leaves the mapped rect: a card that lifts
+/// reaches above its box and nowhere else, and a reach that is too generous
+/// costs paint and damage while one that is too tight loses a widget.
+fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) -> Outsets {
     let moved = if transform.is_identity() {
         painted
     } else {
@@ -892,7 +891,7 @@ fn outset_of(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) ->
         // would put a corner pivot in a different place here than on screen.
         transform.about(pivot, bounds).map_rect(painted)
     };
-    moved.outset_beyond(bounds).widest()
+    moved.outset_beyond(bounds)
 }
 
 /// A colour as a state layer resolves it: its background override, then its
@@ -926,7 +925,7 @@ mod reach_tests {
         let mut worst: f32 = 0.0;
         for degrees in 0..360 {
             let spin = Transform::compose((0.0, 0.0), degrees as f32, Scale::NONE);
-            worst = worst.max(outset_of(spin, BOX, BOX, Pivot::TOP_LEFT));
+            worst = worst.max(outset_of(spin, BOX, BOX, Pivot::TOP_LEFT).widest());
         }
         // What a bound written for the centre would have said.
         let centre_shaped = (100.0f32.hypot(100.0) - 100.0) / 2.0;
@@ -958,18 +957,31 @@ mod reach_tests {
         let painted = BOX.outset(10.0);
         assert_eq!(
             outset_of(Transform::IDENTITY, painted, BOX, Pivot::CENTER),
-            10.0
+            Outsets::all(10.0)
         );
     }
 
     /// The shadow and the transform compose. This is the case the review
     /// found: measured against the shadow-inflated box the answer came out 50,
     /// and the shadow really reaches 60.
+    ///
+    /// And only upward. The lift carries the box away from its bottom edge, so
+    /// nothing is drawn below it at all, and its sides keep the shadow's 10.
+    /// One number for the four reported 60 on every side — 50 pixels of
+    /// damage either side of a card that only ever moved up.
     #[test]
     fn a_shadow_carried_by_a_translate_reaches_past_both() {
         let painted = BOX.outset(10.0);
         let lift = Transform::compose((0.0, -50.0), 0.0, Scale::NONE);
-        assert_eq!(outset_of(lift, painted, BOX, Pivot::CENTER), 60.0);
+        assert_eq!(
+            outset_of(lift, painted, BOX, Pivot::CENTER),
+            Outsets {
+                left: 10.0,
+                top: 60.0,
+                right: 10.0,
+                bottom: 0.0,
+            }
+        );
     }
 
     /// And a consumer growing the box by the answer contains what is drawn,
@@ -981,7 +993,7 @@ mod reach_tests {
         let reach = outset_of(lift, painted, BOX, Pivot::CENTER);
 
         let drawn = lift.about(Pivot::CENTER, painted).map_rect(painted);
-        let grown = BOX.outset(reach);
+        let grown = BOX.outset_by(reach);
         assert!(
             grown.x <= drawn.x
                 && grown.y <= drawn.y
@@ -999,7 +1011,10 @@ mod reach_tests {
         // The 120-wide painted box doubles about the centre it shares with
         // bounds, reaching 120 either side of it; 70 of that stands outside the
         // 100-wide bounds. A shadow that did not scale would reach 60.
-        assert_eq!(outset_of(grow, painted, BOX, Pivot::CENTER), 70.0);
+        assert_eq!(
+            outset_of(grow, painted, BOX, Pivot::CENTER),
+            Outsets::all(70.0)
+        );
     }
 
     /// The rotation bound, asked of the container rather than of the
@@ -1039,20 +1054,22 @@ mod reach_tests {
                     let spin = Transform::compose((0.0, 0.0), deg as f32, Scale::NONE);
                     outset_of(spin, painted, BOX, pivot)
                 })
-                .fold(0.0f32, f32::max);
+                .fold(Outsets::ZERO, Outsets::max);
 
+            // Side by side: a corner pivot sweeps far past the two edges it
+            // sits away from and less past the two it sits on.
             assert!(
-                bound >= worst - 0.01,
-                "{pivot:?}: the bound is {bound} and the widest angle reaches \
-                 {worst}, so a container mid-rotation would be culled"
+                bound.covers(worst - Outsets::all(0.01)),
+                "{pivot:?}: the bound is {bound:?} and the widest angles reach \
+                 {worst:?}, so a container mid-rotation would be culled"
             );
             // And tight. A bound that is merely large is satisfied by any
             // arithmetic that errs upward, which leaves the whole computation
             // unwatched — and every pixel of slack is painted and damaged.
             assert!(
-                bound <= worst + 0.01,
-                "{pivot:?}: the bound is {bound} where the widest angle reaches \
-                 only {worst}, so every rotation pays for reach it cannot use"
+                (worst + Outsets::all(0.01)).covers(bound),
+                "{pivot:?}: the bound is {bound:?} where the widest angles reach \
+                 only {worst:?}, so every rotation pays for reach it cannot use"
             );
         }
     }
@@ -1062,8 +1079,12 @@ mod reach_tests {
     #[test]
     fn a_box_that_cannot_rotate_is_not_given_a_rotation_s_reach() {
         let still = container().width(100.0).height(100.0);
-        assert_eq!(still.max_transform_reach(BOX, 0.0), 0.0);
-        assert_eq!(still.max_transform_reach(BOX, 6.0), 6.0, "only its shadow");
+        assert_eq!(still.max_transform_reach(BOX, 0.0), Outsets::ZERO);
+        assert_eq!(
+            still.max_transform_reach(BOX, 6.0),
+            Outsets::all(6.0),
+            "only its shadow"
+        );
     }
 
     /// A spring passes its target before it settles, and the reach has to
@@ -1080,8 +1101,8 @@ mod reach_tests {
 
         let reach = sprung.max_transform_reach(BOX, 0.0);
         assert!(
-            reach > 100.0,
-            "a spring to -100 was given a reach of {reach}, so it is culled at \
+            reach.top > 100.0,
+            "a spring to -100 was given a reach of {reach:?}, so it is culled at \
              the far end of its own overshoot"
         );
 
@@ -1091,7 +1112,10 @@ mod reach_tests {
             .translate(Translate::new(0.0, -100.0).transition(200.0));
         assert_eq!(
             eased.max_transform_reach(BOX, 0.0),
-            100.0,
+            Outsets {
+                top: 100.0,
+                ..Outsets::ZERO
+            },
             "an eased translate overshoots nothing and should pay for nothing"
         );
     }
@@ -1106,13 +1130,25 @@ mod reach_tests {
             .width(100.0)
             .height(100.0)
             .translate(Translate::relative(-1.0, 0.0));
-        assert_eq!(declared.max_transform_reach(BOX, 0.0), BOX.width);
+        assert_eq!(
+            declared.max_transform_reach(BOX, 0.0),
+            Outsets {
+                left: BOX.width,
+                ..Outsets::ZERO
+            }
+        );
 
         let layered = container()
             .width(100.0)
             .height(100.0)
             .when_hovered(|s| s.translate(Translate::relative(0.0, 0.5)));
-        assert_eq!(layered.max_transform_reach(BOX, 0.0), BOX.height / 2.0);
+        assert_eq!(
+            layered.max_transform_reach(BOX, 0.0),
+            Outsets {
+                bottom: BOX.height / 2.0,
+                ..Outsets::ZERO
+            }
+        );
     }
 
     /// A state layer that moves only one component is still a transform this
@@ -1130,7 +1166,7 @@ mod reach_tests {
             .when_pressed(|s| s.scale(Scale::uniform(2.0)));
         assert_eq!(
             scaled.max_transform_reach(BOX, 0.0),
-            50.0,
+            Outsets::all(50.0),
             "a layer that doubles this box on press was not counted, so it is \
              culled at its resting size while it is pressed"
         );
@@ -1143,7 +1179,10 @@ mod reach_tests {
             .when_hovered(|s| s.translate(Translate::new(0.0, -25.0)));
         assert_eq!(
             lifted.max_transform_reach(BOX, 0.0),
-            25.0,
+            Outsets {
+                top: 25.0,
+                ..Outsets::ZERO
+            },
             "a layer that lifts this box on hover was not counted"
         );
 
@@ -1152,7 +1191,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.rotate(45.0));
         assert!(
-            turned.max_transform_reach(BOX, 0.0) > 0.0,
+            turned.max_transform_reach(BOX, 0.0).widest() > 0.0,
             "a layer that turns this box on hover was not counted"
         );
     }
@@ -1173,6 +1212,7 @@ mod reach_tests {
                 BOX,
                 Pivot::CENTER,
             )
+            .widest()
         };
         assert_eq!(at(0.0), 0.0);
         assert!(
