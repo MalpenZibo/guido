@@ -96,12 +96,13 @@ fn seven_small_images_are_one_draw_call_and_the_rest_are_one_per_group() {
 /// them and nothing else.
 ///
 /// A backdrop blur is four passes per region — downsample, a blur each way,
-/// composite — and one present for the frame, so two regions are nine. A
-/// rotated label is one textured quad, and one glyphon pass to rasterize the
-/// texture it samples, which on its first frame has not been made yet.
+/// composite — and one present for the frame, so two regions are nine, each
+/// one draw. A rotated label is one textured quad, and one glyphon pass to
+/// rasterize the texture it samples, which on its first frame has not been
+/// made yet.
 #[test]
 fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() {
-    let Some(calls) = draw_calls_of_one_frame(|| {
+    let Some(stats) = first_frame(|| {
         container()
             .layout(Flex::row().spacing(8.0))
             .child(container().width(40.0).height(16.0).backdrop_blur(4.0))
@@ -111,6 +112,7 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
         return;
     };
 
+    let calls = stats.draw_calls;
     assert_eq!(
         calls,
         DrawCalls {
@@ -123,6 +125,7 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
         }
     );
     assert_eq!(calls.total(), 1 + 1 + 9);
+    assert_eq!(stats.backdrop_passes, 9);
 }
 
 /// A widget that draws one path, or one arc, in a 16×16 box.

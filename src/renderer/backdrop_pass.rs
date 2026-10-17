@@ -826,6 +826,7 @@ impl BackdropRenderer {
         }
         pass.draw(0..3, 0..1);
         render_stats::record_draw_calls(Pipeline::Backdrop, 1);
+        render_stats::record_backdrop_pass();
     }
 
     /// Blur one region of the scene target, in place, cut out by the region's
