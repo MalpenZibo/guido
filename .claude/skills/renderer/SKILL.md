@@ -265,6 +265,12 @@ per pipeline — and `quad.*` — the buffers and bind groups the image and
 transformed-text quads made — among its counts, so a claim about batching has
 a number that repeats.
 
+`damage.pixels` is the buffer pixels the frames' damage named, clipped to the
+buffer: what the compositor was asked to take again. A scroller damages its
+whole viewport every frame, so it says little in the gesture benchmarks;
+`benches/slide_list` plays no gesture at all, only a timer reordering a column
+of cards that slide with `animate_position`, and there it is the slides' alone.
+
 Under the table is what the run cost the heap, which is the number a change that
 exists to stop allocating has to move. It is counted by `CountingAllocator`, a
 `GlobalAlloc` the benchmark binary installs — guido ships it and installs
