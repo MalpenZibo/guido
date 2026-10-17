@@ -1072,6 +1072,10 @@ pub struct LayoutHints {
     /// Hidden, as CSS's `display: none`: it takes no space, so a parent that
     /// sizes itself from its children leaves it out.
     pub hidden: bool,
+    /// On its way out: removed from a dynamic children list and playing its
+    /// exit, as [`Widget::is_exiting`] says. A
+    /// [`ZStack`](crate::layout::ZStack) is not held open by it.
+    pub leaving: bool,
     /// Where it sits in its parent, where it says so itself, as CSS's
     /// `align-self`. A [`ZStack`](crate::layout::ZStack) reads it in place of
     /// its own alignment.
@@ -1203,8 +1207,13 @@ pub trait Widget {
         Placement::NONE
     }
 
+    /// What a parent laying this widget out asks of it before it does. A
+    /// widget that plays an exit is leaving whatever else it answers.
     fn layout_hints(&self) -> LayoutHints {
-        LayoutHints::default()
+        LayoutHints {
+            leaving: self.is_exiting(),
+            ..LayoutHints::default()
+        }
     }
 
     /// Measure this widget, and place its children.
