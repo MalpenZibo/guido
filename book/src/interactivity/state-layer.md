@@ -60,10 +60,30 @@ is active.
 # use guido::prelude::*;
 # fn main() {
 # container()
-.when_hovered(|s| s.border(2.0, Color::WHITE))   // both halves, always
+.when_hovered(|s| s.border(1.0, Color::WHITE))   // both halves, always
 # ;
 # }
 ```
+
+A border takes room inside the box, so a layer that changes its width relays the
+container out and moves its content by the difference; a colour change moves
+nothing.
+
+### Outline
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# container()
+.outline(2.0, Color::TRANSPARENT, 2.0)
+.when_focused(|s| s.outline(2.0, Color::WHITE, 2.0))   // width, colour, offset
+# ;
+# }
+```
+
+A ring outside the box that takes no room: a layer that shows, thickens or moves
+it only repaints. It is the focus or hover ring.
 
 ### Transform
 
@@ -204,11 +224,14 @@ Internally, `StateStyle` holds all possible overrides:
 
 ```rust,ignore
 # // not compiled: a field listing of the real struct, whose halves
-# // (`BackgroundOverride`, `BorderOverride`) are named without being built.
+# // (`BackgroundOverride`, `BorderOverride`, `OutlineOverride`) are named
+# // without being built.
 pub struct StateStyle {
     pub background: Option<BackgroundOverride>,
     // Both halves or neither: half a border is no border.
     pub border: Option<BorderOverride>,
+    // All three halves or none, for the same reason.
+    pub outline: Option<OutlineOverride>,
     pub corners: Prop<Corners>,
     pub translate: Prop<Translate>,
     pub rotate: Prop<f32>,
@@ -220,9 +243,9 @@ pub struct StateStyle {
 ```
 
 `RippleConfig` is in the prelude, because `ripple_config` takes one.
-`BackgroundOverride` and `BorderOverride` are not: nothing asks you to build
-either — `background`, `lighter`, `darker` and `border` take a colour and a
-number and build them for you — so they stay in `guido::widgets`, for the rare
-caller that reads a `StateStyle` back.
+`BackgroundOverride`, `BorderOverride` and `OutlineOverride` are not: nothing
+asks you to build any of them — `background`, `lighter`, `darker`, `border` and
+`outline` take colours and numbers and build them for you — so they stay in
+`guido::widgets`, for the rare caller that reads a `StateStyle` back.
 
 When the container paints, it checks the current state and applies overrides accordingly, blending with animations when configured.

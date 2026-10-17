@@ -374,8 +374,8 @@ container()
     .padding(8.0)
     .border(1.0, Color::rgb(0.3, 0.3, 0.4))
     // Lights up for the focus, and keeps it: a click on the padding is a
-    // click on the field.
-    .when_focused(|s| s.border(2.0, Color::rgb(0.4, 0.8, 1.0)))
+    // click on the field. A ring outside the box, so the field does not move.
+    .when_focused(|s| s.outline(2.0, Color::rgb(0.4, 0.8, 1.0), 2.0))
     .child(text_input(value))
 # ;
 # }

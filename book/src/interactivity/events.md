@@ -239,7 +239,7 @@ Shift+Tab to the one before. A container joins them by declaring
 # let open = move || {};
 container()
     .focusable(true)
-    .when_focused(|s| s.border(2.0, Color::WHITE))
+    .when_focused(|s| s.outline(2.0, Color::WHITE, 2.0))
     .on_key_down(move |key, _mods, _repeat| {
         if key == Key::Enter {
             open();

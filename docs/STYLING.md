@@ -72,13 +72,20 @@ change:
 container().border(1.5, move || if failed.get() { theme.danger } else { theme.line })
 ```
 
+A border takes room inside the box, as CSS's `box-sizing: border-box` does:
+the children are laid out inside the border and the padding, and a box sized to
+its content grows by both. A scroller's viewport and extents are measured inside
+its border, so its content scrolls from the border's inner edge to the same edge
+at the far end. The width is a layout property for that reason: changing it,
+from a signal, a transition or a state layer, relays the container out and moves
+what it holds. A ring that should not move anything is an
+[outline](#outlines).
+
 A container that scrolls or hides its overflow cuts its children *inside* its
 border, as CSS cuts at the padding box: the border is never covered by what the
 container holds, its scrollbar sits inside the border too, and a press on the
 border does not reach a child under it. The container's own background, border
-and shadow are not cut by that clip. The border does not take room in the
-layout, though, so content laid against the edge goes under the clip by the
-border's width; padding at least as wide keeps it in view.
+and shadow are not cut by that clip.
 
 ### In a State Layer
 
@@ -92,6 +99,10 @@ container()
     .state(failed, |s| s.border(1.5, theme.danger))
 ```
 
+Changing the colour moves nothing. Changing the width does: the content moves
+in by the difference, so a ring that thickens on focus or hover belongs to the
+outline instead.
+
 A width repeated across layers is a constant in your own code, not something the
 API should let you leave half-said:
 
@@ -103,9 +114,36 @@ const FIELD_BORDER: f32 = 1.5;
 
 ```rust
 container()
-    .border(1.0.transition(150.0), Color::rgb(0.3, 0.3, 0.4).transition(150.0))
-    .when_hovered(|s| s.border(2.0, Color::rgb(0.5, 0.5, 0.6)))
+    .border(1.0, Color::rgb(0.3, 0.3, 0.4).transition(150.0))
+    .when_hovered(|s| s.border(1.0, Color::rgb(0.5, 0.5, 0.6)))
 ```
+
+A width can carry a transition too, and each of its frames lays the container
+out: the content follows the border as it grows.
+
+## Outlines
+
+An outline is a ring drawn outside the box — `width` wide, `offset` out from its
+edge — above everything the box holds, following its corners: CSS's `outline`.
+It takes no room, so showing, hiding or animating one repaints and never relays
+anything out. That is what a focus or hover ring wants:
+
+```rust
+container()
+    .corners(8.0)
+    .border(1.0, theme.line)
+    .outline(2.0, Color::TRANSPARENT.transition(120.0), 2.0)
+    .when_focused(|s| s.outline(2.0, theme.accent, 2.0))
+```
+
+A rounded corner of the ring is the box's radius grown by `offset + width`, and
+a square one stays square. A negative offset draws the ring inside the box, over
+its edge. All three halves are declared together, on the container and in a
+state layer alike, and each carries its own timing.
+
+The ring is painting outside the box, so it counts in the reach a parent culls
+and damages by, as a shadow does; it is cut by the clips above the container,
+not by a ripple's.
 
 ## Corner Radius
 
