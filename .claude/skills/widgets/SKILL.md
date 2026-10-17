@@ -14,7 +14,8 @@ Reactive: `background`, `gradient`, `backdrop_blur`, `overflow`, `corners`,
 `border`, `translate`, `rotate`, `scale`, `pivot`, `opacity`, `width`, `height`,
 `padding`, `visible`, `enabled`, `takes_input`, `cursor`, `shadow` — and beyond `Container`, `Text`'s `wrap`, `align`, `max_lines` and `overflow`,
 `Image`'s `content_fit`, `TextInput`'s `caret`, `readonly` and `cursor`, `PasswordInput`'s `mask_char` and `reveal`,
-`RippleConfig`'s colour, and the direction a `Flex` is built with.
+`RippleConfig`'s colour, `Arc`'s `size`, `stroke`, `track`, `caps`, `start`
+and `sweep`, and the direction a `Flex` is built with.
 
 Structural: `layout`, `child`, `children`, `control`, `focusable`, the axis a `Scroll` is
 built with, the event handlers — and the *motion* a value is declared with,
@@ -49,7 +50,8 @@ asking why the cache is not good enough, and saying so where it is read.
 An animatable property takes `impl IntoAnimated<T, M>` instead, which is
 everything `IntoSignal` accepts plus a value carrying its own motion:
 `background`, `corners`, `padding`, `border` (each half), `shadow`, `width`,
-`height`, `translate`, `rotate`, `scale`, `opacity`. The others keep plain `IntoSignal`,
+`height`, `translate`, `rotate`, `scale`, `opacity` — and beyond `Container`,
+`Text`'s `color` and `font_size` and `Arc`'s `color` and `progress`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
 property somebody else declared, so a timing there is a compile error rather
 than a value quietly ignored.

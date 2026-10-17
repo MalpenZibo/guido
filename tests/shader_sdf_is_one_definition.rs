@@ -1,10 +1,10 @@
-//! The corner geometry is written three times, and the three have to agree.
+//! The corner geometry is written four times, and the four have to agree.
 //! So is the walk down a clip chain that cuts with it.
 //!
 //! WGSL has no include. A clip is one shape and a corner is one curve, but the
-//! pipelines that cut them are three — the shape shader, the textured quad
-//! (images and transformed text), and the backdrop composite — and each carries
-//! its own copy of the signed distance function.
+//! pipelines that cut them are four — the shape shader, the textured quad
+//! (images and transformed text), the backdrop composite and the path
+//! triangles — and each carries its own copy of the signed distance function.
 //!
 //! Copies drift. #403 is what that looked like: the backdrop read the curvature
 //! as `max(k, 0.05) * 2` where the other two read `pow(2, k)`. The two
@@ -19,7 +19,7 @@
 //! shows. This catches it at the character, without anyone having to think of
 //! the scenario.
 //!
-//! **There is a fourth copy, and it is not WGSL.** `Rect::shape_distance` in
+//! **There is a fifth copy, and it is not WGSL.** `Rect::shape_distance` in
 //! `src/widgets/widget.rs` is the same function in Rust, and it is what
 //! hit-testing runs — so it decides where a click lands the way the shaders
 //! decide where a pixel lands. It cannot be compared character for character
@@ -31,7 +31,7 @@
 //! falls on is the last bit of two `powf` calls. Change the
 //! curve and that fails too.
 //!
-//! **Why three copies rather than one.** All three shaders are loaded with
+//! **Why four copies rather than one.** All four shaders are loaded with
 //! `include_str!`, so `concat!` with a shared prelude file would make one copy
 //! genuinely be one copy, with no build script and no dependency. It is not
 //! free: naga reports errors by line and column, and every diagnostic in every
@@ -43,10 +43,11 @@
 use std::path::Path;
 
 /// The files that must carry the block, and the markers that delimit it.
-const SHADERS: [&str; 3] = [
+const SHADERS: [&str; 4] = [
     "src/renderer/shader.wgsl",
     "src/renderer/textured_quad_shader.wgsl",
     "src/renderer/backdrop_shader.wgsl",
+    "src/renderer/path_shader.wgsl",
 ];
 /// The corner geometry, and the walk down a clip chain that cuts with it.
 /// Each pair delimits a block every shader carries word for word.
@@ -100,7 +101,7 @@ fn every_shader_carries_the_same(markers: (&str, &str)) {
                 "{path} and {} have drifted apart: {mismatch}.\n\
                  Copy the block between `{open}` and `{close}` from one to the other — \
                  every shader cuts the same corner, and #403 is what happens when they do not. \
-                 `Rect::shape_distance` in src/widgets/widget.rs is a fourth copy in Rust; \
+                 `Rect::shape_distance` in src/widgets/widget.rs is a fifth copy in Rust; \
                  if the curve itself is changing, it changes too.",
                 SHADERS[0]
             );
@@ -131,7 +132,7 @@ fn every_shader_calls_the_shared_function_it_carries() {
     }
 }
 
-/// The fourth copy answers to the same definition.
+/// The fifth copy answers to the same definition.
 ///
 /// `Rect::shape_distance` is `rounded_rect_sdf` written in Rust, and it is what
 /// decides whether a click landed inside a widget. It cannot be compared with

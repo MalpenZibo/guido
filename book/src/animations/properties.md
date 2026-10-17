@@ -260,6 +260,30 @@ A state override supplies a value and never a timing, here as everywhere:
 `when_hovered(|s| s.color(..))` takes a colour, and a transition on it is a
 compile error rather than something quietly ignored.
 
+## Arc Progress and Colour
+
+An [`arc()`](../building-ui/arcs-and-paths.md) moves its `progress` and its
+`color` the same way, and nothing else of it moves:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let level = create_signal(40.0_f32);
+arc()
+    .size(24.0)
+    .progress((move || level.get() / 100.0).transition(800.0))
+    .color(
+        (move || if level.get() < 20.0 { Color::rgb(0.9, 0.3, 0.3) } else { Color::WHITE })
+            .transition(200.0),
+    )
+# ;
+# }
+```
+
+An easing progress redraws one shape a frame and builds nothing: the arc is
+drawn exactly rather than cut into triangles.
+
 ## Multiple Animations
 
 Each property carries its own, where it is declared:
@@ -307,6 +331,7 @@ container()
 | Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
 | Font size | `font_size(..)` on a `text` or `text_input` | Duration |
+| Arc progress, colour | `progress(..)`, `color(..)` on an `arc` | Duration, EaseOut |
 
 ## Best Practices
 

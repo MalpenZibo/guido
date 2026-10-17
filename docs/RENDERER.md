@@ -134,6 +134,13 @@ ctx.draw_rounded_rect_full(rect, color, radius, curvature, border, shadow, gradi
 // Circle
 ctx.draw_circle(cx, cy, radius, color);
 
+// Arc: `sweep` degrees from `start`, clockwise from twelve o'clock, drawn as
+// one SDF shape with the stroke's width, colour and cap
+ctx.draw_arc(center, radius, start, sweep, stroke);
+
+// Path: filled, stroked or both, tessellated once and kept — see "Paths"
+ctx.draw_path(&path, Fill::color(color), Stroke::new(1.6, color));
+
 // Text
 ctx.draw_text(text, rect, color, font_size);
 ctx.draw_text_styled(text, rect, color, font_size, font_family, font_weight, font_style, font_features, line_height, letter_spacing, fit);
@@ -207,10 +214,12 @@ Commands are bucketed by kind so that commands of a kind share a draw call:
 
 ```rust
 pub enum RenderLayer {
-    Shapes = 0,   // Background shapes (rectangles, borders)
-    Images = 1,   // Image content
-    Text = 2,     // Text content
-    Overlay = 3,  // Overlay effects (ripples, highlights)
+    Backdrop = 0, // Backdrop effects, which open a group
+    Shapes = 1,   // Background shapes (rectangles, borders, arcs)
+    Paths = 2,    // Filled and stroked paths, as triangles
+    Images = 3,   // Image content
+    Text = 4,     // Text content
+    Overlay = 5,  // Overlay effects (ripples, highlights)
 }
 ```
 
@@ -226,7 +235,9 @@ backwards:
 
 ```rust
 pub struct CommandLayer {
+    pub backdrop: Range<usize>,
     pub shapes: Range<usize>,
+    pub paths: Range<usize>,
     pub images: Range<usize>,
     pub text: Range<usize>,
     pub overlay: Range<usize>,
@@ -322,14 +333,15 @@ cent, which is half a pixel of frost beside its letters at the edges.
 A `text_stroke` over frost is dilated from the same mask, so its width is in
 mask texels too.
 
-One corner, four copies. WGSL has no include, so the signed distance function
+One corner, five copies. WGSL has no include, so the signed distance function
 for a superellipse corner is written out in `shader.wgsl`, in
-`textured_quad_shader.wgsl` and in `backdrop_shader.wgsl`; the fourth is
+`textured_quad_shader.wgsl`, in `backdrop_shader.wgsl` and in
+`path_shader.wgsl`; the fifth is
 `Rect::shape_distance` in `src/widgets/widget.rs`, in Rust, and it is what
-hit-testing runs — so it decides where a *click* lands the way the other three
+hit-testing runs — so it decides where a *click* lands the way the other four
 decide where a pixel lands.
 
-The three shaders are kept character-for-character identical between the
+The four shaders are kept character-for-character identical between the
 `=== SHARED SDF` markers, and `tests/shader_sdf_is_one_definition.rs` fails if
 any two drift — which they had: the backdrop read the curvature as
 `max(k, 0.05) * 2` against the others' `pow(2, k)`, and those agree at exactly
@@ -664,7 +676,7 @@ pub struct ShapeInstance {
     pub border_width: f32,
     pub shape_curvature: f32,     // superellipse K-value
     pub gradient_type: u32,       // 0=none, 1=horizontal, 2=vertical, 3/4=diagonal
-    pub _pad_tail: u32,
+    pub shape_kind: u32,          // a rounded rect, or an arc and its cap
 }
 ```
 
@@ -751,12 +763,81 @@ call, small, large, small is three, and a second frame of cached textures makes
 no buffer and no bind group — and `atlas_neighbours_do_not_bleed` the edges.
 `benches/icon_grid` says what a scrolling screen of them costs.
 
+### Arcs
+
+An arc is a shape, not a path: `DrawCommand::Arc` becomes one `ShapeInstance`
+with `shape_kind` naming it and its cap, and the shape shader draws it with a
+distance function of its own in place of `rounded_rect_sdf`. Its numbers ride in the corner radii —
+the radius of the line's centre, half its width, the angle halfway along it and
+half the angle it spans — since a rect is never an arc and the instance stays
+240 bytes; `shape_kind` was the padding that rounded it out. The fragment is
+turned so the arc's middle points one way and folded about it, and every arc
+is then the one symmetric case Inigo Quilez's sdArc (round caps) and sdRing
+(butt) solve, with a box added past each end for a square cap.
+
+That is what makes a progress ring cheap: a sweep that eases every frame is a
+new number in an instance, never a new tessellation, and the edge is exact at
+any scale because the distance is measured per fragment. Impeller draws its
+simple shapes the same way.
+
+### Paths
+
+A path is filled and stroked into triangles by lyon
+(`src/renderer/path_mesh.rs`) and drawn by a pipeline of its own
+(`src/renderer/path_pipeline.rs`, `path_shader.wgsl`). The choices, and why:
+
+- **No MSAA.** Every pipeline here draws one sample, and an MSAA target would
+  change all of them and every offscreen texture besides. GPUI's history is the
+  warning: VRAM and crashes from an MSAA path atlas, and slowness on Intel from
+  full-frame MSAA.
+- **A fringe instead.** lyon does no anti-aliasing, so guido draws the edge:
+  the boundary of lyon's mesh — the edges one triangle uses, which is the
+  outline with holes, crossings and joins already resolved, and the inside of
+  each is wherever its own triangle is — is moved half a physical pixel in
+  along each vertex's miter normal, and a twin of each boundary vertex goes
+  half a pixel out at coverage zero. Coverage is interpolated across the quad
+  between them, so it ramps from one to zero over the pixel the edge crosses.
+  egui feathers its shapes this way, and Skia's non-MSAA path renderers draw
+  the same alpha ramp. A stroke thinner than a pixel is tessellated a pixel
+  wide at a coverage that keeps its weight.
+- **Cached by content and scale.** A mesh is kept, keyed by a hash of the
+  path's segments, its fill rule or stroke geometry, and the surface scale —
+  the fringe is a physical pixel, so a new scale is a new mesh. The colour and
+  the transform are not in the key: they are the draw's `PathRecord`, which
+  the vertex shader reads, so a path that moves, turns, fades or changes colour
+  draws the mesh it has. A transform's own scale scales the fringe with it.
+  A mesh no frame has drawn for 120 frames is dropped.
+- **Its own layer.** `RenderLayer::Paths` sits between the shapes and the
+  images, so a group's paths are one indexed draw however many shapes lie
+  between them, and a shape painted over a path opens a group as one painted
+  over an image does.
+- **The clip as every pipeline takes it.** A record carries its clip as the
+  first `ClipRecord` of the chain, and the fragment stage cuts by it and walks
+  the rest, from the same shared block every shader carries.
+
+What the fringe cannot undo is lyon's own overlap: a stroke whose segments are
+shorter than it is wide folds the inside of its sharpest joins back over
+itself, and a translucent line is drawn twice there — a handful of pixels in
+`a_dense_translucent_sparkline`, against none at ordinary densities.
+
+Each frame copies the meshes it draws into one vertex and one index buffer,
+tagged with their record's index. The copy is linear in vertices and allocates
+nothing once the buffers have grown; keeping meshes on the GPU instead would
+save it at the cost of a buffer per mesh.
+
+`a_sparkline_has_one_tone_at_every_join`, `closed_paths_are_filled`,
+`a_stroke_follows_its_transform` and `a_path_is_cut_by_a_rounded_clip` are the
+goldens; `benches/sparkline_ring` is the workload, and its `path.tessellated`
+and `path.reused` rows say how often a frame made a mesh rather than drawing
+one again.
+
 ### Render Order
 
-1. **Shapes** - Background rectangles, borders, shadows
-2. **Images** - Image quads via `ImageQuadRenderer`
-3. **Text** - Regular text via glyphon, transformed text via `TextQuadRenderer`
-4. **Overlay** - Ripple effects and highlights
+1. **Shapes** - Background rectangles, borders, shadows, arcs
+2. **Paths** - Path triangles via `PathRenderer`
+3. **Images** - Image quads via `ImageQuadRenderer`
+4. **Text** - Regular text via glyphon, transformed text via `TextQuadRenderer`
+5. **Overlay** - Ripple effects and highlights
 
 ## Example: Implementing paint()
 
@@ -810,4 +891,7 @@ fn paint(&self, ctx: &mut PaintContext) {
 | `src/renderer/text_quad.rs` | Transformed text as textured quads |
 | `src/renderer/image_quad.rs` | Image rendering |
 | `src/renderer/image_atlas.rs` | The pages small images are packed onto |
+| `src/renderer/path.rs` | `Path`, `Fill`, `Stroke`: what a widget draws |
+| `src/renderer/path_mesh.rs` | lyon's tessellation, and the fringe that anti-aliases it |
+| `src/renderer/path_pipeline.rs` | The mesh cache, the frame's triangles, the path pipeline |
 | `src/renderer/textured_quad.rs` | The textured-quad pipeline, the frame's quad vertices, runs |

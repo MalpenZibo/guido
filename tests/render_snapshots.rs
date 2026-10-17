@@ -240,6 +240,49 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
                 color(c)
             );
         }
+        DrawCommand::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+            width,
+            color: c,
+            cap,
+        } => {
+            let _ = writeln!(
+                out,
+                "{pad}{kind} arc at {},{} r={} from={} sweep={} width={} {:?} stroke={}",
+                n(center.x),
+                n(center.y),
+                n(*radius),
+                n(*start),
+                n(*sweep),
+                n(*width),
+                cap,
+                color(c)
+            );
+        }
+        DrawCommand::Path { path, fill, stroke } => {
+            let mut line = format!(
+                "{pad}{kind} path {} segments in {}",
+                path.elements().len(),
+                rect(&path.bounds())
+            );
+            if let Some(f) = fill {
+                let _ = write!(line, " fill={} {:?}", color(&f.color), f.rule);
+            }
+            if let Some(s) = stroke {
+                let _ = write!(
+                    line,
+                    " stroke={}@{} {:?} {:?}",
+                    color(&s.color),
+                    n(s.width),
+                    s.cap,
+                    s.join
+                );
+            }
+            let _ = writeln!(out, "{line}");
+        }
         // Deliberately metric-free: see the module docs.
         DrawCommand::Text { .. } => {
             let _ = writeln!(out, "{pad}{kind} text <not snapshotted>");
@@ -776,6 +819,65 @@ fn a_tinted_image_carries_its_tint() {
         .child(box_of(16.0, 16.0).child(image(icon()).tint(Color::RED)));
 
     assert_snapshot("tinted_image", render(view, 64.0, 32.0));
+}
+
+/// A widget that strokes a sparkline and fills a triangle under it.
+struct Chart;
+
+impl Widget for Chart {
+    fn layout(
+        &mut self,
+        _ctx: &mut guido::tree::LayoutCtx,
+        constraints: Constraints,
+    ) -> guido::layout::Size {
+        constraints.constrain(guido::layout::Size::new(40.0, 16.0))
+    }
+
+    fn paint(&self, ctx: &mut guido::renderer::PaintContext) {
+        use guido::renderer::{Fill, Join, Path, Stroke};
+        let line = Path::new()
+            .move_to((0.0, 12.0))
+            .line_to((10.0, 4.0))
+            .line_to((20.0, 9.0))
+            .quad_to((30.0, 0.0), (40.0, 6.0));
+        ctx.draw_path(
+            &Path::new()
+                .move_to((0.0, 16.0))
+                .line_to((40.0, 16.0))
+                .line_to((40.0, 6.0))
+                .close(),
+            Fill::color(Color::BLUE),
+            None,
+        );
+        ctx.draw_path(
+            &line,
+            None,
+            Stroke::new(1.6, Color::WHITE).joins(Join::Round),
+        );
+    }
+}
+
+/// An arc and a path are what was drawn, in the order it was drawn: a ring's
+/// track before the part its progress covers, and a chart's fill before the
+/// line over it.
+#[test]
+fn arcs_and_paths_are_carried_in_paint_order() {
+    let view = container()
+        .padding(8.0)
+        .layout(Flex::row().spacing(8.0))
+        .child(
+            arc()
+                .size(20.0)
+                .stroke(3.0)
+                .track(Color::WHITE.with_alpha(0.25))
+                .color(Color::GREEN)
+                .caps(Cap::Round)
+                .start(-90.0)
+                .progress(0.25),
+        )
+        .child(Chart);
+
+    assert_snapshot("arcs_and_paths", render(view, 96.0, 36.0));
 }
 
 // ---------------------------------------------------------------------------

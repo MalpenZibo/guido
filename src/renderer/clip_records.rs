@@ -31,6 +31,17 @@ pub struct ClipRecord {
 }
 
 impl ClipRecord {
+    /// No clip at all: the negative extents every shader reads as "nothing
+    /// cuts this", and no chain after it. What a path drawn outside any clip
+    /// carries, since its record always has a clip field to fill.
+    pub(crate) const NONE: Self = Self {
+        rect: super::gpu::NO_CLIP_RECT,
+        radii: [0.0; 4],
+        inverse: crate::transform::Transform::IDENTITY.data,
+        curvature: 1.0,
+        next: super::clip::NO_CHAIN,
+    };
+
     /// `shape` as a shader cuts by it, at the surface's `scale`, continuing
     /// at `next`. The one place a clip is written for a GPU to read, beside
     /// the instance's own `with_clip`, which is kept inline for its cost.

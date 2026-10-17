@@ -19,6 +19,7 @@ use super::flatten::{CommandLayer, FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
 use super::gpu_context::RenderTarget;
 use super::image_quad::{ImageQuadRenderer, PreparedImageQuad};
+use super::path_pipeline::PathRenderer;
 use super::text::TextRenderState;
 use super::text_mask::{MaskSpec, TextMaskRenderer};
 use super::text_quad::{PreparedTextQuad, TextQuadRenderer};
@@ -65,6 +66,9 @@ pub struct Renderer {
 
     // Image rendering
     image_quad_renderer: ImageQuadRenderer,
+
+    /// Paths: their tessellations, and the frame's triangles.
+    path_renderer: PathRenderer,
 
     // Reusable per-frame buffers (cleared and reused each frame to avoid allocations)
     /// Every group's shape and overlay instances, addressed by range.
@@ -182,6 +186,8 @@ impl Renderer {
 
         let backdrop = BackdropRenderer::new(&device, format, clip_records.layout());
 
+        let path_renderer = PathRenderer::new(&device, format, clip_records.layout());
+
         Self {
             device,
             queue,
@@ -198,6 +204,7 @@ impl Renderer {
             text_quad_renderer,
             text_mask,
             image_quad_renderer,
+            path_renderer,
             shape_instance_buf: Vec::new(),
             text_entry_buf: Vec::new(),
             image_quads: Vec::new(),
@@ -238,18 +245,7 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
+                    blend: Some(super::gpu::STRAIGHT_ALPHA_BLEND),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -533,6 +529,14 @@ impl Renderer {
                     render_stats::record_draw_calls(Pipeline::Shapes, 1);
                 }
 
+                if !layer.paths.is_empty() {
+                    self.path_renderer.draw(
+                        &mut render_pass,
+                        layer.paths.clone(),
+                        self.clip_records.bind_group(),
+                    );
+                }
+
                 if !layer.images.is_empty() {
                     self.image_quad_renderer.render(
                         &mut render_pass,
@@ -590,6 +594,7 @@ impl Renderer {
         let scale = self.scale_factor;
 
         self.shape_instance_buf.clear();
+        self.path_renderer.begin_frame();
         self.image_quads.clear();
         self.text_quads.clear();
         self.prepared_layers.clear();
@@ -613,6 +618,12 @@ impl Renderer {
                     .filter_map(|c| faded_instance(c, scale)),
             );
             let shapes = shapes_start..self.shape_instance_buf.len() as u32;
+
+            let paths_start = self.path_renderer.index_count();
+            for command in &commands[layer.paths.clone()] {
+                self.path_renderer.push(command, scale);
+            }
+            let paths = paths_start..self.path_renderer.index_count();
 
             let images_start = self.image_quads.len();
             if !layer.images.is_empty() {
@@ -678,6 +689,7 @@ impl Renderer {
 
             self.prepared_layers.push(PreparedLayer {
                 shapes,
+                paths,
                 images,
                 text_slot,
                 text_quads,
@@ -687,6 +699,8 @@ impl Renderer {
 
         self.image_quad_renderer.upload(&self.device, &self.queue);
         self.text_quad_renderer.upload(&self.device, &self.queue);
+        self.path_renderer
+            .upload(&self.device, &self.queue, &self.uniform_buffer);
         self.image_quad_renderer.trim(crate::image_cache_budget());
         self.text_state.end_frame();
     }
@@ -696,6 +710,8 @@ impl Renderer {
 /// per-frame buffers.
 struct PreparedLayer {
     shapes: std::ops::Range<u32>,
+    /// Indices into the path renderer's frame.
+    paths: std::ops::Range<u32>,
     images: std::ops::Range<usize>,
     /// Glyphon renderer holding this group's directly-rendered text.
     text_slot: Option<usize>,
@@ -977,6 +993,32 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
 
             Some(instance)
         }
+        DrawCommand::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+            width,
+            color,
+            cap,
+        } => {
+            let mut instance = ShapeInstance::arc(
+                [center.x * scale, center.y * scale],
+                radius * scale,
+                width * 0.5 * scale,
+                *start,
+                *sweep,
+                *cap,
+                [color.r, color.g, color.b, color.a],
+            )
+            .with_transform(&cmd.world_transform, scale);
+            if let Some(clip) = cmd.clip() {
+                instance = instance.with_clip(&clip, scale);
+            }
+            Some(instance)
+        }
+        // Triangles, drawn by the path renderer from a layer of their own.
+        DrawCommand::Path { .. } => None,
         // Text commands are handled separately via command_to_text_entry
         DrawCommand::Text { .. } => None,
         // Filters the target rather than adding geometry; handled between
@@ -1343,6 +1385,7 @@ mod tests {
         let group = |shapes: std::ops::Range<usize>| CommandLayer {
             backdrop: 0..0,
             shapes,
+            paths: 0..0,
             images: 0..0,
             text: 0..0,
             overlay: 0..0,

@@ -76,6 +76,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
+use guido::renderer::{Fill, FillRule, Join, Path as VectorPath, Stroke};
 use guido::renderer::{
     FlatFrame, FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into,
 };
@@ -3791,5 +3792,416 @@ fn italic_is_a_face_where_there_is_one_and_a_shear_where_there_is_not() {
         1.0,
         BACKDROP,
         view,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Arcs and paths
+// ---------------------------------------------------------------------------
+
+/// Whatever a closure draws into a box of a given size — a widget that paints
+/// a path, the way an application's own widget would.
+struct Drawing {
+    size: (f32, f32),
+    paint: Box<dyn Fn(&mut guido::renderer::PaintContext)>,
+}
+
+impl Widget for Drawing {
+    fn layout(
+        &mut self,
+        _ctx: &mut guido::tree::LayoutCtx,
+        constraints: Constraints,
+    ) -> guido::layout::Size {
+        constraints.constrain(guido::layout::Size::new(self.size.0, self.size.1))
+    }
+
+    fn paint(&self, ctx: &mut guido::renderer::PaintContext) {
+        (self.paint)(ctx);
+    }
+}
+
+fn drawing(
+    width: f32,
+    height: f32,
+    paint: impl Fn(&mut guido::renderer::PaintContext) + 'static,
+) -> Drawing {
+    Drawing {
+        size: (width, height),
+        paint: Box::new(paint),
+    }
+}
+
+/// A sparkline's samples, as a polyline across `width` by `height`: steep
+/// climbs, a near reversal and a flat run, which is every join a line chart
+/// has to make.
+fn sparkline(width: f32, height: f32) -> VectorPath {
+    const SAMPLES: [f32; 12] = [
+        0.30, 0.42, 0.38, 0.90, 0.15, 0.55, 0.52, 0.52, 0.80, 0.10, 0.65, 0.45,
+    ];
+    let step = width / (SAMPLES.len() - 1) as f32;
+    SAMPLES
+        .iter()
+        .enumerate()
+        .fold(VectorPath::new(), |path, (i, v)| {
+            let point = (i as f32 * step, height * (1.0 - v));
+            if i == 0 {
+                path.move_to(point)
+            } else {
+                path.line_to(point)
+            }
+        })
+}
+
+/// A five-pointed star, its edges crossing in the middle, which is the one
+/// shape whose inside the two fill rules disagree on.
+fn star(cx: f32, cy: f32, r: f32) -> VectorPath {
+    (0..5)
+        .fold(VectorPath::new(), |path, i| {
+            let angle = (i as f32 * 144.0 - 90.0).to_radians();
+            let point = (cx + r * angle.cos(), cy + r * angle.sin());
+            if i == 0 {
+                path.move_to(point)
+            } else {
+                path.line_to(point)
+            }
+        })
+        .close()
+}
+
+/// Rings at progress 0, a half and 1, each cap, over a track — the same row at
+/// every scale it is drawn at. The arc is a distance function in the shape
+/// shader, so its ends and its edge are exact at any scale, and progress 0 with
+/// round caps draws nothing rather than a dot.
+fn arc_rows() -> Container {
+    let ring = |progress: f32, cap: Cap| {
+        container().padding(6.0).child(
+            arc()
+                .size(36.0)
+                .stroke(5.0)
+                .track(Color::WHITE.with_alpha(0.16))
+                .color(Color::rgb(0.40, 0.85, 0.50))
+                .caps(cap)
+                .progress(progress),
+        )
+    };
+    let row = |cap: Cap| {
+        container()
+            .layout(Flex::row())
+            .children([0.0, 0.5, 1.0, 0.85].map(|p| ring(p, cap)))
+    };
+    container()
+        .background(BACKDROP)
+        .padding(4.0)
+        .layout(Flex::column())
+        .child(row(Cap::Round))
+        .child(row(Cap::Butt))
+        .child(row(Cap::Square))
+        // A gauge open at the bottom, running anticlockwise, and a thin arc,
+        // so the start, the sign of the sweep and a hairline are drawn too.
+        .child(
+            container()
+                .layout(Flex::row())
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(4.0)
+                            .start(-135.0)
+                            .sweep(270.0)
+                            .track(Color::WHITE.with_alpha(0.16))
+                            .color(Color::rgb(0.95, 0.60, 0.25))
+                            .caps(Cap::Round)
+                            .progress(0.6),
+                    ),
+                )
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(4.0)
+                            .sweep(-360.0)
+                            .color(Color::rgb(0.45, 0.65, 1.0))
+                            .caps(Cap::Round)
+                            .progress(0.3),
+                    ),
+                )
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(0.6)
+                            .color(Color::WHITE)
+                            .progress(0.7),
+                    ),
+                ),
+        )
+}
+
+#[test]
+fn arcs_at_their_progress_and_caps() {
+    golden(
+        "arcs_at_their_progress_and_caps",
+        (200.0, 200.0),
+        1.0,
+        BACKDROP,
+        arc_rows(),
+    );
+}
+
+#[test]
+fn arcs_at_their_progress_and_caps_at_scale_1_5() {
+    golden(
+        "arcs_at_their_progress_and_caps_at_scale_1_5",
+        (200.0, 200.0),
+        1.5,
+        BACKDROP,
+        arc_rows(),
+    );
+}
+
+/// A sparkline 1.6 pixels wide, opaque and at half alpha, with each join.
+///
+/// The half-alpha rows are the oracle for doubled joins: a line drawn as
+/// segments that overlap at their joints, as instanced SDF segments would be,
+/// shows a darker knot at every vertex where two translucent pieces blend
+/// twice. lyon's stroke is one band, and the fringe is one ramp around it, so
+/// the line has one tone from end to end.
+#[test]
+fn a_sparkline_has_one_tone_at_every_join() {
+    let line = |join: Join, alpha: f32| {
+        drawing(150.0, 40.0, move |ctx| {
+            let colour = Color::rgb(0.45, 0.80, 1.0).with_alpha(alpha);
+            ctx.draw_path(
+                &sparkline(150.0, 40.0),
+                None,
+                Stroke::new(1.6, colour).joins(join),
+            );
+        })
+    };
+    let pair = |join: Join| {
+        container()
+            .layout(Flex::row().spacing(10.0))
+            .child(line(join, 1.0))
+            .child(line(join, 0.5))
+    };
+    golden(
+        "a_sparkline_has_one_tone_at_every_join",
+        (330.0, 160.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::column().spacing(6.0))
+            .child(pair(Join::Miter))
+            .child(pair(Join::Round))
+            .child(pair(Join::Bevel)),
+    );
+}
+
+/// Closed paths, filled: a star by each rule, curves filled and stroked, and
+/// a ring cut by even-odd. Half alpha on the stroke over the fill, so where
+/// the stroke's inner half lies over the fill is visible as a band of its own.
+#[test]
+fn closed_paths_are_filled() {
+    let blob = || {
+        VectorPath::new()
+            .move_to((10.0, 40.0))
+            .cubic_to((10.0, 5.0), (60.0, 0.0), (70.0, 30.0))
+            .quad_to((85.0, 70.0), (40.0, 70.0))
+            .close()
+    };
+    let ring = || {
+        let square = |path: VectorPath, x: f32, side: f32| {
+            path.move_to((x, x))
+                .line_to((x + side, x))
+                .line_to((x + side, x + side))
+                .line_to((x, x + side))
+                .close()
+        };
+        square(square(VectorPath::new(), 5.0, 70.0), 25.0, 30.0)
+    };
+    let gold = Color::rgb(0.95, 0.75, 0.25);
+    golden(
+        "closed_paths_are_filled",
+        (380.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(&star(40.0, 42.0, 38.0), Fill::color(gold), None);
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &star(40.0, 42.0, 38.0),
+                    Fill::color(gold).rule(FillRule::EvenOdd),
+                    None,
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &blob(),
+                    Fill::color(Color::rgb(0.30, 0.55, 0.95)),
+                    Stroke::new(4.0, Color::WHITE.with_alpha(0.5)).joins(Join::Round),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &ring(),
+                    Fill::color(Color::rgb(0.85, 0.35, 0.30)).rule(FillRule::EvenOdd),
+                    None,
+                );
+            })),
+    );
+}
+
+/// The same paths at a fractional scale: the fringe is a physical pixel, so a
+/// new scale is a new tessellation and the edges are as sharp as at 1x.
+#[test]
+fn closed_paths_are_filled_at_scale_1_5() {
+    golden(
+        "closed_paths_are_filled_at_scale_1_5",
+        (200.0, 100.0),
+        1.5,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &star(40.0, 42.0, 38.0),
+                    Fill::color(Color::rgb(0.95, 0.75, 0.25)),
+                    Stroke::new(1.6, Color::WHITE).joins(Join::Round),
+                );
+            }))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(1.6, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.5))
+                        .joins(Join::Round)
+                        .caps(Cap::Round),
+                );
+            })),
+    );
+}
+
+/// A stroke turned, and scaled by one and a half, is the mesh it was at rest
+/// carried by the transform: the fringe goes with it, with no seam where it
+/// meets the inside of the line.
+#[test]
+fn a_stroke_follows_its_transform() {
+    let line = || {
+        drawing(120.0, 40.0, |ctx| {
+            ctx.draw_path(
+                &sparkline(120.0, 40.0),
+                None,
+                Stroke::new(2.0, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.6))
+                    .joins(Join::Round)
+                    .caps(Cap::Round),
+            );
+        })
+    };
+    golden(
+        "a_stroke_follows_its_transform",
+        (440.0, 120.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(20.0)
+            .layout(Flex::row().spacing(40.0))
+            .child(container().child(line()).rotate(20.0))
+            .child(container().child(line()).scale(1.5)),
+    );
+}
+
+/// A path is cut by a rounded clip as a rect would be: a fill larger than the
+/// card it sits in, beside a rect the same size in a card the same shape, so
+/// the two corners can be compared — and once more in a card that is turned,
+/// and once under a clip of its own two pixels inside the card, whose small
+/// corners cross the card's large ones: no one rounded rect is the two cut
+/// together, so the path is cut by the chain.
+#[test]
+fn a_path_is_cut_by_a_rounded_clip() {
+    let card = || {
+        box_of(90.0, 90.0)
+            .background(Color::rgb(0.15, 0.20, 0.30))
+            .corners(24.0)
+            .overflow(Overflow::Hidden)
+    };
+    let flood = || {
+        drawing(90.0, 90.0, |ctx| {
+            let square = VectorPath::new()
+                .move_to((-30.0, -30.0))
+                .line_to((120.0, -30.0))
+                .line_to((120.0, 120.0))
+                .line_to((-30.0, 120.0))
+                .close();
+            ctx.draw_path(&square, Fill::color(Color::rgb(0.95, 0.45, 0.25)), None);
+        })
+    };
+    golden(
+        "a_path_is_cut_by_a_rounded_clip",
+        (440.0, 122.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(16.0)
+            .layout(Flex::row().spacing(16.0))
+            .child(card().child(swatch(90.0, 90.0, Color::rgb(0.95, 0.45, 0.25))))
+            .child(card().child(flood()))
+            .child(card().child(flood()).rotate(30.0))
+            .child(
+                card().padding(2.0).child(
+                    container()
+                        .width(fill())
+                        .height(fill())
+                        .corners(Corners::rounded(4.0))
+                        .overflow(Overflow::Hidden)
+                        .child(flood()),
+                ),
+            ),
+    );
+}
+
+/// A dense line at half alpha: a hundred and twenty samples across a hundred
+/// and fifty pixels, so its segments are shorter than it is wide and lyon folds
+/// the inside of its joins back over itself. Where the folds overlap, the line
+/// is drawn twice — what this golden holds is how much of that shows: nine
+/// pixels of its several hundred, at the sharpest folds.
+#[test]
+fn a_dense_translucent_sparkline() {
+    golden(
+        "a_dense_translucent_sparkline",
+        (170.0, 60.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .child(drawing(150.0, 40.0, |ctx| {
+                let samples = 120;
+                let line = (0..samples).fold(VectorPath::new(), |path, i| {
+                    let x = i as f32 * 150.0 / (samples - 1) as f32;
+                    let y = 20.0 + 14.0 * (i as f32 * 0.9).sin() * (i as f32 * 0.13).cos();
+                    if i == 0 {
+                        path.move_to((x, y))
+                    } else {
+                        path.line_to((x, y))
+                    }
+                });
+                ctx.draw_path(
+                    &line,
+                    None,
+                    Stroke::new(1.6, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.5))
+                        .joins(Join::Round),
+                );
+            })),
     );
 }

@@ -14,6 +14,23 @@ pub const NO_CLIP_RECT: [f32; 4] = [0.0, 0.0, -1.0, -1.0];
 /// negative extents mean there is no clip at all.
 pub const EMPTY_CLIP_RECT: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
 
+/// Colour as it comes, scaled by its own alpha, over what is there: the
+/// blend the shape pipeline draws with, and the path pipeline and the
+/// backdrop composite with it, so the three composite one colour alike.
+/// Textured quads differ on purpose — their texels are premultiplied.
+pub const STRAIGHT_ALPHA_BLEND: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::SrcAlpha,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
+
 /// The least blur a shadow reaches the shader with, in physical pixels: a
 /// hard edge, since the fade it spans is a small fraction of one pixel.
 pub const SHARPEST_SHADOW_BLUR: f32 = 1e-3;
@@ -183,9 +200,28 @@ pub struct ShapeInstance {
     pub shape_curvature: f32,
     /// Gradient type: 0=none, 1=horizontal, 2=vertical, 3=diagonal, 4=diagonal_reverse
     pub gradient_type: u32,
-    /// Rounds the struct out to its 16-byte alignment.
-    pub _pad_tail: u32,
+    /// What the instance draws: [`SHAPE_ROUNDED_RECT`], or an arc with one of
+    /// the three caps — [`ShapeInstance::arc`] says how an arc reads the
+    /// fields above. It was the padding that rounded the struct out to its
+    /// 16-byte alignment, so a second kind of shape costs no instance any room.
+    pub shape_kind: u32,
 }
+
+/// How far from its centre an arc's pixels can be: a square cap's outer
+/// corner, which is the furthest any cap reaches, and a pixel beyond it for
+/// the ramp of the edge. In whatever units the two lengths are given.
+pub fn arc_reach(radius: f32, half_width: f32) -> f32 {
+    ((radius + half_width).powi(2) + half_width.powi(2)).sqrt() + 1.0
+}
+
+/// The rounded rect, which every instance but an arc is.
+pub const SHAPE_ROUNDED_RECT: u32 = 0;
+/// An arc whose ends are cut square at the end angles.
+pub const SHAPE_ARC_BUTT: u32 = 1;
+/// An arc with a half disc on each end.
+pub const SHAPE_ARC_ROUND: u32 = 2;
+/// An arc with a half square on each end.
+pub const SHAPE_ARC_SQUARE: u32 = 3;
 
 impl Default for ShapeInstance {
     fn default() -> Self {
@@ -210,7 +246,7 @@ impl Default for ShapeInstance {
             border_width: 0.0,
             shape_curvature: 1.0,
             gradient_type: 0, // No gradient
-            _pad_tail: 0,
+            shape_kind: SHAPE_ROUNDED_RECT,
         }
     }
 }
@@ -232,14 +268,54 @@ impl ShapeInstance {
         }
     }
 
+    /// An arc, drawn by its own distance function in the shape shader.
+    ///
+    /// Everything is in physical pixels. The instance's rect is the square
+    /// about `center` that holds the line, ends included, and a pixel beyond
+    /// for the ramp of its edge; the four corner radii are the arc's own
+    /// numbers — the radius of the line's centre, half its width, the angle
+    /// halfway along it and half the angle it spans, both in radians, clockwise
+    /// from twelve o'clock. A rect is never an arc, so the fields are never
+    /// read both ways.
+    pub fn arc(
+        center: [f32; 2],
+        radius: f32,
+        half_width: f32,
+        start_degrees: f32,
+        sweep_degrees: f32,
+        cap: super::path::Cap,
+        color: [f32; 4],
+    ) -> Self {
+        let span = sweep_degrees.abs().min(360.0);
+        let middle = start_degrees + sweep_degrees * 0.5;
+        let reach = arc_reach(radius, half_width);
+        Self {
+            rect: [
+                center[0] - reach,
+                center[1] - reach,
+                reach * 2.0,
+                reach * 2.0,
+            ],
+            corner_radii: [
+                radius,
+                half_width,
+                middle.to_radians(),
+                (span * 0.5).to_radians(),
+            ],
+            fill_color: color,
+            shape_kind: match cap {
+                super::path::Cap::Butt => SHAPE_ARC_BUTT,
+                super::path::Cap::Round => SHAPE_ARC_ROUND,
+                super::path::Cap::Square => SHAPE_ARC_SQUARE,
+            },
+            ..Default::default()
+        }
+    }
+
     /// Set transform from a Transform struct, scaling translation by scale_factor.
     pub fn with_transform(mut self, transform: &crate::transform::Transform, scale: f32) -> Self {
         if !transform.is_identity() {
-            // Transform stores exactly the affine layout the shader expects
-            // ([a, b, tx, c, d, ty]); only the translation needs scaling.
-            self.transform = transform.data;
-            self.transform[2] *= scale;
-            self.transform[5] *= scale;
+            self.transform = transform.physical(scale);
         }
         self
     }
@@ -466,6 +542,63 @@ mod tests {
         assert_eq!(size, 240, "ShapeInstance size changed unexpectedly");
     }
 
+    /// An arc's instance holds its whole line — a square cap's outer corner
+    /// included, and a pixel past it — and a sweep past a full turn is a ring.
+    #[test]
+    fn an_arc_s_instance_holds_its_line() {
+        let i = ShapeInstance::arc(
+            [50.0, 40.0],
+            20.0,
+            3.0,
+            -90.0,
+            180.0,
+            super::super::path::Cap::Square,
+            [1.0; 4],
+        );
+        let reach = arc_reach(20.0, 3.0);
+        assert_eq!(reach, (23.0f32 * 23.0 + 9.0).sqrt() + 1.0);
+        assert_eq!(
+            i.rect,
+            [50.0 - reach, 40.0 - reach, reach * 2.0, reach * 2.0]
+        );
+        assert_eq!(i.corner_radii[..2], [20.0, 3.0]);
+        assert!(
+            (i.corner_radii[2] - 0.0).abs() < 1e-6,
+            "halfway is twelve o'clock"
+        );
+        assert!((i.corner_radii[3] - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert_eq!(i.shape_kind, SHAPE_ARC_SQUARE);
+
+        let ring = ShapeInstance::arc(
+            [0.0; 2],
+            5.0,
+            1.0,
+            0.0,
+            -720.0,
+            Default::default(),
+            [1.0; 4],
+        );
+        assert!((ring.corner_radii[3] - std::f32::consts::PI).abs() < 1e-6);
+        assert_eq!(ring.shape_kind, SHAPE_ARC_BUTT);
+    }
+
+    /// The shape kinds the shader branches on are the ones written here.
+    #[test]
+    fn the_shape_kinds_are_the_shaders() {
+        let shader = include_str!("shader.wgsl");
+        for (name, value) in [
+            ("SHAPE_ROUNDED_RECT", SHAPE_ROUNDED_RECT),
+            ("SHAPE_ARC_BUTT", SHAPE_ARC_BUTT),
+            ("SHAPE_ARC_ROUND", SHAPE_ARC_ROUND),
+            ("SHAPE_ARC_SQUARE", SHAPE_ARC_SQUARE),
+        ] {
+            assert!(
+                shader.contains(&format!("const {name}: u32 = {value}u;")),
+                "shader.wgsl gives {name} another value than {value}"
+            );
+        }
+    }
+
     #[test]
     fn test_quad_vertices() {
         assert_eq!(QUAD_VERTICES.len(), 4);
@@ -515,9 +648,10 @@ pub(super) mod instance_layout {
 
     /// What WGSL says a type occupies, as (align, size).
     ///
-    /// Only the types this struct uses. A type appearing in the shader that is
-    /// not here fails the test rather than being guessed at.
-    fn layout_of(ty: &str) -> Option<(usize, usize)> {
+    /// Only the types these structs use, and a struct `file` declares, which
+    /// is laid out by the same rules. A type appearing in the shader that is
+    /// neither fails the test rather than being guessed at.
+    fn layout_of(file: &str, ty: &str) -> Option<(usize, usize)> {
         match ty {
             "f32" | "u32" | "i32" => Some((4, 4)),
             "vec2<f32>" => Some((8, 8)),
@@ -530,7 +664,11 @@ pub(super) mod instance_layout {
                 .strip_prefix("array<f32,")
                 .and_then(|rest| rest.strip_suffix('>'))
                 .and_then(|n| n.trim().parse::<usize>().ok())
-                .map(|n| (4, 4 * n)),
+                .map(|n| (4, 4 * n))
+                .or_else(|| {
+                    let (_, size, align) = struct_layout(file, ty)?;
+                    Some((align, size))
+                }),
         }
     }
 
@@ -540,13 +678,22 @@ pub(super) mod instance_layout {
         file: &str,
         name: &str,
     ) -> (Vec<(String, usize)>, usize) {
+        let (fields, size, _) =
+            struct_layout(file, name).unwrap_or_else(|| panic!("{file} declares no `{name}`"));
+        (fields, size)
+    }
+
+    /// Field names and their offsets, in declaration order.
+    type Fields = Vec<(String, usize)>;
+
+    /// The fields of `name` with their offsets, its size and its alignment —
+    /// or `None` where `file` declares no such struct.
+    fn struct_layout(file: &str, name: &str) -> Option<(Fields, usize, usize)> {
         let source =
             std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file))
                 .unwrap_or_else(|e| panic!("{file}: {e}"));
 
-        let start = source
-            .find(&format!("struct {name} {{"))
-            .unwrap_or_else(|| panic!("{file} declares no `{name}`"));
+        let start = source.find(&format!("struct {name} {{"))?;
         let body = &source[start..];
         let body = &body[..body
             .find('}')
@@ -567,14 +714,14 @@ pub(super) mod instance_layout {
                 .split_once(':')
                 .unwrap_or_else(|| panic!("cannot read `{line}` as a WGSL struct member"));
             let (name, ty) = (name.trim(), ty.trim());
-            let (a, size) =
-                layout_of(ty).unwrap_or_else(|| panic!("no WGSL layout recorded for type `{ty}`"));
+            let (a, size) = layout_of(file, ty)
+                .unwrap_or_else(|| panic!("no WGSL layout recorded for type `{ty}`"));
             offset = offset.next_multiple_of(a);
             fields.push((name.to_owned(), offset));
             offset += size;
             align = align.max(a);
         }
-        (fields, offset.next_multiple_of(align))
+        Some((fields, offset.next_multiple_of(align), align))
     }
 
     #[test]
@@ -602,6 +749,7 @@ pub(super) mod instance_layout {
                 offset_of!(ShapeInstance, shape_curvature),
             ),
             ("gradient_type", offset_of!(ShapeInstance, gradient_type)),
+            ("shape_kind", offset_of!(ShapeInstance, shape_kind)),
         ];
 
         let (wgsl, wgsl_size) = wgsl_fields("src/renderer/shader.wgsl", "InstanceInput");

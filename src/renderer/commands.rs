@@ -1,12 +1,13 @@
 //! Draw command definitions for the render tree.
 
+use super::path::{Cap, Fill, Path, Stroke};
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
 use crate::image_decode::DecodedImage;
 use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::TextStroke;
-use crate::widgets::{Color, Rect, TextAlign};
+use crate::widgets::{Color, Point, Rect, TextAlign};
 
 /// Border definition for shapes.
 #[derive(Debug, Clone, Copy)]
@@ -240,6 +241,38 @@ pub enum DrawCommand {
         radius: f32,
         /// Fill color
         color: Color,
+    },
+
+    /// Stroke a circular arc: `sweep` degrees of the circle of `radius`
+    /// around `center`, from `start`. Angles are measured clockwise from
+    /// twelve o'clock, and a negative sweep runs the other way.
+    ///
+    /// Drawn exactly, as one shape — not tessellated — so a sweep that moves
+    /// every frame costs the frame nothing more than a sweep that stands
+    /// still.
+    Arc {
+        /// Centre of the circle, in local coordinates.
+        center: Point,
+        /// Radius of the line's centre, in logical pixels.
+        radius: f32,
+        /// Where the arc begins, in degrees clockwise from twelve o'clock.
+        start: f32,
+        /// How far it runs, in degrees. A full turn or more is a ring.
+        sweep: f32,
+        /// Width of the line, in logical pixels.
+        width: f32,
+        /// Colour of the line.
+        color: Color,
+        /// How both ends of an arc short of a ring are drawn.
+        cap: Cap,
+    },
+
+    /// Fill a path, stroke it, or both — the fill first.
+    Path {
+        /// The path, in local coordinates.
+        path: Path,
+        fill: Option<Fill>,
+        stroke: Option<Stroke>,
     },
 
     /// Draw text.

@@ -1,3 +1,4 @@
+pub mod arc;
 pub mod children;
 pub mod container;
 pub mod control;
@@ -17,6 +18,7 @@ pub mod text_style;
 pub mod widget;
 
 pub use crate::renderer::CornerRadii;
+pub use arc::{Arc, arc};
 pub use children::ChildrenSource;
 pub use container::{
     Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
