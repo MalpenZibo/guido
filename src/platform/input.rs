@@ -35,10 +35,8 @@ use super::clicks::ClickCounter;
 use super::wayland::WaylandState;
 use crate::reactive::CursorIcon;
 use crate::surface::SurfaceId;
+use crate::widgets::scroll::SCROLL_PIXELS_PER_LINE;
 use crate::widgets::{Event, Key, Modifiers, MouseButton, Point, ScrollSource};
-
-/// Pixels per line for discrete scroll (mouse wheel)
-const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
 /// Queue an event, replacing the last one when a move follows a move. Every
 /// queued `MouseMove` goes through here, whoever synthesized it.

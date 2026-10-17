@@ -10,7 +10,7 @@ use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widgets::Scroll;
 use crate::widgets::scroll::{
-    ContentDrag, ScrollAxis, ScrollbarAxis, ScrollbarVisibility, TOUCH_SLOP,
+    ContentDrag, SCROLL_PIXELS_PER_LINE, ScrollAxis, ScrollbarAxis, ScrollbarVisibility, TOUCH_SLOP,
 };
 use crate::widgets::widget::{
     Event, EventResponse, Key, Modifiers, MouseButton, Point, PointerKind, Rect, ScrollSource,
@@ -1113,21 +1113,43 @@ impl Container {
         self.pointer_left(tree, id);
     }
 
-    /// Page Up or Page Down: one viewport height up or down, and whether
-    /// that moved anything — a scroller at its end lets the key go on to the
-    /// next one out, as Chromium's scroll chain does. With Ctrl, Alt or Super
-    /// held the key is somebody else's shortcut, as Tab's default is.
-    pub(super) fn page(&mut self, key: Key, modifiers: Modifiers, at: EventInstant) -> bool {
-        let direction = match key {
-            Key::PageDown => 1.0,
-            Key::PageUp => -1.0,
-            _ => return false,
-        };
+    /// A key that scrolls, and whether it moved anything: an arrow by a line
+    /// along its own axis, Page Up or Page Down by a viewport height, Home or
+    /// End to the start or end of the vertical axis — the horizontal one on a
+    /// scroller that has only that. A scroller at its end lets the key go on to
+    /// the next one out, as Chromium's scroll chain does. With Ctrl, Alt or
+    /// Super held the key is somebody else's shortcut, as Tab's default is.
+    pub(super) fn scroll_by_key(
+        &mut self,
+        key: Key,
+        modifiers: Modifiers,
+        at: EventInstant,
+    ) -> bool {
         if self.scroll_axis == ScrollAxis::None || modifiers.holds_a_shortcut() {
             return false;
         }
         let page = self.scroll_data().scroll_state.viewport_height;
-        self.apply_scroll(0.0, direction * page, ScrollSource::Wheel, at)
+        let horizontal_only = self.scroll_axis == ScrollAxis::Horizontal;
+        // An infinite delta is the end itself, once `apply_scroll` clamps it.
+        let to_an_end = |delta: f32| {
+            if horizontal_only {
+                (delta, 0.0)
+            } else {
+                (0.0, delta)
+            }
+        };
+        let (delta_x, delta_y) = match key {
+            Key::Up => (0.0, -SCROLL_PIXELS_PER_LINE),
+            Key::Down => (0.0, SCROLL_PIXELS_PER_LINE),
+            Key::Left => (-SCROLL_PIXELS_PER_LINE, 0.0),
+            Key::Right => (SCROLL_PIXELS_PER_LINE, 0.0),
+            Key::PageUp => (0.0, -page),
+            Key::PageDown => (0.0, page),
+            Key::Home => to_an_end(f32::NEG_INFINITY),
+            Key::End => to_an_end(f32::INFINITY),
+            _ => return false,
+        };
+        self.apply_scroll(delta_x, delta_y, ScrollSource::Wheel, at)
     }
 
     /// Apply scroll delta and return true if any scrolling occurred
