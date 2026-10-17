@@ -589,16 +589,7 @@ macro_rules! declares_text_style {
                 };
                 let moved = anims.advance(now);
                 let running = anims.is_animating();
-                if let Some(required) = moved {
-                    $crate::jobs::request_job(id, $crate::jobs::JobRequest::Animation(required));
-                } else if running {
-                    // Inside a delay: still on its way, nothing new to draw, so
-                    // it asks to be woken without asking for a picture.
-                    $crate::jobs::request_job(
-                        id,
-                        $crate::jobs::JobRequest::Animation($crate::jobs::RequiredJob::None),
-                    );
-                }
+                $crate::jobs::request_animation_frame(id, moved, running);
                 running
             }
 
