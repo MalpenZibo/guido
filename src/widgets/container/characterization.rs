@@ -5465,10 +5465,10 @@ fn the_damage_reach_covers_the_shadow_a_hover_can_reach() {
     h.fit(100.0, 100.0);
 
     let reach = h.tree.paint_overflow(h.root);
-    let lifted = LIFTED.extent();
+    let lifted = LIFTED.outsets();
     assert!(
-        reach.covers(Outsets::all(lifted)) && lifted > 0.0,
-        "reach {reach:?} must cover the hovered shadow {lifted}"
+        reach.covers(lifted) && lifted.widest() > 0.0,
+        "reach {reach:?} must cover the hovered shadow {lifted:?}"
     );
 
     // And a container that can never lift pays nothing for it.
@@ -5575,19 +5575,20 @@ fn the_damage_reach_allows_for_a_spring_overshooting() {
 
     let mut eased = H::new(bouncy(Transition::new(80.0, TimingFunction::Linear)));
     eased.fit(100.0, 100.0);
-    let without_bounce = eased.tree.paint_overflow(eased.root).widest();
+    let without_bounce = eased.tree.paint_overflow(eased.root);
 
     let mut sprung = H::new(bouncy(Transition::spring(SpringConfig::BOUNCY)));
     sprung.fit(100.0, 100.0);
-    let with_bounce = sprung.tree.paint_overflow(sprung.root).widest();
+    let with_bounce = sprung.tree.paint_overflow(sprung.root);
 
     assert!(
-        with_bounce > without_bounce,
-        "a bouncy spring has to reach further than an ease: {with_bounce} vs {without_bounce}"
+        with_bounce.covers(without_bounce) && with_bounce != without_bounce,
+        "a bouncy spring has to reach further than an ease: {with_bounce:?} vs \
+         {without_bounce:?}"
     );
     assert!(
-        with_bounce >= LIFTED.extent() * 1.17 - 0.01,
-        "and far enough for BOUNCY's ~17%, got {with_bounce}"
+        with_bounce.covers(LIFTED.outsets() * 1.17 - Outsets::all(0.01)),
+        "and far enough for BOUNCY's ~17% on every side, got {with_bounce:?}"
     );
 }
 
@@ -6042,7 +6043,7 @@ fn a_sliding_member_damages_the_merged_shape_around_it() {
     h.fit(200.0, 100.0);
     h.paint();
     let group = h.tree.get_bounds(h.root).expect("laid out");
-    let area = group.outset(16.0 * 1.25 + LIFTED.extent());
+    let area = group.outset(16.0 * 1.25 + LIFTED.outsets().widest());
     let _ = h.tree.take_damage(h.root);
 
     slide.set(30.0);
@@ -6088,7 +6089,7 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
     h.fit(100.0, 100.0);
     h.paint();
 
-    let reach = h.tree.paint_overflow(h.root).widest();
+    let reach = h.tree.paint_overflow(h.root);
     let mut inside = false;
     let mut worst: f32 = 0.0;
     // Flipped by the clock, not by a frame count: pumping means reversing every
@@ -6104,11 +6105,12 @@ fn hover_flicker_cannot_push_a_shadow_outside_its_damage_rect() {
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();
-        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
-            worst = worst.max(extent);
+        if let Some(drawn) = drawn_shadow(&node).map(|s| s.outsets()) {
+            worst = worst.max(drawn.widest());
             assert!(
-                extent <= reach + 0.01,
-                "step {step} drew a shadow reaching {extent} outside a damage rect of {reach}"
+                (reach + Outsets::all(0.01)).covers(drawn),
+                "step {step} drew a shadow reaching {drawn:?} outside a damage rect \
+                 of {reach:?}"
             );
         }
     }
@@ -6140,9 +6142,10 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
     set_hover(&mut h, true);
     // The headroom is the step the spring travels, times its overshoot: no
     // more, or every frame of the bounce damages a ring nothing is drawn in.
-    let step_travelled = near_edge.signed_extent() - deep_inside.signed_extent();
-    let headroom =
-        near_edge.signed_extent() + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
+    let step_travelled =
+        near_edge.signed_outsets().widest() - deep_inside.signed_outsets().widest();
+    let headroom = near_edge.signed_outsets().widest()
+        + step_travelled * SpringConfig::BOUNCY.peak_overshoot();
     let t0 = std::time::Instant::now();
     let mut furthest = f32::NEG_INFINITY;
     for step in 1..=60 {
@@ -6152,10 +6155,10 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
             100.0,
             100.0,
         );
-        let reach = h.tree.paint_overflow(h.root).widest();
+        let reach = h.tree.paint_overflow(h.root);
         assert!(
-            reach <= headroom + 0.05,
-            "step {step} reserved {reach} past the box, the bounce reaches {headroom}"
+            Outsets::all(headroom + 0.05).covers(reach),
+            "step {step} reserved {reach:?} past the box, the bounce reaches {headroom}"
         );
         let node = h.paint();
         let Some(drawn) = drawn_shadow(&node) else {
@@ -6167,9 +6170,9 @@ fn a_spring_between_pulled_in_shadows_is_never_rescaled() {
             "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
         );
         assert!(
-            drawn.extent() <= reach + 0.01,
-            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
-            drawn.extent()
+            (reach + Outsets::all(0.01)).covers(drawn.outsets()),
+            "step {step} drew a shadow reaching {:?} outside a damage rect of {reach:?}",
+            drawn.outsets()
         );
     }
     assert!(
@@ -6214,7 +6217,7 @@ fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
             100.0,
             100.0,
         );
-        let reach = h.tree.paint_overflow(h.root).widest();
+        let reach = h.tree.paint_overflow(h.root);
         let node = h.paint();
         let Some(drawn) = drawn_shadow(&node) else {
             continue;
@@ -6225,9 +6228,9 @@ fn a_timeline_between_pulled_in_shadows_is_never_rescaled() {
             "step {step} drew {drawn:?}, scaled away from the declared blur of 2"
         );
         assert!(
-            drawn.extent() <= reach + 0.01,
-            "step {step} drew a shadow reaching {} outside a damage rect of {reach}",
-            drawn.extent()
+            (reach + Outsets::all(0.01)).covers(drawn.outsets()),
+            "step {step} drew a shadow reaching {:?} outside a damage rect of {reach:?}",
+            drawn.outsets()
         );
     }
     assert!(
@@ -6280,11 +6283,11 @@ fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
     // The reach has to be reserved before the sequence is asked for: it is
     // recorded by layout, and the frames that carry the sequence are not
     // allowed to need a bigger one than the frame that reserved it.
-    let reach = h.tree.paint_overflow(h.root).widest();
+    let reach = h.tree.paint_overflow(h.root);
     assert!(
-        reach >= deep.extent() - 0.01,
-        "the reach has to cover the deepest keyframe ({}), got {reach}",
-        deep.extent()
+        (reach + Outsets::all(0.01)).covers(deep.outsets()),
+        "the reach has to cover the deepest keyframe ({:?}), got {reach:?}",
+        deep.outsets()
     );
 
     plays.set(1);
@@ -6295,11 +6298,11 @@ fn a_shadow_timeline_is_drawn_at_the_depth_its_keyframes_reach() {
         pump(&mut h);
         h.fit(100.0, 100.0);
         let node = h.paint();
-        if let Some(extent) = drawn_shadow(&node).map(|s| s.extent()) {
-            deepest = deepest.max(extent);
+        if let Some(drawn) = drawn_shadow(&node).map(|s| s.outsets()) {
+            deepest = deepest.max(drawn.widest());
             assert!(
-                extent <= reach + 0.01,
-                "drew a shadow reaching {extent} outside a damage rect of {reach}"
+                (reach + Outsets::all(0.01)).covers(drawn),
+                "drew a shadow reaching {drawn:?} outside a damage rect of {reach:?}"
             );
         }
     }
@@ -7504,7 +7507,7 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
         // Shadow has two resolvers, and the first draft of this fix converted
         // one: with the extent left raw, a container with a bad shadow and a
         // transform reported a damage rect that did not cover where it drew.
-        finite("shadow extent", vec![c.max_shadow_extent(id)]);
+        finite("shadow extent", c.max_shadow_extent(id).sides().to_vec());
     }
 
     // And a state layer's override is passed over the same way, so the base

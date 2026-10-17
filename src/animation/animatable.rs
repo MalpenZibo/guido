@@ -189,8 +189,8 @@ impl Animatable for Shadow {
 
     /// Shrinking, and then fading at a constant size.
     ///
-    /// `Shadow::signed_extent` is the same reduction the
-    /// damage rect is sized by, so "reverse" here means the same thing it means
+    /// `Shadow::depth` is the widest of the outsets the damage rect is sized
+    /// by, so "reverse" here means the same thing it means
     /// to everything downstream: the shadow is giving ground back. Alpha breaks
     /// the tie because the extent reports the full reach at any alpha above zero,
     /// so a shadow fading out at a constant geometry would otherwise read as

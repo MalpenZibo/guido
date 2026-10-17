@@ -200,7 +200,11 @@ impl Container {
     /// `.shadow(none).when_hovered(|s| s.shadow(lifted))` — both constants — is
     /// laid out once; `when_hovered(|s| s.shadow(lift))` with `lift` a signal
     /// re-lays out the container when it moves.
-    pub(super) fn max_shadow_extent(&self, id: WidgetId) -> f32 {
+    ///
+    /// Side by side: a shadow cast downward reaches further below the box than
+    /// above it, and each side is bounded on its own — the overshoot of each
+    /// measured across that side's own range.
+    pub(super) fn max_shadow_extent(&self, id: WidgetId) -> Outsets {
         let base = self
             .shadow_prop()
             .get_finite_or(Shadows::none(), id, "shadow");
@@ -209,17 +213,18 @@ impl Container {
         // overshoot past its edge though neither end reaches it. The low end
         // starts at zero, so a shadow rising from none, or from any positive
         // declaration, keeps the bound it had: a fraction of its own depth.
-        let resting = base.signed_extent();
+        let resting = base.signed_outsets();
         let (floor, deepest) = self
             .interaction
             .iter()
             .flat_map(|ix| ix.states.iter())
             .filter_map(|(_, state)| state.shadow.as_deref()?.get())
             .filter(AllFinite::all_finite)
-            .map(|shadow| shadow.signed_extent())
-            .fold((resting.min(0.0), resting), |(low, high), extent| {
-                (low.min(extent), high.max(extent))
-            });
+            .map(|shadow| shadow.signed_outsets())
+            .fold(
+                (resting.min(Outsets::ZERO), resting),
+                |(low, high), extent| (low.min(extent), high.max(extent)),
+            );
 
         match anim {
             // The value in flight is already past its overshoot, so it is folded
@@ -233,10 +238,20 @@ impl Container {
             // peak on a sign-crossing bounce rather than a ring outside the
             // damage rect — the same one-sided error the clamp already trades
             // for not sizing every rect to a resonant gain.
-            Some(anim) => (deepest + (deepest - floor) * anim.peak_overshoot())
-                .max(anim.current().extent())
-                .max(anim.sequence_reach(Shadows::signed_extent)),
-            None => deepest.max(0.0),
+            Some(anim) => {
+                let sequence =
+                    |side: fn(Outsets) -> f32| anim.sequence_reach(|s| side(s.signed_outsets()));
+                let sequence = Outsets {
+                    left: sequence(|o| o.left),
+                    top: sequence(|o| o.top),
+                    right: sequence(|o| o.right),
+                    bottom: sequence(|o| o.bottom),
+                };
+                (deepest + (deepest - floor) * anim.peak_overshoot())
+                    .max(anim.current().outsets())
+                    .max(sequence)
+            }
+            None => deepest.max(Outsets::ZERO),
         }
     }
 
@@ -325,10 +340,10 @@ impl Container {
     /// buy nothing the schedule does not already cover — and would put every
     /// container that declares `when_hovered` on its own hover signal from
     /// the reach path, which is a wider fan-out than the case needs.
-    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: f32) -> Outsets {
+    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: Outsets) -> Outsets {
         let moves = self.moving_components();
         if !moves.any() {
-            return Outsets::all(shadow_extent);
+            return shadow_extent;
         }
 
         // The box the transform actually carries: the container plus the
@@ -336,7 +351,7 @@ impl Container {
         // because that is what every consumer grows by the answer — an outset
         // taken against `painted` would report the excursion beyond the shadow
         // and lose its width.
-        let painted = bounds.outset(shadow_extent);
+        let painted = bounds.outset_by(shadow_extent);
         let pivot = self.resolved_pivot_quietly();
         let anims = self.anims.as_ref();
 
@@ -516,8 +531,8 @@ impl Container {
     /// shrinking shadow the declared maximum has already reached nothing and the
     /// shadow was cut away while the animation was still playing.
     ///
-    /// Uniformly — see [`Shadow::shrunk_to`] — because a shadow is four numbers
-    /// and the reserved rect is one.
+    /// Uniformly — see [`Shadow::shrunk_to`] — by the factor that brings the
+    /// side furthest past its reserved outset inside it, so the shape survives.
     ///
     /// A clamp at all, rather than a wider reach, because the reach that would
     /// make one unnecessary is not a small one. A spring keeps its momentum
@@ -534,7 +549,7 @@ impl Container {
             Some(_) => shadow.shrunk_to(self.shadow_reach.get()),
             // Only where something is in flight, because `shadow_reach` is the
             // number *layout* recorded and layout has not run yet on the frame
-            // a container is first painted — it is `0.0` until then, and
+            // a container is first painted — it is zero until then, and
             // clamping to it would draw no shadow at all. Everything a
             // declaration or a state layer can resolve to is already folded
             // into `max_shadow_extent`, so an unanimated shadow is inside the
@@ -1047,7 +1062,7 @@ mod reach_tests {
             // that reads it is indistinguishable from arithmetic that does not.
             let shadow = 6.0;
             let painted = BOX.outset(shadow);
-            let bound = turning.max_transform_reach(BOX, shadow);
+            let bound = turning.max_transform_reach(BOX, Outsets::all(shadow));
 
             let worst = (0..360)
                 .map(|deg| {
@@ -1079,9 +1094,9 @@ mod reach_tests {
     #[test]
     fn a_box_that_cannot_rotate_is_not_given_a_rotation_s_reach() {
         let still = container().width(100.0).height(100.0);
-        assert_eq!(still.max_transform_reach(BOX, 0.0), Outsets::ZERO);
+        assert_eq!(still.max_transform_reach(BOX, Outsets::ZERO), Outsets::ZERO);
         assert_eq!(
-            still.max_transform_reach(BOX, 6.0),
+            still.max_transform_reach(BOX, Outsets::all(6.0)),
             Outsets::all(6.0),
             "only its shadow"
         );
@@ -1099,7 +1114,7 @@ mod reach_tests {
             Translate::new(0.0, -100.0).transition(Transition::spring(SpringConfig::BOUNCY)),
         );
 
-        let reach = sprung.max_transform_reach(BOX, 0.0);
+        let reach = sprung.max_transform_reach(BOX, Outsets::ZERO);
         assert!(
             reach.top > 100.0,
             "a spring to -100 was given a reach of {reach:?}, so it is culled at \
@@ -1111,7 +1126,7 @@ mod reach_tests {
             .height(100.0)
             .translate(Translate::new(0.0, -100.0).transition(200.0));
         assert_eq!(
-            eased.max_transform_reach(BOX, 0.0),
+            eased.max_transform_reach(BOX, Outsets::ZERO),
             Outsets {
                 top: 100.0,
                 ..Outsets::ZERO
@@ -1131,7 +1146,7 @@ mod reach_tests {
             .height(100.0)
             .translate(Translate::relative(-1.0, 0.0));
         assert_eq!(
-            declared.max_transform_reach(BOX, 0.0),
+            declared.max_transform_reach(BOX, Outsets::ZERO),
             Outsets {
                 left: BOX.width,
                 ..Outsets::ZERO
@@ -1143,7 +1158,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.translate(Translate::relative(0.0, 0.5)));
         assert_eq!(
-            layered.max_transform_reach(BOX, 0.0),
+            layered.max_transform_reach(BOX, Outsets::ZERO),
             Outsets {
                 bottom: BOX.height / 2.0,
                 ..Outsets::ZERO
@@ -1165,7 +1180,7 @@ mod reach_tests {
             .height(100.0)
             .when_pressed(|s| s.scale(Scale::uniform(2.0)));
         assert_eq!(
-            scaled.max_transform_reach(BOX, 0.0),
+            scaled.max_transform_reach(BOX, Outsets::ZERO),
             Outsets::all(50.0),
             "a layer that doubles this box on press was not counted, so it is \
              culled at its resting size while it is pressed"
@@ -1178,7 +1193,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.translate(Translate::new(0.0, -25.0)));
         assert_eq!(
-            lifted.max_transform_reach(BOX, 0.0),
+            lifted.max_transform_reach(BOX, Outsets::ZERO),
             Outsets {
                 top: 25.0,
                 ..Outsets::ZERO
@@ -1191,7 +1206,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.rotate(45.0));
         assert!(
-            turned.max_transform_reach(BOX, 0.0).widest() > 0.0,
+            turned.max_transform_reach(BOX, Outsets::ZERO).widest() > 0.0,
             "a layer that turns this box on hover was not counted"
         );
     }

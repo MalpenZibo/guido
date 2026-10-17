@@ -2,7 +2,7 @@
 
 use crate::transform::Transform;
 use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
-use crate::widgets::{Color, Rect, TextAlign};
+use crate::widgets::{Color, Outsets, Rect, TextAlign};
 
 /// Gradient direction for linear gradients
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,28 +70,41 @@ impl Shadow {
     /// How far this shadow reaches past the box that casts it.
     ///
     /// The amount the damage rect has to grow by, so repainting the box also
-    /// re-composites the shadow instead of leaving the old one behind:
-    /// `signed_extent` floored at zero, since a shadow
-    /// pulled inside its box reaches nothing past it.
+    /// re-composites the shadow instead of leaving the old one behind: the
+    /// widest of its [`outsets`](Self::outsets).
     pub fn extent(&self) -> f32 {
-        // `clamp` rather than `max`, so a `NaN` stays one.
-        self.signed_extent().clamp(0.0, f32::INFINITY)
+        self.outsets().widest()
     }
 
-    /// How far this shadow reaches past its box, below zero for one pulled
-    /// inside it.
+    /// How far this shadow reaches past its box on each side: the blur and
+    /// the spread all round, moved by the offset — so a shadow cast downward
+    /// reaches further below its box and less far above it. What the damage
+    /// rect grows by, side by side; [`extent`](Self::extent) is the widest of
+    /// these.
+    pub fn outsets(&self) -> Outsets {
+        self.signed_outsets().floored()
+    }
+
+    /// The same, below zero on a side the shadow is pulled inside of — what a
+    /// spring's overshoot is measured across, side by side: every shadow
+    /// pulled inside the box has outsets of zero, but one pulled in by 16 and
+    /// one by 4 are still a step apart. An inset shadow reaches nothing past
+    /// its box, whatever its numbers.
     ///
-    /// What orders two shadows and what a spring's overshoot is measured
-    /// across: every shadow pulled inside the box has an
-    /// [`extent`](Self::extent) of zero, but one pulled in by 16 and one by 4
-    /// are still a step apart.
-    ///
-    /// An inset shadow reaches nothing past its box, whatever its numbers.
-    pub(crate) fn signed_extent(&self) -> f32 {
+    /// GTK gives an outset shadow's extents the same way
+    /// (`gsk_outset_shadow_node_get_extents`).
+    pub(crate) fn signed_outsets(&self) -> Outsets {
         if self.color.a <= 0.0 || self.inset {
-            return 0.0;
+            return Outsets::ZERO;
         }
-        self.depth()
+        let spill = self.spill();
+        let (dx, dy) = self.offset;
+        Outsets {
+            left: spill - dx,
+            top: spill - dy,
+            right: spill + dx,
+            bottom: spill + dy,
+        }
     }
 
     /// How far the shadow is drawn from the edge, on the side its offset
@@ -120,12 +133,12 @@ impl Shadow {
     /// The same shadow, every length multiplied by `k`.
     ///
     /// The colour does not scale — a shadow made smaller should be smaller, not
-    /// fainter — and neither does the alpha `extent` gates on, so
-    /// `scaled(k).extent() == extent() * k` for any `k >= 0`. That identity is
-    /// what [`shrunk_to`](Self::shrunk_to) rests on, and it is why the two live
-    /// beside [`extent`](Self::extent) rather than beside either caller: add a
-    /// constant term to `extent` and both stop holding, here, where it is
-    /// tested.
+    /// fainter — and neither does the alpha `outsets` gates on, so
+    /// `scaled(k).outsets() == outsets() * k` for any `k >= 0`, side by side.
+    /// That identity is what [`shrunk_to`](Self::shrunk_to) rests on, and it is
+    /// why the two live beside [`outsets`](Self::outsets) rather than beside
+    /// either caller: add a constant term to a side and both stop holding,
+    /// here, where it is tested.
     ///
     /// Two callers, one rule: the HiDPI pass multiplies a shadow by the surface
     /// scale before it reaches the instance buffer, and a container shrinks one
@@ -140,15 +153,17 @@ impl Shadow {
     }
 
     /// This shadow, shrunk until it reaches no further than `reach` past its
-    /// box.
+    /// box on any side — a plain number is the same reach on all four.
     ///
     /// Uniform, so the shape survives rather than the shadow collapsing along
-    /// one axis. A shadow already inside the rect is returned untouched, and so
-    /// is one whose extent is not a positive number — which is what answers a
-    /// `NaN` field, since every comparison against it is false. A reach below
-    /// zero counts as zero, so the factor is never above one or below zero.
-    pub fn shrunk_to(self, reach: f32) -> Self {
-        match shrink_factor(self.extent(), reach) {
+    /// one axis: every length by the one factor that brings the side furthest
+    /// past its reach inside it. A shadow already inside the rect is returned
+    /// untouched, and so is one whose outsets are not positive numbers — which
+    /// is what answers a `NaN` field, since every comparison against it is
+    /// false. A reach below zero counts as zero, so the factor is never above
+    /// one or below zero.
+    pub fn shrunk_to(self, reach: impl Into<Outsets>) -> Self {
+        match shrink_factor(self.outsets(), reach.into()) {
             Some(k) => self.scaled(k),
             None => self,
         }
@@ -172,15 +187,24 @@ impl Shadow {
 }
 
 /// What a shadow reaching `extent` past its box is scaled by to reach no
-/// further than `reach`, or `None` where it already fits.
+/// further than `reach` on any side, or `None` where it already fits.
 ///
-/// A reach below zero counts as zero, so the factor is never above one or below
+/// Each side asks for its own factor and the smallest is taken, which is
+/// enough for all four because a shadow's outsets scale with its lengths. A
+/// reach below zero counts as zero, so the factor is never above one or below
 /// zero. Inside the reach, exactly at it, or not comparable at all is `None` —
 /// a `NaN` on either side lands there rather than scaling by a `NaN` factor,
 /// which would spread it into every field.
-fn shrink_factor(extent: f32, reach: f32) -> Option<f32> {
-    let reach = reach.clamp(0.0, f32::INFINITY);
-    (extent > reach).then(|| reach / extent)
+fn shrink_factor(extent: Outsets, reach: Outsets) -> Option<f32> {
+    extent
+        .sides()
+        .into_iter()
+        .zip(reach.sides())
+        .filter_map(|(extent, reach)| {
+            let reach = reach.clamp(0.0, f32::INFINITY);
+            (extent > reach).then(|| reach / extent)
+        })
+        .reduce(f32::min)
 }
 
 /// The shadows a box casts, drawn in order with the first on top — the order
@@ -267,27 +291,34 @@ impl Shadows {
     /// How far the furthest of these reaches past the box: what the damage
     /// rect grows by. See [`Shadow::extent`].
     pub fn extent(&self) -> f32 {
-        self.signed_extent().clamp(0.0, f32::INFINITY)
+        self.outsets().widest()
     }
 
-    /// The furthest [`Shadow::signed_extent`] of the list, and zero for none.
-    pub(crate) fn signed_extent(&self) -> f32 {
+    /// How far these reach past the box on each side: the furthest of the
+    /// list's [`Shadow::outsets`], side by side.
+    pub fn outsets(&self) -> Outsets {
+        self.signed_outsets().floored()
+    }
+
+    /// The furthest [`Shadow::signed_outsets`] of the list on each side, and
+    /// zero for none.
+    pub(crate) fn signed_outsets(&self) -> Outsets {
         self.as_slice()
             .iter()
-            .map(Shadow::signed_extent)
-            .reduce(f32::max)
-            .unwrap_or(0.0)
+            .map(Shadow::signed_outsets)
+            .reduce(Outsets::max)
+            .unwrap_or(Outsets::ZERO)
     }
 
     /// These shadows, shrunk until none reaches further than `reach` past the
-    /// box.
+    /// box on any side.
     ///
     /// Every outer shadow by the same factor — the one that brings the
     /// furthest inside the reach — so the list keeps its proportions, as
     /// [`Shadow::shrunk_to`] keeps a shadow's. An inset shadow reaches nothing
     /// past the box and is left as it is.
-    pub fn shrunk_to(mut self, reach: f32) -> Self {
-        if let Some(k) = shrink_factor(self.extent(), reach) {
+    pub fn shrunk_to(mut self, reach: impl Into<Outsets>) -> Self {
+        if let Some(k) = shrink_factor(self.outsets(), reach.into()) {
             for shadow in &mut self.list[..usize::from(self.len)] {
                 if !shadow.inset {
                     *shadow = shadow.scaled(k);
@@ -404,6 +435,50 @@ mod shadow_extent_tests {
                 "scaling by {k} has to scale the extent by {k}"
             );
         }
+    }
+
+    /// The same of each side, which is what the clamp reads now: the blur
+    /// and spread all round, moved by the offset.
+    #[test]
+    fn the_outsets_are_what_scaling_a_shadow_scales() {
+        assert_eq!(
+            DEEP.outsets(),
+            Outsets {
+                left: 21.0,
+                top: 32.0,
+                right: 27.0,
+                bottom: 16.0,
+            },
+            "two blurs and the spread on every side, the offset added to the \
+             sides it moves toward and taken off the others"
+        );
+        for k in [0.0, 0.25, 1.0, 3.0] {
+            let scaled = DEEP.scaled(k).outsets().sides();
+            let expected = (DEEP.outsets() * k).sides();
+            assert!(
+                scaled
+                    .iter()
+                    .zip(expected)
+                    .all(|(side, expected)| (side - expected).abs() < 1e-4),
+                "scaling by {k} has to scale every side by {k}"
+            );
+        }
+    }
+
+    /// Shrunk to a reach that is not the same on every side, by the side that
+    /// is furthest past its own: here the top, at twice its reach, so every
+    /// length is halved and each side is inside its reach.
+    #[test]
+    fn a_shadow_shrunk_to_a_reach_per_side_fits_every_side() {
+        let reach = Outsets {
+            left: 21.0,
+            top: 16.0,
+            right: 27.0,
+            bottom: 16.0,
+        };
+        let fitted = DEEP.shrunk_to(reach);
+        assert_eq!(fitted, DEEP.scaled(0.5));
+        assert!(reach.covers(fitted.outsets()), "{:?}", fitted.outsets());
     }
 
     /// `spill` is the shader's falloff written again in Rust, and the GPU test

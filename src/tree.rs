@@ -3912,6 +3912,68 @@ mod tests {
         );
     }
 
+    /// A card in a padded box, laid out, painted once and clean, so a mark on
+    /// it reports its own damage and nothing else: the box is 50 from every
+    /// edge of a 300 square.
+    fn padded_card(card: crate::widgets::Container) -> (Tree, WidgetId, WidgetId) {
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .width(300.0)
+                .height(300.0)
+                .padding(50.0)
+                .child(card),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 300.0, 300.0));
+        let card = tree.get_children(root)[0];
+        for id in [root, card] {
+            tree.clear_needs_paint(id);
+        }
+        let _ = tree.take_damage(root);
+        (tree, root, card)
+    }
+
+    /// A shadow offset downward falls below the box that casts it, and above
+    /// it reaches only as far as its blur outruns the offset: the top outset
+    /// is the blur alone, less the offset, and the damage stops there.
+    ///
+    /// One number for all four sides gave the top what the bottom needs —
+    /// the blur *and* the offset — and every repaint of a card with an
+    /// elevation shadow damaged a band above it that the shadow never touches.
+    #[test]
+    fn a_shadow_offset_downward_reaches_above_its_box_by_the_blur_alone() {
+        use crate::renderer::Shadow;
+        // A blur of 6 is drawn 12 past the edge; the offset carries all of it
+        // 8 down.
+        let shadow = Shadow::new((0.0, 8.0), 6.0, 0.0, crate::widgets::Color::BLACK);
+        let (mut tree, root, card) = padded_card(
+            crate::widgets::container()
+                .width(40.0)
+                .height(40.0)
+                .shadow(shadow),
+        );
+
+        assert_eq!(
+            tree.paint_overflow(card),
+            Outsets {
+                left: 12.0,
+                top: 4.0,
+                right: 12.0,
+                bottom: 20.0,
+            },
+            "the blur on every side, and the offset added below and taken off above"
+        );
+
+        tree.mark_needs_paint(card);
+        let rect = partial_damage(&mut tree, root);
+        assert_eq!(
+            rect.y,
+            50.0 - 4.0,
+            "the damage {rect:?} reaches above the card by more than its shadow does"
+        );
+    }
+
     /// A widget's bounds are not grown by what it or its children paint
     /// outside it: how far that reaches is damage's question, and
     /// `WidgetRef::rect` reads these. A reach of 20 carries the child past the
