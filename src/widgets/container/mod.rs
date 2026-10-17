@@ -2107,7 +2107,8 @@ impl Widget for Container {
         // baseline, scroll extents, and its size on an axis not in flight — is
         // of the content as it is now. Only while something is in flight, and
         // only where the content does not already fill that box exactly.
-        if let Some(in_flight) = self.lengths_in_flight(ctx, &lengths) {
+        let in_flight = self.lengths_in_flight(ctx, &lengths);
+        if let Some(in_flight) = in_flight {
             let frame = self.child_layout(ctx, &in_flight, constraints);
             if frame.constraints.constrain(content_size) != content_size {
                 ctx.forget_minimum();
@@ -2143,11 +2144,12 @@ impl Widget for Container {
             sd.scroll_state.clamp_offsets();
         }
 
-        let size = self.resolve_size(ctx, &lengths, constraints, content_size);
+        let in_flight = in_flight.is_some();
+        let size = self.resolve_size(ctx, &lengths, constraints, content_size, in_flight);
         // What the layout recorded its children can be arranged in, or — a
         // layout that says nothing — the size they were.
         let content_least = ctx.minimum().unwrap_or(content_size);
-        ctx.set_minimum(self.least_size(&lengths, content_least, size));
+        ctx.set_minimum(self.least_size(&lengths, content_least, size, in_flight));
 
         self.layout_scrollbar_containers(ctx, id, size, lengths.border);
 

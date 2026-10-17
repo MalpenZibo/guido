@@ -356,14 +356,17 @@ impl Container {
     }
 
     /// The lengths this box has on this frame, where a content-sized axis is
-    /// in flight: that axis held where the animation has it, as an exact
-    /// length is held. `None` where no such axis is in flight.
+    /// in flight: every content-sized axis that animates held where its
+    /// animation has it, as an exact length is held. `None` where no such axis
+    /// is in flight.
     ///
     /// What the children are laid out in a second time, once the first layout
     /// has measured the content and set the target from it — the CSS
     /// `interpolate-size` model, where the box animates between two content
-    /// sizes and what is inside is laid out in the box as it is. A scrolled
-    /// axis is left alone: its children are never laid out against the box.
+    /// sizes and what is inside is laid out in the box as it is. An axis whose
+    /// animation has nowhere to go holds too: what is laid out in a box it is
+    /// only passing through is no size to follow. A scrolled axis is left
+    /// alone: its children are never laid out against the box.
     pub(super) fn lengths_in_flight(
         &self,
         ctx: &mut LayoutCtx,
@@ -374,29 +377,45 @@ impl Container {
         if ctx.measuring() {
             return None;
         }
-        let mut in_flight = |axis: Axis, length: Length| {
-            if length.exact_size().is_some() || self.scrolls(axis) {
-                return None;
-            }
-            let anim = self.size_anim(axis).filter(|a| a.is_animating())?;
-            Some(length.held_at(anim.displayed_in(ctx)))
+        let (width, height) = (
+            self.held_anim(Axis::Horizontal, &lengths.width),
+            self.held_anim(Axis::Vertical, &lengths.height),
+        );
+        let moving = |anim: Option<&AnimationState<f32>>| anim.is_some_and(|a| a.is_animating());
+        if !moving(width) && !moving(height) {
+            return None;
+        }
+        let mut held = |anim: Option<&AnimationState<f32>>, length: Length| match anim {
+            Some(anim) => length.held_at(anim.displayed_in(ctx)),
+            None => length,
         };
-        let width = in_flight(Axis::Horizontal, lengths.width);
-        let height = in_flight(Axis::Vertical, lengths.height);
-        (width.is_some() || height.is_some()).then(|| BoxLengths {
-            width: width.unwrap_or(lengths.width),
-            height: height.unwrap_or(lengths.height),
+        Some(BoxLengths {
+            width: held(width, lengths.width),
+            height: held(height, lengths.height),
             ..*lengths
         })
     }
 
-    /// The container's final size, given what its content measured.
+    /// The animation a content-sized `axis` holds at while the box is in
+    /// flight: the one declared on its size, where the axis is neither exact
+    /// nor scrolled and the animation has a value to hold.
+    fn held_anim(&self, axis: Axis, length: &Length) -> Option<&AnimationState<f32>> {
+        let content_sized = length.exact_size().is_none() && !self.scrolls(axis);
+        self.size_anim(axis)
+            .filter(|a| content_sized && !a.is_initial())
+    }
+
+    /// The container's final size, given what its content measured, and
+    /// whether the box is `in_flight` — holding its content-sized axes where
+    /// their animations have them, as [`lengths_in_flight`](Self::lengths_in_flight)
+    /// laid the content out.
     pub(super) fn resolve_size(
         &self,
         ctx: &mut LayoutCtx,
         lengths: &BoxLengths,
         constraints: Constraints,
         content: Size,
+        in_flight: bool,
     ) -> Size {
         let inset = lengths.inset();
         Size::new(
@@ -408,6 +427,7 @@ impl Container {
                 content.width + inset.horizontal_total(),
                 constraints.min_width,
                 constraints.max_width,
+                in_flight,
             ),
             self.resolve_axis(
                 ctx,
@@ -417,6 +437,7 @@ impl Container {
                 content.height + inset.vertical_total(),
                 constraints.min_height,
                 constraints.max_height,
+                in_flight,
             ),
         )
     }
@@ -431,10 +452,19 @@ impl Container {
     /// hold it, as CSS gives a scroll container no automatic minimum, and goes
     /// down to the minimum it declares. Any other box goes no lower than its
     /// content, padding and border, the rule [`resolve_axis`](Self::resolve_axis)
-    /// holds it to. A size in flight is where the animation has it.
-    pub(super) fn least_size(&self, lengths: &BoxLengths, content: Size, size: Size) -> Size {
+    /// holds it to. A size in flight, or held while the box is, is where the
+    /// animation has it.
+    pub(super) fn least_size(
+        &self,
+        lengths: &BoxLengths,
+        content: Size,
+        size: Size,
+        in_flight: bool,
+    ) -> Size {
         let least = |axis: Axis, length: &Length, padding: f32, content: f32, size: f32| {
-            if self.size_anim(axis).is_some_and(|a| a.is_animating()) {
+            if self.size_anim(axis).is_some_and(|a| a.is_animating())
+                || in_flight && self.held_anim(axis, length).is_some()
+            {
                 return size;
             }
             if let Some(exact) = length.exact_size() {
@@ -501,14 +531,21 @@ impl Container {
         content: f32,
         parent_min: f32,
         parent_max: f32,
+        in_flight: bool,
     ) -> f32 {
         let anim = self.size_anim(axis);
         let animating = anim.is_some_and(|a| a.is_animating());
         let has_exact = length.exact_size().is_some();
+        // While the box is in flight a content-sized axis is where its
+        // animation has it, even one going nowhere: the content was laid out
+        // in a box the size is only passing through, so it may run past the
+        // box until the box arrives, as CSS's `interpolate-size` lets it.
+        let held = in_flight && self.held_anim(axis, length).is_some();
 
         // Growing back to fit the content is the default; these are the cases
         // where the author asked for a smaller box on purpose.
-        let allow_shrink = self.content_may_overflow(axis, overflow) || animating || has_exact;
+        let allow_shrink =
+            self.content_may_overflow(axis, overflow) || animating || held || has_exact;
 
         let mut size = if let Some(anim) = anim {
             let animated = anim.displayed_in(ctx);
