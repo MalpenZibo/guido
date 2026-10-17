@@ -42,7 +42,6 @@ use std::sync::Arc;
 
 use layout::Constraints;
 use platform::create_wayland_app;
-use reactive::owner::with_owner;
 use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
 use renderer::{GpuSlot, Renderer, flatten_root_into};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
@@ -409,11 +408,7 @@ fn process_surface_commands<P: Platform>(
                 // Create Wayland surface
                 wayland_state.create_surface(id, &config);
 
-                // Create the widget inside an owner scope so that signals/effects
-                // created in the factory are properly owned.
-                let (widget, owner_id) = with_owner(widget_fn);
-                let managed = ManagedSurface::new(id, config, widget, owner_id, tree);
-                surface_manager.add(managed);
+                surface_manager.add(ManagedSurface::build(id, config, widget_fn, tree));
             }
             SurfaceCommand::Close(id) => {
                 log::info!("Closing dynamic surface {:?}", id);
@@ -528,12 +523,11 @@ fn process_surface_commands<P: Platform>(
                 // Build the widget tree FIRST: auto-height popups size to
                 // their content, so the content must exist to be measured
                 // before the xdg_positioner is created.
-                let (widget, owner_id) = with_owner(widget_fn);
                 let surface_config = SurfaceConfig::new()
                     .width(config.width)
                     .height(config.height.unwrap_or(1))
                     .background_color(config.background_color);
-                let managed = ManagedSurface::new(id, surface_config, widget, owner_id, tree);
+                let managed = ManagedSurface::build(id, surface_config, widget_fn, tree);
 
                 let height = config.height.unwrap_or_else(|| {
                     measure_popup_height(tree, managed.widget_id, config.width, parent)
@@ -2540,14 +2534,10 @@ impl App {
         // still forced — see `FramePacing::forced` — so `wait_for` returns a
         // 16ms timeout and the first iteration is immediate.
         for def in self.surface_definitions.drain(..) {
-            // Create the widget inside an owner scope so that signals/effects
-            // created in the factory (e.g. create_memo) are properly owned.
-            let (widget, owner_id) = with_owner(|| (def.widget_fn)());
-            surface_manager.add(ManagedSurface::new(
+            surface_manager.add(ManagedSurface::build(
                 def.id,
                 def.config,
-                widget,
-                owner_id,
+                def.widget_fn,
                 &mut self.tree,
             ));
         }
@@ -3975,12 +3965,16 @@ fn or_skip<T>(made: Option<T>) -> Option<T> {
 ///
 /// The widget is the smallest there is: none of these lay anything out, it only
 /// has to be registered so the tree can name it. The tree is the caller's
-/// because [`ManagedSurface::new`] registers into it and some callers go on to
+/// because [`ManagedSurface::build`] registers into it and some callers go on to
 /// use it.
 #[cfg(test)]
 fn managed_surface(config: SurfaceConfig, tree: &mut Tree) -> ManagedSurface {
-    let (widget, owner) = with_owner(|| Box::new(widgets::container()) as Box<dyn Widget>);
-    ManagedSurface::new(SurfaceId::next(), config, widget, owner, tree)
+    ManagedSurface::build(
+        SurfaceId::next(),
+        config,
+        || Box::new(widgets::container()),
+        tree,
+    )
 }
 
 /// The frame path asks a compositor for things, and this is the asking written

@@ -28,7 +28,7 @@ App::new().run(|app| {
 # }
 ```
 
-Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for dynamic property modification.
+Note: `run()` takes a setup closure where you add surfaces. `add_surface()` returns a `SurfaceId` that can be used to get a `SurfaceHandle` for dynamic property modification; the surface's own tree reads its handle with `expect_context::<SurfaceHandle>()` instead (see [A Surface's Own Handle](#a-surfaces-own-handle)).
 
 ## Layers
 
@@ -399,9 +399,50 @@ impl SurfaceHandle {
 }
 ```
 
+### A Surface's Own Handle
+
+Every surface's scope declares its own `SurfaceHandle`, so a tree can reach
+the surface it is in without being handed its id. Read it with
+`expect_context` in the factory body, where the scope is current, and capture
+it into the handlers that use it — a handler opens no scope of its own (see
+[Context](./context.md)):
+
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+App::new().run(|app| {
+    app.add_surface(
+        SurfaceConfig::new()
+            .width(240)
+            .height(32)
+            .anchor(Anchor::TOP | Anchor::RIGHT),
+        || {
+            let surface = expect_context::<SurfaceHandle>();
+            let open = create_signal(false);
+            container()
+                .on_click(move || {
+                    open.update(|o| *o = !*o);
+                    surface.set_size(240, if open.get() { 400 } else { 32 });
+                })
+                .child(text("Toggle"))
+        },
+    );
+});
+# ;
+# }
+```
+
+The same holds for a surface from `spawn_surface()`, a popup from
+`spawn_popup()` and a lock cover from `lock_session()`. A popup's handle is its
+own: a tree inside a popup reads the popup's id, not its parent's. A factory that needs the parent's id — to
+hang a popup from it — reads the parent's handle where the parent's tree is
+built and captures it.
+
 ### Getting a Handle for Existing Surfaces
 
-Use `surface_handle()` to get a handle for any surface by its ID:
+Use `surface_handle()` to get a handle for any surface by its ID, from outside
+it:
 
 ```rust,no_run
 # extern crate guido;

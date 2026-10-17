@@ -20,6 +20,9 @@ handle.set_layer(Layer::Overlay);
 handle.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
 ```
 
+A surface's own tree reads its handle with `expect_context::<SurfaceHandle>()`:
+`ManagedSurface::build` declares it in every surface's scope, popups and lock covers included.
+
 Multiple surfaces share one reactive state and one renderer.
 
 ## What is implemented

@@ -560,18 +560,16 @@ impl Headless {
         W: Widget + 'static,
         F: FnOnce() -> W,
     {
-        let (widget, owner) = reactive::with_owner(|| Box::new(widget_fn()) as Box<dyn Widget>);
         let id = SurfaceId::next();
 
         // Through the trait, not beside it: a fixed-size bar declares its
         // reservation once, at birth, and if the driver wrote that number down
         // itself the recorder would be holding an answer rather than a request.
         self.host.create_surface(id, &config);
-        self.surfaces.add(ManagedSurface::new(
+        self.surfaces.add(ManagedSurface::build(
             id,
             config,
-            widget,
-            owner,
+            || Box::new(widget_fn()),
             &mut self.tree,
         ));
         id

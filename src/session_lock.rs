@@ -27,7 +27,6 @@ use crate::app_state::with_app_state;
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::platform::LockEvent;
 use crate::reactive::global::GlobalSignal;
-use crate::reactive::owner::with_owner;
 use crate::reactive::{RwSignal, Signal};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};
@@ -245,23 +244,22 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             // application's own closure and builds a widget tree, so anything
             // it touches runs while this borrow is open. A shared one nests;
             // the `&mut` every other site here takes would not.
-            let widget = with_app_state(|app| {
+            //
+            // Size arrives with the first configure; the config only
+            // contributes the clear color behind the widget tree.
+            let config = SurfaceConfig::new().width(0).height(0);
+            let managed = with_app_state(|app| {
                 app.lock
                     .borrow()
                     .factory
                     .as_ref()
-                    .map(|f| with_owner(|| f(info.clone())))
+                    .map(|f| ManagedSurface::build(id, config, || f(info.clone()), tree))
             });
-            let Some((widget, owner_id)) = widget else {
+            let Some(managed) = managed else {
                 log::error!("Lock held but no lock widget factory is set");
                 wayland_state.destroy_surface(id);
                 continue;
             };
-
-            // Size arrives with the first configure; the config only
-            // contributes the clear color behind the widget tree.
-            let config = SurfaceConfig::new().width(0).height(0);
-            let managed = ManagedSurface::new(id, config, widget, owner_id, tree);
             surface_manager.add(managed);
             with_lock(|lock| lock.surfaces.insert(output_id, id));
         }

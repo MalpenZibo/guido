@@ -483,6 +483,94 @@ fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_t
     );
 }
 
+/// A panel that reads its own surface where it is built and resizes that
+/// surface when clicked — the handle reached through the scope, not handed in
+/// from outside after the factory has already been taken.
+fn self_resizing_panel(seen: Rc<RefCell<Vec<SurfaceId>>>) -> impl FnOnce() -> Container {
+    move || {
+        let me = expect_context::<SurfaceHandle>();
+        seen.borrow_mut().push(me.id());
+        container()
+            .width(fill())
+            .height(fill())
+            .on_click(move || me.set_size(300, 60))
+    }
+}
+
+/// A fixed size on a corner anchor, so both axes are the surface's to ask for.
+fn corner_panel() -> SurfaceConfig {
+    SurfaceConfig::new()
+        .width(200)
+        .height(50)
+        .anchor(Anchor::TOP | Anchor::LEFT)
+}
+
+#[test]
+fn every_surface_tree_holds_the_handle_of_its_own_surface() {
+    let Some(mut app) = headless() else { return };
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let first = app.surface(corner_panel(), self_resizing_panel(seen.clone()));
+    let second = app.surface(corner_panel(), self_resizing_panel(seen.clone()));
+    let spawned = spawn_surface(corner_panel(), self_resizing_panel(seen.clone()));
+    app.step();
+    let popup = spawn_popup(
+        first,
+        PopupConfig::new(80).height(40),
+        self_resizing_panel(seen.clone()),
+    );
+    app.step();
+
+    assert_eq!(
+        *seen.borrow(),
+        [first, second, spawned.id(), popup.id()],
+        "each factory found its own surface, the popup's its own and not its parent's"
+    );
+
+    for id in [first, second, spawned.id()] {
+        app.configure(id, 200, 50, 1.0);
+    }
+    app.step();
+    let first_asks = app.sizes_asked(first).len();
+    let spawned_asks = app.sizes_asked(spawned.id()).len();
+
+    app.click(second, 10.0, 10.0);
+    app.step();
+    // The click queues the request after this pass has drained its commands,
+    // so the next pass is the one that sends it.
+    app.step();
+
+    assert_eq!(
+        app.sizes_asked(second).last(),
+        Some(&(300, 60)),
+        "the click resized the surface it was in"
+    );
+    assert_eq!(app.sizes_asked(first).len(), first_asks, "and not another");
+    assert_eq!(app.sizes_asked(spawned.id()).len(), spawned_asks);
+}
+
+/// A lock cover is a surface like any other, built once per output from one
+/// factory: each build reads the cover it is building.
+#[test]
+fn every_lock_cover_holds_the_handle_of_its_own_surface() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+    let external = app.connect_output("DP-2");
+    let seen = Rc::new(RefCell::new(HashMap::new()));
+    let built = seen.clone();
+    lock_session(move |output: OutputInfo| {
+        built
+            .borrow_mut()
+            .insert(output.id, expect_context::<SurfaceHandle>().id());
+        container()
+    });
+    app.step();
+    app.grant_lock();
+    app.step();
+
+    assert_eq!(seen.borrow()[&laptop], cover_of(&app, laptop));
+    assert_eq!(seen.borrow()[&external], cover_of(&app, external));
+}
+
 #[test]
 fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
     let Some(mut app) = headless() else { return };
