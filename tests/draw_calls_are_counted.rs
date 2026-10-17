@@ -95,13 +95,14 @@ fn seven_small_images_are_one_draw_call_and_the_rest_are_one_per_group() {
 /// The two pipelines the first frame does not reach, on a frame that reaches
 /// them and nothing else.
 ///
-/// A backdrop blur is four passes per region — downsample, a blur each way,
-/// composite — and one present for the frame, so two regions are nine. A
-/// rotated label is one textured quad, and one glyphon pass to rasterize the
-/// texture it samples, which on its first frame has not been made yet.
+/// A backdrop blur is four draws per region — downsample, a blur each way,
+/// composite — and one present for the frame, so two regions are nine. The
+/// two share their passes, three and the present (#766). A rotated label is
+/// one textured quad, and one glyphon pass to rasterize the texture it
+/// samples, which on its first frame has not been made yet.
 #[test]
 fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() {
-    let Some(calls) = draw_calls_of_one_frame(|| {
+    let Some(stats) = first_frame(|| {
         container()
             .layout(Flex::row().spacing(8.0))
             .child(container().width(40.0).height(16.0).backdrop_blur(4.0))
@@ -111,6 +112,7 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
         return;
     };
 
+    let calls = stats.draw_calls;
     assert_eq!(
         calls,
         DrawCalls {
@@ -123,6 +125,7 @@ fn backdrop_passes_and_transformed_text_are_counted_under_their_own_pipelines() 
         }
     );
     assert_eq!(calls.total(), 1 + 1 + 9);
+    assert_eq!(stats.backdrop_passes, 3 + 1);
 }
 
 /// A widget that draws one path, or one arc, in a 16×16 box.
@@ -1158,7 +1161,125 @@ fn a_fading_frost_is_not_made_a_layer() {
     assert_eq!(stats.layers, LayerWork::default(), "no layer");
     assert_eq!(
         stats.draw_calls.backdrop, 5,
-        "the frost, faded with the rest: four passes and the present"
+        "the frost, faded with the rest: four draws and the present"
+    );
+}
+
+/// A frost of its own, `width` wide, over whatever was drawn before it.
+fn frost(width: f32) -> Container {
+    container()
+        .width(width)
+        .height(16.0)
+        .backdrop_blur(BackdropBlur::new(4.0).sources(BackdropSources::SURFACE))
+}
+
+/// Backdrops side by side in one group share their passes: one shrink and
+/// one blur each way for all of them, with a draw per region in each, and
+/// what they lay back drawn in the pass the group resumes. Three passes and
+/// the present, however many there are — not four for each (#766).
+#[test]
+fn backdrops_that_do_not_overlap_share_three_passes() {
+    const FROSTS: u64 = 6;
+    let Some(stats) = first_frame(|| {
+        container()
+            .background(Color::rgb(0.1, 0.1, 0.1))
+            .layout(Flex::row())
+            .children((0..FROSTS).map(|_| frost(40.0)))
+    }) else {
+        return;
+    };
+    assert_eq!(stats.backdrop_passes, 3 + 1);
+    assert_eq!(
+        stats.draw_calls.backdrop,
+        4 * FROSTS + 1,
+        "a shrink, a blur each way and a composite for each frost, and the present"
+    );
+}
+
+/// Backdrops that overlap cannot share: the later one has to read the earlier
+/// one's frost, which is not there until the earlier is laid back. So they
+/// split into batches in paint order, three passes each.
+#[test]
+fn overlapping_backdrops_split_into_batches() {
+    let Some(stats) = first_frame(|| {
+        container()
+            .background(Color::rgb(0.1, 0.1, 0.1))
+            .layout(ZStack::new())
+            .child(frost(42.0))
+            .child(frost(40.0).translate((40.0, 0.0)))
+            .child(frost(40.0).translate((80.0, 0.0)))
+    }) else {
+        return;
+    };
+    assert_eq!(
+        stats.backdrop_passes,
+        2 * 3 + 1,
+        "the second, two pixels over the first, opens a second batch, which the third \
+         beside it joins"
+    );
+}
+
+/// Inside a layer the frosts filter the layer's texture, and those of one of
+/// its groups batch as the surface's do: three passes for all of them.
+#[test]
+fn backdrops_inside_a_layer_share_three_passes() {
+    let Some(stats) = first_frame(|| {
+        container().child(
+            container()
+                .background(Color::rgb(0.1, 0.1, 0.1))
+                .layout(Flex::row())
+                .children((0..4).map(|_| frost(40.0)))
+                .blur(0.0),
+        )
+    }) else {
+        return;
+    };
+    assert_eq!(stats.layers.drawn, 1, "the frosts are inside a layer");
+    assert_eq!(stats.backdrop_passes, 3);
+}
+
+/// A frost too thin to shrink still takes a working texel, and at the far
+/// edge of a surface whose width is not a multiple of the shrink that texel
+/// is past the working texture's last one. The slot is moved back inside it,
+/// and the column is frosted: red over blue, blurred where they meet, rather
+/// than drawn from a texel nobody wrote and left as sharp as it was.
+#[test]
+fn a_frost_too_thin_to_shrink_at_the_surface_s_edge_is_blurred_inside_it() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        || {
+            let half = |colour: Color| container().width(fill()).height(10.0).background(colour);
+            container().layout(ZStack::new()).children([
+                container()
+                    .width(fill())
+                    .layout(Flex::column())
+                    .child(half(Color::rgb(1.0, 0.0, 0.0)))
+                    .child(half(Color::rgb(0.0, 0.0, 1.0)))
+                    .into_any(),
+                container()
+                    .layout(Flex::row())
+                    .child(frost(40.0))
+                    .child(container().width(201.0))
+                    .child(frost(1.0))
+                    .into_any(),
+            ])
+        },
+    );
+    app.configure(surface, 242, 20, 1.0);
+    render_stats::reset_stats();
+    app.step();
+    let stats = render_stats::get_stats();
+    assert_eq!(stats.frames_painted, 1, "the frame was not painted");
+    assert_eq!(stats.backdrop_passes, 3 + 1, "the two share a batch");
+    let [r, _, b, _] = app.read_pixel(surface, 241, 9);
+    assert!(
+        r < 250 && b > 5,
+        "the thin frost reads [{r}, _, {b}] above the seam: not blurred"
     );
 }
 

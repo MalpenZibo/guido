@@ -224,6 +224,11 @@ pub struct StatsSnapshot {
     pub quad_allocations: GpuAllocations,
     /// The buffers and bind groups the backdrop passes made.
     pub backdrop_allocations: GpuAllocations,
+    /// The render passes the backdrop effects and the layer blurs opened, the
+    /// present that copies a frosted frame onto the swapchain among them. Each
+    /// costs wgpu allocations of its own whatever it draws, so this is the
+    /// count a change that batches them has to move.
+    pub backdrop_passes: u64,
     /// The fills and strokes drawn, and how many were tessellated.
     pub path_meshes: PathMeshes,
     /// What the layers these frames composited cost.
@@ -344,6 +349,7 @@ mod inner {
         draw_calls: DrawCalls,
         quad_allocations: GpuAllocations,
         backdrop_allocations: GpuAllocations,
+        backdrop_passes: u64,
         path_meshes: PathMeshes,
         layers: LayerWork,
         // Report timing
@@ -390,6 +396,7 @@ mod inner {
                 draw_calls: DrawCalls::default(),
                 quad_allocations: GpuAllocations::default(),
                 backdrop_allocations: GpuAllocations::default(),
+                backdrop_passes: 0,
                 path_meshes: PathMeshes::default(),
                 layers: LayerWork::default(),
                 last_print: Instant::now(),
@@ -575,6 +582,14 @@ mod inner {
         });
     }
 
+    /// Record a render pass a backdrop effect opened.
+    #[inline]
+    pub fn record_backdrop_pass() {
+        STATS.with(|s| {
+            s.borrow_mut().backdrop_passes += 1;
+        });
+    }
+
     /// Record a fill or stroke drawn: from the cache, or tessellated.
     #[inline]
     pub fn record_path_mesh(reused: bool) {
@@ -637,6 +652,7 @@ mod inner {
                 draw_calls: stats.draw_calls,
                 quad_allocations: stats.quad_allocations,
                 backdrop_allocations: stats.backdrop_allocations,
+                backdrop_passes: stats.backdrop_passes,
                 path_meshes: stats.path_meshes,
                 layers: stats.layers,
             }
@@ -797,6 +813,9 @@ mod inner {
                     stats.path_meshes.tessellated, stats.path_meshes.reused
                 );
             }
+            if stats.backdrop_passes > 0 {
+                eprintln!("  backdrop passes: {}", stats.backdrop_passes);
+            }
             if stats.backdrop_allocations != GpuAllocations::default() {
                 eprintln!(
                     "  backdrop allocations: buffers={} bind_groups={}",
@@ -911,6 +930,10 @@ pub fn record_quad_allocation(_object: GpuObject) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_backdrop_allocation(_object: GpuObject) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_backdrop_pass() {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

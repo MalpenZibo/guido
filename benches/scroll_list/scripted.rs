@@ -109,6 +109,8 @@ pub struct Counts {
     pub draw_calls: DrawCalls,
     /// The vertex buffers and bind groups preparing textured quads created.
     pub quad_allocations: GpuAllocations,
+    /// The render passes the backdrop effects and layer blurs opened.
+    pub backdrop_passes: u64,
     /// The fills and strokes drawn, by whether they were tessellated.
     pub path_meshes: PathMeshes,
     /// What the layers the painted frames composited cost: drawn into their
@@ -148,6 +150,7 @@ impl Counts {
         calls.paths += drawn.paths;
         self.quad_allocations.buffers += snapshot.quad_allocations.buffers;
         self.quad_allocations.bind_groups += snapshot.quad_allocations.bind_groups;
+        self.backdrop_passes += snapshot.backdrop_passes;
         self.path_meshes.tessellated += snapshot.path_meshes.tessellated;
         self.path_meshes.reused += snapshot.path_meshes.reused;
         let (layers, done) = (&mut self.layers, &snapshot.layers);
@@ -444,6 +447,7 @@ pub fn report(run: &Run, rows: usize) -> String {
         ("draw.text_quads", counts.draw_calls.text_quads),
         ("draw.backdrop", counts.draw_calls.backdrop),
         ("draw.paths", counts.draw_calls.paths),
+        ("pass.backdrop", counts.backdrop_passes),
         ("quad.buffers_created", counts.quad_allocations.buffers),
         (
             "quad.bind_groups_created",

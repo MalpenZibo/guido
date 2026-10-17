@@ -10,7 +10,7 @@ use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, Device, Queue, RenderPipeline, ShaderModule,
 };
 
-use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask, Scene};
+use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask, Frost, Scene};
 use super::clip_records::ClipRecords;
 use super::commands::{CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
@@ -750,8 +750,7 @@ impl Renderer {
             commands, layers, ..
         } = *frame;
         let scale = self.scale_factor;
-        let mut render_pass = begin_pass(encoder, target, clear);
-        let load = wgpu::LoadOp::Load;
+        let mut render_pass = begin_pass(encoder, target, clear, "Renderer Render Pass");
 
         // Groups are drawn in order; within a group, bucket order. The
         // shape pipeline is re-bound per draw because the image and text
@@ -760,50 +759,47 @@ impl Renderer {
             if !layers[index].backdrop.is_empty()
                 && let Some(scene) = scene
             {
-                // The effect samples the target, so the pass has to end
-                // and its contents be stored before it can run.
+                // The effects sample the target, so the pass has to end
+                // and its contents be stored before they can run.
                 drop(render_pass);
-                let clip_records = self.clip_records.bind_group();
+                self.backdrop.begin_group();
                 for command in &commands[layers[index].backdrop.clone()] {
                     if let Some(region) = command_to_backdrop_region(command, scale) {
-                        self.backdrop
-                            .apply(&self.device, encoder, scene, &region, clip_records);
+                        self.backdrop.push(
+                            scene,
+                            Frost {
+                                region,
+                                mask: None,
+                                outline: None,
+                            },
+                        );
                     } else if let Some(frost) = command_to_text_backdrop(command, scale) {
                         // The mask is rasterized and submitted on its own
                         // encoder, so it is ready by the time this frame's
-                        // encoder reaches the composite below.
+                        // encoder reaches the composite.
                         if let Some(view) =
                             self.text_mask.mask(&self.device, &self.queue, &frost.spec)
                         {
-                            let mask = CoverageMask {
-                                view: &view,
-                                size: frost.spec.size,
-                            };
-                            self.backdrop.apply_masked(
-                                &self.device,
-                                encoder,
+                            self.backdrop.push(
                                 scene,
-                                &frost.region,
-                                clip_records,
-                                mask,
+                                Frost {
+                                    region: frost.region,
+                                    mask: Some(CoverageMask {
+                                        view: (*view).clone(),
+                                        size: frost.spec.size,
+                                    }),
+                                    outline: frost.outline,
+                                },
                             );
-                            // After the blur and before the glyphs: a
-                            // contour on the glass, not under it.
-                            if let Some(outline) = frost.outline {
-                                self.backdrop.apply_outline(
-                                    &self.device,
-                                    encoder,
-                                    scene,
-                                    &frost.region,
-                                    clip_records,
-                                    mask,
-                                    outline,
-                                );
-                            }
                         }
                     }
                 }
-                render_pass = begin_pass(encoder, target, load);
+                render_pass = self.backdrop.filter_group(
+                    &self.device,
+                    encoder,
+                    scene,
+                    self.clip_records.bind_group(),
+                );
             }
 
             let layer = &self.prepared_layers[index];
@@ -1087,13 +1083,14 @@ impl PreparedLayer {
 }
 
 /// Open a colour-only render pass over `target`.
-fn begin_pass<'a>(
+pub(super) fn begin_pass<'a>(
     encoder: &'a mut wgpu::CommandEncoder,
     target: &'a wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,
+    label: &str,
 ) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Renderer Render Pass"),
+        label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: target,
             resolve_target: None,

@@ -2,10 +2,11 @@
 //!
 //! The effect reads pixels that have already been drawn, which a render pass
 //! cannot do to its own attachment. So the frame is drawn into an offscreen
-//! colour target, each blur ends the pass, filters its region, and the pass
-//! resumes with `LoadOp::Load`; the target is blitted to the swapchain once at
-//! the end. Frames with no backdrop blur skip all of it and draw straight to
-//! the swapchain, so the machinery costs nothing when unused.
+//! colour target, a group holding backdrop effects ends the pass, filters
+//! their regions, and the pass resumes with `LoadOp::Load`; the target is
+//! blitted to the swapchain once at the end. Frames with no backdrop blur skip
+//! all of it and draw straight to the swapchain, so the machinery costs
+//! nothing when unused.
 //!
 //! Per region: downsample into a working texture (rendering into a smaller
 //! target with a linear sampler is already a box filter), two separable
@@ -13,10 +14,19 @@
 //! shape. Working at a quarter resolution is what keeps a wide radius cheap —
 //! the same reason compositors downsample before blurring.
 //!
-//! The mask is the only part a caller can replace. [`apply`](BackdropRenderer::apply)
-//! shapes the result with the region's own corners; [`apply_masked`](BackdropRenderer::apply_masked)
-//! takes a coverage texture instead, which is what lets glyphs be the window
-//! rather than a box — see [`text_mask`](super::text_mask).
+//! The regions of a group share those passes, as WebRender packs its blurs
+//! into shared targets: each is shrunk into its own slot of the working
+//! texture, so one downsample and one gaussian each way serve all of them with
+//! a draw per region, and the composites are drawn in the scene's pass as it
+//! resumes, as GTK draws its last blur pass into the caller's. Only regions
+//! that do not overlap can share, since a later one has to read what an
+//! earlier one laid back; the rest are batches of their own, in paint order —
+//! see [`batch_end`](BackdropRenderer::batch_end).
+//!
+//! The mask is the only part a caller can replace. A [`Frost`] with no mask is
+//! shaped by the region's own corners; one with a coverage texture is shaped
+//! by that instead, which is what lets glyphs be the window rather than a box —
+//! see [`text_mask`](super::text_mask).
 //!
 //! What the passes read is kept from frame to frame, as the shape pipeline's
 //! instances are: their uniforms are slots of one buffer, written once when the
@@ -43,7 +53,7 @@ const WORKING_SCALE: u32 = 4;
 
 use super::layer_blur::{BlurPlan, IDLE_FRAMES_BEFORE_RELEASE};
 
-/// Slots the uniform buffer starts with: a frosted panel's four passes and the
+/// Slots the uniform buffer starts with: a frosted panel's four draws and the
 /// blit, with room for a second panel before it has to grow.
 const INITIAL_SLOTS: u64 = 16;
 
@@ -96,9 +106,8 @@ struct Params {
 
 /// A rasterized coverage mask and how big it is, which the view alone does not
 /// say — the passes that read one need its texel size to step by a texel.
-#[derive(Clone, Copy)]
-pub struct CoverageMask<'a> {
-    pub view: &'a wgpu::TextureView,
+pub struct CoverageMask {
+    pub view: wgpu::TextureView,
     pub size: (u32, u32),
 }
 
@@ -160,7 +169,7 @@ impl BackdropRegion {
 
     /// Clamp to the target so a card running off-screen cannot ask for a
     /// viewport wgpu will reject.
-    fn clamped(&self, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    fn clamped(&self, width: u32, height: u32) -> Option<Viewport> {
         // The clip comes first: a region scrolled out of its container has
         // nothing on show, and filtering it would leave a blurred rectangle
         // where the content is not.
@@ -198,7 +207,7 @@ impl BackdropRegion {
     /// contour around one — works by carrying its fragment from the target
     /// back into the shape's own space, so they all need the same fields and
     /// none of them should spell them out again.
-    fn shape_params(&self, origin: (u32, u32), mask: Option<CoverageMask<'_>>) -> Option<Params> {
+    fn shape_params(&self, origin: (u32, u32), mask: Option<&CoverageMask>) -> Option<Params> {
         // A placement that collapses has no inverse, so there is no way back
         // into the shape's own space and nothing to cut. The effect is skipped,
         // which is what a zero-area shape deserves.
@@ -290,6 +299,9 @@ pub struct BackdropRenderer {
     /// uniforms and looks its bind group up, and none of them owns the
     /// renderer.
     bindings: RefCell<Bindings>,
+    /// The backdrop effects of the group being filtered, in paint order —
+    /// kept from group to group so taking them allocates nothing.
+    group: Vec<Planned>,
 }
 
 /// Where a pass's uniforms are: the bind group that reads them, and their
@@ -299,16 +311,16 @@ struct Bound {
     offset: u32,
 }
 
-/// The uniforms of every pass a frame runs, and the bind groups that read
-/// them.
+/// The uniforms of every draw a frame's passes make, and the bind groups that
+/// read them.
 ///
-/// Each pass takes the next slot of one buffer, read through a dynamic offset,
-/// so a bind group says only which textures a pass reads: one per texture, or
+/// Each draw takes the next slot of one buffer, read through a dynamic offset,
+/// so a bind group says only which textures a draw reads: one per texture, or
 /// per texture and mask, made the first time it is bound and kept while frames
 /// go on binding it. The slots are gathered here and written in one
 /// `write_buffer` when the frame is [finished](BackdropRenderer::finish),
-/// because each write is a staging buffer of wgpu's own and a frame runs
-/// several passes per backdrop.
+/// because each write is a staging buffer of wgpu's own and a frame makes
+/// several draws per backdrop.
 struct Bindings {
     queue: wgpu::Queue,
     /// `None` until a pass needs it, and again once the targets are released.
@@ -616,6 +628,7 @@ impl BackdropRenderer {
             targets: None,
             idle_frames: 0,
             bindings: RefCell::new(Bindings::new(device, queue)),
+            group: Vec::new(),
         }
     }
 
@@ -710,8 +723,8 @@ impl BackdropRenderer {
             .retain_mut(|kept| std::mem::take(&mut kept.used));
     }
 
-    /// Stage `params` for a pass reading `view`, and `mask` for the masked
-    /// passes, and answer where the pass finds them.
+    /// Stage `params` for a draw reading `view`, and `mask` for the masked
+    /// ones, and answer where the draw finds them.
     fn bind(
         &self,
         device: &wgpu::Device,
@@ -788,36 +801,25 @@ impl BackdropRenderer {
         })
     }
 
-    /// Run one full-screen-triangle pass into `target` over `viewport`.
-    #[allow(clippy::too_many_arguments)]
-    fn pass(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::RenderPipeline,
-        target: &wgpu::TextureView,
+    /// Open a render pass of the backdrop's own into `target`.
+    fn open<'e>(
+        encoder: &'e mut wgpu::CommandEncoder,
+        target: &'e wgpu::TextureView,
         load: wgpu::LoadOp<wgpu::Color>,
+        label: &str,
+    ) -> wgpu::RenderPass<'e> {
+        render_stats::record_backdrop_pass();
+        super::render::begin_pass(encoder, target, load, label)
+    }
+
+    /// Draw one full-screen triangle over `viewport` of `pass`'s target.
+    fn draw(
+        pass: &mut wgpu::RenderPass<'_>,
+        pipeline: &wgpu::RenderPipeline,
         bind: &Bound,
         clip_records: Option<&wgpu::BindGroup>,
-        viewport: (u32, u32, u32, u32),
-        label: &str,
+        (x, y, w, h): Viewport,
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(label),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load,
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        let (x, y, w, h) = viewport;
         pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind.group, &[bind.offset]);
@@ -828,250 +830,249 @@ impl BackdropRenderer {
         render_stats::record_draw_calls(Pipeline::Backdrop, 1);
     }
 
-    /// Blur one region of the scene target, in place, cut out by the region's
-    /// own corners.
-    pub fn apply(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        scene: &Scene,
-        region: &BackdropRegion,
-        clip_records: &wgpu::BindGroup,
-    ) {
-        self.filter(device, encoder, scene, region, clip_records, None);
+    /// Start taking the backdrop effects of one group, in paint order.
+    pub fn begin_group(&mut self) {
+        self.group.clear();
     }
 
-    /// The same, cut out by `mask`'s alpha instead of the corners.
+    /// Take one backdrop effect of the group begun last, filtering `scene`.
     ///
-    /// The mask covers `region.shape` in the space `region.to_shape` lands in,
-    /// and each fragment is carried back there to find its texel — so what the
-    /// mask leaves opaque is what shows the blur, wherever the shape has been
-    /// turned or stretched to. The region's radii are ignored: the shape is
-    /// entirely the mask's.
-    pub fn apply_masked(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        scene: &Scene,
-        region: &BackdropRegion,
-        clip_records: &wgpu::BindGroup,
-        mask: CoverageMask<'_>,
-    ) {
-        self.filter(device, encoder, scene, region, clip_records, Some(mask));
-    }
-
-    /// Draw a contour just outside `mask`'s coverage.
-    ///
-    /// A stroke, for the one case the cheap approximation cannot serve: copies
-    /// of the glyphs drawn under the fill ring the letter *and* fill it, which
-    /// is invisible under an opaque fill and opaque over frost. This dilates
-    /// the coverage instead and draws only the band the dilate added.
-    ///
-    /// Ordered after the frost and before the glyphs, so the letter keeps what
-    /// the frost put in it.
-    #[allow(clippy::too_many_arguments)]
-    pub fn apply_outline(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        scene: &Scene,
-        region: &BackdropRegion,
-        clip_records: &wgpu::BindGroup,
-        mask: CoverageMask<'_>,
-        (color, width): (Color, f32),
-    ) {
+    /// Where its region lands in the shrunk working texture is worked out
+    /// here: the working texture is the scene shrunk, so each region shrinks
+    /// into the place its own pixels shrink to, and regions that do not meet
+    /// on the scene do not meet there either — save one too thin to shrink,
+    /// which still takes a texel, and is moved back inside the texture when
+    /// that texel would be past its edge.
+    pub fn push(&mut self, scene: &Scene, frost: Frost) {
         let Some(targets) = &self.targets else {
             return;
         };
-        let Some(viewport) = region.clamped(scene.width, scene.height) else {
+        let Some(viewport) = frost.region.clamped(scene.width, scene.height) else {
             return;
         };
-        let (x, y, dst_width, dst_height) = viewport;
-
-        let params = Params {
-            src_rect: [0.0, 0.0, 1.0, 1.0],
-            dst_size: [dst_width as f32, dst_height as f32],
-            stroke_color: [color.r, color.g, color.b, color.a],
-            stroke_width: width,
-            ..match region.shape_params((x, y), Some(mask)) {
-                Some(params) => params,
-                None => return,
-            }
-        };
-        // Binding 0 goes unread by this pipeline; the working texture fills it
-        // because the scene is the target and may not be bound as a resource
-        // at the same time.
-        let bind = self.bind(device, &targets.working_views[0], Some(mask.view), params);
-        self.pass(
-            encoder,
-            &self.outline,
-            &scene.view,
-            wgpu::LoadOp::Load,
-            &bind,
-            Some(clip_records),
-            viewport,
-            "Text Outline",
-        );
-    }
-
-    fn filter(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        scene: &Scene,
-        region: &BackdropRegion,
-        clip_records: &wgpu::BindGroup,
-        mask: Option<CoverageMask<'_>>,
-    ) {
-        let Some(targets) = &self.targets else {
+        let (x, y, width, height) = viewport;
+        let Some(shape) = frost.region.shape_params((x, y), frost.mask.as_ref()) else {
             return;
         };
-        let Some((x, y, width, height)) = region.clamped(scene.width, scene.height) else {
-            return;
-        };
-
-        let work_width = (width / WORKING_SCALE).max(1);
-        let work_height = (height / WORKING_SCALE).max(1);
-
         // Radius shrinks with the working texture; the downsample already
         // spent the rest of it.
         let BlurPlan { sigma, taps, .. } =
-            BlurPlan::shrunk(region.radius, region.scale, WORKING_SCALE);
-
-        let scene_rect = [
-            x as f32 / scene.width as f32,
-            y as f32 / scene.height as f32,
-            width as f32 / scene.width as f32,
-            height as f32 / scene.height as f32,
-        ];
-
-        let base = Params {
-            sigma,
-            taps,
-            dst_size: [width as f32, height as f32],
-            ..match region.shape_params((x, y), mask) {
-                Some(params) => params,
-                None => return,
-            }
+            BlurPlan::shrunk(frost.region.radius, frost.region.scale, WORKING_SCALE);
+        let shrunk = |at: u32, span: u32, room: u32| {
+            let span = (span / WORKING_SCALE).max(1);
+            ((at / WORKING_SCALE).min(room - span), span)
         };
-
-        // 1 and 2: shrunk into the working textures and blurred both ways.
-        let work_rect = self.gaussian(
-            device,
-            encoder,
-            (&scene.view, scene_rect),
-            targets.working(),
-            (work_width, work_height),
-            base,
-        );
-
-        // 3. Back over the scene, cut out by the shape or by the mask.
-        let params = Params {
-            src_rect: work_rect,
-            ..base
-        };
-        let (pipelines, bind, label): (&[wgpu::RenderPipeline], _, _) = match mask {
-            Some(mask) => (
-                if scene.layer {
-                    &self.layer_composite_mask
-                } else {
-                    std::slice::from_ref(&self.composite_mask)
+        let (slot_x, slot_width) = shrunk(x, width, targets.work_width);
+        let (slot_y, slot_height) = shrunk(y, height, targets.work_height);
+        self.group.push(Planned {
+            viewport,
+            slot: Slot {
+                source: normalised(viewport, (scene.width, scene.height)),
+                at: (slot_x, slot_y, slot_width, slot_height),
+                params: Params {
+                    sigma,
+                    taps,
+                    dst_size: [width as f32, height as f32],
+                    ..shape
                 },
-                self.bind(device, &targets.working_views[0], Some(mask.view), params),
-                "Backdrop Composite Mask",
-            ),
-            None => (
-                if scene.layer {
-                    &self.layer_composite
-                } else {
-                    std::slice::from_ref(&self.composite)
-                },
-                self.bind(device, &targets.working_views[0], None, params),
-                "Backdrop Composite",
-            ),
+            },
+            mask: frost.mask,
+            outline: frost.outline,
+        });
+    }
+
+    /// Filter the effects of the group begun last, and resume the scene's
+    /// pass for what the group draws after them.
+    ///
+    /// Batch by batch: the regions of a batch are shrunk and blurred in
+    /// three passes of their own, a draw per region in each, then laid back
+    /// in the scene's pass as it resumes, cut out by each one's shape or
+    /// mask, with the contour round a frosted text after its frost. The last
+    /// batch's pass is the one returned.
+    pub fn filter_group<'e>(
+        &self,
+        device: &wgpu::Device,
+        encoder: &'e mut wgpu::CommandEncoder,
+        scene: &'e Scene,
+        clip_records: &wgpu::BindGroup,
+    ) -> wgpu::RenderPass<'e> {
+        let Some(targets) = self.targets.as_ref().filter(|_| !self.group.is_empty()) else {
+            return resume(encoder, scene);
         };
-        for pipeline in pipelines {
-            self.pass(
+        let working = targets.working();
+        let mut batch = 0..self.batch_end(0);
+        loop {
+            self.gaussian(
+                device,
                 encoder,
-                pipeline,
                 &scene.view,
-                wgpu::LoadOp::Load,
+                working,
+                self.group[batch.clone()].iter().map(|planned| planned.slot),
+            );
+            if batch.end == self.group.len() {
+                break;
+            }
+            let mut pass = resume(encoder, scene);
+            self.lay_back(
+                device,
+                &mut pass,
+                scene,
+                working,
+                batch.clone(),
+                clip_records,
+            );
+            batch = batch.end..self.batch_end(batch.end);
+        }
+        let mut pass = resume(encoder, scene);
+        self.lay_back(device, &mut pass, scene, working, batch, clip_records);
+        pass
+    }
+
+    /// Lay the regions of `batch`, blurred into the first working texture,
+    /// back over the scene in `pass`, and leave the pass with the whole scene
+    /// as its viewport for what the group draws next.
+    fn lay_back(
+        &self,
+        device: &wgpu::Device,
+        pass: &mut wgpu::RenderPass<'_>,
+        scene: &Scene,
+        working: Working<'_>,
+        batch: std::ops::Range<usize>,
+        clip_records: &wgpu::BindGroup,
+    ) {
+        for planned in &self.group[batch] {
+            self.composite(device, pass, scene, working, planned, clip_records);
+        }
+        pass.set_viewport(0.0, 0.0, scene.width as f32, scene.height as f32, 0.0, 1.0);
+    }
+
+    /// Where the batch beginning at the group's `start`-th effect ends.
+    ///
+    /// A batch blurs every region before laying any back, so a region may join
+    /// only if it reads nothing an earlier one of the batch writes — its
+    /// viewport meets none of theirs — and its slot in the working texture is
+    /// its own, which only a region too thin to shrink can fail. The first
+    /// that cannot ends the batch and begins the next, so the effects still
+    /// run in paint order and each reads everything painted before it.
+    fn batch_end(&self, start: usize) -> usize {
+        let group = &self.group;
+        (start..group.len())
+            .find(|&at| {
+                group[start..at].iter().any(|earlier| {
+                    meet(earlier.viewport, group[at].viewport)
+                        || meet(earlier.slot.at, group[at].slot.at)
+                })
+            })
+            .unwrap_or(group.len())
+    }
+
+    /// Lay one region, blurred into the first working texture, back over the
+    /// scene in `pass`.
+    fn composite(
+        &self,
+        device: &wgpu::Device,
+        pass: &mut wgpu::RenderPass<'_>,
+        scene: &Scene,
+        working: Working<'_>,
+        planned: &Planned,
+        clip_records: &wgpu::BindGroup,
+    ) {
+        let blurred = working.views[0];
+        let params = Params {
+            src_rect: normalised(planned.slot.at, working.size),
+            ..planned.slot.params
+        };
+        let mask = planned.mask.as_ref().map(|mask| &mask.view);
+        let pipelines: &[wgpu::RenderPipeline] = match (mask.is_some(), scene.layer) {
+            (true, true) => &self.layer_composite_mask,
+            (true, false) => std::slice::from_ref(&self.composite_mask),
+            (false, true) => &self.layer_composite,
+            (false, false) => std::slice::from_ref(&self.composite),
+        };
+        let bind = self.bind(device, blurred, mask, params);
+        for pipeline in pipelines {
+            Self::draw(pass, pipeline, &bind, Some(clip_records), planned.viewport);
+        }
+
+        // After the frost and before the glyphs: a contour on the glass, not
+        // under it.
+        if let (Some(mask), Some((color, width))) = (mask, planned.outline) {
+            let params = Params {
+                src_rect: [0.0, 0.0, 1.0, 1.0],
+                stroke_color: [color.r, color.g, color.b, color.a],
+                stroke_width: width,
+                ..planned.slot.params
+            };
+            // Binding 0 goes unread by this pipeline; the working texture
+            // fills it because the scene is the target and may not be bound
+            // as a resource at the same time.
+            let bind = self.bind(device, blurred, Some(mask), params);
+            Self::draw(
+                pass,
+                &self.outline,
                 &bind,
                 Some(clip_records),
-                (x, y, width, height),
-                label,
+                planned.viewport,
             );
         }
     }
 
-    /// Shrink `source`'s `src_rect` into the first working texture and blur it
-    /// both ways, leaving the result there, in its top-left `region` texels —
-    /// whose rect within that texture, normalised, is returned.
+    /// Shrink each of `slots` from `source` into its place in the first
+    /// working texture and blur it both ways, leaving the results there.
     ///
     /// The two steps every blur here takes, the backdrop's and a layer's:
     /// rendering into a smaller target through a linear sampler is the box
-    /// filter, and the gaussian smooths what it left behind.
+    /// filter, and the gaussian smooths what it left behind. Three passes
+    /// however many slots, a draw per slot in each.
     fn gaussian(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        (source, src_rect): (&wgpu::TextureView, [f32; 4]),
+        source: &wgpu::TextureView,
         working: Working<'_>,
-        (region_width, region_height): (u32, u32),
-        base: Params,
-    ) -> [f32; 4] {
-        // 1. Source region → working[0], shrunk.
-        let bind = self.bind(device, source, None, Params { src_rect, ..base });
-        self.pass(
+        slots: impl Iterator<Item = Slot> + Clone,
+    ) {
+        // 1. Each source region → its slot of working[0], shrunk.
+        let mut pass = Self::open(
             encoder,
-            &self.downsample,
             working.views[0],
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &bind,
-            None,
-            (0, 0, region_width, region_height),
             "Backdrop Downsample",
         );
-
-        // Only the working textures' top-left corner holds this region, so
-        // reads have to stay inside it — normalised against the working size,
-        // not the source's.
-        let work_rect = [
-            0.0,
-            0.0,
-            region_width as f32 / working.size.0 as f32,
-            region_height as f32 / working.size.1 as f32,
-        ];
+        for slot in slots.clone() {
+            let params = Params {
+                src_rect: slot.source,
+                ..slot.params
+            };
+            let bind = self.bind(device, source, None, params);
+            Self::draw(&mut pass, &self.downsample, &bind, None, slot.at);
+        }
+        drop(pass);
 
         // 2. Two separable gaussian passes, ping-ponging. The step is a texel
         // of the *working* texture, which is what the blur samples — stepping
         // by a source texel would blur as many times too narrowly as the
-        // shrink.
+        // shrink. Each slot's reads are kept inside it by the shader, since
+        // its neighbours share the texture.
         let texel_x = 1.0 / working.size.0 as f32;
         let texel_y = 1.0 / working.size.1 as f32;
         for (index, direction) in [[texel_x, 0.0], [0.0, texel_y]].into_iter().enumerate() {
-            let bind = self.bind(
-                device,
-                working.views[index],
-                None,
-                Params {
-                    src_rect: work_rect,
-                    direction,
-                    ..base
-                },
-            );
-            self.pass(
+            let mut pass = Self::open(
                 encoder,
-                &self.blur,
                 working.views[1 - index],
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                &bind,
-                None,
-                (0, 0, region_width, region_height),
                 "Backdrop Blur",
             );
+            for slot in slots.clone() {
+                let params = Params {
+                    src_rect: normalised(slot.at, working.size),
+                    direction,
+                    ..slot.params
+                };
+                let bind = self.bind(device, working.views[index], None, params);
+                Self::draw(&mut pass, &self.blur, &bind, None, slot.at);
+            }
         }
-        work_rect
     }
 
     /// Blur a layer's texture into `into`, by `plan`.
@@ -1096,24 +1097,21 @@ impl BackdropRenderer {
             (region.0 * plan.shrink) as f32,
             (region.1 * plan.shrink) as f32,
         );
-        let src_rect = [
-            -reach / width as f32,
-            -reach / height as f32,
-            span.0 / width as f32,
-            span.1 / height as f32,
-        ];
-        self.gaussian(
-            device,
-            encoder,
-            (view, src_rect),
-            into,
-            region,
-            Params {
+        let slot = Slot {
+            source: [
+                -reach / width as f32,
+                -reach / height as f32,
+                span.0 / width as f32,
+                span.1 / height as f32,
+            ],
+            at: (0, 0, region.0, region.1),
+            params: Params {
                 sigma: plan.sigma,
                 taps: plan.taps,
                 ..Params::zeroed()
             },
-        );
+        };
+        self.gaussian(device, encoder, view, into, std::iter::once(slot));
     }
 
     /// Copy the offscreen scene onto the swapchain.
@@ -1140,17 +1138,66 @@ impl BackdropRenderer {
                 ..Params::zeroed()
             },
         );
-        self.pass(
+        let mut pass = Self::open(
             encoder,
-            &self.blit,
             target,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            "Backdrop Blit",
+        );
+        Self::draw(
+            &mut pass,
+            &self.blit,
             &bind,
             None,
             (0, 0, scene.width, scene.height),
-            "Backdrop Blit",
         );
     }
+}
+
+/// A viewport on a target, in pixels: `(x, y, width, height)`.
+type Viewport = (u32, u32, u32, u32);
+
+/// The scene's own pass, resumed over what the effects filtered.
+fn resume<'e>(encoder: &'e mut wgpu::CommandEncoder, scene: &'e Scene) -> wgpu::RenderPass<'e> {
+    super::render::begin_pass(
+        encoder,
+        &scene.view,
+        wgpu::LoadOp::Load,
+        "Renderer Render Pass",
+    )
+}
+
+/// Whether two viewports share a pixel.
+fn meet(a: Viewport, b: Viewport) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
+/// A backdrop effect of a group, as the renderer hands it over: the region it
+/// filters, the mask that cuts it when the shape's own corners do not, and the
+/// contour drawn round that mask.
+pub struct Frost {
+    pub region: BackdropRegion,
+    pub mask: Option<CoverageMask>,
+    pub outline: Option<(Color, f32)>,
+}
+
+/// A frost of the group, placed: where it reads and writes on the scene, and
+/// how it is shrunk and blurred.
+struct Planned {
+    viewport: Viewport,
+    slot: Slot,
+    mask: Option<CoverageMask>,
+    outline: Option<(Color, f32)>,
+}
+
+/// One region a [`gaussian`](BackdropRenderer::gaussian) shrinks and blurs:
+/// the rect of the source it reads, normalised, the texels of the working
+/// texture it is shrunk into, and the uniforms its draws share.
+#[derive(Clone, Copy)]
+struct Slot {
+    source: [f32; 4],
+    at: Viewport,
+    params: Params,
 }
 
 /// Two textures a blur ping-pongs between, and how large they are.
@@ -1183,8 +1230,8 @@ impl Targets {
             }
         });
         // One allocation serves every card on screen — each writes only the
-        // corner it needs — and at `WORKING_SCALE` down it costs a sixteenth
-        // of a full-size target.
+        // slot its own pixels shrink to — and at `WORKING_SCALE` down it costs
+        // a sixteenth of a full-size target.
         let working = [
             make("Backdrop Working 0", work_width, work_height),
             make("Backdrop Working 1", work_width, work_height),
@@ -1209,6 +1256,16 @@ impl Targets {
             size: (self.work_width, self.work_height),
         }
     }
+}
+
+/// `viewport` as a fraction of a texture `size` texels large.
+fn normalised((x, y, width, height): Viewport, size: (u32, u32)) -> [f32; 4] {
+    [
+        x as f32 / size.0 as f32,
+        y as f32 / size.1 as f32,
+        width as f32 / size.0 as f32,
+        height as f32 / size.1 as f32,
+    ]
 }
 
 /// A texture the passes here can draw into and read back from.

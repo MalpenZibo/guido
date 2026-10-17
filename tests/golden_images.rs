@@ -5447,3 +5447,87 @@ fn merged_shapes_inside_a_layer_are_drawn_where_they_are_without_one() {
         }
     }
 }
+
+/// Widths of the cells under `frosts_side_by_side_keep_to_their_own_cells`:
+/// odd, so their shrunk slots round, and two of two pixels, which shrink to
+/// the same working texel.
+const SIDE_BY_SIDE: [f32; 9] = [40.0, 13.0, 2.0, 2.0, 22.0, 9.0, 37.0, 55.0, 60.0];
+
+/// A row of cells of their own colours with a white stripe across them, and a
+/// row of frosts as wide as the cells over it.
+fn cells_under_frosts() -> Container {
+    let colours = [
+        Color::rgb(0.85, 0.35, 0.30),
+        Color::rgb(0.15, 0.45, 0.85),
+        Color::rgb(0.30, 0.80, 0.40),
+        Color::rgb(0.95, 0.85, 0.30),
+    ];
+    let cells = container().layout(Flex::row()).children(
+        SIDE_BY_SIDE
+            .iter()
+            .enumerate()
+            .map(|(i, &width)| swatch(width, 50.0, colours[i % colours.len()])),
+    );
+    let stripe = container()
+        .layout(Flex::column())
+        .child(box_of(240.0, 22.0))
+        .child(swatch(240.0, 6.0, Color::WHITE));
+    let frosts = container()
+        .layout(Flex::row())
+        .children(SIDE_BY_SIDE.iter().map(|&width| {
+            box_of(width, 50.0)
+                .backdrop_blur(BackdropBlur::new(6.0).sources(BackdropSources::SURFACE))
+        }));
+    container()
+        .width(240.0)
+        .height(50.0)
+        .layout(ZStack::new())
+        .children([cells.into_any(), stripe.into_any(), frosts.into_any()])
+}
+
+/// Frosts side by side, each over a cell of its own colour, are blurred in
+/// one batch: each shrunk into a slot of its own in the working texture
+/// beside the others' (#766). Each shows its own cell and the stripe through
+/// it and nothing of its neighbours' — a read that ran past its slot would
+/// tint its edge with the next cell's colour. The top row frosts the surface,
+/// the bottom one a layer's texture, which batches the same way.
+#[test]
+fn frosts_side_by_side_keep_to_their_own_cells() {
+    golden(
+        "frosts_side_by_side_keep_to_their_own_cells",
+        (240.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .layout(Flex::column())
+            .child(cells_under_frosts())
+            .child(container().blur(0.0).child(cells_under_frosts())),
+    );
+}
+
+/// A frost over a frost blurs what the first laid down, not the scene beneath
+/// both: the two cannot share a batch, and the second waits for the first.
+/// The third reaches two pixels over the second, too few to meet it once both
+/// are shrunk, and still waits for it.
+#[test]
+fn a_frost_over_a_frost_blurs_it_again() {
+    let frost = |x: f32, y: f32, width: f32| {
+        box_of(width, 50.0)
+            .backdrop_blur(BackdropBlur::new(8.0).sources(BackdropSources::SURFACE))
+            .translate((x, y))
+    };
+    golden(
+        "a_frost_over_a_frost_blurs_it_again",
+        (240.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(ZStack::new())
+            .child(stripes(240.0, 10, 10.0))
+            .child(frost(30.0, 20.0, 100.0))
+            .child(frost(90.0, 40.0, 100.0))
+            .child(frost(188.0, 20.0, 50.0)),
+    );
+}

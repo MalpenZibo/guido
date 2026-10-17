@@ -81,6 +81,29 @@ fn source_uv(uv: vec2<f32>) -> vec2<f32> {
     return params.src_rect.xy + uv * params.src_rect.zw;
 }
 
+// A read inside `src_rect` and nowhere else, for the passes that read a region
+// of a working texture: kept half a texel inside its edges, so the linear
+// sampler blends only the region's own texels. A region shares its texture
+// with whatever lies beyond it, and clamp-to-edge only stops a read at the
+// texture's edge — which is a region's edge only at the top and the left.
+//
+// The bounds are `[low, high]` in one vector, worked out once per fragment by
+// `region_bounds` and not once per tap.
+fn region_bounds() -> vec4<f32> {
+    let half_texel = 0.5 / vec2<f32>(textureDimensions(t_source));
+    let low = params.src_rect.xy + half_texel;
+    let high = max(params.src_rect.xy + params.src_rect.zw - half_texel, low);
+    return vec4<f32>(low, high);
+}
+
+fn region_uv(at: vec2<f32>) -> vec2<f32> {
+    return in_region(at, region_bounds());
+}
+
+fn in_region(at: vec2<f32>, bounds: vec4<f32>) -> vec2<f32> {
+    return clamp(at, bounds.xy, bounds.zw);
+}
+
 // The fragment on the target, then back in the shape's own space — where the
 // shape is an ordinary rect whatever it has been turned or stretched by. The
 // viewport is the box around that shape, so this is also what cuts the box
@@ -142,17 +165,19 @@ fn fs_blur(in: VertexOutput) -> @location(0) vec4<f32> {
     let sigma = max(params.sigma, 0.0001);
     let taps = i32(params.taps);
 
-    var accum = textureSample(t_source, s_source, source_uv(in.uv));
+    let centre = source_uv(in.uv);
+    let bounds = region_bounds();
+    var accum = textureSample(t_source, s_source, in_region(centre, bounds));
     var weight_sum = 1.0;
 
     for (var i = 1; i <= taps; i = i + 1) {
         let offset = f32(i);
         let weight = exp(-(offset * offset) / (2.0 * sigma * sigma));
         let step = params.direction * offset;
-        // Clamped inside the region by the sampler's clamp-to-edge address
-        // mode, so the border smears rather than pulling in neighbours.
-        accum = accum + textureSample(t_source, s_source, source_uv(in.uv) + step) * weight;
-        accum = accum + textureSample(t_source, s_source, source_uv(in.uv) - step) * weight;
+        // Clamped inside the region, so the border smears rather than pulling
+        // in whatever lies next to it.
+        accum = accum + textureSample(t_source, s_source, in_region(centre + step, bounds)) * weight;
+        accum = accum + textureSample(t_source, s_source, in_region(centre - step, bounds)) * weight;
         weight_sum = weight_sum + 2.0 * weight;
     }
 
@@ -315,7 +340,7 @@ fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
 // own corners so the effect stops where the container does.
 @fragment
 fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
-    let blurred = textureSample(t_source, s_source, source_uv(in.uv));
+    let blurred = textureSample(t_source, s_source, region_uv(source_uv(in.uv)));
     return vec4<f32>(blurred.rgb, blurred.a * shape_coverage(in.uv));
 }
 
@@ -358,7 +383,7 @@ fn fs_erase(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_replace(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_source, s_source, source_uv(in.uv)) * shape_coverage(in.uv);
+    return textureSample(t_source, s_source, region_uv(source_uv(in.uv))) * shape_coverage(in.uv);
 }
 
 // A contour around the coverage, drawn outside it.
@@ -409,7 +434,7 @@ fn fs_outline(in: VertexOutput) -> @location(0) vec4<f32> {
 // keep its frost: the coverage goes where the letters go.
 @fragment
 fn fs_composite_mask(in: VertexOutput) -> @location(0) vec4<f32> {
-    let blurred = textureSample(t_source, s_source, source_uv(in.uv));
+    let blurred = textureSample(t_source, s_source, region_uv(source_uv(in.uv)));
     return vec4<f32>(blurred.rgb, blurred.a * mask_coverage(in.uv));
 }
 
@@ -429,5 +454,5 @@ fn fs_erase_mask(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_replace_mask(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_source, s_source, source_uv(in.uv)) * mask_coverage(in.uv);
+    return textureSample(t_source, s_source, region_uv(source_uv(in.uv))) * mask_coverage(in.uv);
 }

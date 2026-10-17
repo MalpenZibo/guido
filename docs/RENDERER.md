@@ -431,7 +431,7 @@ land after the groups holding that content.
 A backdrop effect samples the render target, which a pass cannot do to its own
 attachment. When a frame contains one, it is drawn into an offscreen colour
 target instead of the swapchain; at each backdrop group the pass ends, the
-effect runs, and the pass resumes with `LoadOp::Load`. The target is blitted to
+effects run, and the pass resumes with `LoadOp::Load`. The target is blitted to
 the swapchain once at the end and released after enough idle frames.
 
 Per region: downsample into a quarter-size working texture (rendering into a
@@ -440,8 +440,27 @@ gaussian passes ping-ponging between two working textures, then a composite
 back over the scene masked by the container's rounded-rect SDF. See
 `src/renderer/backdrop_pass.rs`.
 
+**The regions of a group share those passes** (#766). Each is shrunk into its
+own slot of the working texture — the place its pixels shrink to, so regions
+apart on the scene are apart there — and one downsample, one gaussian each way
+serve them all, a draw per region. The composites are drawn in the scene's
+pass as it resumes, so a group costs three passes of the backdrop's own
+however many frosts it holds. A render pass costs wgpu-core about fifteen
+allocations whatever it draws, which is what the frosts were paying for: over
+a list of frosted cards a frame went from 843 allocations to 453, against 338
+for the same cards unfrosted. Every read of a slot is clamped to its rect in
+`src/renderer/backdrop_shader.wgsl`, since its neighbours share the texture.
+Only regions whose viewports do not overlap can share — a later one reads what
+an earlier one lays back — and two that land on one working texel cannot
+either, so `BackdropRenderer::batch_end` closes a batch at the first that
+would, and the batches run in paint order. Inside a layer it is the same,
+against the layer's texture. `render_stats` counts the passes in
+`backdrop_passes`, and `tests/draw_calls_are_counted.rs` holds a group at
+three; `frosts_side_by_side_keep_to_their_own_cells` and
+`a_frost_over_a_frost_blurs_it_again` are the goldens.
+
 What those passes read is kept across frames, as the shape pipeline's
-instances are. Each pass takes the next slot of one uniform buffer, read
+instances are. Each draw takes the next slot of one uniform buffer, read
 through a dynamic offset; the slots are gathered on the CPU and written in a
 single `write_buffer` when the frame is finished, and the buffer is replaced by
 one twice its size only when a frame needs more slots than it holds — the
