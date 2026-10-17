@@ -306,6 +306,34 @@ than pressing what is under it.
 A scroller with nothing to scroll claims none of this, so a list that happens
 to fit today still answers a tap the way it always did.
 
+The keyboard moves it too. Page Down scrolls the nearest scroller around the
+focus down by one viewport height, and Page Up back up by one — a scroller that
+is `.focusable(true)` and holds the focus itself, or one with the focused
+widget somewhere inside it. The key goes to the focus first, as every key does:
+the focused widget, then the scroller's own `on_key_down`, and only what both
+let through pages. A scroller at its end lets the key go on, so the next
+scroller out pages instead, as a browser's do. A page is vertical, so a
+`Scroll::horizontal()` scroller lets the key go on too. With Ctrl, Alt or
+Super held, the key is left for whoever binds it.
+
+With nothing focused, nothing pages. Clicking into a list that is not
+focusable gives nothing the focus, so a list that should page after a click
+is made focusable:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn large_content() -> Container { container() }
+# fn main() {
+container()
+    .height(300.0)
+    .focusable(true)
+    .scroll(Scroll::vertical())
+    .child(large_content())
+# ;
+# }
+```
+
 Nested scrollers go to the innermost one that can move: a finger in a list
 inside a page drags the list, and the page only where the list is not — or
 where it has nothing to scroll on that axis. The wheel has always gone to the

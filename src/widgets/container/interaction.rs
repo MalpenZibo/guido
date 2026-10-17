@@ -529,6 +529,10 @@ impl Container {
                 {
                     return EventResponse::Handled;
                 }
+                if tree.routing_the_focus_path() && self.page(*key, *modifiers, now) {
+                    request_job(id, JobRequest::Paint);
+                    return EventResponse::Handled;
+                }
             }
 
             Event::KeyUp { key, modifiers } => {
