@@ -20,15 +20,17 @@
 //! device pixel wide. A transform applied afterwards carries the mesh with it,
 //! fringe and all.
 
-use lyon_tessellation::math::point;
+use lyon_tessellation::math::{Point as LyonPoint, point};
 use lyon_tessellation::path::Path as LyonPath;
+use lyon_tessellation::path::PathEvent;
+use lyon_tessellation::path::iterator::PathIterator;
 use lyon_tessellation::{
     BuffersBuilder, FillOptions, FillTessellator, FillVertex, LineCap, LineJoin, StrokeOptions,
     StrokeTessellator, StrokeVertex, VertexBuffers,
 };
 use rustc_hash::FxHashMap;
 
-use super::path::{Cap, FillRule, Join, Path, PathElement, Stroke};
+use super::path::{Cap, Dashes, FillRule, Join, Path, PathElement, Stroke};
 
 /// How far a flattened curve may stray from the true one, in physical pixels.
 /// lyon's own default, and a tenth of the fringe.
@@ -111,6 +113,199 @@ fn to_lyon(path: &Path, scale: f32) -> LyonPath {
     builder.build()
 }
 
+/// The most dashes and gaps a path is cut into. A pattern so fine against so
+/// long a path that it would make more is drawn solid instead, as Skia gives
+/// up past a million — and a pattern whose lengths are below what the
+/// path's coordinates can resolve would otherwise never move along it.
+const MOST_INTERVALS: usize = 200_000;
+
+/// `path` cut into the dashes `dashes` describes, each an open subpath of its
+/// own — or `None` if that would be more than [`MOST_INTERVALS`].
+///
+/// The curves are flattened first, to the tolerance the stroker would have
+/// used, and a dash keeps every vertex it passes, so the stroker still joins
+/// it at each corner and caps it only at its two ends. The pattern starts
+/// again on every subpath. On a closed one, a dash that is on at the start
+/// and on again when the subpath comes back to it is one dash through the
+/// start, as Skia and cairo draw it, and a dash longer than the whole subpath
+/// leaves it closed.
+fn dash(
+    path: &LyonPath,
+    dashes: &Dashes,
+    scale: f32,
+    scratch: &mut DashScratch,
+) -> Option<LyonPath> {
+    let mut dasher = Dasher::new(dashes, scale, scratch);
+    for event in path.iter().flattened(TOLERANCE) {
+        match event {
+            PathEvent::Begin { at } => dasher.begin(at),
+            PathEvent::Line { to, .. } => dasher.line_to(to)?,
+            PathEvent::End { first, close, .. } => {
+                if close {
+                    dasher.line_to(first)?;
+                }
+                dasher.end(close);
+            }
+            // Flattened: there are no curves left.
+            PathEvent::Quadratic { .. } | PathEvent::Cubic { .. } => {}
+        }
+    }
+    Some(dasher.out.build())
+}
+
+/// The buffers [`dash`] walks a path in, kept between tessellations so a
+/// dash offset that moves every frame does not grow them again every frame.
+#[derive(Default)]
+struct DashScratch {
+    /// The pattern, in physical pixels.
+    pattern: Vec<f32>,
+    /// The dash being drawn — empty in a gap.
+    current: Vec<LyonPoint>,
+    /// The subpath's first dash, held until its end says whether it is closed
+    /// and the last dash runs into it.
+    first: Vec<LyonPoint>,
+}
+
+/// The walk [`dash`] makes along a flattened path.
+struct Dasher<'a> {
+    /// Where each subpath starts in the pattern: the interval, and how much of
+    /// it is left.
+    start: (usize, f32),
+    index: usize,
+    left: f32,
+    at: LyonPoint,
+    scratch: &'a mut DashScratch,
+    intervals: usize,
+    out: lyon_tessellation::path::path::Builder,
+}
+
+impl<'a> Dasher<'a> {
+    fn new(dashes: &Dashes, scale: f32, scratch: &'a mut DashScratch) -> Self {
+        scratch.pattern.clear();
+        scratch
+            .pattern
+            .extend(dashes.pattern().iter().map(|l| l * scale));
+        let pattern = &scratch.pattern;
+        // Walk the offset into the pattern. An offset that ends exactly where
+        // an interval does starts on the next, unless it is zero: a pattern
+        // that opens on a dot draws that dot at the start.
+        let mut offset = dashes.offset() * scale;
+        let mut index = 0;
+        while offset > 0.0 && offset >= pattern[index] {
+            offset -= pattern[index];
+            index = (index + 1) % pattern.len();
+        }
+        let left = pattern[index] - offset;
+        Self {
+            start: (index, left),
+            index,
+            left,
+            at: point(0.0, 0.0),
+            scratch,
+            intervals: 0,
+            out: LyonPath::builder(),
+        }
+    }
+
+    /// A dash is on the even intervals, a gap on the odd.
+    fn on(&self) -> bool {
+        self.index.is_multiple_of(2)
+    }
+
+    /// Whether the dash being drawn is the subpath's first, which began at
+    /// its start: the subpath began on a dash, and that dash has not ended.
+    fn in_first(&self) -> bool {
+        self.start.0.is_multiple_of(2) && self.scratch.first.is_empty()
+    }
+
+    fn begin(&mut self, at: LyonPoint) {
+        (self.index, self.left) = self.start;
+        self.at = at;
+        self.scratch.current.clear();
+        self.scratch.first.clear();
+        if self.on() {
+            self.scratch.current.push(at);
+        }
+    }
+
+    fn line_to(&mut self, to: LyonPoint) -> Option<()> {
+        let from = self.at;
+        let length = (to - from).length();
+        let mut travelled = 0.0;
+        while self.left <= length - travelled {
+            self.intervals += 1;
+            if self.intervals > MOST_INTERVALS {
+                return None;
+            }
+            travelled += self.left;
+            let p = if length > 0.0 {
+                from.lerp(to, travelled / length)
+            } else {
+                from
+            };
+            self.scratch.current.push(p);
+            if self.on() {
+                self.finish_dash();
+            }
+            self.index = (self.index + 1) % self.scratch.pattern.len();
+            self.left = self.scratch.pattern[self.index];
+        }
+        self.left -= length - travelled;
+        if self.on() {
+            self.scratch.current.push(to);
+        }
+        self.at = to;
+        Some(())
+    }
+
+    fn finish_dash(&mut self) {
+        let in_first = self.in_first();
+        let DashScratch { current, first, .. } = &mut *self.scratch;
+        if in_first {
+            std::mem::swap(first, current);
+        } else {
+            emit(&mut self.out, current, false);
+        }
+        current.clear();
+    }
+
+    fn end(&mut self, close: bool) {
+        let on = self.on();
+        let in_first = self.in_first();
+        let DashScratch { current, first, .. } = &mut *self.scratch;
+        if close && on && in_first {
+            // One dash all the way round: the subpath as it was, closed. Its
+            // last point is its first again.
+            current.pop();
+            emit(&mut self.out, current, true);
+        } else if close && on && !first.is_empty() {
+            current.extend_from_slice(&first[1..]);
+            emit(&mut self.out, current, false);
+        } else {
+            if on {
+                emit(&mut self.out, current, false);
+            }
+            emit(&mut self.out, first, false);
+        }
+    }
+}
+
+/// One dash, as a subpath. A dash of a single point is drawn as one of no
+/// length, which lyon gives a cap at either end of — a round cap's dot.
+fn emit(out: &mut lyon_tessellation::path::path::Builder, points: &[LyonPoint], close: bool) {
+    let Some((&start, rest)) = points.split_first() else {
+        return;
+    };
+    out.begin(start);
+    if rest.is_empty() {
+        out.line_to(start);
+    }
+    for &p in rest {
+        out.line_to(p);
+    }
+    out.end(close);
+}
+
 /// lyon's two tessellators, and everything a mesh is built in on its way to
 /// being one — kept between meshes, so that tessellating a path allocates the
 /// mesh it returns and little else.
@@ -134,6 +329,7 @@ struct Scratch {
     gathered: Vec<Gathered>,
     boundary: Vec<(u32, u32)>,
     outer: Vec<u32>,
+    dash: DashScratch,
 }
 
 impl Tessellator {
@@ -166,7 +362,10 @@ impl Tessellator {
         if width.is_nan() || width <= 0.0 {
             return PathMesh::default();
         }
-        let lyon = to_lyon(path, scale);
+        let mut lyon = to_lyon(path, scale);
+        if let Some(dashes) = &stroke.dashes {
+            lyon = dash(&lyon, dashes, scale, &mut self.scratch.dash).unwrap_or(lyon);
+        }
         let options = StrokeOptions::tolerance(TOLERANCE)
             .with_line_width(width.max(THINNEST))
             .with_line_cap(match stroke.cap {
@@ -207,6 +406,7 @@ impl Tessellator {
             gathered,
             boundary,
             outer,
+            dash: _,
         } = &mut self.scratch;
 
         // Weld first. A boundary is the edges one triangle uses, so two
@@ -614,5 +814,194 @@ mod tests {
         let zero =
             Tessellator::default().stroke(&square(4.0), &Stroke::new(0.0, Color::WHITE), 1.0);
         assert!(zero.indices.is_empty());
+    }
+
+    /// The dashes `stroke` cuts `path` into at `scale`, each as its points and
+    /// whether it is closed.
+    fn dashes_of(path: &Path, stroke: &Stroke, scale: f32) -> Vec<(Vec<[f32; 2]>, bool)> {
+        let lyon = dash(
+            &to_lyon(path, scale),
+            stroke.dashes.as_ref().unwrap(),
+            scale,
+            &mut DashScratch::default(),
+        )
+        .expect("within the interval limit");
+        let mut out = Vec::new();
+        for event in lyon.iter() {
+            match event {
+                PathEvent::Begin { at } => out.push((vec![at.to_array()], false)),
+                PathEvent::Line { to, .. } => out.last_mut().unwrap().0.push(to.to_array()),
+                PathEvent::End { close, .. } => out.last_mut().unwrap().1 = close,
+                _ => unreachable!("a dash is straight lines"),
+            }
+        }
+        out
+    }
+
+    fn line(length: f32) -> Path {
+        Path::new().move_to((0.0, 0.0)).line_to((length, 0.0))
+    }
+
+    fn close(a: &[[f32; 2]], b: &[[f32; 2]]) -> bool {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(p, q)| (p[0] - q[0]).abs() < 1e-4 && (p[1] - q[1]).abs() < 1e-4)
+    }
+
+    /// The dashes, in any order: the first dash of a subpath is held back
+    /// until its end says whether the last one runs into it, and a mesh's
+    /// triangles are one colour whatever order they come in.
+    fn assert_dashes(got: &[(Vec<[f32; 2]>, bool)], want: &[(&[[f32; 2]], bool)]) {
+        assert!(
+            got.len() == want.len()
+                && want
+                    .iter()
+                    .all(|(w, wc)| got.iter().any(|(g, gc)| gc == wc && close(g, w))),
+            "dashed into {got:?}, not {want:?}"
+        );
+    }
+
+    /// The pattern is laid along the line from its start, and the offset is
+    /// how far into the pattern that start is.
+    #[test]
+    fn a_line_is_cut_where_its_pattern_says() {
+        let stroke = Stroke::new(1.0, Color::WHITE);
+        assert_dashes(
+            &dashes_of(&line(20.0), &stroke.clone().dashes(&[4.0, 4.0], 0.0), 1.0),
+            &[
+                (&[[0.0, 0.0], [4.0, 0.0]], false),
+                (&[[8.0, 0.0], [12.0, 0.0]], false),
+                (&[[16.0, 0.0], [20.0, 0.0]], false),
+            ],
+        );
+        assert_dashes(
+            &dashes_of(&line(20.0), &stroke.dashes(&[4.0, 4.0], 2.0), 1.0),
+            &[
+                (&[[0.0, 0.0], [2.0, 0.0]], false),
+                (&[[6.0, 0.0], [10.0, 0.0]], false),
+                (&[[14.0, 0.0], [18.0, 0.0]], false),
+            ],
+        );
+    }
+
+    /// The pattern is in logical pixels, like the path, so a scale cuts the
+    /// same dashes into a larger path.
+    #[test]
+    fn the_pattern_scales_with_the_path() {
+        let stroke = Stroke::new(1.0, Color::WHITE).dashes(&[4.0, 4.0], 2.0);
+        assert_dashes(
+            &dashes_of(&line(10.0), &stroke, 2.0),
+            &[
+                (&[[0.0, 0.0], [4.0, 0.0]], false),
+                (&[[12.0, 0.0], [20.0, 0.0]], false),
+            ],
+        );
+    }
+
+    /// A dash that runs round a corner keeps it, so the stroker joins it there
+    /// rather than cutting the corner off.
+    #[test]
+    fn a_dash_keeps_the_corners_it_turns() {
+        let corner = Path::new()
+            .move_to((0.0, 0.0))
+            .line_to((10.0, 0.0))
+            .line_to((10.0, 10.0));
+        let stroke = Stroke::new(1.0, Color::WHITE).dashes(&[14.0, 2.0], 0.0);
+        assert_dashes(
+            &dashes_of(&corner, &stroke, 1.0),
+            &[
+                (&[[0.0, 0.0], [10.0, 0.0], [10.0, 4.0]], false),
+                (&[[10.0, 6.0], [10.0, 10.0]], false),
+            ],
+        );
+    }
+
+    /// On a closed subpath the dash that is on when the path comes back to
+    /// its start is the dash that began there: one dash, through the corner.
+    #[test]
+    fn a_dash_through_the_start_of_a_closed_path_is_one_dash() {
+        // A perimeter of 40 is four periods, so the pattern is where it began
+        // when the square closes: three pixels into a dash.
+        let stroke = Stroke::new(1.0, Color::WHITE).dashes(&[6.0, 4.0], 3.0);
+        let dashes = dashes_of(&square(10.0), &stroke, 1.0);
+        assert_eq!(dashes.len(), 4, "{dashes:?}");
+        let through = dashes.last().unwrap();
+        assert!(
+            close(&through.0, &[[0.0, 3.0], [0.0, 0.0], [3.0, 0.0]]),
+            "{dashes:?}"
+        );
+    }
+
+    /// A dash longer than the subpath it is laid on leaves it as it was,
+    /// closed, with joins all the way round and no cap anywhere.
+    #[test]
+    fn a_dash_longer_than_a_closed_path_leaves_it_closed() {
+        let stroke = Stroke::new(1.0, Color::WHITE).dashes(&[100.0, 4.0], 0.0);
+        assert_dashes(
+            &dashes_of(&square(10.0), &stroke, 1.0),
+            &[(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]], true)],
+        );
+    }
+
+    /// The pattern starts again on each subpath.
+    #[test]
+    fn each_subpath_starts_the_pattern_again() {
+        let two = line(6.0).move_to((0.0, 10.0)).line_to((6.0, 10.0));
+        let stroke = Stroke::new(1.0, Color::WHITE).dashes(&[4.0, 4.0], 0.0);
+        assert_dashes(
+            &dashes_of(&two, &stroke, 1.0),
+            &[
+                (&[[0.0, 0.0], [4.0, 0.0]], false),
+                (&[[0.0, 10.0], [4.0, 10.0]], false),
+            ],
+        );
+    }
+
+    /// A dash of no length with round caps is a dot; with butt caps it is
+    /// nothing.
+    #[test]
+    fn a_dash_of_no_length_is_a_dot_with_round_caps() {
+        let dotted = Stroke::new(4.0, Color::WHITE).dashes(&[0.0, 10.0], 0.0);
+        let round =
+            Tessellator::default().stroke(&line(25.0), &dotted.clone().caps(Cap::Round), 1.0);
+        let area = painted_area(&round, [-4.0, -4.0], [30.0, 4.0], 0.05);
+        let dots = 3.0 * std::f32::consts::PI * 4.0;
+        assert!(
+            (area - dots).abs() < dots * 0.1,
+            "three dots of radius 2 cover {dots}, and the mesh painted {area}"
+        );
+        let butt = Tessellator::default().stroke(&line(25.0), &dotted, 1.0);
+        let area = painted_area(&butt, [-4.0, -4.0], [30.0, 4.0], 0.05);
+        assert!(area < 0.5, "dashes of no length painted {area}");
+    }
+
+    /// A pattern of no length, or one no length could be laid out by, draws
+    /// the line solid — the mesh a stroke with no pattern draws.
+    #[test]
+    fn a_pattern_of_no_length_draws_the_line_solid() {
+        let solid = Stroke::new(2.0, Color::WHITE);
+        let expected = Tessellator::default().stroke(&square(10.0), &solid, 1.0);
+        for pattern in [&[][..], &[0.0, 0.0], &[0.0], &[4.0, -1.0], &[f32::NAN, 2.0]] {
+            let stroke = solid.clone().dashes(pattern, 3.0);
+            assert_eq!(stroke.dashes, None, "{pattern:?} was kept");
+            let mesh = Tessellator::default().stroke(&square(10.0), &stroke, 1.0);
+            assert_eq!(mesh.vertices, expected.vertices, "{pattern:?}");
+            assert_eq!(mesh.indices, expected.indices, "{pattern:?}");
+        }
+    }
+
+    /// A pattern too fine for the path it is laid along — more intervals than
+    /// [`MOST_INTERVALS`] — is drawn solid rather than walked for ever.
+    #[test]
+    fn a_pattern_too_fine_for_its_path_draws_it_solid() {
+        let fine = Stroke::new(1.0, Color::WHITE).dashes(&[1e-3, 1e-3], 0.0);
+        let lyon = to_lyon(&line(1000.0), 1.0);
+        let scratch = &mut DashScratch::default();
+        assert!(dash(&lyon, fine.dashes.as_ref().unwrap(), 1.0, scratch).is_none());
+        let mesh = Tessellator::default().stroke(&line(1000.0), &fine, 1.0);
+        let solid =
+            Tessellator::default().stroke(&line(1000.0), &Stroke::new(1.0, Color::WHITE), 1.0);
+        assert_eq!(mesh.indices, solid.indices);
     }
 }

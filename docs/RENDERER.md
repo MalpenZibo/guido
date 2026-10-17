@@ -896,6 +896,12 @@ new number in an instance, never a new tessellation, and the edge is exact at
 any scale because the distance is measured per fragment. Impeller draws its
 simple shapes the same way.
 
+A dashed arc is the exception: `draw_arc` builds it as a path — one cubic per
+quarter turn, `Path::arc` — and hands it to `draw_path`, so it is cut and
+tessellated as every dashed path is. An SDF has no arc length to dash by
+without a shader route of its own, which #755 left for a measurement to ask
+for.
+
 ### Paths
 
 A path is filled and stroked into triangles by lyon
@@ -917,12 +923,27 @@ A path is filled and stroked into triangles by lyon
   the same alpha ramp. A stroke thinner than a pixel is tessellated a pixel
   wide at a coverage that keeps its weight.
 - **Cached by content and scale.** A mesh is kept, keyed by a hash of the
-  path's segments, its fill rule or stroke geometry, and the surface scale —
+  path's segments, its fill rule or stroke geometry and dashes, and the
+  surface scale —
   the fringe is a physical pixel, so a new scale is a new mesh. The colour and
   the transform are not in the key: they are the draw's `PathRecord`, which
   the vertex shader reads, so a path that moves, turns, fades or changes colour
   draws the mesh it has. A transform's own scale scales the fringe with it.
   A mesh no frame has drawn for 120 frames is dropped.
+- **Dashes cut before the stroke.** A dashed `Stroke` is cut on the CPU,
+  after the curves are flattened and before lyon strokes it: the walk along
+  the flattened path (`dash` in `path_mesh.rs`) emits each dash as an open
+  subpath that keeps every vertex it passes, so each is capped at its two ends
+  and joined at its corners as a solid line would be. On a closed subpath the
+  last dash runs into the first, as Skia and cairo draw it. iced, Vello and
+  GTK dash on the CPU the same way; Skia's shader route is for one straight
+  segment only. lyon's own walk along a path reports only where the pattern
+  changes, which would turn a dash's corners into chords — iced's dashes do.
+  The pattern and the offset are part of the mesh key, the offset kept modulo
+  the pattern's period, so an offset that marches is a tessellation a frame
+  for that one path until it comes back round. A pattern that would cut a
+  path into more than 200 000 intervals draws it solid, as Skia gives up past
+  a million.
 - **Its own layer.** `RenderLayer::Paths` sits between the shapes and the
   images, so a group's paths are one indexed draw however many shapes lie
   between them, and a shape painted over a path opens a group as one painted
@@ -942,10 +963,12 @@ nothing once the buffers have grown; keeping meshes on the GPU instead would
 save it at the cost of a buffer per mesh.
 
 `a_sparkline_has_one_tone_at_every_join`, `closed_paths_are_filled`,
-`a_stroke_follows_its_transform` and `a_path_is_cut_by_a_rounded_clip` are the
-goldens; `benches/sparkline_ring` is the workload, and its `path.tessellated`
-and `path.reused` rows say how often a frame made a mesh rather than drawing
-one again.
+`a_stroke_follows_its_transform`, `a_path_is_cut_by_a_rounded_clip` and
+`dashed_strokes_keep_their_caps_and_joins` are the goldens;
+`benches/sparkline_ring` is the workload, and its `path.tessellated` and
+`path.reused` rows say how often a frame made a mesh rather than drawing one
+again. Its marching outline is one tessellation every painted frame, which is
+what an animated dash offset costs.
 
 ### Render Order
 

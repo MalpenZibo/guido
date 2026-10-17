@@ -2,7 +2,8 @@
 //! the pipeline that draws them.
 //!
 //! A path is tessellated once per shape and scale (`path_mesh.rs`) and kept,
-//! keyed by its segments, how it is filled or stroked, and the surface scale —
+//! keyed by its segments, how it is filled or stroked — dashes included — and
+//! the surface scale —
 //! the fringe is a physical pixel, so a new scale is a new mesh. A transform is
 //! not part of the key: the mesh is in the path's own space, and the vertex
 //! shader places it, so a path that moves, turns or fades draws the triangles
@@ -24,7 +25,7 @@ use wgpu::{BindGroup, BindGroupLayout, Buffer, Device, Queue, RenderPass, Render
 use super::clip_records::ClipRecord;
 use super::commands::DrawCommand;
 use super::flatten::FlattenedCommand;
-use super::path::{Cap, FillRule, Join, Path, Stroke};
+use super::path::{Cap, Dashes, FillRule, Join, Path, Stroke};
 use super::path_mesh::{PathMesh, Tessellator};
 use crate::render_stats::{self, Pipeline};
 use crate::widgets::Color;
@@ -73,7 +74,7 @@ pub(crate) struct PathRecord {
 /// What a mesh was made from besides the path: one fill rule, or one stroke's
 /// geometry. The colour is not here — it is the record's, so a path that
 /// changes colour keeps its triangles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Style {
     Fill(FillRule),
     Stroke {
@@ -81,6 +82,9 @@ enum Style {
         cap: Cap,
         join: Join,
         miter_limit: u32,
+        /// The offset is already kept modulo the pattern, so dashes that have
+        /// marched one period along hit the mesh they drew a period ago.
+        dashes: Option<Dashes>,
     },
 }
 
@@ -100,6 +104,7 @@ impl Drawn<'_> {
                 cap: stroke.cap,
                 join: stroke.join,
                 miter_limit: stroke.miter_limit.to_bits(),
+                dashes: stroke.dashes.clone(),
             },
         }
     }
@@ -112,7 +117,7 @@ impl Drawn<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct MeshKey {
     path: u64,
     style: Style,
