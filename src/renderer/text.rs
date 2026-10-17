@@ -196,11 +196,7 @@ pub(super) fn shape(
     scale: f32,
 ) -> Buffer {
     let px = crate::renderer::text_measurer::shapeable_size(font_size);
-    let weight = if font_weight == FontWeight::default() {
-        FontWeight::NORMAL
-    } else {
-        font_weight
-    };
+    let weight = drawn_weight(font_weight);
     let declared = match line_height {
         LineHeight::Normal => None,
         LineHeight::Relative(factor) => Some(factor * px),
@@ -238,6 +234,15 @@ pub(super) fn shape(
         cut_to_lines(font_system, &mut buffer, lines, mark);
     }
     buffer
+}
+
+/// The weight a declared one is drawn at: the default is the normal weight.
+pub(super) fn drawn_weight(weight: FontWeight) -> FontWeight {
+    if weight == FontWeight::default() {
+        FontWeight::NORMAL
+    } else {
+        weight
+    }
 }
 
 /// What a declared family, weight and style are drawn in: the installed family
@@ -285,6 +290,7 @@ fn resolve_font(
     weight: FontWeight,
     style: FontStyle,
 ) -> ResolvedFont {
+    let weight = drawn_weight(weight);
     let key = (family, weight, style);
     let known = with_app_state(|app| app.resolved_fonts.borrow().get(&key).copied());
     if let Some(resolved) = known {
