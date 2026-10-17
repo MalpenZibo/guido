@@ -81,12 +81,14 @@ fn every_painted_frame_draws_paths_and_most_are_drawn_again() {
         "the rings are shapes, and a frame drew none"
     );
     assert!(meshes.tessellated > 0, "no reading was ever tessellated");
+    // The charts' own tessellations: the outline's, one a painted frame, are
+    // not a path that only moved.
+    let charts = meshes.tessellated - painted;
     assert!(
-        meshes.reused > meshes.tessellated,
-        "{} meshes drawn again against {} tessellated: a path that only moved \
-         was tessellated again",
+        meshes.reused > charts,
+        "{} meshes drawn again against {charts} tessellated for the charts: a \
+         path that only moved was tessellated again",
         meshes.reused,
-        meshes.tessellated
     );
     assert_eq!(
         run.counts.frames_pinned, 0,

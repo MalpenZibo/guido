@@ -9,6 +9,13 @@
 //!
 //! The scroller is what the script moves, so on every frame some rows move
 //! under the viewport, and a path that only moved draws the mesh it has.
+//!
+//! Above the scroller, standing still, is one row with a dashed outline whose
+//! dashes march along it every frame — marching ants. A new offset is a new
+//! mesh, so that one path is tessellated every frame, the case #755 asked to
+//! have measured. It steps by a fraction of a pixel that no whole number of
+//! frames in the script brings back round to a period, so no frame finds its
+//! mesh cached from an earlier one: what it costs is the worst case.
 
 use std::time::Duration;
 
@@ -16,8 +23,19 @@ use guido::prelude::*;
 use guido::renderer::{Fill, Join, Path, Stroke};
 use guido::widget_prelude::*;
 
-/// The surface, in logical pixels.
-pub const VIEWPORT: (u32, u32) = (600, 800);
+/// The marching outline's pattern, and how far it marches each frame: 0.37
+/// pixels against a period of 12 comes back to where it began only after 1200
+/// frames, more than the script plays.
+const ANTS: [f32; 2] = [8.0, 4.0];
+const ANTS_STEP: f32 = 0.37;
+const ANTS_HEIGHT: f32 = 40.0;
+
+/// The gap between the script's frames, which is how often the ants march.
+const FRAME: Duration = Duration::from_millis(16);
+
+/// The surface, in logical pixels: the marching outline's row, and under it a
+/// scroller 800 pixels tall.
+pub const VIEWPORT: (u32, u32) = (600, 840);
 
 const ROW_HEIGHT: f32 = 44.0;
 const RING: f32 = 32.0;
@@ -42,17 +60,57 @@ pub fn scene(rows: usize) -> Container {
     // The handle is dropped and the timer kept: it lives as long as the owner
     // building the surface, which is the run.
     let _ = set_interval(TICK, move || tick.update(|t| *t += 1));
+    let march = create_signal(0u32);
+    let _ = set_interval(FRAME, move || march.update(|m| *m += 1));
     container()
-        .width(VIEWPORT.0 as f32)
-        .height(VIEWPORT.1 as f32)
-        .scroll(Scroll::vertical())
+        .layout(Flex::column())
         .background(Color::rgb(0.10, 0.10, 0.14))
+        .child(Ants { march })
         .child(
             container()
-                .layout(Flex::column())
-                .padding(8.0)
-                .children((0..rows).map(move |row| status(row, tick))),
+                .width(VIEWPORT.0 as f32)
+                .height(VIEWPORT.1 as f32 - ANTS_HEIGHT)
+                .scroll(Scroll::vertical())
+                .child(
+                    container()
+                        .layout(Flex::column())
+                        .padding(8.0)
+                        .children((0..rows).map(move |row| status(row, tick))),
+                ),
         )
+}
+
+/// A rounded outline the width of the surface whose dashes march along it,
+/// one step a frame.
+struct Ants {
+    march: RwSignal<u32>,
+}
+
+impl Widget for Ants {
+    fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        constraints.constrain(Size::new(VIEWPORT.0 as f32, ANTS_HEIGHT))
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        let (x0, y0, x1, y1, r) = (4.0, 4.0, VIEWPORT.0 as f32 - 4.0, ANTS_HEIGHT - 4.0, 8.0);
+        let outline = Path::new()
+            .move_to((x0 + r, y0))
+            .line_to((x1 - r, y0))
+            .quad_to((x1, y0), (x1, y0 + r))
+            .line_to((x1, y1 - r))
+            .quad_to((x1, y1), (x1 - r, y1))
+            .line_to((x0 + r, y1))
+            .quad_to((x0, y1), (x0, y1 - r))
+            .line_to((x0, y0 + r))
+            .quad_to((x0, y0), (x0 + r, y0))
+            .close();
+        let offset = -(self.march.get() as f32) * ANTS_STEP;
+        ctx.draw_path(
+            &outline,
+            None,
+            Stroke::new(1.5, Color::rgb(0.95, 0.75, 0.25)).dashes(&ANTS, offset),
+        );
+    }
 }
 
 fn status(row: usize, tick: RwSignal<u32>) -> Container {
