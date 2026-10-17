@@ -498,6 +498,17 @@ A hidden child leads nothing, just as it takes no space in a flex: while an over
 beside a `fill()` background is hidden, the stack is sized as if it were not
 there.
 
+A child on its way out — removed from a `.child(move || ..)`, a
+`.children(move || ..)` or a `keyed(..)` list and playing the exit it declared
+with `exiting_to` — does not hold the stack open either: it leads only an axis
+that nothing staying leads. A shape that sizes to its content cross-fades
+between two views and starts moving toward the new one's size at once, rather
+than when the old one has finished fading. The leaving view keeps its own size,
+its place by the stack's alignment and its paint — cut off where the shape
+clips — and a leaving `fill()` background shrinks with the stack. With nothing
+staying, the leaving view is all there is to size by, so a view removed with
+nothing in its place fades out where it was.
+
 The two axes are decided independently, which is what makes the status-bar
 case work: a child with only `.height(fill())` fills the bar height and still
 leads the width.

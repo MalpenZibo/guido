@@ -108,6 +108,10 @@ and it travels home from wherever it had got to. The row itself is not rebuilt;
 a `.child(move || ..)` inside it is re-run, as it would be for any change it
 read, and an effect that missed a write while the row was leaving runs once.
 
+In a [`ZStack`](../concepts/layout.md#leaders-and-followers) a leaving child
+no longer leads the stack's size while anything staying does, so a shape that
+sizes to its content moves toward the view replacing it from the first frame.
+
 Only the removed widget's own properties are waited on. An exit declared on
 something inside it plays when *that* is the widget removed, and a container
 removed with no exit of its own takes a leaving child with it at once.
