@@ -4,7 +4,8 @@ use rustc_hash::FxHashMap;
 
 use crate::jobs::{JobRequest, request_job};
 use crate::layout::{Constraints, Size};
-use crate::reactive::{OwnerId, dispose_owner_now, under_owner};
+use crate::reactive::owner::under_scope;
+use crate::reactive::{OwnerId, current_owner, dispose_owner_now, under_owner};
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -22,6 +23,9 @@ enum SegmentType {
     /// Dynamic source with keyed reconciliation
     Dynamic {
         items_fn: Rc<ItemsFn>,
+        /// The scope `items_fn` runs under: the one current where the segment
+        /// was written. See [`ChildrenSource::add_dynamic`].
+        scope: Option<OwnerId>,
         /// Widget IDs by key while one reconciliation matches them against
         /// what was asked for. Empty between passes.
         cached: FxHashMap<u64, WidgetId>,
@@ -142,9 +146,15 @@ impl ChildrenSource {
     /// leaving, so a source whose keys mean something across runs — `keyed`,
     /// and not the closure forms, which mint a key every run — can hand one of
     /// them back and have its row returned rather than rebuilt.
+    ///
+    /// The scope current here is the one `items_fn` runs under, every time it
+    /// runs: what it reads with `use_context` and the scopes of the rows it
+    /// builds belong to where the segment was written, not to wherever the
+    /// frame happens to be when it reconciles.
     pub fn add_dynamic(&mut self, items_fn: impl Fn(&Leaving) -> Vec<DynItem> + 'static) {
         self.segments.push(SegmentType::Dynamic {
             items_fn: Rc::new(items_fn),
+            scope: current_owner(),
             cached: FxHashMap::default(),
             current_keys: Vec::new(),
             leaving: FxHashMap::default(),
@@ -177,6 +187,7 @@ impl ChildrenSource {
         for (idx, segment) in self.segments.iter_mut().enumerate() {
             if let SegmentType::Dynamic {
                 items_fn,
+                scope,
                 current_keys,
                 leaving,
                 has_run,
@@ -194,7 +205,7 @@ impl ChildrenSource {
                     let new_items = crate::reactive::invalidation::with_segment_tracking(
                         parent_id,
                         idx as u32,
-                        || items_fn(&Leaving(leaving)),
+                        || under_scope(*scope, || items_fn(&Leaving(leaving))),
                     );
                     *has_run = true;
 
@@ -767,13 +778,16 @@ impl Widget for OwnedWidget {
     /// line is drawn there because they are the two the frame runs as
     /// *machinery*: nothing a caller wrote decides what they build.
     ///
-    /// `event` and `reconcile_children` run a caller's own closure — a handler,
-    /// an `items_fn` — and a signal made there may be handed somewhere that
-    /// outlives the row on purpose. Disposing it would turn a later read into a
-    /// panic, so those two are left alone, and a test says so rather than a
-    /// comment promising it. That nothing in the library allocates there either
-    /// is true today and is the weaker half of the reason: it would stop being
-    /// true without anything failing, which is why it is not the argument.
+    /// `event` runs a caller's own closure — a handler — and a signal made
+    /// there may be handed somewhere that outlives the row on purpose.
+    /// Disposing it would turn a later read into a panic, so it is left alone,
+    /// and a test says so rather than a comment promising it. That nothing in
+    /// the library allocates there either is true today and is the weaker half
+    /// of the reason: it would stop being true without anything failing, which
+    /// is why it is not the argument.
+    ///
+    /// `reconcile_children` needs nothing from here: a dynamic segment enters
+    /// its own scope (see [`ChildrenSource::add_dynamic`]).
     ///
     /// The factory ran inside `with_owner`; this runs afterwards, and anything
     /// it creates — `Container::fold_enabled`'s derived — would otherwise be
@@ -1076,5 +1090,51 @@ mod tests {
             settled,
             "a scroller left its scrollbar's signals behind"
         );
+    }
+
+    /// A row's scope is made under the scope its list was written in, so what
+    /// the row owns goes when that scope does — a surface closing takes its
+    /// rows' cleanups with it — and the row dropping afterwards finds its
+    /// scope already gone rather than running them a second time.
+    #[test]
+    fn a_row_is_disposed_with_the_scope_its_list_was_written_in_and_only_once() {
+        let cleanups = Rc::new(std::cell::Cell::new(0u32));
+        let counter = Rc::clone(&cleanups);
+        let (list, scope) = crate::reactive::with_owner(|| {
+            container().width(200.0).height(200.0).children(keyed(
+                || vec![0u32, 1, 2],
+                |k| *k,
+                move |_| {
+                    let counter = Rc::clone(&counter);
+                    crate::reactive::on_cleanup(move || counter.set(counter.get() + 1));
+                    container().width(50.0).height(10.0).into_any()
+                },
+            ))
+        });
+        let rows = Rows::new(list);
+
+        dispose_owner_now(scope);
+        assert_eq!(cleanups.get(), 3, "the rows went with the list's scope");
+        drop(rows);
+        assert_eq!(cleanups.get(), 3, "and dropping them ran nothing twice");
+    }
+
+    /// A segment that first runs after the scope it was written in is gone
+    /// still builds, and making a signal there does not panic.
+    #[test]
+    fn a_dynamic_child_written_in_a_scope_that_is_gone_still_builds() {
+        let built = Rc::new(std::cell::Cell::new(0u32));
+        let counter = Rc::clone(&built);
+        let (list, scope) = crate::reactive::with_owner(|| {
+            container().width(200.0).height(200.0).child(move || {
+                counter.set(counter.get() + 1);
+                let width = create_signal(50.0f32);
+                container().width(width).height(10.0)
+            })
+        });
+        dispose_owner_now(scope);
+
+        let _rows = Rows::new(list);
+        assert_eq!(built.get(), 1);
     }
 }
