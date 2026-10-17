@@ -195,6 +195,14 @@ impl Point {
     }
 }
 
+/// `(x, y)`, as a path is usually written.
+impl From<(f32, f32)> for Point {
+    #[inline]
+    fn from((x, y): (f32, f32)) -> Self {
+        Self::new(x, y)
+    }
+}
+
 /// The superellipse "length" of a vector — the shader's `superellipse_length`.
 ///
 /// `n = 1` is the diamond a bevel cuts, `n = 2` the circle of an ordinary

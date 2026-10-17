@@ -13,12 +13,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// The one `pub fn animate_*` that is not a declaration, named with the file it
-/// lives in so that the exemption does not quietly cover a second one
-/// somewhere else: `AnimationState::animate_to` retargets a running animation
-/// from inside the advance loop, and the value it is given is the one it moves
-/// to.
-const NOT_A_DECLARATION: &[(&str, &str)] = &[("widgets/container/animations.rs", "animate_to")];
+/// The `pub fn animate_*` that are not a timing set apart from a declaration,
+/// each named with the file it lives in so that the exemption does not quietly
+/// cover a second one somewhere else.
+///
+/// - `AnimationState::animate_to` retargets a running animation from inside
+///   the advance loop, and the value it is given is the one it moves to.
+/// - `Container::animate_position` has no value to ride with: where a
+///   container stands is its parent's layout's answer, and nothing the
+///   container declares. The timing is the whole declaration (#735).
+const NOT_A_DECLARATION: &[(&str, &str)] = &[
+    ("widgets/container/animations.rs", "animate_to"),
+    ("widgets/container/mod.rs", "animate_position"),
+];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {

@@ -1,3 +1,4 @@
+pub mod arc;
 pub mod children;
 pub mod container;
 pub mod control;
@@ -17,13 +18,14 @@ pub mod text_style;
 pub mod widget;
 
 pub use crate::renderer::CornerRadii;
+pub use arc::{Arc, arc};
 pub use children::ChildrenSource;
 pub use container::{
     Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
 };
 pub use control::Control;
 pub use corners::Corners;
-pub use font::{FamilyId, FontFamily, FontWeight, LineHeight};
+pub use font::{FamilyId, FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 pub use image::{ContentFit, Image, ImageSource, image};
 pub use into_child::{
     DynamicChildren, ForwardedChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,

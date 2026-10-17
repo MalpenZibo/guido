@@ -68,6 +68,28 @@ popup anchored to a button that shrinks while pressed follows it.
 Do not move a widget by its own rect, or by the rect of something it carries:
 each frame's rect would move it again, and it would never settle.
 
+## The Box Layout Gave It
+
+`.layout_rect()` is the same box with every transform taken out — the widget's
+own `translate`, `scale` and `rotate`, its ancestors', and their animations. It
+still moves with the scroll of every scroll area the widget is in. A transform
+animating across frames changes `rect()` on each of them and never writes
+`layout_rect()`; a layout that moves or resizes the widget writes it once.
+
+That is the one to read when a widget's transform is driven from its own
+geometry — a hand-written animation from where an element was to where layout
+now puts it — because `rect()` there would read the transform back:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let card_ref = create_widget_ref();
+let target = move || card_ref.layout_rect().get();
+# let _ = target;
+# }
+```
+
 ## Positioning a Popup
 
 A common use case is positioning a popup centered under a clickable module:

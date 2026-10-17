@@ -466,6 +466,18 @@ impl Transform {
         *self == Self::IDENTITY
     }
 
+    /// This transform as a shader places a shape in physical pixels: `[a, b,
+    /// tx, c, d, ty]` with the translation times `scale` and the linear part
+    /// as it is — what is placed is already scaled, so only where it goes is
+    /// left to scale.
+    #[inline]
+    pub(crate) fn physical(&self, scale: f32) -> [f32; 6] {
+        let mut data = self.data;
+        data[2] *= scale;
+        data[5] *= scale;
+        data
+    }
+
     /// This placement undone, for a consumer working in physical pixels while
     /// the space it places is written in logical ones.
     ///

@@ -45,6 +45,9 @@ pub(crate) enum Attachment {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WidgetRef {
     signal: RwSignal<Rect>,
+    /// The box layout gave the widget, relative to the surface: what `signal`
+    /// holds with every transform taken out.
+    laid_out: RwSignal<Rect>,
     /// Which widget this ref is attached to, filled in when that widget is laid
     /// out and cleared when it leaves the tree. `None` before the first layout,
     /// which is why [`focus`](Self::focus) has to survive being called early.
@@ -60,9 +63,26 @@ impl WidgetRef {
     ///
     /// Updated on every frame that may have moved it — after a layout, a
     /// scroll, or a transform's animation frame — and written only when it
-    /// changed.
+    /// changed. [`layout_rect`](Self::layout_rect) is the same box with the
+    /// transforms taken out.
     pub fn rect(&self) -> Signal<Rect> {
         self.signal.read_only()
+    }
+
+    /// The reactive signal holding the box layout gave this widget, relative
+    /// to the surface (read-only): [`rect`](Self::rect) with every transform
+    /// taken out — the widget's own `translate`, `scale` and `rotate`, its
+    /// ancestors', and their animations. It still moves with the scroll offset
+    /// of every container it is in, because scrolling moves the content
+    /// rather than drawing it somewhere else.
+    ///
+    /// What to read when the widget's own transform is driven from its
+    /// geometry: reading `rect()` there reads the transform back.
+    ///
+    /// Updated after a layout or a scroll that moved or resized the box, and
+    /// written only when it changed — an animating transform never writes it.
+    pub fn layout_rect(&self) -> Signal<Rect> {
+        self.laid_out.read_only()
     }
 
     /// The widget this ref is attached to, once it has been laid out.
@@ -133,6 +153,7 @@ impl WidgetRef {
 pub fn create_widget_ref() -> WidgetRef {
     WidgetRef {
         signal: create_signal(Rect::default()),
+        laid_out: create_signal(Rect::default()),
         widget: create_signal(None),
     }
 }
@@ -158,7 +179,7 @@ pub(crate) fn register_widget_ref(id: WidgetId, widget_ref: WidgetRef) {
 }
 
 /// Update all registered widget ref signals with where their widgets are
-/// drawn in `tree`.
+/// drawn in `tree`, and where they were laid out.
 ///
 /// Entries whose widget no longer exists in the tree are removed (GC).
 /// Called once per surface on every frame that reaches layout, whether or not
@@ -188,8 +209,9 @@ pub(crate) fn update_widget_refs(tree: &Tree) {
                     return false;
                 }
                 let attached = widget_ref.widget();
-                if let Some(rect) = tree.get_surface_relative_bounds(id) {
-                    widget_ref.signal.set(rect);
+                if let Some((drawn, laid_out)) = tree.surface_relative_boxes(id) {
+                    widget_ref.signal.set(drawn);
+                    widget_ref.laid_out.set(laid_out);
                     true
                 } else {
                     // Widget removed from tree — drop registry entry, and stop

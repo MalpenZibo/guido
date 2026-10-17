@@ -3214,6 +3214,11 @@ fn a_widget_ref_rect_follows_the_scroll_its_widget_is_drawn_under() {
     let mut seen = Vec::new();
     for frame in 0..30 {
         let y = row.rect().get_untracked().y;
+        assert_eq!(
+            row.layout_rect().get_untracked().y,
+            y,
+            "frame {frame}: the layout box moves with the scroll too"
+        );
         let drawn = 500.0 - scrolled(&app, surface);
         assert!(
             (y - drawn).abs() <= 1.0,
@@ -3301,6 +3306,141 @@ fn a_widget_ref_rect_is_the_box_its_own_scale_draws() {
         card.rect().get_untracked(),
         Rect::new(-20.0, 0.0, 120.0, 40.0)
     );
+}
+
+/// A 60 by 20 card, translated 30 across inside a parent scaled twice, at
+/// the padding's corner — or the same card with neither transform.
+fn a_translated_card_in_a_scaled_parent(card: WidgetRef, transformed: bool) -> Container {
+    let (scale, across) = if transformed { (2.0, 30.0) } else { (1.0, 0.0) };
+    container().padding(10.0).child(
+        container().scale(scale).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .translate(Translate::new(across, 0.0))
+                .widget_ref(card),
+        ),
+    )
+}
+
+/// `layout_rect()` is `rect()` with every transform taken out: the card's
+/// own translate and its parent's scale both move `rect()`, and neither moves
+/// `layout_rect()`, which is where the same card is drawn with no transform
+/// at all.
+#[test]
+fn a_widget_ref_layout_rect_is_its_rect_with_the_transforms_taken_out() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let plain = create_widget_ref();
+    let one = app.surface(fixed_bar(), move || {
+        a_translated_card_in_a_scaled_parent(card, true)
+    });
+    let two = app.surface(fixed_bar(), move || {
+        a_translated_card_in_a_scaled_parent(plain, false)
+    });
+    app.configure(one, 200, 50, 1.0);
+    app.configure(two, 200, 50, 1.0);
+    app.step();
+
+    let untransformed = plain.rect().get_untracked();
+    assert_eq!(untransformed, Rect::new(10.0, 10.0, 60.0, 20.0));
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(40.0, 0.0, 120.0, 40.0),
+        "drawn translated, then doubled about the parent's centre"
+    );
+    assert_eq!(card.layout_rect().get_untracked(), untransformed);
+}
+
+/// How many times `signal` is written, counted by an effect that reads it —
+/// its first run included.
+fn writes_of(signal: Signal<Rect>) -> Rc<Cell<usize>> {
+    let writes = Rc::new(Cell::new(0));
+    let counted = writes.clone();
+    create_effect(move || {
+        signal.get();
+        counted.set(counted.get() + 1);
+    });
+    writes
+}
+
+/// A translate animating across frames moves `rect()` on each of them and
+/// never writes `layout_rect()`: nothing about the layout moved.
+#[test]
+fn an_animating_translate_never_writes_a_widget_ref_layout_rect() {
+    let Some(mut app) = headless() else { return };
+    let moved = create_signal(false);
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container().padding(10.0).child(
+            container()
+                .width(60.0)
+                .height(20.0)
+                .translate(
+                    (move || {
+                        if moved.get() {
+                            Translate::new(40.0, 0.0)
+                        } else {
+                            Translate::NONE
+                        }
+                    })
+                    .transition(160.0),
+                )
+                .widget_ref(card),
+        )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let writes = writes_of(card.layout_rect());
+    let mut at = Instant::now();
+    app.step_at(at);
+    let laid_out = card.layout_rect().get_untracked();
+    assert_eq!(laid_out, Rect::new(10.0, 10.0, 60.0, 20.0));
+    let before = writes.get();
+
+    moved.set(true);
+    // The frame that starts the transition draws it at its start.
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    let mut xs = vec![card.rect().get_untracked().x];
+    for _ in 0..8 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        xs.push(card.rect().get_untracked().x);
+    }
+    assert!(
+        xs.windows(2).all(|pair| pair[1] > pair[0]),
+        "rect() moved on every frame of the translate: {xs:?}"
+    );
+    assert_eq!(writes.get(), before, "and layout_rect() was never written");
+    assert_eq!(card.layout_rect().get_untracked(), laid_out);
+}
+
+/// A layout change that moves the widget writes `layout_rect()` once, on the
+/// frame that laid it out, and the frames after it write nothing.
+#[test]
+fn a_layout_move_writes_a_widget_ref_layout_rect_once() {
+    let Some(mut app) = headless() else { return };
+    let wide = create_signal(false);
+    let card = create_widget_ref();
+    let surface = app.surface(fixed_bar(), move || {
+        container()
+            .padding(move || if wide.get() { 10.0 } else { 5.0 })
+            .child(container().width(60.0).height(20.0).widget_ref(card))
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let writes = writes_of(card.layout_rect());
+    app.step();
+    let before = writes.get();
+
+    wide.set(true);
+    for _ in 0..3 {
+        app.step();
+    }
+    assert_eq!(
+        card.layout_rect().get_untracked(),
+        Rect::new(10.0, 10.0, 60.0, 20.0)
+    );
+    assert_eq!(writes.get(), before + 1, "written once, for the one move");
 }
 
 /// A layout root is restarted under its own constraints, not the surface's.
@@ -4697,4 +4837,369 @@ fn a_container_switched_off_mid_press_is_not_pressed_when_on_again() {
             "{case}: a press on the sibling released over it activated nothing"
         );
     }
+}
+
+/// 160ms, linear: so the middle of a move is half of it.
+fn sliding() -> Transition {
+    Transition::new(160.0, TimingFunction::Linear)
+}
+
+/// A column of rows 20 tall, in the order `rows` holds their keys, each
+/// sliding to where layout moves it and reported through `refs[key]`. A click on one records its key in `clicked`.
+fn reorderable(
+    rows: RwSignal<Vec<u32>>,
+    refs: [WidgetRef; 2],
+    clicked: Rc<Cell<Option<u32>>>,
+) -> Container {
+    container().layout(Flex::column()).children(keyed(
+        move || rows.get(),
+        |key| *key,
+        move |key| {
+            let clicked = clicked.clone();
+            container()
+                .width(60.0)
+                .height(20.0)
+                .animate_position(sliding())
+                .on_click(move || clicked.set(Some(key)))
+                .widget_ref(refs[key as usize])
+        },
+    ))
+}
+
+/// A row moved by a reorder is drawn where it was on the first frame after
+/// the change, between the two half way through, and where it now is once
+/// the transition ends. Its layout box is the new one from the first frame,
+/// and a click lands where it is drawn.
+#[test]
+fn a_row_moved_by_a_reorder_slides_from_where_it_was() {
+    let Some(mut app) = headless() else { return };
+    let (a, b) = (create_widget_ref(), create_widget_ref());
+    let rows = create_signal(vec![0, 1]);
+    let clicked = Rc::new(Cell::new(None));
+    let seen = clicked.clone();
+    let surface = app.surface(fixed_bar(), move || reorderable(rows, [a, b], seen.clone()));
+    app.configure(surface, 200, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    assert_eq!(
+        (a.rect().get_untracked().y, b.rect().get_untracked().y),
+        (0.0, 20.0),
+        "the first layout places the rows without sliding them there"
+    );
+
+    rows.set(vec![1, 0]);
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    assert_eq!(a.rect().get_untracked().y, 0.0, "drawn where it was");
+    assert_eq!(b.rect().get_untracked().y, 20.0);
+    assert_eq!(
+        a.layout_rect().get_untracked().y,
+        20.0,
+        "laid out where it is"
+    );
+    assert_eq!(b.layout_rect().get_untracked().y, 0.0);
+
+    // The click arrives with the next frame, where row 0 is still drawn at
+    // the top, and lands on it rather than on the row laid out there.
+    app.event_at(surface, Event::mouse_down(10.0, 5.0, MouseButton::Left), at);
+    app.event_at(surface, Event::mouse_up(10.0, 5.0, MouseButton::Left), at);
+    at += Duration::from_millis(80);
+    app.step_at(at);
+    assert_eq!(
+        clicked.get(),
+        Some(0),
+        "the click lands on the row drawn there"
+    );
+    let (mid_a, mid_b) = (a.rect().get_untracked().y, b.rect().get_untracked().y);
+    assert!(
+        mid_a > 2.0 && mid_a < 18.0 && mid_b > 2.0 && mid_b < 18.0,
+        "half way through, both are between their two places: {mid_a}, {mid_b}"
+    );
+    assert_eq!(a.layout_rect().get_untracked().y, 20.0);
+
+    for _ in 0..10 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    assert_eq!(a.rect().get_untracked(), a.layout_rect().get_untracked());
+    assert_eq!(a.rect().get_untracked().y, 20.0, "and settles where it is");
+    assert_eq!(b.rect().get_untracked().y, 0.0);
+}
+
+/// Scrolling moves the content, not a row inside it: no row's origin in its
+/// parent changes, so nothing slides, and every row is drawn where it is laid
+/// out on every frame of the scroll.
+#[test]
+fn scrolling_an_ancestor_slides_nothing() {
+    let Some(mut app) = headless() else { return };
+    let row = create_widget_ref();
+    let (surface, mut at) = scroller(&mut app, move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .scroll(hidden_scroll())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .width(fill())
+                    .child(block(500.0, Color::rgb(1.0, 0.0, 0.0)).animate_position(sliding()))
+                    .child(
+                        block(1500.0, Color::rgb(0.0, 0.0, 1.0))
+                            .animate_position(sliding())
+                            .widget_ref(row),
+                    ),
+            )
+    });
+    for _ in 0..6 {
+        app.event_at(
+            surface,
+            Event::scroll(50.0, 50.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    app.event_at(surface, Event::scroll_end(50.0, 50.0), at);
+    let mut ys = Vec::new();
+    for frame in 0..20 {
+        app.step_at(at);
+        let (drawn, laid_out) = (
+            row.rect().get_untracked(),
+            row.layout_rect().get_untracked(),
+        );
+        assert_eq!(drawn, laid_out, "frame {frame}: drawn where it is laid out");
+        ys.push(drawn.y);
+        at += Duration::from_millis(16);
+    }
+    assert!(
+        ys[0] - ys[ys.len() - 1] > 60.0,
+        "and the content did scroll: {ys:?}"
+    );
+}
+
+/// A parent that moves carries its children, and only its own move slides:
+/// the child's origin inside it never changed, so the child is drawn at the
+/// same place in the parent on every frame — at once where the parent does
+/// not slide, and riding the parent's slide where it does.
+#[test]
+fn a_parents_move_does_not_slide_its_children() {
+    let Some(mut app) = headless() else { return };
+    let moved = create_signal(false);
+    let (still, sliding_parent, carried) = (
+        create_widget_ref(),
+        create_widget_ref(),
+        create_widget_ref(),
+    );
+    let surface = app.surface(fixed_bar(), move || {
+        let pad = move || if moved.get() { [0.0, 80.0] } else { [0.0, 0.0] };
+        container()
+            .layout(Flex::column())
+            .child(
+                container().padding(pad).child(
+                    container().child(
+                        container()
+                            .width(20.0)
+                            .height(20.0)
+                            .animate_position(sliding())
+                            .widget_ref(still),
+                    ),
+                ),
+            )
+            .child(
+                container().padding(pad).child(
+                    container()
+                        .animate_position(sliding())
+                        .widget_ref(sliding_parent)
+                        .child(
+                            container()
+                                .width(20.0)
+                                .height(20.0)
+                                .animate_position(sliding())
+                                .widget_ref(carried),
+                        ),
+                ),
+            )
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    moved.set(true);
+    let mut parent_xs = Vec::new();
+    for frame in 0..14 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        assert_eq!(
+            still.rect().get_untracked(),
+            still.layout_rect().get_untracked(),
+            "frame {frame}: a child whose parent does not slide is where its parent put it"
+        );
+        let (parent, child) = (
+            sliding_parent.rect().get_untracked(),
+            carried.rect().get_untracked(),
+        );
+        assert_eq!(
+            (child.x, child.y),
+            (parent.x, parent.y),
+            "frame {frame}: and one whose parent slides rides it without a slide of its own"
+        );
+        parent_xs.push(parent.x);
+    }
+    assert_eq!(still.rect().get_untracked().x, 80.0);
+    assert!(
+        parent_xs.iter().any(|&x| x > 1.0 && x < 79.0),
+        "the parent did slide: {parent_xs:?}"
+    );
+    assert_eq!(parent_xs.last(), Some(&80.0));
+}
+
+/// A card slid across by its parent's padding, with a spring.
+fn a_springing_card(card: WidgetRef, across: RwSignal<f32>, wide: RwSignal<bool>) -> Container {
+    container().padding(move || [0.0, across.get()]).child(
+        container()
+            .width((move || if wide.get() { 80.0 } else { 20.0 }).transition(sliding()))
+            .height(20.0)
+            .animate_position(SpringConfig::SNAPPY)
+            .widget_ref(card),
+    )
+}
+
+/// A move during a move starts from where the card is drawn and keeps going
+/// the way it was going: no frame jumps further than the spring was already
+/// moving, and it settles at the second target.
+#[test]
+fn a_move_during_a_move_continues_from_where_it_is_drawn() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let across = create_signal(0.0);
+    let wide = create_signal(false);
+    let surface = app.surface(fixed_bar(), move || a_springing_card(card, across, wide));
+    app.configure(surface, 400, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    across.set(200.0);
+    let mut xs = Vec::new();
+    for _ in 0..5 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        xs.push(card.rect().get_untracked().x);
+    }
+    let before = *xs.last().expect("five frames");
+    assert!(
+        before > 1.0 && before < 199.0,
+        "mid-spring when the second move comes: {xs:?}"
+    );
+    let fastest = xs
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).abs())
+        .fold(0.0, f32::max);
+
+    across.set(100.0);
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    let after = card.rect().get_untracked().x;
+    assert!(
+        (after - before).abs() <= fastest + 1.0,
+        "the frame after the retarget moved {} from {before}, \
+         and the spring was moving at most {fastest} a frame: {xs:?} then {after}",
+        after - before
+    );
+    assert!(
+        after >= before,
+        "still moving the way it was: {before} then {after}"
+    );
+    assert_eq!(card.layout_rect().get_untracked().x, 100.0);
+
+    for _ in 0..120 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    assert_eq!(
+        card.rect().get_untracked().x,
+        100.0,
+        "and settles at the second"
+    );
+}
+
+/// Sliding to a new place and growing to a new width, together: the width
+/// transition and the slide each reach their own target.
+#[test]
+fn a_card_that_moves_and_grows_reaches_both_targets() {
+    let Some(mut app) = headless() else { return };
+    let card = create_widget_ref();
+    let across = create_signal(0.0);
+    let wide = create_signal(false);
+    let surface = app.surface(fixed_bar(), move || a_springing_card(card, across, wide));
+    app.configure(surface, 400, 50, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    across.set(150.0);
+    wide.set(true);
+    let mut seen = Vec::new();
+    for _ in 0..120 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        let drawn = card.rect().get_untracked();
+        seen.push((drawn.x, drawn.width));
+    }
+    assert!(
+        seen.iter()
+            .any(|&(x, w)| x > 1.0 && x < 149.0 && w > 21.0 && w < 79.0),
+        "on the way, both were between their ends: {seen:?}"
+    );
+    assert_eq!(
+        card.rect().get_untracked(),
+        Rect::new(150.0, 0.0, 80.0, 20.0),
+        "and both arrived"
+    );
+}
+
+/// A row sliding out of view from a place in it is still painted on its way
+/// out. Its layout box is far below the viewport from the first frame, and a
+/// scroller paints only the children whose box can reach what it shows — so
+/// the slide has to reach that far, or the row vanishes on the frame it
+/// starts to move.
+#[test]
+fn a_row_sliding_out_of_view_is_painted_on_its_way() {
+    let Some(mut app) = headless() else { return };
+    let pushed = create_signal(false);
+    let red = |[r, g, b, _]: [u8; 4]| r > 200 && g < 50 && b < 50;
+    let (surface, mut at) = scroller(&mut app, move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .scroll(hidden_scroll())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .width(fill())
+                    .child(
+                        container()
+                            .width(fill())
+                            .height(move || if pushed.get() { 1000.0 } else { 0.0 }),
+                    )
+                    .child(block(20.0, Color::rgb(1.0, 0.0, 0.0)).animate_position(sliding())),
+            )
+    });
+    assert!(
+        red(app.read_pixel(surface, 50, 10)),
+        "the row is at the top"
+    );
+
+    pushed.set(true);
+    at += Duration::from_millis(16);
+    app.step_at(at);
+    assert!(
+        red(app.read_pixel(surface, 50, 10)),
+        "laid out 1000 down, and still drawn where it was"
+    );
+
+    at += Duration::from_millis(64);
+    app.step_at(at);
+    let y = (0..600).find(|&y| red(app.read_pixel(surface, 50, y)));
+    assert!(
+        y.is_some_and(|y| y > 100 && y < 590),
+        "part way down the viewport, on its way out: {y:?}"
+    );
 }

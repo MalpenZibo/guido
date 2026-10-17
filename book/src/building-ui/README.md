@@ -30,6 +30,7 @@ All styling is done in Rust code, not external CSS files. This provides type saf
 - [Borders & Corners](borders.md) - Borders, corner radius, and curvature
 - [Shadows](shadows.md) - offset, blur, spread and colour
 - [Text](text.md) - Text styling and typography
+- [Arcs & Paths](arcs-and-paths.md) - Rings, gauges, and paths filled and stroked
 
 ## Quick Reference
 

@@ -105,6 +105,11 @@ Text rendering with:
 - Line alignment within the text's own box (`TextAlign`)
 - A line limit, `max_lines()`, marked by `overflow()` — measured and drawn by one shaping function, `shape` in `renderer/text.rs`, in the width the text was laid out in, so every path breaks and cuts on the same lines; `paint_offset` places those lines in the text's box
 
+**Arc** (`widgets/arc.rs`)
+A ring or part of one — a progress ring, a timer, a gauge — drawn as one SDF
+shape: size, stroke, start and sweep, a track, and a colour and progress that
+animate.
+
 **Type Erasure** (`widgets/widget.rs`)
 - `AnyWidget` type alias (`Box<dyn Widget>`) for type-erased widgets
 - `Widget::into_any()` method for boxing widgets in conditional branches
@@ -138,6 +143,8 @@ Hardware-accelerated rendering using wgpu.
 - `PaintContext` - Build render tree nodes during widget painting
 - `RenderNode` - Hierarchical render tree with local coordinates (one root per surface, children Rc-shared with the paint cache)
 - Custom WGSL shaders for SDF-based instanced rendering
+- `Path`, filled and stroked by `PaintContext::draw_path`: tessellated by lyon,
+  anti-aliased by a fringe of guido's own, cached by content and scale
 
 **Rendering Pipeline (per frame):**
 
@@ -485,6 +492,7 @@ register is of. Sweeping either in would make the register noise.
 | `PING_SENT` | `src/jobs.rs` | Process-wide: whether a ping is already armed for the current blocked period, which is what stops every producer writing one. Coalescing is only correct if all of them read the same flag, which is exactly what a thread's cell is not |
 | `WAKEUP_PING` | `src/jobs.rs` | Process-wide: the calloop `Ping` the flag above arms, installed by `App::run` and pinged from whichever thread has work. `Mutex<Option<Ping>>` rather than a `OnceLock` so `App::drop` can take it back out |
 | `FAMILIES` | `src/widgets/font.rs` | Process-wide: interned font family names. Not `APP`, whose `reset` empties it whole and would recycle a slot under a `FontFamily` an application still holds; not a thread's, because `FontFamily` is `Copy` and `create_signal` requires `Send`, so a name minted on a worker would be read on the main thread as a different family or none. Blink's `AtomicString` table is per-process for the same reason, and the declaration carries the argument |
+| `FEATURE_SETS` | `src/widgets/font.rs` | Process-wide: interned OpenType feature sets, which a `FontFeatures` is an id into. `FAMILIES`'s argument over again, because the value is the same kind: not `APP`, whose `reset` would recycle an id a property still holds; not a thread's, because `FontFeatures` is `Copy` and so `Send`, and a set minted on a worker would be read on the main thread as another set or none. Bounded by the distinct sets the program asks for, never freed — a set built from a signal's value leaks one entry per distinct value |
 
 ## Widget Trait
 
@@ -541,6 +549,13 @@ pub trait Widget {
 ```
 
 **Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
+
+**Note:** So is the slide a container declared with `animate_position`. A move is
+made by the *parent's* layout through `set_origin`, while the widget that moves
+runs no code, so the tree holds the motion, in a map beside `tab_stops`:
+`set_origin`, in a real layout pass, points it at the new origin, repaints the
+widget and queues an animation frame. `Container` reads the offset as the last
+translate of its transform and advances it from `advance_animations`.
 
 **Note:** So is what time it is, and there are two answers because they are two
 questions. A widget **advancing** something over time asks `tree.frame_instant()`
@@ -953,6 +968,8 @@ duplicate was found.
 | `src/renderer/flatten.rs` | Tree flattening with transform inheritance |
 | `src/renderer/clip.rs` | The frame's clip tree, which draw commands name rather than copy |
 | `src/renderer/shader.wgsl` | GPU shaders for instanced SDF rendering |
+| `src/renderer/path_pipeline.rs` | Paths: their cached tessellations and the pipeline that draws them |
+| `src/widgets/arc.rs` | The arc widget: a ring drawn as one SDF shape |
 | `src/reactive/signal.rs` | Signal implementation |
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |

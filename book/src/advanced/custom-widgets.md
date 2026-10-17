@@ -172,6 +172,10 @@ being measured, before a surface exists, which is when an animated value reads
 as where it is going rather than where it is. A widget that animates nothing
 never has to ask.
 
+A widget that draws a shape no box describes — a chart, a custom outline —
+builds a `Path` and hands it to `ctx.draw_path`; [Arcs &
+Paths](../building-ui/arcs-and-paths.md) has the vocabulary.
+
 ## A layout
 
 `Layout` has one method: given the children and the constraints, place them and

@@ -1,7 +1,7 @@
 //! Shared types for the renderer.
 
 use crate::transform::Transform;
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::{Color, Rect, TextAlign};
 
 /// Gradient direction for linear gradients
@@ -169,6 +169,10 @@ pub struct TextEntry {
     pub font_family: FontFamily,
     /// The font weight
     pub font_weight: FontWeight,
+    /// Upright, italic or oblique
+    pub font_style: FontStyle,
+    /// The OpenType features it is shaped with
+    pub font_features: FontFeatures,
     /// How tall each line is
     pub line_height: LineHeight,
     /// Extra advance after every glyph, in logical pixels

@@ -206,6 +206,10 @@ pub(super) struct LayerProps {
     pub(super) scale: Prop<Scale>,
     pub(super) pivot: Prop<Pivot>,
     pub(super) opacity: Prop<f32>,
+    /// How a move layout gives this container is played, if it slides there
+    /// rather than jumping. The slide itself is the tree's — see
+    /// `Tree::set_origin`.
+    pub(super) position: Option<crate::animation::TransitionConfig>,
 }
 
 /// The two decorations a container rarely has. Boxed and absent by default,
@@ -583,7 +587,10 @@ impl Container {
         // they publish, and re-measured whenever this container lays out. That
         // split is what lets this run from a Paint job without walking
         // anything.
-        tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow_extent));
+        // A slide carries the whole box by its offset, after everything else.
+        let (dx, dy) = self.position_offset(tree, id);
+        let reach = self.max_transform_reach(bounds, shadow_extent) + dx.abs().max(dy.abs());
+        tree.set_own_paint_reach(id, reach);
     }
 
     /// Resolve the declared scroll measurements for this pass.
@@ -623,17 +630,36 @@ impl Container {
     /// here, so what a widget ref reports, where a click lands and what is
     /// drawn cannot disagree about where this container is. `bounds` is the
     /// laid-out box a relative translate is a fraction of.
-    fn placed(&self, id: WidgetId, bounds: Rect) -> Placed {
+    ///
+    /// A slide to where layout moved it is part of the transform, applied
+    /// last, so it carries the box as a translate does.
+    fn placed(&self, tree: &Tree, id: WidgetId, bounds: Rect) -> Placed {
         let scroll = if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_data();
             (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
         } else {
             (0.0, 0.0)
         };
+        let (dx, dy) = self.position_offset(tree, id);
         Placed {
-            transform: self.animated_transform(id, bounds),
+            transform: self.animated_transform(id, bounds).translated(dx, dy),
             pivot: self.resolved_pivot(id),
             scroll,
+        }
+    }
+
+    /// Whether this container slides to where layout moves it.
+    fn slides(&self) -> bool {
+        self.layer.as_deref().is_some_and(|l| l.position.is_some())
+    }
+
+    /// How far from where layout put it this container is drawn, while it
+    /// slides there. Asked of the tree only by a container that slides.
+    fn position_offset(&self, tree: &Tree, id: WidgetId) -> (f32, f32) {
+        if self.slides() {
+            tree.position_offset(id)
+        } else {
+            (0.0, 0.0)
         }
     }
 
@@ -1287,6 +1313,41 @@ impl Container {
         self
     }
 
+    /// Slide to where layout moves this container, rather than jump there.
+    ///
+    /// When its origin inside its parent changes — a reorder, an insertion
+    /// above it, a sibling that grew — it is drawn where it was and slides to
+    /// the new place on `transition`. Layout lands on the new place at once:
+    /// the slide is a paint-time offset settling to zero, so nothing re-lays
+    /// out while it plays. A move during a move starts from where the
+    /// container is drawn, and a spring keeps its speed.
+    ///
+    /// Measured in the parent's coordinates, so scrolling an ancestor slides
+    /// nothing, and a parent that moves carries its children without sliding
+    /// them: each level slides only its own move. The first layout places it
+    /// without a slide; an entrance is [`Animated::entering_from`]'s.
+    ///
+    /// Hit testing and [`WidgetRef::rect`] follow where it is drawn;
+    /// [`WidgetRef::layout_rect`] is where it is going. A size change is the
+    /// width and height's own transitions, which compose with this one.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().animate_position(SpringConfig::SNAPPY);
+    /// container().animate_position(200.0);
+    /// ```
+    ///
+    /// [`Animated::entering_from`]: crate::animation::Animated::entering_from
+    /// [`WidgetRef::rect`]: crate::widget_ref::WidgetRef::rect
+    /// [`WidgetRef::layout_rect`]: crate::widget_ref::WidgetRef::layout_rect
+    pub fn animate_position(
+        mut self,
+        transition: impl Into<crate::animation::TransitionConfig>,
+    ) -> Self {
+        self.layer_mut().position = Some(transition.into());
+        self
+    }
+
     /// Displace this container from where it was laid out.
     ///
     /// In logical pixels, or in fractions of the container's own size with
@@ -1577,6 +1638,18 @@ impl Widget for Container {
 
         any_animating |= self.advance_declared_animations(id, now);
 
+        if self.slides()
+            && let Some(moved) = tree.advance_position(id, now)
+        {
+            any_animating = true;
+            let required = if moved {
+                RequiredJob::Paint
+            } else {
+                RequiredJob::None
+            };
+            request_job(id, JobRequest::Animation(required));
+        }
+
         // Advance ripple animation
         if let Some(ref mut ix) = self.interaction
             && ix.ripple.is_active()
@@ -1746,6 +1819,11 @@ impl Widget for Container {
         let boundary = self.is_relayout_boundary_for(constraints);
         ctx.tree().set_relayout_boundary(id, boundary);
         self.ensure_scrollbar_containers(ctx.tree(), id);
+        // Before the parent places this container, which is the move a slide
+        // is played for.
+        if let Some(transition) = self.layer.as_deref().and_then(|l| l.position.as_ref()) {
+            ctx.tree().animate_position(id, transition);
+        }
 
         // Before the measurement, because the measurement consumes what this
         // places: `read_box_lengths` reads the animated padding, and a value
@@ -1865,7 +1943,7 @@ impl Widget for Container {
             return EventResponse::Ignored;
         }
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
         let hit = HitContext {
             bounds,
             corners: self.animated_corners(id),
@@ -2062,7 +2140,7 @@ impl Widget for Container {
         let Some(bounds) = tree.get_bounds(id) else {
             return Placement::NONE;
         };
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
         Placement {
             // About the pivot in the container's own box, as flatten turns it.
             own: placed.transform.about(
@@ -2082,7 +2160,7 @@ impl Widget for Container {
 
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
 
         // Read inside the scope the framework opened around this call, so a
         // change to any of them repaints this container and nothing else.
