@@ -86,6 +86,9 @@ struct RecordedSurface {
     /// each buffer the frame path resolved and never for a frame that resolved
     /// the same one again.
     viewport_destinations: Vec<(u32, u32)>,
+    /// Every damage rectangle reported, oldest first, in buffer pixels: one
+    /// per frame presented.
+    damage: Vec<(i32, i32, i32, i32)>,
     frame_callbacks: u32,
 }
 
@@ -284,6 +287,10 @@ impl Surface for &mut RecordedSurface {
 
     fn request_frame_callback(&mut self) {
         self.frame_callbacks += 1;
+    }
+
+    fn damage(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        self.damage.push((x, y, width, height));
     }
 
     fn mark_frame_callback_pending(&mut self) {
@@ -833,6 +840,13 @@ impl Headless {
             .get(&id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Every damage rectangle a surface reported, oldest first: `(x, y,
+    /// width, height)` in buffer pixels, as `wl_surface.damage_buffer` takes
+    /// it.
+    pub fn damage_reported(&self, id: SurfaceId) -> &[(i32, i32, i32, i32)] {
+        &self.host.get(id).damage
     }
 
     /// How many frames a surface has presented and had its callback re-armed.

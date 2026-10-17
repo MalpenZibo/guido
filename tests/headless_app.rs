@@ -5203,3 +5203,118 @@ fn a_row_sliding_out_of_view_is_painted_on_its_way() {
         "part way down the viewport, on its way out: {y:?}"
     );
 }
+
+/// Two views swapped on one signal, as a panel that collapses to a pill does:
+/// both fill the surface, and the pill springs its scale down while `squished`
+/// says so.
+fn a_panel_and_its_pill(
+    pill: WidgetRef,
+    collapsed: RwSignal<bool>,
+    squished: RwSignal<bool>,
+) -> Container {
+    container()
+        .layout(ZStack::new())
+        .width(fill())
+        .height(fill())
+        .child(
+            container()
+                .width(fill())
+                .height(fill())
+                .background(Color::rgb(0.2, 0.2, 0.8))
+                .visible(move || !collapsed.get()),
+        )
+        .child(
+            container()
+                .width(fill())
+                .height(fill())
+                .background(Color::rgb(0.1, 0.1, 0.1))
+                .scale(
+                    (move || {
+                        if squished.get() {
+                            Scale::uniform(0.5)
+                        } else {
+                            Scale::NONE
+                        }
+                    })
+                    .transition(Transition::spring(SpringConfig::SNAPPY)),
+                )
+                .visible(collapsed)
+                .widget_ref(pill),
+        )
+}
+
+/// A 400 by 300 surface showing the panel, its pill hidden — mid-spring when
+/// `spring` says so — and then the pill shown in the frame the surface is
+/// configured to 100 by 40, as it is when the configure lands while the frame
+/// that shows it is waiting on its callback. The surface, what the pill was
+/// laid out at, and how many damage rectangles were reported before that frame.
+fn a_pill_shown_as_the_surface_shrinks(
+    app: &mut Headless,
+    spring: bool,
+) -> (SurfaceId, Rect, usize) {
+    let pill = create_widget_ref();
+    let collapsed = create_signal(true);
+    let squished = create_signal(false);
+    let surface = app.surface(SurfaceConfig::new().width(400).height(300), move || {
+        a_panel_and_its_pill(pill, collapsed, squished)
+    });
+    app.configure(surface, 400, 300, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    if spring {
+        squished.set(true);
+        for _ in 0..3 {
+            at += Duration::from_millis(16);
+            app.step_at(at);
+        }
+    }
+    collapsed.set(false);
+    at += Duration::from_millis(16);
+    app.step_at(at);
+
+    let before = app.damage_reported(surface).len();
+    collapsed.set(true);
+    app.configure(surface, 100, 40, 1.0);
+    for _ in 0..20 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    (surface, pill.rect().get_untracked(), before)
+}
+
+/// A container shown again in the frame its surface shrank is laid out against
+/// the surface it is in now, and the animation it resumes damages nothing
+/// outside it (#775). It used to keep the 400 by 300 layout, and every frame of
+/// the spring damaged — and drew — a pill four times the surface.
+#[test]
+fn a_container_shown_as_its_surface_shrinks_resumes_its_animation_inside_it() {
+    let Some(mut app) = headless() else { return };
+    let (surface, pill, before) = a_pill_shown_as_the_surface_shrinks(&mut app, true);
+    let damage = &app.damage_reported(surface)[before..];
+
+    assert_eq!(app.root_size(surface), (100.0, 40.0));
+    assert!(
+        pill.width < 100.0 && pill.height < 40.0,
+        "the 100 by 40 pill, scaled down by its spring: {pill:?}"
+    );
+    assert!(damage.len() > 1, "the spring went on drawing: {damage:?}");
+    assert!(
+        damage
+            .iter()
+            .all(|&(x, y, width, height)| x >= 0 && y >= 0 && x + width <= 100 && y + height <= 40),
+        "damage past the 100 by 40 surface: {damage:?}"
+    );
+}
+
+/// The same with nothing animating: the layout the show asks for and the resize
+/// arrive in one frame, and the resize is not lost to it. Nothing repaints
+/// after that frame, so the stale layout was only seen by the next thing that
+/// did.
+#[test]
+fn a_layout_pending_in_the_frame_a_surface_is_resized_does_not_keep_the_old_size() {
+    let Some(mut app) = headless() else { return };
+    let (surface, pill, _) = a_pill_shown_as_the_surface_shrinks(&mut app, false);
+
+    assert_eq!(app.root_size(surface), (100.0, 40.0));
+    assert_eq!(pill, Rect::new(0.0, 0.0, 100.0, 40.0));
+}
