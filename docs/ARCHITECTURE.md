@@ -549,6 +549,13 @@ pub trait Widget {
 
 **Note:** Widget bounds and origins are stored in the `Tree`, not on individual widgets. Use `tree.get_bounds(id)` to retrieve a widget's bounds and `tree.set_origin(id, x, y)` to position widgets during layout.
 
+**Note:** So is the slide a container declared with `animate_position`. A move is
+made by the *parent's* layout through `set_origin`, while the widget that moves
+runs no code, so the tree holds the motion, in a map beside `tab_stops`:
+`set_origin`, in a real layout pass, points it at the new origin, repaints the
+widget and queues an animation frame. `Container` reads the offset as the last
+translate of its transform and advances it from `advance_animations`.
+
 **Note:** So is what time it is, and there are two answers because they are two
 questions. A widget **advancing** something over time asks `tree.frame_instant()`
 — a frame declares its instant once, around the jobs, the layout and the paint,

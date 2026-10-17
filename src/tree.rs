@@ -179,6 +179,22 @@ struct Slot {
     children_reach: f32,
 }
 
+/// A widget sliding from where it was drawn to where layout has moved it.
+///
+/// Kept by the tree rather than by the widget, because a move is something
+/// the *parent's* layout does — through [`Tree::set_origin`], whatever
+/// `Layout` it runs — while the widget that moves runs no code at all: its
+/// own layout is cached and its painted node is re-emitted where it now
+/// stands. The tree is the one party present at the move. Core Animation keeps
+/// a layer's implicit `position` animation on the layer for the same reason.
+struct PositionMotion {
+    transition: crate::animation::TransitionConfig,
+    /// The widget's origin in its parent as it is drawn, heading for the last
+    /// origin a real layout gave it. `None` until that first layout: there is
+    /// no old place to slide from, so the first one is taken at once.
+    drawn: Option<crate::widgets::container::AnimationState<crate::transform::Translate>>,
+}
+
 /// Central tree for widget storage using arena-based sparse-set architecture.
 ///
 /// The tree stores all widgets in a dense Vec for cache-friendly iteration,
@@ -549,6 +565,10 @@ pub struct Tree {
     /// an animation inside one can stop and be queued again when it is shown
     /// (#666).
     declared_visible: rustc_hash::FxHashMap<WidgetId, Prop<bool>>,
+    /// The slide each container that declared `animate_position` plays when
+    /// layout moves it. A map rather than a slot field, because every widget
+    /// pays for a slot and almost none of them slide.
+    positions: rustc_hash::FxHashMap<WidgetId, PositionMotion>,
     /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
     /// surface without it keeps its focus, and a field holding that focus
     /// draws no caret until the keyboard is back (#726).
@@ -589,6 +609,7 @@ impl Tree {
             key_route: SmallVec::new(),
             key_heard_by: None,
             tab_stops: rustc_hash::FxHashMap::default(),
+            positions: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
             keyboard: KeyboardAt::Unknown,
@@ -820,6 +841,7 @@ impl Tree {
         self.key_listeners.retain(|&listener| listener != id);
         self.tab_stops.remove(&id);
         self.declared_visible.remove(&id);
+        self.positions.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -2461,11 +2483,19 @@ impl Tree {
     /// content is position-independent and the parent re-emits it at the new
     /// offset (paint-cache reuse re-parents the cached node). The parent is
     /// already marked, since moving a child means it ran its own layout.
+    ///
+    /// A widget that asked to [`animate_position`](crate::widgets::Container::animate_position)
+    /// slides instead: it goes on being drawn where it was, and the offset
+    /// from there settles to zero over its transition. Only a real layout
+    /// moves it — a measure sets origins and puts them back — and only a move
+    /// inside its parent, which is all this is told: a parent that moves
+    /// carries its children, and a scroll moves none of their origins.
     pub fn set_origin(&mut self, id: WidgetId, x: f32, y: f32) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
-        if self.dense[idx].origin == (x, y) {
+        let slides = !self.measuring() && self.slide_to(id, x, y);
+        if self.dense[idx].origin == (x, y) && !slides {
             return;
         }
         if let Some((root, vacated)) = self.surface_relative_damage_and_root(id) {
@@ -2473,9 +2503,96 @@ impl Tree {
         }
         let idx = self.get_dense_index(id).expect("checked above");
         self.dense[idx].origin = (x, y);
+        if slides {
+            // Drawn where it was, so it has to be painted again with the
+            // offset that keeps it there, and its reach has to cover the place
+            // it is drawn before the damage below is measured from it. Then a
+            // frame after this one, to move it.
+            self.with_widget_mut(id, |widget, id, tree| {
+                refresh_paint_reach(&*widget, tree, id)
+            });
+            self.mark_needs_paint(id);
+            crate::jobs::request_job(
+                id,
+                crate::jobs::JobRequest::Animation(crate::jobs::RequiredJob::None),
+            );
+        }
         if let Some((root, occupied)) = self.surface_relative_damage_and_root(id) {
             self.expand_damage_rect(root, occupied);
         }
+    }
+
+    /// Point a widget's slide at the origin a real layout just gave it.
+    /// Whether a slide started, or turned towards the new place mid-flight.
+    fn slide_to(&mut self, id: WidgetId, x: f32, y: f32) -> bool {
+        if self.positions.is_empty() {
+            return false;
+        }
+        let now = self.frame_instant;
+        let Some(motion) = self.positions.get_mut(&id) else {
+            return false;
+        };
+        let to = crate::transform::Translate::new(x, y);
+        match (&mut motion.drawn, now) {
+            (Some(drawn), _) if *drawn.target() == to => false,
+            (Some(drawn), Some(now)) => {
+                drawn.animate_to(to, now.into());
+                true
+            }
+            // The first place it is given, or a move with no frame to time a
+            // slide by: taken at once.
+            (drawn, _) => {
+                *drawn = Some(crate::widgets::container::AnimationState::new(
+                    to,
+                    motion.transition.clone(),
+                ));
+                false
+            }
+        }
+    }
+
+    /// Make a widget slide to where layout moves it, on `transition`.
+    ///
+    /// Declared by its container at layout, before its parent places it, and
+    /// once: the motion a widget is declared with is structural, so a later
+    /// declaration changes nothing.
+    pub(crate) fn animate_position(
+        &mut self,
+        id: WidgetId,
+        transition: &crate::animation::TransitionConfig,
+    ) {
+        if self.get_dense_index(id).is_some() {
+            self.positions.entry(id).or_insert_with(|| PositionMotion {
+                transition: transition.clone(),
+                drawn: None,
+            });
+        }
+    }
+
+    /// How far from where layout put it a widget is drawn while it slides
+    /// there: zero for one that is not sliding, or does not slide at all.
+    pub(crate) fn position_offset(&self, id: WidgetId) -> (f32, f32) {
+        let drawn = self
+            .positions
+            .get(&id)
+            .and_then(|motion| motion.drawn.as_ref());
+        drawn.map_or((0.0, 0.0), |drawn| {
+            let (at, to) = (drawn.current(), drawn.target());
+            (at.x - to.x, at.y - to.y)
+        })
+    }
+
+    /// Move a widget's slide on to `now`. `None` when it is not sliding;
+    /// otherwise whether the frame moved it.
+    pub(crate) fn advance_position(
+        &mut self,
+        id: WidgetId,
+        now: crate::clock::FrameInstant,
+    ) -> Option<bool> {
+        let drawn = self.positions.get_mut(&id)?.drawn.as_mut()?;
+        drawn
+            .is_animating()
+            .then(|| drawn.advance(now).is_changed())
     }
 
     /// Get the origin (position) for a widget.
