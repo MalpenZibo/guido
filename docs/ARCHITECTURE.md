@@ -537,10 +537,13 @@ pub trait Widget {
     /// children by. What a `WidgetRef`'s rect is composed from. Hidden from
     /// the docs.
     fn placement(&self, tree: &Tree, id: WidgetId) -> Placement { Placement::NONE }
-    /// Whether it fills its parent's width or height, whether it is hidden,
-    /// and the alignment it declares for itself, asked by `Flex` and `ZStack`
-    /// before they lay it out.
-    fn layout_hints(&self) -> LayoutHints { LayoutHints::default() }
+    /// Whether it fills its parent's width or height, whether it is hidden or
+    /// leaving, and the alignment it declares for itself, asked by `Flex` and
+    /// `ZStack` before they lay it out. By default only whether it is
+    /// leaving.
+    fn layout_hints(&self) -> LayoutHints {
+        LayoutHints { leaving: self.is_exiting(), ..LayoutHints::default() }
+    }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size;
     fn paint(&self, ctx: &mut PaintContext);

@@ -151,6 +151,16 @@ it. A child's own alignment reaches the stack in `LayoutHints`, read untracked;
 `Container::layout` reads it tracked, which is what lays the stack out again
 when it changes.
 
+A child playing its exit (`Widget::is_exiting`) reaches the stack as
+`LayoutHints::leaving`, and leads only an axis no staying child leads — so a
+shape morphing between two keyed views moves toward the arriving one at once,
+and one whose only children are leaving keeps its size while they fade. It is
+still laid out, aligned and painted, and a leaving `fill()` still follows. The
+stack is laid out again when a child starts leaving and when its key comes
+back, because both happen in the reconcile that marks it for layout. `Flex`
+does not read the hint: a leaving row keeping its space is often what is wanted
+there.
+
 A child is never larger than its parent offers — an exact length included,
 which `exact_within` cuts to the parent's maximum — unless its length is
 `natural()`. `Container::own_constraints` lifts the parent's minimum and

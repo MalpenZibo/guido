@@ -2044,6 +2044,7 @@ impl Widget for Container {
             fill_width: self.width.get_or_untracked(Length::default()).is_fill(),
             fill_height: self.height.get_or_untracked(Length::default()).is_fill(),
             hidden: false,
+            leaving: self.is_exiting(),
             align_self: self.align_self_prop().get_untracked(),
         }
     }
