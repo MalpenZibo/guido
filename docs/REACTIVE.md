@@ -656,11 +656,19 @@ example above does. Before that they were filed under the surface and outlived t
 the whole life of the application: a churning list leaked one signal per row for
 `enabled`, and ten for a row that scrolled.
 
-What that scope does **not** cover is `event` or `reconcile_children`. Those
-run a closure you wrote — a handler, an `items_fn` — and a signal made there may
-be handed to something that outlives the row on purpose. Disposing it with the
-row would turn every later read into a panic, so it is left alone, and there is
-a test that says so rather than a comment promising it.
+What that scope does **not** cover is `event`. It runs a closure you wrote — a
+handler — and a signal made there may be handed to something that outlives the
+row on purpose. Disposing it with the row would turn every later read into a
+panic, so it is left alone, and there is a test that says so rather than a
+comment promising it.
+
+`reconcile_children` needs no re-entering, because a dynamic segment carries
+its own: `ChildrenSource::add_dynamic` keeps the scope current where `.child(…)`
+or `.children(…)` was written, and every run of the segment's closure enters it.
+The scopes of the rows it builds hang from there, and so does what a
+`use_context` inside them finds — the surface's declarations, or the row's
+around a nested list, and not the root's because the frame happened to
+reconcile from a job rather than from a row's layout (#786).
 
 ### Disposing Owner Scopes: `dispose_owner`
 

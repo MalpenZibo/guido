@@ -52,6 +52,11 @@ called it — the whole surface — and not for the subtree the factory is
 building. A closure guido *invokes* is a scope, and that is the difference: the
 factory you hand to `.child(…)` for dynamic children is called by the library,
 which opens a scope around it, so a declaration made there belongs to that row.
+That scope hangs from the one that was current where `.child(…)` or
+`.children(…)` was written — the surface's, or the row's around it — and not
+from whatever is current when the library gets round to running the factory,
+which is later, while the frame is laid out. So a row reads what its surface
+declared, and a row inside a row reads what either of them did.
 
 ## Where a Read Resolves
 
