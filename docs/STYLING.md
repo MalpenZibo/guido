@@ -414,6 +414,20 @@ where the family's own font is not installed. A bare number is
 pixels. It is resolved in one place, `shape` in `src/renderer/text.rs`, which
 the measurer and all three draw paths call.
 
+`text_box(top, bottom)` is on `Text` alone, and is not part of the shared
+list: it says which lines of the font the box ends on, as CSS's
+`text-box-edge`, so a label trimmed to `TextEdge::Cap` and
+`TextEdge::Alphabetic` is a capital tall and centres on its ink. Only the
+first line's top and the last line's bottom are trimmed, and only the box
+moves — paint draws the lines from above it by what the top lost, and the text
+reports that much more paint reach on each side. The baseline it reports is
+read in the trimmed box, so `CrossAlignment::Baseline` keeps working. The cap
+height and x-height are the face's `OS/2` values, or the top of its `H` and its
+`x` where it declares none, resolved once per face beside its line height in
+`resolve_font`; `Measured::trim` turns them into the two trims.
+`capitals_trimmed_to_their_box_are_centred_on_their_ink` in
+`tests/golden_images.rs` is what says the ink ends up centred.
+
 `letter_spacing` is extra advance in logical pixels, independent of the font
 size — `text("LABEL").letter_spacing(1.5)` — and `0.0`, the default, is the
 font's own spacing; a negative value tightens it and a value that is not a

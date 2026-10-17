@@ -72,3 +72,46 @@ fn a_row_aligned_to_the_start_keeps_its_height() {
     assert_eq!(row.height, 24.0, "the tallest child, which is the box");
     assert_eq!(below.y, 24.0, "the sibling starts where the row ends");
 }
+
+/// A label trimmed to its capitals keeps its glyphs on the row's baseline:
+/// the baseline it reports is the one in the box the trim left, so the
+/// trimmed label and an untrimmed one beside it stand on the same line, and
+/// the trimmed one's box starts where its capitals do.
+#[test]
+fn a_trimmed_label_stands_on_the_same_baseline() {
+    guido::load_font(FONT.to_vec());
+    let label = || {
+        text("Ag")
+            .font_size(14.0)
+            .font_family(FontFamily::name("DejaVu Sans Mono"))
+    };
+    let h = Harness::laid_out(
+        container()
+            .layout(Flex::row().cross_alignment(CrossAlignment::Baseline))
+            .child(label())
+            .child(label().text_box(TextEdge::Cap, TextEdge::Alphabetic)),
+        400.0,
+        400.0,
+    );
+    let row = h.tree.get_children(h.root).to_vec();
+    let line = |id| {
+        let bounds = h.tree.get_bounds(id).expect("laid out");
+        (
+            bounds,
+            bounds.y + h.tree.baseline(id).expect("a text has one"),
+        )
+    };
+    let ((plain, plain_line), (trimmed, trimmed_line)) = (line(row[0]), line(row[1]));
+    assert!(
+        (plain_line - trimmed_line).abs() < 0.01,
+        "the untrimmed label's baseline is at {plain_line} and the trimmed one's at {trimmed_line}"
+    );
+    assert!(
+        (trimmed.y + trimmed.height - trimmed_line).abs() < 0.01,
+        "trimmed to the baseline, the box ends on it: {trimmed:?} against {trimmed_line}"
+    );
+    assert!(
+        trimmed.y > plain.y && trimmed.height < plain.height,
+        "the trimmed box is inside the line box: {trimmed:?} within {plain:?}"
+    );
+}

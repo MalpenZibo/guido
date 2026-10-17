@@ -244,8 +244,8 @@ pub mod prelude {
         ImageSource, IntoChildren, IntoClickHandler, Key, LineHeight, LinearGradient, Modifiers,
         MouseButton, Overflow, Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig,
         Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful, Text,
-        TextAlign, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle, Widget, arc,
-        container, image, keyed, password_input, text, text_input,
+        TextAlign, TextEdge, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle, Widget,
+        arc, container, image, keyed, password_input, text, text_input,
     };
     pub use crate::{
         App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,

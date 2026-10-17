@@ -21,7 +21,6 @@ use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::types::TextEntry;
 use crate::render_stats::Pipeline;
-use crate::widgets::font::FontWeight;
 use crate::widgets::{Rect, TextAlign};
 
 /// Margin multiplier is imported from constants
@@ -201,11 +200,7 @@ impl TextQuadRenderer {
         let tex_width = ((room_width + padding * 2.0).ceil() as u32).max(1);
         let tex_height = ((room_height + padding * 2.0).ceil() as u32).max(1);
 
-        let weight = if entry.font_weight == FontWeight::default() {
-            FontWeight::NORMAL
-        } else {
-            entry.font_weight
-        };
+        let weight = super::text::drawn_weight(entry.font_weight);
 
         let cache_key = TextCacheKey {
             text: entry.text.clone(),

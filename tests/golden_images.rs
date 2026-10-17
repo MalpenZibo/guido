@@ -5589,3 +5589,152 @@ fn outlines() -> Container {
             0.0,
         ))
 }
+
+// ---------------------------------------------------------------------------
+// A text's box trimmed to its capitals
+// ---------------------------------------------------------------------------
+
+/// A face whose capital is a box exactly as tall as the cap height its `OS/2`
+/// table declares, with far more room above it than below — the opposite of
+/// DejaVu Sans Mono, which declares no cap height and whose `H` is the only
+/// way to know one. `tests/assets/make_caps_fixture.py` builds it.
+const CAPS: &[u8] = include_bytes!("assets/GuidoCaps.ttf");
+const CAPS_FAMILY: &str = "Guido Caps";
+
+/// One line of capitals centred across a pill `height` tall, its box ending
+/// on `edges`: the capitals and the baseline, or `TextEdge::Text` on both
+/// sides for the line box.
+fn capitals_in_a_pill(family: &'static str, height: f32, edges: (TextEdge, TextEdge)) -> Container {
+    container()
+        .height(height)
+        .padding([0.0, 10.0])
+        .layout(Flex::row().cross_alignment(CrossAlignment::Center))
+        .child(
+            label("HHHH", 20.0)
+                .font_family(FontFamily::name(family))
+                .nowrap()
+                .text_box(edges.0, edges.1),
+        )
+}
+
+/// The edges of a box trimmed to its capitals, and of one left as its line
+/// box.
+const TRIMMED: (TextEdge, TextEdge) = (TextEdge::Cap, TextEdge::Alphabetic);
+const LINE_BOX: (TextEdge, TextEdge) = (TextEdge::Text, TextEdge::Text);
+
+/// Where the ink in `pixels` starts and ends down the image, in device pixels,
+/// read to a fraction: a row's coverage is its brightest pixel, white ink on
+/// black, so a top edge that covers a third of its row starts two thirds of
+/// the way down it.
+fn ink_extent(pixels: &Pixels) -> Option<(f32, f32)> {
+    let coverage = |y: u32| {
+        (0..pixels.width)
+            .map(|x| red_at(pixels, x, y))
+            .max()
+            .map_or(0.0, |r| f32::from(r) / 255.0)
+    };
+    let inked: Vec<u32> = (0..pixels.height).filter(|&y| coverage(y) > 0.02).collect();
+    let (first, last) = (*inked.first()?, *inked.last()?);
+    Some((
+        first as f32 + 1.0 - coverage(first),
+        last as f32 + coverage(last),
+    ))
+}
+
+/// A line of capitals trimmed to its cap height and its baseline, centred in a
+/// taller box, is centred on its ink — within half a device pixel, at three
+/// scales and in two faces whose ascent and descent are far apart (#773).
+///
+/// Half a pixel is as close as it gets, not a slack: hinted capitals are a
+/// whole number of rows tall, and an odd number of them in an even box has no
+/// middle row.
+///
+/// The cap height of the one comes from its `OS/2` table and of the other from
+/// the ink of its `H`, so both answers are watched. The same pill left
+/// untrimmed is the control: in the face with the tall ascent it sits more
+/// than a device pixel low, which is the defect, and which says the
+/// measurement can see it.
+#[test]
+fn capitals_trimmed_to_their_box_are_centred_on_their_ink() {
+    const NAME: &str = "capitals_trimmed_to_their_box_are_centred_on_their_ink";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    guido::load_font(CAPS.to_vec());
+    const HEIGHT: f32 = 40.0;
+    for family in [FONT_FAMILY, CAPS_FAMILY] {
+        for scale in [1.0, 1.5, 2.0] {
+            let centre_of = |edges| {
+                let pixels = render_with_own_renderer(
+                    ctx,
+                    capitals_in_a_pill(family, HEIGHT, edges),
+                    (120.0, HEIGHT),
+                    scale,
+                    Color::BLACK,
+                );
+                let (top, bottom) = ink_extent(&pixels).expect("the capitals draw some ink");
+                (top + bottom) / 2.0
+            };
+            let middle = HEIGHT * scale / 2.0;
+            let trimmed = centre_of(TRIMMED);
+            assert!(
+                (trimmed - middle).abs() <= 0.5,
+                "{family} at {scale}x: trimmed capitals are centred at {trimmed} \
+                 device px, and the box's middle is {middle}"
+            );
+            if family == CAPS_FAMILY {
+                let untrimmed = centre_of(LINE_BOX);
+                assert!(
+                    untrimmed - middle > 1.0,
+                    "{family} at {scale}x: by its line box the capitals sit low, \
+                     at {untrimmed} against {middle}, or this test sees nothing"
+                );
+            }
+        }
+    }
+}
+
+/// Pills with a square beside their label, as a button with an icon is drawn:
+/// in each face, the label as its line box centres it, and below it the label
+/// trimmed to its capitals and its baseline, which lines up with the square.
+#[test]
+fn capitals_trimmed_to_their_box_line_up_with_an_icon_at_scale_2x() {
+    let pill = |family: &'static str, edges: (TextEdge, TextEdge)| {
+        container()
+            .height(30.0)
+            .corners(15.0)
+            .padding([0.0, 14.0])
+            .background(Color::rgb(0.22, 0.26, 0.38))
+            .layout(
+                Flex::row()
+                    .spacing(8.0)
+                    .cross_alignment(CrossAlignment::Center),
+            )
+            .child(swatch(14.0, 14.0, Color::rgb(0.95, 0.65, 0.25)))
+            .child(
+                label("HxH p", 16.0)
+                    .font_family(FontFamily::name(family))
+                    .nowrap()
+                    .text_box(edges.0, edges.1),
+            )
+    };
+    let column = |family: &'static str| {
+        container()
+            .layout(Flex::column().spacing(12.0))
+            .child(pill(family, LINE_BOX))
+            .child(pill(family, TRIMMED))
+    };
+    guido::load_font(CAPS.to_vec());
+    golden(
+        "capitals_trimmed_to_their_box_line_up_with_an_icon_at_scale_2x",
+        (300.0, 96.0),
+        2.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(12.0)
+            .layout(Flex::row().spacing(24.0))
+            .child(column(FONT_FAMILY))
+            .child(column(CAPS_FAMILY)),
+    );
+}

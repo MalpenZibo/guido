@@ -285,11 +285,7 @@ impl TextMaskRenderer {
         }
 
         let font_size = spec.font_size * spec.density;
-        let weight = if spec.font_weight == FontWeight::default() {
-            FontWeight::NORMAL
-        } else {
-            spec.font_weight
-        };
+        let weight = super::text::drawn_weight(spec.font_weight);
         let key = MaskKey {
             text: spec.text.to_owned(),
             font_size_bits: font_size.to_bits(),
