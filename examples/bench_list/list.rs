@@ -68,7 +68,7 @@ fn row(i: usize) -> Container {
                 .padding(6.0)
                 .background(Color::rgb(0.18, 0.18, 0.24))
                 .corners(4.0)
-                .when_focused(|s| s.border(1.5, Color::rgb(0.4, 0.8, 1.0)))
+                .when_focused(|s| s.outline(1.5, Color::rgb(0.4, 0.8, 1.0), 1.0))
                 .child(text_input(value).font_size(13.0).color(Color::WHITE)),
         )
 }
