@@ -67,13 +67,13 @@ impl Container {
                 lengths.width.exact_size(),
                 lengths.width.min(),
                 lengths.width.max(),
-                content.width + lengths.padding.horizontal_total(),
+                content.width + lengths.inset().horizontal_total(),
             ),
             (
                 lengths.height.exact_size(),
                 lengths.height.min(),
                 lengths.height.max(),
-                content.height + lengths.padding.vertical_total(),
+                content.height + lengths.inset().vertical_total(),
             ),
         ];
         // Leaving, nothing follows the content: a size with an exit goes where

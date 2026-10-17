@@ -497,10 +497,44 @@ impl Container {
         })
     }
 
+    /// The border width a layout keeps room for: where its animation is, for
+    /// the pass that asked, as the padding beside it is read — never below
+    /// zero, because a border cannot give room back.
+    ///
+    /// Without an animation, the state is asked only where a layer's width
+    /// differs from the declared one. A layer that recolours the border at
+    /// its own width moves nothing, and asking would put this layout on the
+    /// hover of every bordered button. The widths are read tracked, so one
+    /// that comes to differ lays the container out and is asked then.
+    pub(super) fn laid_out_border_width(&self, ctx: &mut LayoutCtx, id: WidgetId) -> f32 {
+        let width = match self.anims.as_ref().and_then(|a| a.border_width()) {
+            Some(anim) => anim.displayed_in(ctx),
+            None => {
+                let base = self.border_width.get_finite_or(0.0, id, "border_width");
+                let layers_move_it = self.interaction.as_ref().is_some_and(|ix| {
+                    ix.states
+                        .iter()
+                        .filter_map(|(_, state)| state.border)
+                        .any(|border| border.width.get() != base)
+                });
+                if layers_move_it {
+                    self.effective_border_width_target(id)
+                } else {
+                    base
+                }
+            }
+        };
+        width.max(0.0)
+    }
+
+    /// Never below zero, as the layout reads it: a spring overshooting past
+    /// none must not turn the clip and the hit test inside the border into an
+    /// outset.
     pub(super) fn animated_border_width(&self, id: WidgetId) -> f32 {
         get_animated_value(self.anims.as_ref().and_then(|a| a.border_width()), || {
             self.effective_border_width_target(id)
         })
+        .max(0.0)
     }
 
     pub(super) fn animated_blur(&self, id: WidgetId) -> f32 {
@@ -627,13 +661,15 @@ impl Container {
     /// colour, and without the width the enter queued no Animation job at all.
     /// The spring then started a frame late, and only if something else had
     /// forced that paint. Both halves are in by construction now: a property
-    /// counts here when it follows a signal and does not move the box.
+    /// counts here when its row says a state layer can override it.
+    ///
+    /// Not when it follows a signal and does not move the box, which is what
+    /// this asked until the border's width took room (#767): the width moves
+    /// the box now, and a hover still moves it.
     pub(super) fn has_animated_state_properties(&self) -> bool {
-        self.anims.as_deref().is_some_and(|declared| {
-            declared
-                .slots()
-                .any(|slot| slot.follows_a_signal() && !slot.moves_the_box())
-        })
+        self.anims
+            .as_deref()
+            .is_some_and(|declared| declared.slots().any(AnimSlot::a_state_overrides))
     }
 }
 

@@ -108,14 +108,13 @@ impl Container {
     /// places the handle, the hit test — is measured from it, so none of them
     /// is drawn under the border or answers there.
     ///
-    /// The border's target rather than the value an animation is passing
-    /// through: the track is placed by layout, which a border animation does
-    /// not run, so the displayed value would leave it wherever the animation
-    /// stood when the last layout did. Read under the layout's tracking, the
-    /// target moves the track when it changes, and paint and the hit test ask
-    /// the same number.
-    fn scrollbar_box(&self, id: WidgetId, width: f32, height: f32) -> Rect {
-        Rect::new(0.0, 0.0, width, height).inset(self.effective_border_width_target(id))
+    /// `border` is the width the content was inset by: layout hands over the
+    /// one it laid out with, and paint and the hit test the one showing, which
+    /// is the same number outside a measure. A border's width takes room, so
+    /// each frame of its animation runs a layout, and the track follows the
+    /// border in step with the content beside it (#767).
+    fn scrollbar_box(width: f32, height: f32, border: f32) -> Rect {
+        Rect::new(0.0, 0.0, width, height).inset(border)
     }
 
     /// Layout and position scrollbar container widgets
@@ -124,6 +123,7 @@ impl Container {
         ctx: &mut LayoutCtx,
         id: WidgetId,
         size: crate::layout::Size,
+        border: f32,
     ) {
         if self.scroll_axis == ScrollAxis::None
             || self.scroll_data().scrollbar_visibility == ScrollbarVisibility::Hidden
@@ -136,7 +136,7 @@ impl Container {
         let needs_vertical = sd.scroll_state.needs_vertical_scrollbar();
         let needs_horizontal = sd.scroll_state.needs_horizontal_scrollbar();
 
-        let local_bounds = self.scrollbar_box(id, size.width, size.height);
+        let local_bounds = Self::scrollbar_box(size.width, size.height, border);
 
         // Layout vertical scrollbar
         if self.scroll_axis.allows_vertical() && needs_vertical {
@@ -334,7 +334,8 @@ impl Container {
         axis: ScrollbarAxis,
     ) -> (f32, f32) {
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        let local_bounds = self.scrollbar_box(id, bounds.width, bounds.height);
+        let local_bounds =
+            Self::scrollbar_box(bounds.width, bounds.height, self.animated_border_width(id));
 
         let sd = self.scroll_data();
         let needs_other = match axis {
@@ -543,7 +544,11 @@ impl Container {
             None => Cow::Borrowed(event),
         };
         let event = local.as_ref();
-        let bounds = self.scrollbar_box(id, hit.bounds.width, hit.bounds.height);
+        let bounds = Self::scrollbar_box(
+            hit.bounds.width,
+            hit.bounds.height,
+            self.animated_border_width(id),
+        );
 
         match event {
             Event::MouseDown {

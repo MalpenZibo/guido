@@ -619,6 +619,56 @@ fn corners_borders_and_shadows() {
     assert_snapshot("corners_borders_and_shadows", render(view, 500.0, 400.0));
 }
 
+/// A border takes room inside its box, as CSS's `border-box` does (#767): a
+/// child of a box with no padding starts at the border width, a box sized to
+/// its content grows by border and padding, a fill child stops at the border,
+/// and a scroller's viewport and extents are inside its border — its content
+/// starts there, and its handle is the share of the track that 90 of 180 is,
+/// not 100 of 180.
+#[test]
+fn a_border_takes_room_inside_its_box() {
+    let rows = container().layout(Flex::column()).children((0..6).map(|i| {
+        swatch(
+            90.0,
+            30.0,
+            if i % 2 == 0 { Color::RED } else { Color::BLUE },
+        )
+    }));
+    let view = container()
+        .layout(Flex::row().spacing(10.0))
+        .padding(10.0)
+        .child(
+            box_of(60.0, 60.0)
+                .border(4.0, Color::WHITE)
+                .child(swatch(20.0, 20.0, Color::RED)),
+        )
+        .child(
+            container()
+                .border(3.0, Color::WHITE)
+                .padding(2.0)
+                .child(swatch(20.0, 20.0, Color::GREEN)),
+        )
+        .child(
+            box_of(60.0, 60.0).border(5.0, Color::WHITE).child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .background(Color::BLUE),
+            ),
+        )
+        .child(
+            box_of(100.0, 100.0)
+                .border(5.0, Color::WHITE)
+                .scroll(Scroll::vertical())
+                .child(rows),
+        );
+
+    assert_snapshot(
+        "a_border_takes_room_inside_its_box",
+        render(view, 500.0, 200.0),
+    );
+}
+
 /// After `examples/blur_example.rs`: the backdrop blur, which is the one command
 /// carrying a property the golden is the only reader of — `sources` decides
 /// which half of the effect runs, and until this scene existed no golden held a

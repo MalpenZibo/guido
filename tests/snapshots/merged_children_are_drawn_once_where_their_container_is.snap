@@ -4,8 +4,8 @@ node 0,0 172x52
     node 0,0 120x36
       draw rect 0,0 120x36 fill=#000000ff radius=18/18/18/18
       draw rect 0,0 120x36 fill=#00000000 radius=18/18/18/18 border=#ffffffff@1
-      node 0,0 16x16 at 10,10
-        draw rect 0,0 16x16 fill=#00ff00ff radius=0/0/0/0
+      node 0,0 16x14 at 11,11
+        draw rect 0,0 16x14 fill=#00ff00ff radius=0/0/0/0
     node 0,0 36x36 at 126,0
       draw rect 0,0 36x36 fill=#000000ff radius=18/18/18/18
 flattened
@@ -15,5 +15,5 @@ flattened
     draw merged -3.5,-3.5 169x43 distance=14
       member 0,0 120x36 at 0,0 fill=#000000ff radius=18 border=#ffffffff@1
       member 0,0 36x36 at 126,0 fill=#000000ff radius=18
-  at 18,18
-    draw rect 0,0 16x16 fill=#00ff00ff radius=0/0/0/0
+  at 19,19
+    draw rect 0,0 16x14 fill=#00ff00ff radius=0/0/0/0

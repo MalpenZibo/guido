@@ -16,9 +16,9 @@
 //!   tracking scope. A size's target is whatever the layout just measured, so
 //!   it is recomputed from scratch each time and needs no subscription — see
 //!   `update_size_targets`.
-//! - **Whether it moves the box.** `width`, `height` and `padding` do, which
-//!   is what `is_relayout_boundary_for` asks and what splits the advance into
-//!   a Layout half and a Paint half.
+//! - **Whether it moves the box.** `width`, `height`, `padding` and the
+//!   border's width do, which is what `is_relayout_boundary_for` asks and what
+//!   splits the advance into a Layout half and a Paint half.
 //!
 //! So one row states a property and every list is emitted from it. The table
 //! is an *X-macro*: [`animated_properties!`] holds the rows and takes the name
@@ -44,7 +44,7 @@ use crate::widgets::Corners;
 ///
 /// ```text
 /// name: AnimatedType as DeclaredType, target: <fn> | none, layout: yes | no,
-///     timeline: yes | no,
+///     timeline: yes | no, state: yes | no,
 ///     test { value, declared_as, probe, from, to, then, base };
 /// ```
 ///
@@ -59,6 +59,10 @@ use crate::widgets::Corners;
 ///   `width(w.timeline(..))` does not compile. Stated rather than inferred
 ///   from `target`, because they are two different facts that happen to
 ///   divide the same two rows off today.
+/// - **`state`** says whether a state layer can override it — what decides
+///   whether a hover or a press has to drive its animation. Not inferred from
+///   `layout`: the border's width moves the box and a state layer overrides
+///   it, and a padding moves the box and none does.
 /// - **`test`** is the property's own recipe, so the generated test can say
 ///   what it means to declare, watch and write *this* property: how one number
 ///   becomes a value of its type, a container built around the declaration, a
@@ -77,7 +81,7 @@ macro_rules! animated_properties {
     ($emit:ident) => {
         $emit! {
             width: f32 as Length, target: none, layout: yes,
-                timeline: no,
+                timeline: no, state: no,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(v).height(100.0),
@@ -85,7 +89,7 @@ macro_rules! animated_properties {
                     from: 10.0, to: 150.0, then: 50.0, base: 10.0,
                 };
             height: f32 as Length, target: none, layout: yes,
-                timeline: no,
+                timeline: no, state: no,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(v),
@@ -93,7 +97,7 @@ macro_rules! animated_properties {
                     from: 10.0, to: 150.0, then: 50.0, base: 10.0,
                 };
             padding: Padding as Padding, target: effective_padding_target, layout: yes,
-                timeline: yes,
+                timeline: yes, state: no,
                 test {
                     value: |k| Padding::all(k),
                     declared_as: |v| container().padding(v).child(box_of(10.0, 10.0)),
@@ -109,7 +113,7 @@ macro_rules! animated_properties {
                     from: 4.0, to: 40.0, then: 16.0, base: 4.0,
                 };
             background: Color as Color, target: effective_background_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| Color::rgb(k, 0.0, 0.0),
                     declared_as: |v| container().width(200.0).height(100.0).background(v),
@@ -117,7 +121,7 @@ macro_rules! animated_properties {
                     from: 0.0, to: 1.0, then: 0.5, base: 0.0,
                 };
             corners: Corners as Corners, target: effective_corners_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| crate::widgets::Corners::rounded(k),
                     declared_as: |v| container().width(200.0).height(100.0)
@@ -126,7 +130,7 @@ macro_rules! animated_properties {
                     from: 2.0, to: 20.0, then: 8.0, base: 2.0,
                 };
             shadow: Shadows as Shadows, target: effective_shadow_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| crate::renderer::Shadows::from(
                         Shadow::new((0.0, 0.0), k, 0.0, Color::BLACK),
@@ -142,8 +146,8 @@ macro_rules! animated_properties {
                     // 20 and draw 2 throughout. See #384.
                     base: 20.0,
                 };
-            border_width: f32 as f32, target: effective_border_width_target, layout: no,
-                timeline: yes,
+            border_width: f32 as f32, target: effective_border_width_target, layout: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(100.0)
@@ -152,7 +156,7 @@ macro_rules! animated_properties {
                     from: 1.0, to: 10.0, then: 4.0, base: 1.0,
                 };
             border_color: Color as Color, target: effective_border_color_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| Color::rgb(k, 0.0, 0.0),
                     declared_as: |v| container().width(200.0).height(100.0)
@@ -161,7 +165,7 @@ macro_rules! animated_properties {
                     from: 0.0, to: 1.0, then: 0.5, base: 0.0,
                 };
             translate: Translate as Translate, target: effective_translate_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| Translate::new(k, 0.0),
                     declared_as: |v| container().width(200.0).height(100.0).translate(v),
@@ -169,7 +173,7 @@ macro_rules! animated_properties {
                     from: 5.0, to: 50.0, then: 20.0, base: 5.0,
                 };
             rotate: f32 as f32, target: effective_rotate_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(100.0).rotate(v),
@@ -177,7 +181,7 @@ macro_rules! animated_properties {
                     from: 4.0, to: 40.0, then: 16.0, base: 4.0,
                 };
             scale: Scale as Scale, target: effective_scale_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: yes,
                 test {
                     value: |k| Scale::uniform(k),
                     declared_as: |v| container().width(200.0).height(100.0).scale(v),
@@ -185,7 +189,7 @@ macro_rules! animated_properties {
                     from: 0.5, to: 2.0, then: 1.25, base: 0.5,
                 };
             opacity: f32 as f32, target: effective_opacity_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: no,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(100.0)
@@ -194,7 +198,7 @@ macro_rules! animated_properties {
                     from: 0.2, to: 1.0, then: 0.5, base: 0.2,
                 };
             blur: f32 as f32, target: effective_blur_target, layout: no,
-                timeline: yes,
+                timeline: yes, state: no,
                 test {
                     value: |k| k,
                     declared_as: |v| container().width(200.0).height(100.0)
@@ -252,7 +256,7 @@ impl Kept for Shadows {
 /// than a field per property whether or not anybody asked for one.
 macro_rules! emit_store {
     ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
-        timeline: $timeline:ident,
+        timeline: $timeline:ident, state: $state:ident,
         test { $($test:tt)* };)*) => {
         /// One declared animation, and which property declared it.
         ///
@@ -363,11 +367,20 @@ macro_rules! moves_the_box {
     };
 }
 
+macro_rules! a_state_overrides {
+    (yes) => {
+        true
+    };
+    (no) => {
+        false
+    };
+}
+
 /// What a slot knows about itself, so the three predicates that used to be
 /// three lists are now three questions asked of whatever is declared.
 macro_rules! emit_slot_facts {
     ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
-        timeline: $timeline:ident,
+        timeline: $timeline:ident, state: $state:ident,
         test { $($test:tt)* };)*) => {
         impl AnimSlot {
             /// Whether this property reads its own target from the signal it
@@ -382,6 +395,14 @@ macro_rules! emit_slot_facts {
             pub(crate) fn moves_the_box(&self) -> bool {
                 match self {
                     $(AnimSlot::$name(_) => moves_the_box!($layout),)*
+                }
+            }
+
+            /// Whether a state layer can override it, so that a hover or a
+            /// press moves it.
+            pub(crate) fn a_state_overrides(&self) -> bool {
+                match self {
+                    $(AnimSlot::$name(_) => a_state_overrides!($state),)*
                 }
             }
 
@@ -486,7 +507,7 @@ macro_rules! drift_from_target {
 /// property does one property's work.
 macro_rules! emit_passes {
     ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
-        timeline: $timeline:ident,
+        timeline: $timeline:ident, state: $state:ident,
         test { $($test:tt)* };)*) => {
         impl super::Container {
             /// First layout: subscribe every declared animation and start it
@@ -670,7 +691,7 @@ macro_rules! emit_declare {
 /// slot. That is the defect this whole change is about, in a new spelling.
 macro_rules! emit_declarers {
     ($($name:ident: $anim:ty as $decl:ty, target: $target:tt, layout: $layout:ident,
-        timeline: $timeline:ident,
+        timeline: $timeline:ident, state: $state:ident,
         test { $($test:tt)* };)*) => {
         pub(in crate::widgets::container) mod declare {
             use super::super::{declare_anim, declare_size};

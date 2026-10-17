@@ -2034,7 +2034,7 @@ impl Widget for Container {
         let content_least = ctx.minimum().unwrap_or(content_size);
         ctx.set_minimum(self.least_size(&lengths, content_least, size));
 
-        self.layout_scrollbar_containers(ctx, id, size);
+        self.layout_scrollbar_containers(ctx, id, size, lengths.border);
 
         // A shadow falls outside the box that casts it, so the damage this
         // container reports has to reach past its own bounds.
