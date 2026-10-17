@@ -4125,6 +4125,35 @@ fn the_clip_carries_every_corner() {
     assert_eq!(clip.corner_radius.bottom_left, 0.0);
 }
 
+/// A scroller's track is placed inside its border, by layout — so a border
+/// that changes has to bring a layout, or the track stays where the old border
+/// left it, under the new one (#764). An animated one is the case that asks:
+/// the value it displays is read untracked, and its frames run no layout.
+#[test]
+fn a_scrollbar_moves_in_when_its_border_grows() {
+    let border = create_signal(0.0f32);
+    let mut h = H::new(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .border(border.transition(linear_100ms()), Color::WHITE)
+            .scroll(Scroll::vertical())
+            .child(
+                container()
+                    .layout(Flex::column())
+                    .children((0..20).map(|_| box_of(200.0, 40.0))),
+            ),
+    );
+    let right = |h: &mut H| {
+        let node = h.frame(200.0, 200.0).node;
+        let track = &node.children[1];
+        track.local_transform.tx() + track.bounds.width
+    };
+    assert_eq!(right(&mut h), 198.0);
+    border.set(6.0);
+    assert_eq!(right(&mut h), 192.0, "the track stayed under the border");
+}
+
 /// A state override carries the whole shape, so a squircle that only asks to
 /// grow on hover becomes an ordinary rounded box — the same trade the border
 /// override makes, and the reason a bare size is spelled as one.

@@ -272,3 +272,58 @@ fn a_scrollers_inner_corner_is_its_radius_less_its_border() {
     // and (12, 12) is 11.3 from it, inside.
     assert_eq!(clicks_at(card, &[(9.0, 9.0), (12.0, 12.0)]), [0, 1]);
 }
+
+// ---------------------------------------------------------------------------
+// A scroller's scrollbar sits inside its border, where its clip cuts (#764)
+// ---------------------------------------------------------------------------
+
+/// A 200×200 scroller with a 4px border over 800px of rows. Inside the border
+/// it is 4..196, so its vertical scrollbar answers across x 184..194 (hover
+/// width 10, margin 2) — measured from the outer edge it would be 188..198,
+/// and drawn 4px into the border.
+fn bordered_scroller() -> Harness {
+    Harness::laid_out(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .border(4.0, Color::WHITE)
+            .scroll(Scroll::vertical())
+            .child(rows_800_tall()),
+        200.0,
+        200.0,
+    )
+}
+
+#[test]
+fn a_scrollbar_is_not_covered_by_its_scrollers_border() {
+    let mut h = bordered_scroller();
+    let node = h.paint();
+    let track = &node.children[1];
+    let right = track.local_transform.tx() + track.bounds.width;
+    let bottom = track.local_transform.ty() + track.bounds.height;
+    assert!(
+        right <= 196.0,
+        "the track reaches x {right}, into the border"
+    );
+    assert!(
+        track.local_transform.ty() >= 4.0 && bottom <= 196.0,
+        "the track runs into the border, y {}..{bottom}",
+        track.local_transform.ty()
+    );
+}
+
+#[test]
+fn a_scrollbar_answers_where_it_is_drawn_inside_the_border() {
+    let mut h = bordered_scroller();
+    // Inside the clip, but right of where the track is drawn now.
+    h.send(Event::mouse_down(195.0, 150.0, MouseButton::Left));
+    h.send(Event::mouse_up(195.0, 150.0, MouseButton::Left));
+    assert_eq!(
+        scrolled_by(&mut h),
+        0.0,
+        "a track the border pushed in answered"
+    );
+
+    h.send(Event::mouse_down(186.0, 150.0, MouseButton::Left));
+    assert!(scrolled_by(&mut h) > 0.0, "the drawn track did not answer");
+}
