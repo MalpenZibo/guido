@@ -31,6 +31,7 @@ pub struct RenderNode {
     pub overlay_commands: SmallVec<[Rc<DrawCommand>; 1]>, // Commands drawn after children
     pub clip: Option<ClipRegion>,            // Clips this node and children
     pub overlay_clip: Option<ClipRegion>,    // Clips only overlay commands
+    pub children_clip: Option<ClipRegion>,   // Clips only the children, under `clip`
     pub merge: Option<Box<MergeChildren>>,   // Children's backgrounds drawn as one shape
     pub repainted: Cell<bool>,               // true = freshly painted this frame
     pub partial: bool,                       // Some children were not painted (do not cache)
@@ -109,7 +110,18 @@ ctx.set_clip_rect(rect);
 
 // Set clip only for overlay commands (doesn't clip children)
 ctx.set_overlay_clip(rect, corner_radius, curvature);
+
+// Set clip only for the children (doesn't clip this node's own commands)
+ctx.set_children_clip(rect, corner_radius, curvature);
 ```
+
+A container's overflow clip is the last of these. CSS clips overflow at the
+padding box and leaves the box's own background, border and shadow alone, and
+so does a scroller or an `Overflow::Hidden` container here: it cuts its
+children to its box inset by its border width, each corner radius less that
+width (floored at zero), the curvature kept — and its own fill, border and
+shadow are not cut at all (#764). `set_clip`, which cuts the node's own
+commands too, is what `TextInput` uses to keep its text inside its box.
 
 ### Draw Commands
 

@@ -75,6 +75,14 @@ container()
 # }
 ```
 
+A container that scrolls or hides its overflow cuts its children *inside* its
+border, as CSS cuts at the padding box: the border is never covered by what the
+container holds, its scrollbar sits inside the border too, and a press on the
+border does not reach a child under it. The container's own background, border
+and shadow are not cut by that clip. The border does not take room in the
+layout, though, so content laid against the edge goes under the clip by the
+border's width; padding at least as wide keeps it in view.
+
 ## Shadows
 
 Four degrees of freedom: offset, blur, spread and colour. There is no elevation

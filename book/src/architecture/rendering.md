@@ -231,11 +231,19 @@ Containers set a clip region for their content:
 // Set clip for this node and all children (in local coordinates)
 ctx.set_clip(local_bounds, self.corner_radius, self.corner_curvature);
 
+// Set clip for the children only: what the node draws itself is not cut
+ctx.set_children_clip(inside_border, inner_radius, self.corner_curvature);
+
 // For overlay-only clipping (e.g., ripple effects)
 ctx.set_overlay_clip(local_bounds, self.corner_radius, self.corner_curvature);
 # ;
 # }
 ```
+
+A container clips with the last of these, as CSS clips overflow at the
+padding box: its children stop inside its border — the box inset by the
+border width, each corner radius less it — while its own fill, border and
+shadow are not cut at all.
 
 Clipping respects corner radius and curvature for proper rounded container
 clipping. Clip regions are inherited through the render tree and transformed
