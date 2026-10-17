@@ -215,7 +215,7 @@ pub mod prelude {
     pub use crate::keyboard::keyboard_modifiers;
     pub use crate::layout::{
         Alignment, Axis, CrossAlignment, Flex, Length, MainAlignment, Size, ZStack, at_least,
-        at_most, fill, fraction,
+        at_most, fill, fraction, natural,
     };
     pub use crate::outputs::{OutputId, OutputInfo, outputs, surface_output};
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};

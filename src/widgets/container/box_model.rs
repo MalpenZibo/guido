@@ -445,7 +445,7 @@ impl Container {
                 // ran, so reaching here means the constraints were unbounded
                 // and there was no share to take — which sizes to content, as
                 // an undeclared length does.
-                Extent::Auto | Extent::Fraction(_) => content,
+                Extent::Auto | Extent::Fraction(_) | Extent::Natural => content,
             }
         };
 
