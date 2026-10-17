@@ -256,6 +256,10 @@ handle.set_size(400, 300);
 handle.set_margin([8, 12]);
 ```
 
+The id is not needed from inside the surface: `ManagedSurface::build` opens
+every surface's scope — popups and lock covers included — and declares its `SurfaceHandle` there, so its
+tree reads `expect_context::<SurfaceHandle>()`.
+
 ### `transform.rs` - 2D Transforms
 
 2D affine transforms stored as 6 floats `[a, b, tx, c, d, ty]` (24 bytes) —
