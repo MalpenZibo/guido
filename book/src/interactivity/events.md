@@ -18,6 +18,31 @@ container()
 
 Click events fire when the mouse button is pressed and released within the container bounds.
 
+### Double Clicks
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let select = move || {};
+# let open = move || {};
+container()
+    .on_click(select)
+    .on_double_click(open)
+# ;
+# }
+```
+
+`on_double_click` fires on the release of the second click, as the web's
+`dblclick` does. `on_click` still fires for both clicks, so the first click of
+a double click selects and the second opens. A click is the second of a pair
+when it is the same button, within 400 ms and 5 px of the first, with no drag
+between.
+
+Every press carries its place in the run: `Event::MouseDown`'s `count` is 1
+for a single click, 2 for the second of a double click, 3 for a triple, so a
+widget that wants a triple click reads it there. A finger always presses 1.
+
 ### With Signal Updates
 
 ```rust
@@ -499,6 +524,9 @@ fn interactive_counter() -> impl Widget {
 impl Container {
     /// Handle click events
     pub fn on_click(self, handler: impl Fn() + 'static) -> Self;
+
+    /// Handle the second click of a double click, on its release
+    pub fn on_double_click(self, handler: impl Fn() + 'static) -> Self;
 
     /// Handle hover state changes
     pub fn on_hover(self, handler: impl Fn(bool) + 'static) -> Self;

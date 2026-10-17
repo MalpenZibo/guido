@@ -11,7 +11,7 @@ use wgpu::{Device, MultisampleState, Queue};
 
 use crate::app_state::with_app_state;
 use crate::render_stats::{self, Pipeline};
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::{Rect, TextAlign, TextOverflow};
 
 use super::clip::ClipChains;
@@ -26,6 +26,8 @@ fn text_buffer_key(entry: &TextEntry, scale_factor: f32) -> u64 {
     entry.text.hash(&mut hasher);
     (entry.font_size * scale_factor).to_bits().hash(&mut hasher);
     entry.font_weight.hash(&mut hasher);
+    entry.font_style.hash(&mut hasher);
+    entry.font_features.hash(&mut hasher);
     entry.line_height.key().hash(&mut hasher);
     entry.letter_spacing.to_bits().hash(&mut hasher);
     entry.font_family.hash(&mut hasher);
@@ -123,6 +125,8 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
         entry.font_size * scale_factor,
         entry.font_family,
         entry.font_weight,
+        entry.font_style,
+        entry.font_features,
         entry.line_height,
         entry.letter_spacing,
         entry.align,
@@ -171,6 +175,10 @@ fn shape_entry(font_system: &mut FontSystem, entry: &TextEntry, scale_factor: f3
 /// added to is cosmic-text's decision — the advance of every glyph it puts
 /// out — and the measurer, glyphon, the quad and the mask all take it from
 /// this one call. A number that is not one is no spacing.
+///
+/// The style picks the face as the weight does (see [`resolve_font`]), and
+/// cosmic-text shears an upright face for a slanted style the family has no
+/// face for. The features are handed to the shaper as they are.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn shape(
     font_system: &mut FontSystem,
@@ -178,6 +186,8 @@ pub(super) fn shape(
     font_size: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     line_height: LineHeight,
     letter_spacing: f32,
     align: TextAlign,
@@ -196,7 +206,7 @@ pub(super) fn shape(
         LineHeight::Relative(factor) => Some(factor * px),
         LineHeight::Absolute(height) => Some(height * scale),
     };
-    let font = resolve_font(font_system, font_family, weight);
+    let font = resolve_font(font_system, font_family, weight, font_style);
     let line_height = declared
         .filter(|h| h.is_finite() && *h > 0.0)
         .unwrap_or(font.line_ratio * px);
@@ -213,7 +223,11 @@ pub(super) fn shape(
     }
     let mut attrs = Attrs::new()
         .family(font.family.to_cosmic())
-        .weight(weight.to_cosmic());
+        .weight(weight.to_cosmic())
+        .style(font_style.to_cosmic());
+    if !font_features.is_empty() {
+        attrs = attrs.font_features(font_features.to_cosmic());
+    }
     let spacing = letter_spacing * scale;
     if spacing.is_finite() && spacing != 0.0 {
         attrs = attrs.letter_spacing(spacing / px);
@@ -226,16 +240,16 @@ pub(super) fn shape(
     buffer
 }
 
-/// What a declared family and weight are drawn in: the installed family that
-/// draws it, and the line height over its size of that family's face nearest
-/// the weight.
+/// What a declared family, weight and style are drawn in: the installed family
+/// that draws it, and the line height over its size of that family's face
+/// nearest the weight and the style.
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedFont {
     family: FontFamily,
     line_ratio: f32,
 }
 
-/// Resolve a declared family and weight to the face that draws them.
+/// Resolve a declared family, weight and style to the face that draws them.
 ///
 /// **The family** is a named one as declared, when the font database has it.
 /// Otherwise it is the one that draws a space in the declared family at 400,
@@ -257,17 +271,22 @@ pub(crate) struct ResolvedFont {
 /// **The line ratio** is the ascent, descent and line gap over its em, as
 /// Chromium and Parley count them, of the family's face nearest the weight by
 /// `fontdb`'s CSS query — the face that draws the text, so a fallback glyph
-/// later in the line does not make the line taller.
+/// later in the line does not make the line taller. The query is asked for the
+/// style too, so an italic line is as tall as the italic face says, and where
+/// the family has no slanted face it answers with the upright one, which is
+/// the face cosmic-text then shears.
 ///
-/// Kept per family and weight in the application's state: the faces every font
+/// Kept per family, weight and style in the application's state: the faces every font
 /// system holds are the same ones, fixed once the first of them is built, and a
 /// probe is a shaping.
 fn resolve_font(
     font_system: &mut FontSystem,
     family: FontFamily,
     weight: FontWeight,
+    style: FontStyle,
 ) -> ResolvedFont {
-    let known = with_app_state(|app| app.resolved_fonts.borrow().get(&(family, weight)).copied());
+    let key = (family, weight, style);
+    let known = with_app_state(|app| app.resolved_fonts.borrow().get(&key).copied());
     if let Some(resolved) = known {
         return resolved;
     }
@@ -276,6 +295,7 @@ fn resolve_font(
         let id = db.query(&glyphon::fontdb::Query {
             families: &[of.to_cosmic()],
             weight: weight.to_cosmic(),
+            style: style.to_cosmic(),
             ..Default::default()
         })?;
         Some((id, FontWeight(db.face(id)?.weight.0)))
@@ -296,11 +316,7 @@ fn resolve_font(
         family: drawing_family.unwrap_or(family),
         line_ratio,
     };
-    with_app_state(|app| {
-        app.resolved_fonts
-            .borrow_mut()
-            .insert((family, weight), resolved)
-    });
+    with_app_state(|app| app.resolved_fonts.borrow_mut().insert(key, resolved));
     resolved
 }
 
@@ -829,6 +845,8 @@ pub(super) fn test_entry(rect: Rect, transform: crate::transform::Transform) -> 
         font_size: 16.0,
         font_family: crate::widgets::FontFamily::default(),
         font_weight: FontWeight::default(),
+        font_style: FontStyle::Normal,
+        font_features: FontFeatures::new(),
         line_height: LineHeight::Normal,
         letter_spacing: 0.0,
         align: Default::default(),
@@ -1406,7 +1424,9 @@ mod a_wrapped_text_keeps_its_measured_lines {
     use super::{shape_entry, test_entry, vendored_font_system};
     use crate::renderer::LineFit;
     use crate::transform::Transform;
-    use crate::widgets::{FontFamily, FontWeight, LineHeight, Rect, TextAlign, TextOverflow};
+    use crate::widgets::{
+        FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight, Rect, TextAlign, TextOverflow,
+    };
 
     const OFFERED: f32 = 120.0;
 
@@ -1437,6 +1457,8 @@ mod a_wrapped_text_keeps_its_measured_lines {
                 16.0,
                 family,
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 0.0,
                 TextAlign::Start,
@@ -1505,6 +1527,27 @@ fn letter_spacing_is_part_of_the_buffer_key() {
     );
 }
 
+/// A style and a set of features are part of the shaped buffer's key, or a
+/// text whose style or features alone changed is drawn from the previous
+/// frame's shaping.
+#[cfg(test)]
+#[test]
+fn style_and_features_are_part_of_the_buffer_key() {
+    use crate::transform::Transform;
+    let plain = test_entry(Rect::new(0.0, 0.0, 120.0, 40.0), Transform::default());
+    let italic = TextEntry {
+        font_style: FontStyle::Italic,
+        ..plain.clone()
+    };
+    let tabular = TextEntry {
+        font_features: FontFeatures::new().enable(b"tnum"),
+        ..plain.clone()
+    };
+    let key = |entry: &TextEntry| text_buffer_key(entry, 1.0);
+    assert_ne!(key(&plain), key(&italic));
+    assert_ne!(key(&plain), key(&tabular));
+}
+
 /// An aligned text that is cut is cut where it was measured, and its lines are
 /// aligned across its own box.
 ///
@@ -1518,7 +1561,9 @@ fn letter_spacing_is_part_of_the_buffer_key() {
 mod an_aligned_cut_is_the_measured_cut {
     use super::{paint_offset, shape, vendored_font_system};
     use crate::renderer::LineFit;
-    use crate::widgets::{FontFamily, FontWeight, LineHeight, TextAlign, TextOverflow};
+    use crate::widgets::{
+        FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight, TextAlign, TextOverflow,
+    };
 
     const WORDS: &str = "one two three four five six seven eight nine ten eleven twelve";
     const OFFERED: f32 = 150.0;
@@ -1548,6 +1593,8 @@ mod an_aligned_cut_is_the_measured_cut {
             SIZE * scale,
             family,
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             align,
@@ -1576,6 +1623,8 @@ mod an_aligned_cut_is_the_measured_cut {
             SIZE,
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             TextAlign::Start,
@@ -1633,8 +1682,13 @@ mod an_aligned_cut_is_the_measured_cut {
 #[test]
 fn normal_is_the_line_height_of_the_face_that_draws_the_text() {
     let mut font_system = vendored_font_system();
-    let ratio =
-        resolve_font(&mut font_system, FontFamily::SansSerif, FontWeight::NORMAL).line_ratio;
+    let ratio = resolve_font(
+        &mut font_system,
+        FontFamily::SansSerif,
+        FontWeight::NORMAL,
+        FontStyle::Normal,
+    )
+    .line_ratio;
     assert!(
         (ratio - 1.1640625).abs() < 1e-4,
         "{ratio} is not DejaVu Sans Mono's own 1.164"
@@ -1681,6 +1735,8 @@ fn an_absolute_line_height_is_scaled_with_the_text() {
             14.0 * scale,
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Absolute(20.0),
             0.0,
             TextAlign::Start,
@@ -1723,6 +1779,8 @@ fn a_missing_weight_is_the_nearest_one_of_the_same_family() {
             14.0,
             FontFamily::SansSerif,
             weight,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             TextAlign::Start,
@@ -1775,6 +1833,8 @@ fn a_variable_face_is_shaped_at_the_weight_asked_of_it() {
         14.0,
         FontFamily::name("Guido Variable"),
         FontWeight::BOLD,
+        FontStyle::Normal,
+        FontFeatures::new(),
         LineHeight::Normal,
         0.0,
         TextAlign::Start,
@@ -1803,7 +1863,13 @@ fn a_weight_s_line_height_is_its_own_face_s() {
     }
     let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
     let ratio = |font_system: &mut FontSystem, weight| {
-        resolve_font(font_system, FontFamily::SansSerif, weight).line_ratio
+        resolve_font(
+            font_system,
+            FontFamily::SansSerif,
+            weight,
+            FontStyle::Normal,
+        )
+        .line_ratio
     };
     assert!((ratio(&mut font_system, FontWeight::NORMAL) - 1.1640625).abs() < 1e-4);
     let bold = ratio(&mut font_system, FontWeight::BOLD);
@@ -1811,6 +1877,77 @@ fn a_weight_s_line_height_is_its_own_face_s() {
         (bold - 1.3642578).abs() < 1e-4,
         "{bold} is the regular face's line, not the bold one's 1.364"
     );
+}
+
+/// An italic is drawn in the family's italic face where it has one, and its
+/// line is that face's; where it has none, the upright face is sheared.
+///
+/// `GuidoFigures-Italic.ttf` is a face of its own, with an ascent of 1000
+/// where the upright one has 800 (`make_figures_fixture.py`), so its line is
+/// 1.2 of the size where the upright one's is 1.0. DejaVu Sans Mono is
+/// vendored upright only.
+#[cfg(test)]
+#[test]
+fn an_italic_is_the_family_s_italic_face_or_a_shear_of_its_upright_one() {
+    const MONO: &[u8] = include_bytes!("../../tests/assets/DejaVuSansMono.ttf");
+    const REGULAR: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Regular.ttf");
+    const ITALIC: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Italic.ttf");
+    let mut db = glyphon::fontdb::Database::new();
+    for font in [MONO, REGULAR, ITALIC] {
+        db.load_font_data(font.to_vec());
+    }
+    let mut font_system = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    let figures = FontFamily::name("Guido Figures");
+    let mono = FontFamily::name("DejaVu Sans Mono");
+
+    let ratio = |font_system: &mut FontSystem, style| {
+        resolve_font(font_system, figures, FontWeight::NORMAL, style).line_ratio
+    };
+    assert!((ratio(&mut font_system, FontStyle::Normal) - 1.0).abs() < 1e-4);
+    let italic = ratio(&mut font_system, FontStyle::Italic);
+    assert!(
+        (italic - 1.2).abs() < 1e-4,
+        "{italic} is the upright face's line, not the italic one's 1.2"
+    );
+
+    // Which face drew each glyph, and whether it was sheared to look slanted.
+    let mut drawn = |family, style| {
+        let buffer = shape(
+            &mut font_system,
+            "0",
+            20.0,
+            family,
+            FontWeight::NORMAL,
+            style,
+            FontFeatures::new(),
+            LineHeight::Normal,
+            0.0,
+            TextAlign::Start,
+            (None, None),
+            None,
+            1.0,
+        );
+        let glyph = buffer.layout_runs().next().expect("a line").glyphs[0].clone();
+        let face = font_system.db().face(glyph.font_id).expect("a face");
+        (
+            face.style,
+            glyph
+                .cache_key_flags
+                .contains(glyphon::cosmic_text::CacheKeyFlags::FAKE_ITALIC),
+        )
+    };
+    use glyphon::fontdb::Style;
+    assert_eq!(
+        drawn(figures, FontStyle::Italic),
+        (Style::Italic, false),
+        "a family with an italic face draws an italic in it, unsheared"
+    );
+    assert_eq!(
+        drawn(mono, FontStyle::Italic),
+        (Style::Normal, true),
+        "a family without one shears its upright face"
+    );
+    assert_eq!(drawn(mono, FontStyle::Normal), (Style::Normal, false));
 }
 
 /// A named family that is installed is measured in itself, even when it has
@@ -1833,6 +1970,8 @@ fn a_named_family_without_a_space_is_measured_in_itself() {
         14.0,
         FontFamily::name("Guido No Space"),
         FontWeight::NORMAL,
+        FontStyle::Normal,
+        FontFeatures::new(),
         LineHeight::Normal,
         0.0,
         TextAlign::Start,
@@ -1866,6 +2005,7 @@ fn a_named_family_that_is_not_installed_is_measured_in_its_fallback() {
         &mut font_system,
         FontFamily::name("Not Installed Anywhere"),
         FontWeight::NORMAL,
+        FontStyle::Normal,
     )
     .line_ratio;
     assert!(

@@ -68,6 +68,9 @@ zeroize = "1"
 tokio = { version = "1", features = ["sync", "rt", "time"] }
 smallvec = "1"
 rustc-hash = "2"
+# Fills and strokes a path into triangles; the 1-pixel fringe that anti-aliases
+# them is guido's own, since lyon does none and guido has no MSAA.
+lyon_tessellation = "1.0.22"
 
 [dev-dependencies]
 env_logger = "0.11"
@@ -121,6 +124,13 @@ required-features = ["testing", "render-stats"]
 [[bench]]
 name = "nested_clip"
 path = "benches/nested_clip/main.rs"
+harness = false
+test = false
+required-features = ["testing", "render-stats"]
+
+[[bench]]
+name = "sparkline_ring"
+path = "benches/sparkline_ring/main.rs"
 harness = false
 test = false
 required-features = ["testing", "render-stats"]

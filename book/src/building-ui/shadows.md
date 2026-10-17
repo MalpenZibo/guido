@@ -1,7 +1,8 @@
 # Shadows
 
 A shadow is four numbers: an offset, a blur, a spread and a colour. `Shadow`
-carries all four, and `.shadow(..)` is the only way to ask for one.
+carries all four, and `.shadow(..)` is the only way to ask for one — or for
+several, and for one cast inside the box rather than outside it.
 
 ```rust
 # extern crate guido;
@@ -22,6 +23,66 @@ The offset moves the shadow, and it moves in both axes: `(12.0, 0.0)` throws it
 to the right, `(0.0, -6.0)` throws it upward. Blur is the softness of the edge.
 Spread grows the shadow in every direction before it is blurred. The colour is a
 colour, alpha included — a shadow does not have to be black.
+
+## Inset shadows
+
+`.inset()` casts the same shadow inside the box, as CSS's `inset` keyword does:
+over the fill and inside the border, dark at the edge and fading inwards. The
+offset moves it as it moves an outer one, so `(0.0, 3.0)` darkens the top edge —
+a control pressed into the surface — and a spread pushes the edge further in.
+With no blur, a spread is a hard ring just inside the edge.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+// A glow inside the edge, for something that wants attention.
+container().shadow(Shadow::new((0.0, 0.0), 12.0, 0.0, Color::rgba(1.0, 0.3, 0.2, 0.6)).inset());
+
+// Pressed in.
+container().shadow(Shadow::new((0.0, 3.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.35)).inset());
+
+// A ring, 1.5 px deep.
+container().shadow(Shadow::new((0.0, 0.0), 0.0, 1.5, Color::WHITE).inset())
+# ;
+# }
+```
+
+An outer shadow rides the box's fill and draws nothing without one, since a
+shadow with no box above it is a smear. An inset shadow is inside the box, and
+an empty box can glow.
+
+## More than one shadow
+
+`.shadow(..)` holds a `Shadows`: a list of up to four, which one `Shadow` or an
+array of them converts into. They are drawn as CSS draws a `box-shadow` list —
+the first on top — and outer and inset shadows mix in one list. Most design
+systems spell an elevation as two shadows, a tight one that draws the edge and a
+soft one that lifts the card:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+const RAISED: Shadows = Shadows::new([
+    Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3)),
+    Shadow::new((0.0, 4.0), 8.0, 3.0, Color::rgba(0.0, 0.0, 0.0, 0.15)),
+]);
+
+# fn main() {
+container().shadow(RAISED);
+
+// An array is a list too, inset shadows included.
+container().shadow([
+    Shadow::simple((0.0, 2.0), 4.0, Color::rgba(0.0, 0.0, 0.0, 0.2)),
+    Shadow::new((0.0, 0.0), 6.0, 0.0, Color::rgba(1.0, 1.0, 1.0, 0.5)).inset(),
+])
+# ;
+# }
+```
+
+`Shadows::new` is `const` and refuses more than `Shadows::MAX` at compile
+time. A list animates shadow by shadow: the shorter of two is padded with
+shadows that draw nothing, so a second shadow arriving on hover fades in.
 
 ## There is no elevation level
 

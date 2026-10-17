@@ -32,7 +32,7 @@ use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
     CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
 };
-use crate::renderer::{GradientDir, PaintContext, Shadow};
+use crate::renderer::{GradientDir, PaintContext, Shadow, Shadows};
 use crate::transform::{Scale, Transform, Translate};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
@@ -206,6 +206,10 @@ pub(super) struct LayerProps {
     pub(super) scale: Prop<Scale>,
     pub(super) pivot: Prop<Pivot>,
     pub(super) opacity: Prop<f32>,
+    /// How a move layout gives this container is played, if it slides there
+    /// rather than jumping. The slide itself is the tree's — see
+    /// `Tree::set_origin`.
+    pub(super) position: Option<crate::animation::TransitionConfig>,
 }
 
 /// The two decorations a container rarely has. Boxed and absent by default,
@@ -220,7 +224,7 @@ pub(super) struct LayerProps {
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
-    pub(super) shadow: Prop<Shadow>,
+    pub(super) shadow: Prop<Shadows>,
 }
 
 bitflags::bitflags! {
@@ -236,6 +240,7 @@ bitflags::bitflags! {
 /// Only allocated when `.on_click()`, `.when_hovered()`, `.when_pressed()`, etc. are called.
 pub(super) struct InteractionState {
     pub(super) on_click: Option<ClickCallback>,
+    pub(super) on_double_click: Option<ClickCallback>,
     pub(super) on_right_click: Option<ClickCallback>,
     pub(super) on_middle_click: Option<ClickCallback>,
     pub(super) on_key_down: Option<KeyCallback>,
@@ -245,6 +250,10 @@ pub(super) struct InteractionState {
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
     pub(super) on_mouse_down: Option<MouseDownCallback>,
     pub(super) on_mouse_up: Option<MouseUpCallback>,
+    /// Which press of a run the press held now was — its
+    /// [`count`](Event::MouseDown::count) — so the release knows whether it
+    /// ends a double click.
+    pub(super) press_count: u32,
     /// Whether Tab stops here, and a press inside takes the focus.
     pub(super) focusable: bool,
     /// Hover and press, behind a signal so that *resolving a state layer
@@ -302,6 +311,7 @@ impl Default for InteractionState {
     fn default() -> Self {
         Self {
             on_click: None,
+            on_double_click: None,
             on_right_click: None,
             on_middle_click: None,
             on_key_down: None,
@@ -311,6 +321,7 @@ impl Default for InteractionState {
             on_pointer_move: None,
             on_mouse_down: None,
             on_mouse_up: None,
+            press_count: 0,
             focusable: false,
             flags: create_signal(InteractionFlags::empty()),
             states: Vec::new(),
@@ -576,7 +587,10 @@ impl Container {
         // they publish, and re-measured whenever this container lays out. That
         // split is what lets this run from a Paint job without walking
         // anything.
-        tree.set_own_paint_reach(id, self.max_transform_reach(bounds, shadow_extent));
+        // A slide carries the whole box by its offset, after everything else.
+        let (dx, dy) = self.position_offset(tree, id);
+        let reach = self.max_transform_reach(bounds, shadow_extent) + dx.abs().max(dy.abs());
+        tree.set_own_paint_reach(id, reach);
     }
 
     /// Resolve the declared scroll measurements for this pass.
@@ -616,17 +630,36 @@ impl Container {
     /// here, so what a widget ref reports, where a click lands and what is
     /// drawn cannot disagree about where this container is. `bounds` is the
     /// laid-out box a relative translate is a fraction of.
-    fn placed(&self, id: WidgetId, bounds: Rect) -> Placed {
+    ///
+    /// A slide to where layout moved it is part of the transform, applied
+    /// last, so it carries the box as a translate does.
+    fn placed(&self, tree: &Tree, id: WidgetId, bounds: Rect) -> Placed {
         let scroll = if self.scroll_axis != ScrollAxis::None {
             let sd = self.scroll_data();
             (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
         } else {
             (0.0, 0.0)
         };
+        let (dx, dy) = self.position_offset(tree, id);
         Placed {
-            transform: self.animated_transform(id, bounds),
+            transform: self.animated_transform(id, bounds).translated(dx, dy),
             pivot: self.resolved_pivot(id),
             scroll,
+        }
+    }
+
+    /// Whether this container slides to where layout moves it.
+    fn slides(&self) -> bool {
+        self.layer.as_deref().is_some_and(|l| l.position.is_some())
+    }
+
+    /// How far from where layout put it this container is drawn, while it
+    /// slides there. Asked of the tree only by a container that slides.
+    fn position_offset(&self, tree: &Tree, id: WidgetId) -> (f32, f32) {
+        if self.slides() {
+            tree.position_offset(id)
+        } else {
+            (0.0, 0.0)
         }
     }
 
@@ -658,7 +691,7 @@ impl Container {
             .map_or(Prop::Unset, |d| d.gradient)
     }
 
-    pub(super) fn shadow_prop(&self) -> Prop<Shadow> {
+    pub(super) fn shadow_prop(&self) -> Prop<Shadows> {
         self.decoration.as_deref().map_or(Prop::Unset, |d| d.shadow)
     }
 
@@ -1136,6 +1169,27 @@ impl Container {
         self
     }
 
+    /// Called on the release of a double click inside the bounds: the second
+    /// left click of a run, as the web's `dblclick` is.
+    ///
+    /// [`on_click`](Self::on_click) still fires for each of the two clicks,
+    /// before this does for the second. A third click in the run is a click
+    /// and nothing more; a widget that wants it reads the press's
+    /// [`count`](Event::MouseDown::count) from the event.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let open = || {};
+    /// container().on_click(|| println!("select")).on_double_click(open);
+    /// ```
+    pub fn on_double_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
+        let handler = callback.into_click_handler();
+        if handler.is_some() || self.interaction.is_some() {
+            self.interact_mut().on_double_click = handler;
+        }
+        self
+    }
+
     /// Called on a right-button press inside the bounds.
     pub fn on_right_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_right_click = Some(Rc::new(callback));
@@ -1237,7 +1291,8 @@ impl Container {
     }
 
     /// The shadow this container casts — offset, blur, spread and colour, all
-    /// four of them.
+    /// four of them — or up to [`Shadows::MAX`] of them, the first on top, any
+    /// of which may be [cast inside the box](Shadow::inset) instead.
     ///
     /// There is no elevation level and no table behind one. A design system's
     /// ladder is a set of `Shadow` values the application writes down, the way
@@ -1252,10 +1307,50 @@ impl Container {
     /// let _ = container()
     ///     .shadow(Shadow::none().transition(120.0))
     ///     .when_hovered(|s| s.shadow(LIFTED));
+    ///
+    /// // A tight shadow over a soft one, and a glow inside the edge.
+    /// const EDGE: Shadow = Shadow::new((0.0, 1.0), 2.0, 0.0, Color::BLACK);
+    /// let _ = container().shadow([EDGE, LIFTED]);
+    /// let _ = container().shadow(Shadow::new((0.0, 0.0), 8.0, 0.0, Color::WHITE).inset());
     /// ```
-    pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadow, M>) -> Self {
+    pub fn shadow<M>(mut self, shadow: impl IntoAnimated<Shadows, M>) -> Self {
         let declared = animated_properties::declare::shadow(&mut self.anims, shadow);
         self.decoration_mut().shadow = declared;
+        self
+    }
+
+    /// Slide to where layout moves this container, rather than jump there.
+    ///
+    /// When its origin inside its parent changes — a reorder, an insertion
+    /// above it, a sibling that grew — it is drawn where it was and slides to
+    /// the new place on `transition`. Layout lands on the new place at once:
+    /// the slide is a paint-time offset settling to zero, so nothing re-lays
+    /// out while it plays. A move during a move starts from where the
+    /// container is drawn, and a spring keeps its speed.
+    ///
+    /// Measured in the parent's coordinates, so scrolling an ancestor slides
+    /// nothing, and a parent that moves carries its children without sliding
+    /// them: each level slides only its own move. The first layout places it
+    /// without a slide; an entrance is [`Animated::entering_from`]'s.
+    ///
+    /// Hit testing and [`WidgetRef::rect`] follow where it is drawn;
+    /// [`WidgetRef::layout_rect`] is where it is going. A size change is the
+    /// width and height's own transitions, which compose with this one.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// container().animate_position(SpringConfig::SNAPPY);
+    /// container().animate_position(200.0);
+    /// ```
+    ///
+    /// [`Animated::entering_from`]: crate::animation::Animated::entering_from
+    /// [`WidgetRef::rect`]: crate::widget_ref::WidgetRef::rect
+    /// [`WidgetRef::layout_rect`]: crate::widget_ref::WidgetRef::layout_rect
+    pub fn animate_position(
+        mut self,
+        transition: impl Into<crate::animation::TransitionConfig>,
+    ) -> Self {
+        self.layer_mut().position = Some(transition.into());
         self
     }
 
@@ -1476,6 +1571,7 @@ impl Container {
             ix.declared_enabled.is_set()
                 || ix.has_any_state()
                 || ix.on_click.is_some()
+                || ix.on_double_click.is_some()
                 || ix.on_right_click.is_some()
                 || ix.on_middle_click.is_some()
                 || ix.on_hover.is_some()
@@ -1547,6 +1643,18 @@ impl Widget for Container {
         let now = tree.frame_instant();
 
         any_animating |= self.advance_declared_animations(id, now);
+
+        if self.slides()
+            && let Some(moved) = tree.advance_position(id, now)
+        {
+            any_animating = true;
+            let required = if moved {
+                RequiredJob::Paint
+            } else {
+                RequiredJob::None
+            };
+            request_job(id, JobRequest::Animation(required));
+        }
 
         // Advance ripple animation
         if let Some(ref mut ix) = self.interaction
@@ -1717,6 +1825,11 @@ impl Widget for Container {
         let boundary = self.is_relayout_boundary_for(constraints);
         ctx.tree().set_relayout_boundary(id, boundary);
         self.ensure_scrollbar_containers(ctx.tree(), id);
+        // Before the parent places this container, which is the move a slide
+        // is played for.
+        if let Some(transition) = self.layer.as_deref().and_then(|l| l.position.as_ref()) {
+            ctx.tree().animate_position(id, transition);
+        }
 
         // Before the measurement, because the measurement consumes what this
         // places: `read_box_lengths` reads the animated padding, and a value
@@ -1836,7 +1949,7 @@ impl Widget for Container {
             return EventResponse::Ignored;
         }
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
         let hit = HitContext {
             bounds,
             corners: self.animated_corners(id),
@@ -2033,7 +2146,7 @@ impl Widget for Container {
         let Some(bounds) = tree.get_bounds(id) else {
             return Placement::NONE;
         };
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
         Placement {
             // About the pivot in the container's own box, as flatten turns it.
             own: placed.transform.about(
@@ -2053,7 +2166,7 @@ impl Widget for Container {
 
         // Get bounds from Tree (single source of truth)
         let bounds = tree.get_bounds(id).unwrap_or_default();
-        let placed = self.placed(id, bounds);
+        let placed = self.placed(tree, id, bounds);
 
         // Read inside the scope the framework opened around this call, so a
         // change to any of them repaints this container and nothing else.

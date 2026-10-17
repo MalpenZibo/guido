@@ -1,6 +1,6 @@
 use crate::app_state::with_app_state;
 use crate::layout::Size;
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::{TextAlign, TextOverflow};
 use cosmic_text::{Buffer, FontSystem};
 use rustc_hash::FxHashMap;
@@ -97,6 +97,8 @@ struct MeasureCacheKey {
     text_len: u32,
     font_size_bits: u32,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     line_height: (u8, u32),
     letter_spacing_bits: u32,
     /// The width it was laid out in, and the cut, when there is one.
@@ -110,6 +112,8 @@ impl MeasureCacheKey {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         fit: LineFit,
@@ -122,6 +126,8 @@ impl MeasureCacheKey {
             text_len: text.len() as u32,
             font_size_bits: font_size.to_bits(),
             font_weight,
+            font_style,
+            font_features,
             line_height: line_height.key(),
             letter_spacing_bits: letter_spacing.to_bits(),
             fit: fit.key(),
@@ -176,6 +182,8 @@ impl TextMeasurer {
             max_width,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
         )
@@ -189,6 +197,8 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
     ) -> Size {
@@ -198,6 +208,8 @@ impl TextMeasurer {
             max_width,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             None,
@@ -221,6 +233,8 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         fit: Option<LineFit>,
@@ -231,6 +245,8 @@ impl TextMeasurer {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             fit,
@@ -248,6 +264,8 @@ impl TextMeasurer {
                 None,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 line_height,
                 letter_spacing,
                 Some(fit),
@@ -322,6 +340,8 @@ impl TextMeasurer {
         max_width: Option<f32>,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         fit: Option<LineFit>,
@@ -333,6 +353,8 @@ impl TextMeasurer {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             TextAlign::Start,
@@ -354,12 +376,15 @@ impl TextMeasurer {
     /// Text inputs previously rebuilt their cursor-position table by
     /// measuring every prefix of the text — O(n) shaping passes of O(n)
     /// text per keystroke.
+    #[allow(clippy::too_many_arguments)]
     pub fn char_positions_styled(
         &mut self,
         text: &str,
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         letter_spacing: f32,
     ) -> Vec<f32> {
         if text.is_empty() {
@@ -373,6 +398,8 @@ impl TextMeasurer {
             None,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             LineHeight::Normal,
             letter_spacing,
             None,
@@ -416,11 +443,14 @@ impl TextMeasurer {
             char_index,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             0.0,
         )
     }
 
     /// Measure text width up to a specific character index with font styling.
+    #[allow(clippy::too_many_arguments)]
     pub fn measure_to_char_styled(
         &mut self,
         text: &str,
@@ -428,6 +458,8 @@ impl TextMeasurer {
         char_index: usize,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         letter_spacing: f32,
     ) -> f32 {
         if char_index == 0 || text.is_empty() {
@@ -448,6 +480,8 @@ impl TextMeasurer {
             None,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             LineHeight::Normal,
             letter_spacing,
         )
@@ -463,11 +497,14 @@ impl TextMeasurer {
             x,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             0.0,
         )
     }
 
     /// Find the character index from an x-coordinate with font styling.
+    #[allow(clippy::too_many_arguments)]
     pub fn char_from_x_styled(
         &mut self,
         text: &str,
@@ -475,6 +512,8 @@ impl TextMeasurer {
         x: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         letter_spacing: f32,
     ) -> usize {
         if text.is_empty() || x <= 0.0 {
@@ -489,6 +528,8 @@ impl TextMeasurer {
                 None,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 LineHeight::Normal,
                 letter_spacing,
             )
@@ -509,6 +550,8 @@ impl TextMeasurer {
                 mid,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 letter_spacing,
             );
             if width < x {
@@ -526,6 +569,8 @@ impl TextMeasurer {
                 left - 1,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 letter_spacing,
             );
             let curr_width = self.measure_to_char_styled(
@@ -534,6 +579,8 @@ impl TextMeasurer {
                 left,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 letter_spacing,
             );
             if (x - prev_width) < (curr_width - x) {
@@ -567,12 +614,15 @@ pub fn measure_text(text: &str, font_size: f32, max_width: Option<f32>) -> Size 
 
 /// Measure text dimensions with specified font family, weight, line height
 /// and letter spacing
+#[allow(clippy::too_many_arguments)]
 pub fn measure_text_styled(
     text: &str,
     font_size: f32,
     max_width: Option<f32>,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     line_height: LineHeight,
     letter_spacing: f32,
 ) -> Size {
@@ -583,6 +633,8 @@ pub fn measure_text_styled(
             max_width,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
         )
@@ -598,6 +650,8 @@ pub fn measure_text_full(
     max_width: Option<f32>,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     line_height: LineHeight,
     letter_spacing: f32,
     fit: Option<LineFit>,
@@ -609,6 +663,8 @@ pub fn measure_text_full(
             max_width,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             fit,
@@ -624,6 +680,8 @@ pub(crate) fn measure_line_height(
     font_size: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     line_height: LineHeight,
 ) -> f32 {
     with_measurer(|m| {
@@ -633,6 +691,8 @@ pub(crate) fn measure_line_height(
             None,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             0.0,
             None,
@@ -648,12 +708,15 @@ pub fn measure_text_to_char(text: &str, font_size: f32, char_index: usize) -> f3
 }
 
 /// Measure text width up to a character index with font styling
+#[allow(clippy::too_many_arguments)]
 pub fn measure_text_to_char_styled(
     text: &str,
     font_size: f32,
     char_index: usize,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     letter_spacing: f32,
 ) -> f32 {
     with_measurer(|m| {
@@ -663,6 +726,8 @@ pub fn measure_text_to_char_styled(
             char_index,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             letter_spacing,
         )
     })
@@ -675,10 +740,20 @@ pub fn measure_char_positions_styled(
     font_size: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     letter_spacing: f32,
 ) -> Vec<f32> {
     with_measurer(|m| {
-        m.char_positions_styled(text, font_size, font_family, font_weight, letter_spacing)
+        m.char_positions_styled(
+            text,
+            font_size,
+            font_family,
+            font_weight,
+            font_style,
+            font_features,
+            letter_spacing,
+        )
     })
 }
 
@@ -688,16 +763,28 @@ pub fn char_index_from_x(text: &str, font_size: f32, x: f32) -> usize {
 }
 
 /// Find character index from x-coordinate with font styling
+#[allow(clippy::too_many_arguments)]
 pub fn char_index_from_x_styled(
     text: &str,
     font_size: f32,
     x: f32,
     font_family: FontFamily,
     font_weight: FontWeight,
+    font_style: FontStyle,
+    font_features: FontFeatures,
     letter_spacing: f32,
 ) -> usize {
     with_measurer(|m| {
-        m.char_from_x_styled(text, font_size, x, font_family, font_weight, letter_spacing)
+        m.char_from_x_styled(
+            text,
+            font_size,
+            x,
+            font_family,
+            font_weight,
+            font_style,
+            font_features,
+            letter_spacing,
+        )
     })
 }
 
@@ -728,6 +815,8 @@ mod baseline_tests {
                     Some(100.0),
                     FontFamily::default(),
                     FontWeight::NORMAL,
+                    FontStyle::Normal,
+                    FontFeatures::new(),
                     LineHeight::Normal,
                     0.0,
                     None,
@@ -759,6 +848,8 @@ mod baseline_tests {
                 None,
                 FontFamily::default(),
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 0.0,
                 None,
@@ -803,6 +894,8 @@ mod fit_tests {
                 None,
                 family,
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 0.0,
                 fit,
@@ -817,6 +910,8 @@ mod fit_tests {
                 None,
                 family,
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 0.0,
                 None,
@@ -871,6 +966,8 @@ mod fit_tests {
             None,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             Some(fit(90.0, 1, TextOverflow::Ellipsis, false)),
@@ -955,8 +1052,15 @@ mod line_height_tests {
     pub(super) const DEJAVU_RATIO: f32 = (1901.0 + 483.0) / 2048.0;
 
     pub(super) fn measurer() -> TextMeasurer {
+        measurer_with(&[FONT])
+    }
+
+    /// A measurer that knows these fonts and no others.
+    pub(super) fn measurer_with(fonts: &[&[u8]]) -> TextMeasurer {
         let mut db = cosmic_text::fontdb::Database::new();
-        db.load_font_data(FONT.to_vec());
+        for font in fonts {
+            db.load_font_data(font.to_vec());
+        }
         TextMeasurer {
             font_system: FontSystem::new_with_locale_and_db("en-US".into(), db),
             measure_cache: FxHashMap::default(),
@@ -971,6 +1075,8 @@ mod line_height_tests {
                 None,
                 FontFamily::name("DejaVu Sans Mono"),
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 line_height,
                 0.0,
                 None,
@@ -1080,6 +1186,8 @@ mod letter_spacing_tests {
             max_width,
             FontFamily::name("DejaVu Sans Mono"),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             spacing,
         )
@@ -1157,12 +1265,28 @@ mod letter_spacing_tests {
         let mut m = measurer();
         let family = FontFamily::name("DejaVu Sans Mono");
         let cell = ADVANCE * 20.0 + 4.0;
-        let positions = m.char_positions_styled("abcde", 20.0, family, FontWeight::NORMAL, 4.0);
+        let positions = m.char_positions_styled(
+            "abcde",
+            20.0,
+            family,
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
+            4.0,
+        );
         assert_eq!(positions.len(), 6);
         for (i, x) in positions.iter().enumerate() {
             assert_near(*x, i as f32 * cell, &format!("boundary {i}"));
-            let prefix =
-                m.measure_to_char_styled("abcde", 20.0, i, family, FontWeight::NORMAL, 4.0);
+            let prefix = m.measure_to_char_styled(
+                "abcde",
+                20.0,
+                i,
+                family,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
+                4.0,
+            );
             assert_near(prefix, i as f32 * cell, &format!("prefix of {i}"));
         }
     }
@@ -1176,11 +1300,29 @@ mod letter_spacing_tests {
         let family = FontFamily::name("DejaVu Sans Mono");
         let x = 3.0 * (ADVANCE * 20.0 + 10.0);
         assert_eq!(
-            m.char_from_x_styled("abcdefgh", 20.0, x, family, FontWeight::NORMAL, 10.0),
+            m.char_from_x_styled(
+                "abcdefgh",
+                20.0,
+                x,
+                family,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
+                10.0
+            ),
             3
         );
         assert_eq!(
-            m.char_from_x_styled("abcdefgh", 20.0, x, family, FontWeight::NORMAL, 0.0),
+            m.char_from_x_styled(
+                "abcdefgh",
+                20.0,
+                x,
+                family,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
+                0.0
+            ),
             5
         );
     }
@@ -1241,6 +1383,8 @@ mod letter_spacing_tests {
                 None,
                 FontFamily::name("DejaVu Sans Mono"),
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 spacing,
                 None,
@@ -1276,7 +1420,15 @@ mod letter_spacing_tests {
                 vec![0.0, cell, cell, 2.0 * cell, 3.0 * cell],
             ),
         ] {
-            let got = m.char_positions_styled(text, 20.0, family, FontWeight::NORMAL, spacing);
+            let got = m.char_positions_styled(
+                text,
+                20.0,
+                family,
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
+                spacing,
+            );
             assert_eq!(got.len(), expected.len(), "{text:?}: {got:?}");
             for (i, (x, want)) in got.iter().zip(&expected).enumerate() {
                 assert_near(
@@ -1310,6 +1462,8 @@ mod longest_word_tests {
                 None,
                 family,
                 FontWeight::NORMAL,
+                FontStyle::Normal,
+                FontFeatures::new(),
                 LineHeight::Normal,
                 0.0,
                 Some(LineFit::wrapping(width)),
@@ -1322,6 +1476,88 @@ mod longest_word_tests {
                 (widest - 7.0 * glyph).abs() < 0.01,
                 "seven glyphs at {width:?}, got {widest} for a glyph of {glyph}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod font_style_and_feature_tests {
+    use super::line_height_tests::assert_near;
+    use super::*;
+
+    /// `tests/assets/make_figures_fixture.py` says what these are: an upright
+    /// face whose digit n is 400 + 40n units wide on a 1000 em, with a `tnum`
+    /// that makes every digit 600, and an italic face whose line is 1.2 of the
+    /// size where the upright one's is 1.0.
+    const REGULAR: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Regular.ttf");
+    const ITALIC: &[u8] = include_bytes!("../../tests/assets/GuidoFigures-Italic.ttf");
+
+    fn measurer() -> TextMeasurer {
+        super::line_height_tests::measurer_with(&[REGULAR, ITALIC])
+    }
+
+    fn tnum() -> FontFeatures {
+        FontFeatures::new().enable(b"tnum")
+    }
+
+    fn measure(m: &mut TextMeasurer, text: &str, style: FontStyle, features: FontFeatures) -> Size {
+        m.measure_styled(
+            text,
+            20.0,
+            None,
+            FontFamily::name("Guido Figures"),
+            FontWeight::NORMAL,
+            style,
+            features,
+            LineHeight::Normal,
+            0.0,
+        )
+    }
+
+    /// Two measurements of one string that differ only in their features are
+    /// two cache entries with two widths: a key without the features hands
+    /// the second the first one's width.
+    #[test]
+    fn a_feature_set_is_part_of_the_measurement_s_key() {
+        let mut m = measurer();
+        // A "1" of 440 units and a "0" of 400, at 20 pixels to the em.
+        let proportional = measure(&mut m, "10", FontStyle::Normal, FontFeatures::new()).width;
+        // Two digits of 600.
+        let tabular = measure(&mut m, "10", FontStyle::Normal, tnum()).width;
+        assert_near(proportional, 16.8, "the figures without `tnum`");
+        assert_near(tabular, 24.0, "the figures with `tnum`");
+        assert_eq!(m.measure_cache.len(), 2, "one entry for each");
+    }
+
+    /// The same for a style: the italic face's line is taller than the
+    /// upright one's, so a key without the style gives one the other's.
+    #[test]
+    fn a_style_is_part_of_the_measurement_s_key() {
+        let mut m = measurer();
+        let upright = measure(&mut m, "0", FontStyle::Normal, FontFeatures::new()).height;
+        let italic = measure(&mut m, "0", FontStyle::Italic, FontFeatures::new()).height;
+        assert_near(upright, 20.0, "the upright face's line, 1.0 of the size");
+        assert_near(italic, 24.0, "the italic face's line, 1.2 of the size");
+        assert_eq!(m.measure_cache.len(), 2, "one entry for each");
+    }
+
+    /// A field puts its caret between tabular figures, not where the
+    /// proportional ones would have stood.
+    #[test]
+    fn a_caret_stands_between_the_figures_the_features_drew() {
+        let mut m = measurer();
+        let positions = m.char_positions_styled(
+            "10",
+            20.0,
+            FontFamily::name("Guido Figures"),
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            tnum(),
+            0.0,
+        );
+        assert_eq!(positions.len(), 3);
+        for (x, want) in positions.iter().zip([0.0, 12.0, 24.0]) {
+            assert_near(*x, want, "a boundary between tabular figures");
         }
     }
 }

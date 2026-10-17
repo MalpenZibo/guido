@@ -65,7 +65,7 @@ pub(crate) trait FiniteOr<T> {
 impl<T: AllFinite + Clone + 'static> FiniteOr<T> for Prop<T> {
     // Matching on `get` rather than reading through `get_or`, so `default` is
     // not cloned in order to be dropped. These run per property per container
-    // per painted frame, and a `Shadow` is 32 bytes of it.
+    // per painted frame, and a `Shadows` is 148 bytes of it.
     //
     // An undeclared property is `None` and falls back without a word: there is
     // no declaration to report.
@@ -152,6 +152,14 @@ finite_by_channels!(
     crate::transform::Translate,
     crate::transform::Scale,
 );
+
+/// The shadows it holds, rather than its channels: read on every painted frame,
+/// and those would build a vector of them to look at.
+impl AllFinite for crate::renderer::Shadows {
+    fn all_finite(&self) -> bool {
+        self.as_slice().iter().all(AllFinite::all_finite)
+    }
+}
 
 impl AllFinite for crate::widgets::LinearGradient {
     fn all_finite(&self) -> bool {

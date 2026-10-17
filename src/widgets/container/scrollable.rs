@@ -895,6 +895,7 @@ impl Container {
                 at: Some(at),
                 button: MouseButton::Left,
                 pointer: PointerKind::Finger,
+                ..
             } if hit.contains(Some(*at)) && self.has_room_to_scroll() => {
                 let drag = ContentDrag::landed(hit.rebase(*at));
                 // A finger on moving content is asking it to stop, and that is

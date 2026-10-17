@@ -3,6 +3,7 @@
 use std::rc::Rc;
 
 use super::commands::{Border, CornerRadii, DrawCommand};
+use super::path::{Fill, Path, Stroke};
 use super::text_measurer::LineFit;
 use super::tree::{ClipRegion, NodeId, RenderNode};
 use super::types::{Gradient, Shadow};
@@ -10,10 +11,10 @@ use crate::image_decode::DecodedImage;
 use crate::pivot::Pivot;
 use crate::transform::Transform;
 use crate::tree::{Tree, WidgetId};
-use crate::widgets::font::{FontFamily, FontWeight, LineHeight};
+use crate::widgets::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use crate::widgets::image::{ContentFit, ImageSource};
 use crate::widgets::text_style::{TextShadow, TextStroke};
-use crate::widgets::{Color, Rect, TextAlign};
+use crate::widgets::{Color, Point, Rect, TextAlign};
 
 /// Painting context for the renderer.
 ///
@@ -467,6 +468,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -485,6 +488,8 @@ impl<'a> PaintContext<'a> {
                 font_size,
                 font_family,
                 font_weight,
+                font_style,
+                font_features,
                 line_height,
                 letter_spacing,
                 align,
@@ -497,6 +502,100 @@ impl<'a> PaintContext<'a> {
             center: (cx, cy),
             radius,
             color,
+        }));
+    }
+
+    /// Stroke `sweep` degrees of the circle of `radius` around `center`,
+    /// starting `start` degrees clockwise from twelve o'clock — the line's
+    /// width, colour and cap are `stroke`'s, and its join is not used.
+    ///
+    /// Drawn exactly as one shape rather than tessellated, so an arc whose
+    /// sweep animates costs every frame the same. A sweep of zero draws
+    /// nothing, whatever the cap; a full turn or more draws a ring.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # use guido::widget_prelude::*;
+    /// struct Gauge(f32);
+    ///
+    /// impl Widget for Gauge {
+    ///     fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+    ///         constraints.constrain(Size::new(40.0, 40.0))
+    ///     }
+    ///
+    ///     fn paint(&self, ctx: &mut PaintContext) {
+    ///         let line = Stroke::new(4.0, Color::WHITE).caps(Cap::Round);
+    ///         // Three quarters of a turn, opening at the bottom.
+    ///         ctx.draw_arc((20.0, 20.0), 16.0, -135.0, 270.0 * self.0, line);
+    ///     }
+    /// }
+    /// ```
+    pub fn draw_arc(
+        &mut self,
+        center: impl Into<Point>,
+        radius: f32,
+        start: f32,
+        sweep: f32,
+        stroke: Stroke,
+    ) {
+        if sweep == 0.0 || stroke.width.is_nan() || stroke.width <= 0.0 {
+            return;
+        }
+        self.node.commands.push(Rc::new(DrawCommand::Arc {
+            center: center.into(),
+            radius,
+            start,
+            sweep,
+            width: stroke.width,
+            color: stroke.color,
+            cap: stroke.cap,
+        }));
+    }
+
+    /// Fill `path`, stroke it, or both: the fill is drawn first and the
+    /// stroke over it, centred on the outline.
+    ///
+    /// Either may be `None`, and a bare `Fill` or `Stroke` is taken as it is.
+    /// The path is tessellated the first time it is drawn at a scale and kept,
+    /// so drawing the same path again — moved, turned, faded or recoloured —
+    /// costs no tessellation; a path with new segments does.
+    ///
+    /// ```
+    /// # use guido::prelude::*;
+    /// # use guido::widget_prelude::*;
+    /// struct Sparkline(Vec<f32>);
+    ///
+    /// impl Widget for Sparkline {
+    ///     fn layout(&mut self, _ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+    ///         constraints.constrain(Size::new(80.0, 20.0))
+    ///     }
+    ///
+    ///     fn paint(&self, ctx: &mut PaintContext) {
+    ///         let step = 80.0 / (self.0.len().max(2) - 1) as f32;
+    ///         let line = self.0.iter().enumerate().fold(Path::new(), |path, (i, v)| {
+    ///             let point = (i as f32 * step, 20.0 * (1.0 - v));
+    ///             if i == 0 { path.move_to(point) } else { path.line_to(point) }
+    ///         });
+    ///         let stroke = Stroke::new(1.6, Color::WHITE).joins(Join::Round);
+    ///         ctx.draw_path(&line, None, stroke);
+    ///     }
+    /// }
+    /// ```
+    pub fn draw_path(
+        &mut self,
+        path: &Path,
+        fill: impl Into<Option<Fill>>,
+        stroke: impl Into<Option<Stroke>>,
+    ) {
+        let fill = fill.into();
+        let stroke = stroke.into().filter(|s| s.width > 0.0);
+        if path.is_empty() || (fill.is_none() && stroke.is_none()) {
+            return;
+        }
+        self.node.commands.push(Rc::new(DrawCommand::Path {
+            path: path.clone(),
+            fill,
+            stroke,
         }));
     }
 
@@ -513,14 +612,16 @@ impl<'a> PaintContext<'a> {
             font_size,
             FontFamily::default(),
             FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontFeatures::new(),
             LineHeight::Normal,
             0.0,
             None,
         );
     }
 
-    /// Draw text with custom font family, weight, line height and letter
-    /// spacing, laid out as `fit` says.
+    /// Draw text with custom font family, weight, style, features, line
+    /// height and letter spacing, laid out as `fit` says.
     ///
     /// `fit` is the width the text was measured in and the cut, if any: every
     /// path shapes the text in that width, so it is drawn on the lines it was
@@ -536,6 +637,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         fit: Option<LineFit>,
@@ -550,6 +653,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             TextAlign::Start,
@@ -566,6 +671,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -578,6 +685,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             align,
@@ -600,6 +709,8 @@ impl<'a> PaintContext<'a> {
         font_size: f32,
         font_family: FontFamily,
         font_weight: FontWeight,
+        font_style: FontStyle,
+        font_features: FontFeatures,
         line_height: LineHeight,
         letter_spacing: f32,
         align: TextAlign,
@@ -628,6 +739,8 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    font_style,
+                    font_features,
                     line_height,
                     letter_spacing,
                     align,
@@ -645,6 +758,8 @@ impl<'a> PaintContext<'a> {
                     font_size,
                     font_family,
                     font_weight,
+                    font_style,
+                    font_features,
                     line_height,
                     letter_spacing,
                     align,
@@ -660,6 +775,8 @@ impl<'a> PaintContext<'a> {
             font_size,
             font_family,
             font_weight,
+            font_style,
+            font_features,
             line_height,
             letter_spacing,
             align,

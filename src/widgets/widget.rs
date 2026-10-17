@@ -195,6 +195,14 @@ impl Point {
     }
 }
 
+/// `(x, y)`, as a path is usually written.
+impl From<(f32, f32)> for Point {
+    #[inline]
+    fn from((x, y): (f32, f32)) -> Self {
+        Self::new(x, y)
+    }
+}
+
 /// The superellipse "length" of a vector — the shader's `superellipse_length`.
 ///
 /// `n = 1` is the diamond a bevel cuts, `n = 2` the circle of an ordinary
@@ -663,6 +671,12 @@ pub enum Event {
         button: MouseButton,
         /// What is pressing — see [`PointerKind`].
         pointer: PointerKind,
+        /// Which press of a run of them this is: 1 for a single click, 2 for
+        /// the second of a double click, 3 for a triple. The platform counts a
+        /// press as the next of a run when it is the same button, within
+        /// 400 ms and 5 px of the press before it, with no drag between; any
+        /// other press starts a new run at 1. A finger always presses 1.
+        count: u32,
     },
     /// Mouse button released
     MouseUp {
@@ -759,12 +773,14 @@ impl Event {
         }
     }
 
-    /// A button pressed at a place. See [`mouse_move`](Self::mouse_move).
+    /// A button pressed at a place, as the first press of a run. See
+    /// [`mouse_move`](Self::mouse_move).
     pub fn mouse_down(x: f32, y: f32, button: MouseButton) -> Self {
         Event::MouseDown {
             at: Some(Point::new(x, y)),
             button,
             pointer: PointerKind::Mouse,
+            count: 1,
         }
     }
 
@@ -786,6 +802,7 @@ impl Event {
             at: Some(Point::new(x, y)),
             button: MouseButton::Left,
             pointer: PointerKind::Finger,
+            count: 1,
         }
     }
 
@@ -876,11 +893,15 @@ impl Event {
                 pointer: *pointer,
             },
             Event::MouseDown {
-                button, pointer, ..
+                button,
+                pointer,
+                count,
+                ..
             } => Event::MouseDown {
                 at,
                 button: *button,
                 pointer: *pointer,
+                count: *count,
             },
             Event::MouseUp { button, .. } => Event::MouseUp {
                 at,

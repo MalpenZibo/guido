@@ -53,6 +53,9 @@ pub enum Pipeline {
     TextQuads,
     /// Backdrop blur: every pass of its filter, and the present.
     Backdrop,
+    /// Paths, as the triangles they were tessellated into: one call per run of
+    /// paths drawn back to back.
+    Paths,
 }
 
 /// Draw calls issued, by the pipeline that issued them.
@@ -66,12 +69,13 @@ pub struct DrawCalls {
     pub text: u64,
     pub text_quads: u64,
     pub backdrop: u64,
+    pub paths: u64,
 }
 
 impl DrawCalls {
     /// Every pipeline's calls together.
     pub fn total(&self) -> u64 {
-        self.shapes + self.images + self.text + self.text_quads + self.backdrop
+        self.shapes + self.images + self.text + self.text_quads + self.backdrop + self.paths
     }
 
     #[cfg(feature = "render-stats")]
@@ -82,6 +86,7 @@ impl DrawCalls {
             Pipeline::Text => &mut self.text,
             Pipeline::TextQuads => &mut self.text_quads,
             Pipeline::Backdrop => &mut self.backdrop,
+            Pipeline::Paths => &mut self.paths,
         };
         *column += count;
     }
@@ -96,6 +101,19 @@ impl DrawCalls {
 pub struct QuadAllocations {
     pub buffers: u64,
     pub bind_groups: u64,
+}
+
+/// Fills and strokes drawn, by whether their triangles had to be made.
+///
+/// A path that only moved, turned or faded draws the mesh it already has; one
+/// whose segments, style or surface scale changed is tessellated again. The two
+/// columns are what says which of those a frame did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PathMeshes {
+    /// Tessellated this frame.
+    pub tessellated: u64,
+    /// Drawn from the cache.
+    pub reused: u64,
 }
 
 /// A GPU object a textured-quad pipeline created.
@@ -163,6 +181,8 @@ pub struct StatsSnapshot {
     pub draw_calls: DrawCalls,
     /// The buffers and bind groups preparing images and transformed text made.
     pub quad_allocations: QuadAllocations,
+    /// The fills and strokes drawn, and how many were tessellated.
+    pub path_meshes: PathMeshes,
 }
 
 /// Zero-cost timing macro. Wraps a block with `Instant::now()` / `.elapsed()`
@@ -189,7 +209,8 @@ macro_rules! time_phase {
 #[cfg(feature = "render-stats")]
 mod inner {
     use super::{
-        DrawCalls, LayoutReasons, Phase, PhaseTiming, Pipeline, QuadAllocations, QuadObject,
+        DrawCalls, LayoutReasons, PathMeshes, Phase, PhaseTiming, Pipeline, QuadAllocations,
+        QuadObject,
     };
     use crate::tree::DamageRegion;
     use std::cell::RefCell;
@@ -277,6 +298,7 @@ mod inner {
         heap_mark: (u64, u64),
         draw_calls: DrawCalls,
         quad_allocations: QuadAllocations,
+        path_meshes: PathMeshes,
         // Report timing
         last_print: Instant,
     }
@@ -320,6 +342,7 @@ mod inner {
                 heap_mark: heap_now(),
                 draw_calls: DrawCalls::default(),
                 quad_allocations: QuadAllocations::default(),
+                path_meshes: PathMeshes::default(),
                 last_print: Instant::now(),
             }
         }
@@ -499,6 +522,19 @@ mod inner {
         });
     }
 
+    /// Record a fill or stroke drawn: from the cache, or tessellated.
+    #[inline]
+    pub fn record_path_mesh(reused: bool) {
+        STATS.with(|s| {
+            let mut stats = s.borrow_mut();
+            if reused {
+                stats.path_meshes.reused += 1;
+            } else {
+                stats.path_meshes.tessellated += 1;
+            }
+        });
+    }
+
     /// Return a snapshot of the current stats (for testing).
     pub fn get_stats() -> super::StatsSnapshot {
         STATS.with(|s| {
@@ -533,6 +569,7 @@ mod inner {
                 bytes_allocated: stats.bytes_allocated,
                 draw_calls: stats.draw_calls,
                 quad_allocations: stats.quad_allocations,
+                path_meshes: stats.path_meshes,
             }
         })
     }
@@ -676,14 +713,21 @@ mod inner {
 
             let calls = stats.draw_calls;
             eprintln!(
-                "  draw calls: total={} shapes={} images={} text={} text_quads={} backdrop={}",
+                "  draw calls: total={} shapes={} images={} text={} text_quads={} backdrop={} paths={}",
                 calls.total(),
                 calls.shapes,
                 calls.images,
                 calls.text,
                 calls.text_quads,
-                calls.backdrop
+                calls.backdrop,
+                calls.paths
             );
+            if stats.path_meshes != PathMeshes::default() {
+                eprintln!(
+                    "  path meshes: tessellated={} reused={}",
+                    stats.path_meshes.tessellated, stats.path_meshes.reused
+                );
+            }
             eprintln!(
                 "  quad allocations: buffers={} bind_groups={}",
                 stats.quad_allocations.buffers, stats.quad_allocations.bind_groups
@@ -779,6 +823,10 @@ pub fn record_draw_calls(_pipeline: Pipeline, _count: u64) {}
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]
 pub fn record_quad_allocation(_object: QuadObject) {}
+
+#[cfg(not(feature = "render-stats"))]
+#[inline(always)]
+pub fn record_path_mesh(_reused: bool) {}
 
 #[cfg(not(feature = "render-stats"))]
 #[inline(always)]

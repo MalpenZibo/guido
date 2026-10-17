@@ -37,16 +37,16 @@ animating surface renders once per callback, an idle surface renders nothing.
 
 ## Layers and ordering
 
-Within a draw group the order is shapes → images → text → overlay. A group is
-split whenever the tree paints a lower layer over a higher one, so batching
+Within a draw group the order is shapes → paths → images → text → overlay. A
+group is split whenever the tree paints a lower layer over a higher one, so batching
 never reorders drawing. Overlays (ripples) naturally land after children
 because the render tree is explicit rather than a push/pop stack.
 
 ## Shapes
 
 Everything is an SDF in one fragment shader: rounded rectangles with
-superellipse corners (the CSS K-value system), circles, gradients, borders with
-uniform width, shadows with smooth falloff, clipping. Corner curvature and
+superellipse corners (the CSS K-value system), circles, arcs, gradients,
+borders with uniform width, shadows with smooth falloff, clipping. Corner curvature and
 border width are scaled in the shader, not in layout — which is why a HiDPI bug
 is invisible to any test that renders at scale 1.
 
@@ -108,8 +108,8 @@ keeps the card's corners, and two clips turned apart cut as two.
 
 Every consumer that can invert the placement tests in each clip's own space:
 the shape shader, both quad pipelines — images and transformed text draw the
-same quad and take the same `QuadClip::resolved` — the region tessellator, and
-the backdrop pass, whose viewport is a box but whose fragments are tested
+same quad and take the same `QuadClip::resolved` — the path triangles, the
+region tessellator, and the backdrop pass, whose viewport is a box but whose fragments are tested
 against the shapes. The shaders walk a chain from one storage buffer of
 `ClipRecord`s bound at group 1, combining by the largest pixel-normalised
 distance; an instance with no chain takes the path it always did. Glyphon
@@ -121,12 +121,32 @@ clip always differs, an upright one only inside its corner boxes, and a label
 in the middle of a rounded card is cut the same either way and stays with
 glyphon (#405).
 
-Five pipelines, so a change to clipping has to be checked in all of them.
-`clipped_images`, `clipped_text`, `backdrop_blur_is_cut_by_its_scroller` and
-`frosted_text_is_cut_by_its_scroller` are the goldens for one clip;
+Six pipelines, so a change to clipping has to be checked in all of them.
+`clipped_images`, `clipped_text`, `backdrop_blur_is_cut_by_its_scroller`,
+`frosted_text_is_cut_by_its_scroller` and `a_path_is_cut_by_a_rounded_clip`
+are the goldens for one clip — the last draws a chain too;
 `nested_clips_cut_exactly`, `nested_clips_cut_images_exactly`,
 `nested_clips_cut_text_exactly` and `backdrop_blur_is_cut_by_a_chain_of_clips`
 for clips inside clips. Before each existed, nothing drew that case at all.
+
+## Arcs and paths
+
+An arc is a shape: `DrawCommand::Arc` becomes one `ShapeInstance` whose
+`shape_kind` names it, its numbers packed into the corner radii, and the shape
+shader draws it with a distance function of its own beside the rounded rect's.
+A sweep that animates costs the frame nothing more than one that stands still.
+
+A path is triangles. `src/renderer/path_mesh.rs` has lyon fill or stroke it
+and then draws the edge itself, because lyon does not and guido has no MSAA:
+the mesh's boundary — the edges one triangle uses — is moved half a physical
+pixel in, and a fringe of coverage ramping to zero half a pixel out goes
+around it. `src/renderer/path_pipeline.rs` keeps each mesh, keyed by the path's
+segments, its fill rule or stroke, and the surface scale — not its transform,
+which the vertex shader applies — and copies the frame's meshes into one
+buffer. Paths are a `RenderLayer` of their own, between the shapes and the
+images, so a group's paths are one call. `path.tessellated` against
+`path.reused` in the benchmark tables says how often a frame made a mesh
+rather than drawing one again; `benches/sparkline_ring` is the workload.
 
 ## Regions
 
@@ -217,10 +237,11 @@ the next, and neither average described the other's workload.
 
 `benches/static_clip` plays the same gesture beside a clipped panel that
 stands still, `benches/icon_grid` over a grid of a few hundred distinct
-small images, half raster and half SVG, and `benches/nested_clip` over rounded
+small images, half raster and half SVG, `benches/nested_clip` over rounded
 cards that each clip a clipped child, merged exactly in some and not in others
 — its `scene.rs` lists which — with shapes, text, text quads and images under
-both clips. Each prints `draw.*` — the draw calls
+both clips, and `benches/sparkline_ring` over rows of progress rings and line
+charts that a timer feeds, so its paths are tessellated anew and drawn again. Each prints `draw.*` — the draw calls
 per pipeline — and `quad.*` — the buffers and bind groups the image and
 transformed-text quads made — among its counts, so a claim about batching has
 a number that repeats.

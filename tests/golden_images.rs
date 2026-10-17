@@ -76,6 +76,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
+use guido::renderer::{Fill, FillRule, Join, Path as VectorPath, Stroke};
 use guido::renderer::{
     FlatFrame, FlattenScratch, GpuContext, RenderNode, Renderer, flatten_root_into,
 };
@@ -959,6 +960,181 @@ fn a_blur_below_zero_draws_a_hard_shadow() {
     if let Some(report) = differences(NAME, &hard, &render(-1.0)) {
         panic!("a blur of -1 is not drawn as a blur of 0.01 is: {report}");
     }
+}
+
+/// The red channel of one pixel.
+fn red_at(pixels: &Pixels, x: u32, y: u32) -> u8 {
+    pixels.data[((y * pixels.width + x) * 4) as usize]
+}
+
+/// An inset shadow is drawn inside the shape it belongs to: dark at the edge,
+/// gone by the centre, and nothing of it outside.
+///
+/// Zero offset and a 30 px blur inside a rounded rect, which fades out at three
+/// blurs in — so the box is wide enough that its centre is past that. Beside it
+/// the same box with the shadow offset down and to the right, the "pressed in"
+/// look: dark along the top and the left, clear along the other two.
+#[test]
+fn an_inset_shadow_darkens_the_edge_and_leaves_the_centre() {
+    const NAME: &str = "an_inset_shadow_darkens_the_edge_and_leaves_the_centre";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let dark = Color::rgba(0.0, 0.0, 0.0, 0.6);
+    let glow = Shadow::new((0.0, 0.0), 30.0, 0.0, dark).inset();
+    let pressed = Shadow::new((6.0, 6.0), 6.0, 0.0, dark).inset();
+    let view = container()
+        .background(light)
+        .padding(30.0)
+        .layout(Flex::row().spacing(30.0))
+        .children([
+            swatch(200.0, 200.0, Color::WHITE)
+                .corners(24.0)
+                .shadow(glow),
+            swatch(120.0, 120.0, Color::WHITE)
+                .corners(16.0)
+                .shadow(pressed),
+        ]);
+    let pixels = render_with_own_renderer(ctx, view, (440.0, 260.0), 1.0, light);
+
+    let (edge, centre, outside) = (
+        red_at(&pixels, 31, 130),
+        red_at(&pixels, 130, 130),
+        red_at(&pixels, 20, 130),
+    );
+    assert!(
+        edge < 170,
+        "just inside the edge the shadow is dark, and it is {edge}"
+    );
+    assert!(
+        centre >= 255 - TOLERANCE,
+        "the centre is three blurs in and clear of it, and it is {centre}"
+    );
+    assert_eq!(
+        outside,
+        red_at(&pixels, 0, 0),
+        "an inset shadow draws nothing outside its box"
+    );
+    // The pressed one is dark where its offset pulls the shadow in from, and
+    // clear on the opposite edges.
+    let (top, bottom) = (red_at(&pixels, 320, 31), red_at(&pixels, 320, 148));
+    assert!(
+        top + 40 < bottom,
+        "offset down, the shadow lies along the top ({top}) and not the bottom ({bottom})"
+    );
+
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// An inset shadow with no blur and a 1.5 px spread is a ring inside the
+/// edge, at scale 2 so it is three whole pixels deep.
+///
+/// The second box has a border, and the ring starts where the border ends:
+/// an inset shadow is drawn inside the padding box, as CSS draws one, so the
+/// border does not cover it.
+#[test]
+fn an_inset_spread_is_a_ring_inside_the_edge() {
+    const NAME: &str = "an_inset_spread_is_a_ring_inside_the_edge";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let ring = Shadow::new((0.0, 0.0), 0.0, 1.5, Color::rgb(0.85, 0.1, 0.2)).inset();
+    let view = container()
+        .background(light)
+        .padding(20.0)
+        .layout(Flex::row().spacing(20.0))
+        .children([
+            swatch(80.0, 60.0, Color::WHITE).corners(12.0).shadow(ring),
+            swatch(80.0, 60.0, Color::WHITE)
+                .corners(12.0)
+                .border(4.0, Color::rgb(0.2, 0.3, 0.8))
+                .shadow(ring),
+        ]);
+    let pixels = render_with_own_renderer(ctx, view, (220.0, 100.0), 2.0, light);
+
+    // Halfway down each box's left side, in physical pixels: the first box
+    // starts at 40, the second at 240 with its border 8 deep.
+    let green = |x: u32| pixels.data[((100 * pixels.width + x) * 4) as usize + 1];
+    for (what, ring_at, clear_at) in [("without a border", 41, 46), ("inside a border", 249, 254)] {
+        assert!(
+            green(ring_at) < 60,
+            "{what}, the ring is drawn at x = {ring_at}, and that pixel's green is {}",
+            green(ring_at)
+        );
+        assert!(
+            green(clear_at) >= 255 - TOLERANCE,
+            "{what}, the ring is three pixels deep and x = {clear_at} is past it, \
+             but its green is {}",
+            green(clear_at)
+        );
+    }
+
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// Two shadows on one box are drawn as two boxes stacked on each other would
+/// draw them: the first in the list on top, as CSS orders `box-shadow`.
+///
+/// A tight shadow and a soft one, which is how most design systems spell an
+/// elevation. The comparison is the oracle; the golden keeps the picture.
+#[test]
+fn two_shadows_draw_as_two_stacked_boxes() {
+    const NAME: &str = "two_shadows_draw_as_two_stacked_boxes";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let light = Color::rgb(0.92, 0.92, 0.94);
+    let tight = Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3));
+    let soft = Shadow::new((0.0, 8.0), 16.0, 4.0, Color::rgba(0.1, 0.1, 0.4, 0.25));
+    let render = |card: Container| {
+        let view = container().background(light).padding(40.0).child(card);
+        render_with_own_renderer(ctx, view, (180.0, 160.0), 1.0, light)
+    };
+    let card = || swatch(100.0, 80.0, Color::WHITE).corners(12.0);
+
+    let layered = render(card().shadow([tight, soft]));
+    let stacked = render(card().shadow(soft).child(card().shadow(tight)));
+    assert!(
+        red_at(&layered, 90, 130) + 20 < red_at(&layered, 0, 0),
+        "the soft shadow has to be drawn below the box for the comparison to mean anything"
+    );
+    // Everywhere but the box's own antialiased outline, which the two stacked
+    // boxes draw twice over — their two fills each cover a fraction of those
+    // pixels — and the one box once. That is the boxes differing, not the
+    // shadows: a band two pixels either side of the edge.
+    let outline = |x: u32, y: u32| {
+        let (cx, cy, hw, hh, r) = (90.0, 80.0, 50.0, 40.0, 12.0);
+        let qx = (x as f32 + 0.5 - cx).abs() - hw + r;
+        let qy = (y as f32 + 0.5 - cy).abs() - hh + r;
+        let outside = qx.max(0.0).hypot(qy.max(0.0));
+        let distance = outside + qx.max(qy).min(0.0) - r;
+        distance.abs() <= 2.5
+    };
+    let off_the_outline = |pixels: &Pixels| Pixels {
+        width: pixels.width,
+        height: pixels.height,
+        data: pixels
+            .data
+            .chunks(4)
+            .enumerate()
+            .flat_map(|(i, p)| {
+                let (x, y) = (i as u32 % pixels.width, i as u32 / pixels.width);
+                if outline(x, y) {
+                    [0; 4]
+                } else {
+                    [p[0], p[1], p[2], p[3]]
+                }
+            })
+            .collect(),
+    };
+    if let Some(report) = differences(NAME, &off_the_outline(&stacked), &off_the_outline(&layered))
+    {
+        panic!("two shadows on one box are not drawn as two stacked boxes: {report}");
+    }
+
+    assert_golden(NAME, adapter, layered);
 }
 
 /// Rotation, scale and translation, including a transform inherited through a
@@ -3665,6 +3841,542 @@ fn oversized_raw_rasters_keep_thin_translucent_lines() {
                     .width(32.0)
                     .height(32.0)
                     .child(image(source).content_fit(ContentFit::Fill))
+            })),
+    );
+}
+
+/// `assets/make_figures_fixture.py` builds these: "Guido Figures", whose
+/// upright digit n is a box 400 + 40n units wide and whose `tnum` makes every
+/// digit 600, and an italic face of its own drawn as slanted boxes half as
+/// tall — so a picture says which face drew an italic, and a shear of the
+/// upright boxes cannot pass for it.
+const FIGURES_REGULAR: &[u8] = include_bytes!("assets/GuidoFigures-Regular.ttf");
+const FIGURES_ITALIC: &[u8] = include_bytes!("assets/GuidoFigures-Italic.ttf");
+const FIGURES: &str = "Guido Figures";
+fn tnum() -> FontFeatures {
+    FontFeatures::new().enable(b"tnum")
+}
+
+/// The figures family, registered on this thread before anything measures.
+fn figures(content: &str, size: f32) -> Text {
+    guido::load_font(FIGURES_REGULAR.to_vec());
+    guido::load_font(FIGURES_ITALIC.to_vec());
+    text(content)
+        .font_family(FontFamily::name(FIGURES))
+        .font_size(size)
+        .color(Color::WHITE)
+}
+
+/// Only with `tnum` are a "1" and a "0" one advance, read off the layout: a
+/// line of ones and a line of zeros hug boxes of one width under `tnum`, and of
+/// two widths without it.
+#[test]
+fn tabular_figures_are_one_width_in_the_layout() {
+    let widths = |features: FontFeatures| {
+        let harness = common::Harness::laid_out(
+            container()
+                .layout(Flex::row().spacing(4.0))
+                .child(figures("1111", 20.0).font_features(features).nowrap())
+                .child(figures("0000", 20.0).font_features(features).nowrap()),
+            400.0,
+            100.0,
+        );
+        let children = harness.tree.get_children(harness.root).to_vec();
+        let width = |id| harness.tree.cached_size(id).expect("laid out").width;
+        (width(children[0]), width(children[1]))
+    };
+    // Four of 440 units and four of 400, at 20 pixels to the em.
+    let (ones, zeros) = widths(FontFeatures::new());
+    assert!(
+        (ones - 35.2).abs() < 0.01 && (zeros - 32.0).abs() < 0.01,
+        "{ones} {zeros}"
+    );
+    // Four of 600 each.
+    let (ones, zeros) = widths(tnum());
+    assert!(
+        (ones - 48.0).abs() < 0.01 && (zeros - 48.0).abs() < 0.01,
+        "{ones} {zeros}"
+    );
+}
+
+/// Figures without and with `tnum`, each on a box that hugs it: the upright
+/// digits are boxes of ten widths, the tabular ones of one. Then the tabular
+/// line on a turned card, which the quad shapes apart from glyphon and has to
+/// shape with the same features.
+#[test]
+fn tabular_figures_reach_glyphon_and_the_quad() {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    let hugged = |label: Text| container().background(INK).child(label.nowrap());
+    let view = container()
+        .padding(12.0)
+        .layout(
+            Flex::column()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+        .child(hugged(figures("0123456789", 20.0)))
+        .child(hugged(figures("0123456789", 20.0).font_features(tnum())))
+        .child(
+            container()
+                .padding(8.0)
+                .rotate(6.0)
+                .child(hugged(figures("0123456789", 20.0).font_features(tnum()))),
+        );
+    golden(
+        "tabular_figures_reach_glyphon_and_the_quad",
+        (180.0, 140.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
+/// An italic in a family with an italic face, beside one in a family without.
+///
+/// The first row is the figures family upright and then italic: the italic is
+/// its own face's short slanted boxes, on a box as tall as that face's line.
+/// The second is DejaVu Sans Mono, vendored upright only, upright and then
+/// italic — the upright face sheared by the shaper.
+#[test]
+fn italic_is_a_face_where_there_is_one_and_a_shear_where_there_is_not() {
+    const INK: Color = Color::rgb(0.20, 0.30, 0.45);
+    let hugged = |label: Text| container().background(INK).child(label.nowrap());
+    let row = || {
+        container().layout(
+            Flex::row()
+                .spacing(10.0)
+                .cross_alignment(CrossAlignment::Start),
+        )
+    };
+    let view = container()
+        .padding(12.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(
+            row()
+                .child(hugged(figures("0123", 20.0)))
+                .child(hugged(figures("0123", 20.0).italic())),
+        )
+        .child(
+            row()
+                .child(hugged(label("Upright", 20.0)))
+                .child(hugged(label("Sheared", 20.0).italic())),
+        );
+    golden(
+        "italic_is_a_face_where_there_is_one_and_a_shear_where_there_is_not",
+        (240.0, 90.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Arcs and paths
+// ---------------------------------------------------------------------------
+
+/// Whatever a closure draws into a box of a given size — a widget that paints
+/// a path, the way an application's own widget would.
+struct Drawing {
+    size: (f32, f32),
+    paint: Box<dyn Fn(&mut guido::renderer::PaintContext)>,
+}
+
+impl Widget for Drawing {
+    fn layout(
+        &mut self,
+        _ctx: &mut guido::tree::LayoutCtx,
+        constraints: Constraints,
+    ) -> guido::layout::Size {
+        constraints.constrain(guido::layout::Size::new(self.size.0, self.size.1))
+    }
+
+    fn paint(&self, ctx: &mut guido::renderer::PaintContext) {
+        (self.paint)(ctx);
+    }
+}
+
+fn drawing(
+    width: f32,
+    height: f32,
+    paint: impl Fn(&mut guido::renderer::PaintContext) + 'static,
+) -> Drawing {
+    Drawing {
+        size: (width, height),
+        paint: Box::new(paint),
+    }
+}
+
+/// A sparkline's samples, as a polyline across `width` by `height`: steep
+/// climbs, a near reversal and a flat run, which is every join a line chart
+/// has to make.
+fn sparkline(width: f32, height: f32) -> VectorPath {
+    const SAMPLES: [f32; 12] = [
+        0.30, 0.42, 0.38, 0.90, 0.15, 0.55, 0.52, 0.52, 0.80, 0.10, 0.65, 0.45,
+    ];
+    let step = width / (SAMPLES.len() - 1) as f32;
+    SAMPLES
+        .iter()
+        .enumerate()
+        .fold(VectorPath::new(), |path, (i, v)| {
+            let point = (i as f32 * step, height * (1.0 - v));
+            if i == 0 {
+                path.move_to(point)
+            } else {
+                path.line_to(point)
+            }
+        })
+}
+
+/// A five-pointed star, its edges crossing in the middle, which is the one
+/// shape whose inside the two fill rules disagree on.
+fn star(cx: f32, cy: f32, r: f32) -> VectorPath {
+    (0..5)
+        .fold(VectorPath::new(), |path, i| {
+            let angle = (i as f32 * 144.0 - 90.0).to_radians();
+            let point = (cx + r * angle.cos(), cy + r * angle.sin());
+            if i == 0 {
+                path.move_to(point)
+            } else {
+                path.line_to(point)
+            }
+        })
+        .close()
+}
+
+/// Rings at progress 0, a half and 1, each cap, over a track — the same row at
+/// every scale it is drawn at. The arc is a distance function in the shape
+/// shader, so its ends and its edge are exact at any scale, and progress 0 with
+/// round caps draws nothing rather than a dot.
+fn arc_rows() -> Container {
+    let ring = |progress: f32, cap: Cap| {
+        container().padding(6.0).child(
+            arc()
+                .size(36.0)
+                .stroke(5.0)
+                .track(Color::WHITE.with_alpha(0.16))
+                .color(Color::rgb(0.40, 0.85, 0.50))
+                .caps(cap)
+                .progress(progress),
+        )
+    };
+    let row = |cap: Cap| {
+        container()
+            .layout(Flex::row())
+            .children([0.0, 0.5, 1.0, 0.85].map(|p| ring(p, cap)))
+    };
+    container()
+        .background(BACKDROP)
+        .padding(4.0)
+        .layout(Flex::column())
+        .child(row(Cap::Round))
+        .child(row(Cap::Butt))
+        .child(row(Cap::Square))
+        // A gauge open at the bottom, running anticlockwise, and a thin arc,
+        // so the start, the sign of the sweep and a hairline are drawn too.
+        .child(
+            container()
+                .layout(Flex::row())
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(4.0)
+                            .start(-135.0)
+                            .sweep(270.0)
+                            .track(Color::WHITE.with_alpha(0.16))
+                            .color(Color::rgb(0.95, 0.60, 0.25))
+                            .caps(Cap::Round)
+                            .progress(0.6),
+                    ),
+                )
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(4.0)
+                            .sweep(-360.0)
+                            .color(Color::rgb(0.45, 0.65, 1.0))
+                            .caps(Cap::Round)
+                            .progress(0.3),
+                    ),
+                )
+                .child(
+                    container().padding(6.0).child(
+                        arc()
+                            .size(36.0)
+                            .stroke(0.6)
+                            .color(Color::WHITE)
+                            .progress(0.7),
+                    ),
+                ),
+        )
+}
+
+#[test]
+fn arcs_at_their_progress_and_caps() {
+    golden(
+        "arcs_at_their_progress_and_caps",
+        (200.0, 200.0),
+        1.0,
+        BACKDROP,
+        arc_rows(),
+    );
+}
+
+#[test]
+fn arcs_at_their_progress_and_caps_at_scale_1_5() {
+    golden(
+        "arcs_at_their_progress_and_caps_at_scale_1_5",
+        (200.0, 200.0),
+        1.5,
+        BACKDROP,
+        arc_rows(),
+    );
+}
+
+/// A sparkline 1.6 pixels wide, opaque and at half alpha, with each join.
+///
+/// The half-alpha rows are the oracle for doubled joins: a line drawn as
+/// segments that overlap at their joints, as instanced SDF segments would be,
+/// shows a darker knot at every vertex where two translucent pieces blend
+/// twice. lyon's stroke is one band, and the fringe is one ramp around it, so
+/// the line has one tone from end to end.
+#[test]
+fn a_sparkline_has_one_tone_at_every_join() {
+    let line = |join: Join, alpha: f32| {
+        drawing(150.0, 40.0, move |ctx| {
+            let colour = Color::rgb(0.45, 0.80, 1.0).with_alpha(alpha);
+            ctx.draw_path(
+                &sparkline(150.0, 40.0),
+                None,
+                Stroke::new(1.6, colour).joins(join),
+            );
+        })
+    };
+    let pair = |join: Join| {
+        container()
+            .layout(Flex::row().spacing(10.0))
+            .child(line(join, 1.0))
+            .child(line(join, 0.5))
+    };
+    golden(
+        "a_sparkline_has_one_tone_at_every_join",
+        (330.0, 160.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::column().spacing(6.0))
+            .child(pair(Join::Miter))
+            .child(pair(Join::Round))
+            .child(pair(Join::Bevel)),
+    );
+}
+
+/// Closed paths, filled: a star by each rule, curves filled and stroked, and
+/// a ring cut by even-odd. Half alpha on the stroke over the fill, so where
+/// the stroke's inner half lies over the fill is visible as a band of its own.
+#[test]
+fn closed_paths_are_filled() {
+    let blob = || {
+        VectorPath::new()
+            .move_to((10.0, 40.0))
+            .cubic_to((10.0, 5.0), (60.0, 0.0), (70.0, 30.0))
+            .quad_to((85.0, 70.0), (40.0, 70.0))
+            .close()
+    };
+    let ring = || {
+        let square = |path: VectorPath, x: f32, side: f32| {
+            path.move_to((x, x))
+                .line_to((x + side, x))
+                .line_to((x + side, x + side))
+                .line_to((x, x + side))
+                .close()
+        };
+        square(square(VectorPath::new(), 5.0, 70.0), 25.0, 30.0)
+    };
+    let gold = Color::rgb(0.95, 0.75, 0.25);
+    golden(
+        "closed_paths_are_filled",
+        (380.0, 100.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(&star(40.0, 42.0, 38.0), Fill::color(gold), None);
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &star(40.0, 42.0, 38.0),
+                    Fill::color(gold).rule(FillRule::EvenOdd),
+                    None,
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &blob(),
+                    Fill::color(Color::rgb(0.30, 0.55, 0.95)),
+                    Stroke::new(4.0, Color::WHITE.with_alpha(0.5)).joins(Join::Round),
+                );
+            }))
+            .child(drawing(80.0, 80.0, move |ctx| {
+                ctx.draw_path(
+                    &ring(),
+                    Fill::color(Color::rgb(0.85, 0.35, 0.30)).rule(FillRule::EvenOdd),
+                    None,
+                );
+            })),
+    );
+}
+
+/// The same paths at a fractional scale: the fringe is a physical pixel, so a
+/// new scale is a new tessellation and the edges are as sharp as at 1x.
+#[test]
+fn closed_paths_are_filled_at_scale_1_5() {
+    golden(
+        "closed_paths_are_filled_at_scale_1_5",
+        (200.0, 100.0),
+        1.5,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .layout(Flex::row().spacing(10.0))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &star(40.0, 42.0, 38.0),
+                    Fill::color(Color::rgb(0.95, 0.75, 0.25)),
+                    Stroke::new(1.6, Color::WHITE).joins(Join::Round),
+                );
+            }))
+            .child(drawing(80.0, 80.0, |ctx| {
+                ctx.draw_path(
+                    &sparkline(80.0, 80.0),
+                    None,
+                    Stroke::new(1.6, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.5))
+                        .joins(Join::Round)
+                        .caps(Cap::Round),
+                );
+            })),
+    );
+}
+
+/// A stroke turned, and scaled by one and a half, is the mesh it was at rest
+/// carried by the transform: the fringe goes with it, with no seam where it
+/// meets the inside of the line.
+#[test]
+fn a_stroke_follows_its_transform() {
+    let line = || {
+        drawing(120.0, 40.0, |ctx| {
+            ctx.draw_path(
+                &sparkline(120.0, 40.0),
+                None,
+                Stroke::new(2.0, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.6))
+                    .joins(Join::Round)
+                    .caps(Cap::Round),
+            );
+        })
+    };
+    golden(
+        "a_stroke_follows_its_transform",
+        (440.0, 120.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(20.0)
+            .layout(Flex::row().spacing(40.0))
+            .child(container().child(line()).rotate(20.0))
+            .child(container().child(line()).scale(1.5)),
+    );
+}
+
+/// A path is cut by a rounded clip as a rect would be: a fill larger than the
+/// card it sits in, beside a rect the same size in a card the same shape, so
+/// the two corners can be compared — and once more in a card that is turned,
+/// and once under a clip of its own two pixels inside the card, whose small
+/// corners cross the card's large ones: no one rounded rect is the two cut
+/// together, so the path is cut by the chain.
+#[test]
+fn a_path_is_cut_by_a_rounded_clip() {
+    let card = || {
+        box_of(90.0, 90.0)
+            .background(Color::rgb(0.15, 0.20, 0.30))
+            .corners(24.0)
+            .overflow(Overflow::Hidden)
+    };
+    let flood = || {
+        drawing(90.0, 90.0, |ctx| {
+            let square = VectorPath::new()
+                .move_to((-30.0, -30.0))
+                .line_to((120.0, -30.0))
+                .line_to((120.0, 120.0))
+                .line_to((-30.0, 120.0))
+                .close();
+            ctx.draw_path(&square, Fill::color(Color::rgb(0.95, 0.45, 0.25)), None);
+        })
+    };
+    golden(
+        "a_path_is_cut_by_a_rounded_clip",
+        (440.0, 122.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(16.0)
+            .layout(Flex::row().spacing(16.0))
+            .child(card().child(swatch(90.0, 90.0, Color::rgb(0.95, 0.45, 0.25))))
+            .child(card().child(flood()))
+            .child(card().child(flood()).rotate(30.0))
+            .child(
+                card().padding(2.0).child(
+                    container()
+                        .width(fill())
+                        .height(fill())
+                        .corners(Corners::rounded(4.0))
+                        .overflow(Overflow::Hidden)
+                        .child(flood()),
+                ),
+            ),
+    );
+}
+
+/// A dense line at half alpha: a hundred and twenty samples across a hundred
+/// and fifty pixels, so its segments are shorter than it is wide and lyon folds
+/// the inside of its joins back over itself. Where the folds overlap, the line
+/// is drawn twice — what this golden holds is how much of that shows: nine
+/// pixels of its several hundred, at the sharpest folds.
+#[test]
+fn a_dense_translucent_sparkline() {
+    golden(
+        "a_dense_translucent_sparkline",
+        (170.0, 60.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .padding(10.0)
+            .child(drawing(150.0, 40.0, |ctx| {
+                let samples = 120;
+                let line = (0..samples).fold(VectorPath::new(), |path, i| {
+                    let x = i as f32 * 150.0 / (samples - 1) as f32;
+                    let y = 20.0 + 14.0 * (i as f32 * 0.9).sin() * (i as f32 * 0.13).cos();
+                    if i == 0 {
+                        path.move_to((x, y))
+                    } else {
+                        path.line_to((x, y))
+                    }
+                });
+                ctx.draw_path(
+                    &line,
+                    None,
+                    Stroke::new(1.6, Color::rgb(0.45, 0.80, 1.0).with_alpha(0.5))
+                        .joins(Join::Round),
+                );
             })),
     );
 }

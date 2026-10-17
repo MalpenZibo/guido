@@ -31,7 +31,8 @@ text("Hello").font_size(24.0).color(theme.text)
 ```
 
 The methods — `color`, `font_size`, `font_family`, `font_weight`, `bold`,
-`mono`, `line_height`, `letter_spacing`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
+`font_style`, `italic`, `font_features`, `mono`, `line_height`,
+`letter_spacing`, `text_stroke`, `text_shadow` — belong to the two widgets that draw
 glyphs, `Text` and `TextInput`, and are written from one list so the two always
 offer the same thing.
 
@@ -80,7 +81,8 @@ The style keeps a name, stays next to the widget that draws it, and costs no
 extra node.
 
 Properties nothing declares fall back to white, 14 logical pixels, the
-registered default family and normal weight.
+registered default family, normal weight, upright, and the font's own
+features.
 
 ### A hover that reaches the glyphs
 
@@ -314,6 +316,64 @@ Available weight constants:
 - `FontWeight::BOLD` (700)
 - `FontWeight::EXTRA_BOLD` (800)
 - `FontWeight::BLACK` (900)
+
+### Italic
+
+`font_style` takes `FontStyle::Normal`, `FontStyle::Italic` or
+`FontStyle::Oblique`, as CSS `font-style`; `italic()` is the shorthand. A
+family with an italic face draws an italic in it, and each line is as tall as
+that face says. A family with none is drawn in its upright face, slanted by the
+shaper — a synthetic italic, as a browser draws one:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let quoting = create_signal(true);
+container().child(text("“Quoted”").italic());
+container().child(
+    text("Lyrics").font_style(move || {
+        if quoting.get() { FontStyle::Italic } else { FontStyle::Normal }
+    }),
+)
+# ;
+# }
+```
+
+### OpenType Features
+
+A font can draw more than its defaults: digits of one width, slashed zeros,
+small capitals, alternate letter forms. `font_features` asks for them by their
+OpenType tags, as CSS `font-feature-settings` does — `enable` turns a feature
+on, `disable` turns off one the font turns on by itself, and `set` picks an
+alternate by number:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let seconds = create_signal(0u32);
+// Tabular figures: every digit one width, so a clock does not shift as it ticks.
+let tabular = FontFeatures::new().enable(b"tnum");
+container().child(text(move || format!("0:{:02}", seconds.get())).font_features(tabular));
+
+container().child(text("office").font_features(FontFeatures::new().disable(b"liga")));
+container().child(text("0O").font_features(FontFeatures::new().enable(b"zero").set(b"ss01", 1)))
+# ;
+# }
+```
+
+Most interface fonts draw their digits at different widths, which is why a
+counter, a percentage or a column of version numbers moves sideways as its
+value changes; `tnum` is the fix. A feature the font does not have does
+nothing.
+
+A `FontFeatures` is a small id: every distinct set is stored once, for the
+life of the program, so a set is four bytes however many tags it holds.
+Writing a tag twice keeps the last value. The text is measured with its
+features, so a box that hugs it grows and shrinks with them, and a
+`TextInput` puts its caret between the glyphs they drew. A state that
+supplies features replaces the declared set rather than adding to it.
 
 ### Line Height
 
@@ -678,6 +738,9 @@ impl Text {
     pub fn font_family<M>(self, family: impl IntoSignal<FontFamily, M>) -> Self;
     pub fn font_weight<M>(self, weight: impl IntoSignal<FontWeight, M>) -> Self;
     pub fn bold(self) -> Self;      // Shorthand for FontWeight::BOLD
+    pub fn font_style<M>(self, style: impl IntoSignal<FontStyle, M>) -> Self;
+    pub fn italic(self) -> Self;    // Shorthand for FontStyle::Italic
+    pub fn font_features<M>(self, features: impl IntoSignal<FontFeatures, M>) -> Self;
     pub fn mono(self) -> Self;      // Shorthand for FontFamily::Monospace
     pub fn letter_spacing<M>(self, spacing: impl IntoSignal<f32, M>) -> Self;  // logical pixels
     pub fn wrap<M>(self, wrap: impl IntoSignal<bool, M>) -> Self;

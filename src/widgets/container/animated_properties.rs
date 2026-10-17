@@ -30,7 +30,7 @@
 //! forget.
 
 use super::animations::AnimationState;
-use super::{Color, Padding, Scale, Shadow, Translate};
+use super::{Color, Padding, Scale, Shadows, Translate};
 use crate::clock::FrameInstant;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::reactive::with_signal_tracking;
@@ -125,10 +125,12 @@ macro_rules! animated_properties {
                     probe: |h: &mut H| painted_style(&h.paint()).1.top_left,
                     from: 2.0, to: 20.0, then: 8.0, base: 2.0,
                 };
-            shadow: Shadow as Shadow, target: effective_shadow_target, layout: no,
+            shadow: Shadows as Shadows, target: effective_shadow_target, layout: no,
                 timeline: yes,
                 test {
-                    value: |k| Shadow::new((0.0, 0.0), k, 0.0, Color::BLACK),
+                    value: |k| crate::renderer::Shadows::from(
+                        Shadow::new((0.0, 0.0), k, 0.0, Color::BLACK),
+                    ),
                     declared_as: |v| container().width(200.0).height(100.0)
                         .background(Color::RED).shadow(v),
                     probe: |h: &mut H| painted_style(&h.paint()).3.unwrap().blur,
@@ -200,6 +202,43 @@ macro_rules! animated_properties {
 #[cfg(test)]
 pub(crate) use animated_properties;
 
+/// Where a slot keeps the animation of a value of this type.
+///
+/// In the slot itself, for every type but one. An animation holds its value
+/// several times over — where it started, where it is, where it is going —
+/// and a [`Shadows`] is four shadows, so its animation is 768 bytes against
+/// 264 for the next widest. Kept inline it would make every slot that wide,
+/// and so every container that animates anything at all. Behind a box it
+/// costs the containers that animate a shadow one allocation and the others
+/// nothing.
+pub(crate) trait Kept: crate::animation::Animatable {
+    type Slot: std::borrow::Borrow<AnimationState<Self>>;
+
+    fn keep(anim: AnimationState<Self>) -> Self::Slot;
+}
+
+macro_rules! kept_inline {
+    ($($t:ty),* $(,)?) => {$(
+        impl Kept for $t {
+            type Slot = AnimationState<$t>;
+
+            fn keep(anim: AnimationState<$t>) -> AnimationState<$t> {
+                anim
+            }
+        }
+    )*};
+}
+
+kept_inline!(f32, Color, Padding, Corners, Translate, Scale);
+
+impl Kept for Shadows {
+    type Slot = Box<AnimationState<Shadows>>;
+
+    fn keep(anim: AnimationState<Shadows>) -> Self::Slot {
+        Box::new(anim)
+    }
+}
+
 /// The store: one slot per property that was *declared* with a motion, rather
 /// than a field per property whether or not anybody asked for one.
 macro_rules! emit_store {
@@ -212,7 +251,7 @@ macro_rules! emit_store {
         /// the table and the slot it makes cannot be spelled apart.
         #[allow(non_camel_case_types)]
         pub(crate) enum AnimSlot {
-            $($name(AnimationState<$anim>),)*
+            $($name(<$anim as Kept>::Slot),)*
         }
 
         /// Which property a slot belongs to, with nothing in it — what a
@@ -284,7 +323,7 @@ macro_rules! emit_store {
                     &self,
                 ) -> Option<&AnimationState<$anim>> {
                     self.slots.iter().find_map(|slot| match slot {
-                        AnimSlot::$name(anim) => Some(anim),
+                        AnimSlot::$name(anim) => Some(std::borrow::Borrow::borrow(anim)),
                         _ => None,
                     })
                 }
@@ -596,7 +635,9 @@ macro_rules! emit_declare {
             anims: &mut Option<Box<ContainerAnims>>,
             value: impl crate::animation::IntoAnimated<$decl, M>,
         ) -> crate::reactive::Prop<$decl> {
-            declare_size(anims, value, AnimKind::$name, AnimSlot::$name)
+            declare_size(anims, value, AnimKind::$name, |anim| {
+                AnimSlot::$name(super::Kept::keep(anim))
+            })
         }
     };
     ($target:ident, $name:ident, $decl:ty) => {
@@ -604,7 +645,9 @@ macro_rules! emit_declare {
             anims: &mut Option<Box<ContainerAnims>>,
             value: impl crate::animation::IntoAnimated<$decl, M>,
         ) -> crate::reactive::Prop<$decl> {
-            declare_anim(anims, value, AnimKind::$name, AnimSlot::$name)
+            declare_anim(anims, value, AnimKind::$name, |anim| {
+                AnimSlot::$name(super::Kept::keep(anim))
+            })
         }
     };
 }
@@ -624,7 +667,7 @@ macro_rules! emit_declarers {
             use super::super::{declare_anim, declare_size};
             use super::{AnimKind, AnimSlot, ContainerAnims};
             use crate::layout::Length;
-            use crate::widgets::container::{Color, Padding, Scale, Shadow, Translate};
+            use crate::widgets::container::{Color, Padding, Scale, Shadows, Translate};
             use crate::widgets::Corners;
 
             $(emit_declare!($target, $name, $decl);)*

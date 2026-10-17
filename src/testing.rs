@@ -472,6 +472,8 @@ pub struct Headless {
     host: Recorder,
     layout_roots: rustc_hash::FxHashMap<WidgetId, Vec<WidgetId>>,
     quit_on_last_surface: bool,
+    /// What numbers a press, as `InputState` holds one for the seat.
+    clicks: crate::platform::clicks::ClickCounter,
 }
 
 /// One device for the whole test binary.
@@ -510,6 +512,7 @@ impl Headless {
             host: Recorder::default(),
             layout_roots: rustc_hash::FxHashMap::default(),
             quit_on_last_surface: true,
+            clicks: Default::default(),
         })
     }
 
@@ -668,7 +671,12 @@ impl Headless {
     ///
     /// Delivered by the next [`step`](Self::step), in the order queued, as
     /// [`click`](Self::click)'s are.
-    pub fn event_at(&mut self, id: SurfaceId, event: Event, at: Instant) {
+    ///
+    /// A press is counted here, as the platform counts a compositor's: its
+    /// `count` says which press of a run it is, measured against the presses
+    /// queued before it, and whatever count it was queued with is replaced.
+    pub fn event_at(&mut self, id: SurfaceId, mut event: Event, at: Instant) {
+        self.clicks.observe(id, at, &mut event);
         self.host.get_mut(id).events.push((at, event));
     }
 

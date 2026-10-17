@@ -379,7 +379,9 @@ impl Container {
                 }
             }
 
-            Event::MouseDown { at, button, .. } => {
+            Event::MouseDown {
+                at, button, count, ..
+            } => {
                 if pressed_inside
                     && let Some(at) = at
                     && *button == MouseButton::Left
@@ -387,6 +389,7 @@ impl Container {
                 {
                     let was_pressed = ix.is_pressed();
                     ix.set_flag(InteractionFlags::PRESSED, true);
+                    ix.press_count = *count;
 
                     let has_ripple = ix
                         .states
@@ -416,7 +419,9 @@ impl Container {
                     // A press is claimed even without a down handler, so the
                     // matching release reaches the click handler.
                     if let Some(ref ix) = self.interaction
-                        && (ix.on_click.is_some() || ix.on_mouse_up.is_some())
+                        && (ix.on_click.is_some()
+                            || ix.on_double_click.is_some()
+                            || ix.on_mouse_up.is_some())
                     {
                         return EventResponse::Handled;
                     }
@@ -463,10 +468,17 @@ impl Container {
                     // wandered off only ends the press.
                     if let Some(ref ix) = self.interaction
                         && hit.contains(*at)
-                        && let Some(ref callback) = ix.on_click
                     {
-                        callback();
-                        return EventResponse::Handled;
+                        if let Some(ref callback) = ix.on_click {
+                            callback();
+                            handled = true;
+                        }
+                        if ix.press_count == 2
+                            && let Some(ref callback) = ix.on_double_click
+                        {
+                            callback();
+                            handled = true;
+                        }
                     }
                     if handled {
                         return EventResponse::Handled;

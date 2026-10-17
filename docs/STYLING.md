@@ -177,6 +177,45 @@ mod elevation {
 number could never say: a shadow thrown sideways, a coloured one, and one with
 spread.
 
+### Inset shadows
+
+`.inset()` casts the same shadow inside the shape instead, as CSS's `inset`
+keyword does: over the fill and inside the border, dark at the edge and fading
+inwards, moved by its offset and pushed further in by its spread.
+
+```rust
+// A glow inside the edge
+container().shadow(Shadow::new((0.0, 0.0), 12.0, 0.0, Color::rgba(1.0, 0.3, 0.2, 0.6)).inset())
+// Pressed in: the offset pulls the shadow in from the top
+container().shadow(Shadow::new((0.0, 3.0), 4.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.35)).inset())
+// A hard 1.5 px ring inside the edge
+container().shadow(Shadow::new((0.0, 0.0), 0.0, 1.5, Color::WHITE).inset())
+```
+
+An outer shadow rides the fill and draws nothing without one; an inset shadow
+needs no fill, so an empty box can glow.
+
+### More than one shadow
+
+`.shadow(..)` takes a `Shadows` — a list of up to `Shadows::MAX` — and a single
+`Shadow` or an array of them converts into one. They are drawn as CSS draws a
+`box-shadow` list, the first on top, and outer and inset shadows mix:
+
+```rust
+const RAISED: Shadows = Shadows::new([
+    Shadow::new((0.0, 1.0), 2.0, 0.0, Color::rgba(0.0, 0.0, 0.0, 0.3)),  // tight
+    Shadow::new((0.0, 4.0), 8.0, 3.0, Color::rgba(0.0, 0.0, 0.0, 0.15)), // soft
+]);
+container().shadow(RAISED)
+container().shadow([outer, glow.inset()])
+```
+
+A list animates shadow by shadow. The shorter of two lists is padded with
+shadows that draw nothing, so one arriving fades and grows in; a shadow that is
+inset at one end and outer at the other has nothing between the two, and the
+whole list steps halfway, as CSS's does. A timeline is written over `Shadows`:
+`Keyframes::new(300.0).at(0.0, LOW.into()).at(1.0, HIGH.into())`.
+
 ### Shadows in State Layers
 
 ```rust
@@ -263,13 +302,14 @@ How a text looks can be declared on the text itself:
 text("Hello").font_size(16.0).color(Color::WHITE)
 ```
 
-`color`, `font_size`, `font_family`, `font_weight`, `bold`, `mono`,
-`line_height`, `letter_spacing`, `text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
+`color`, `font_size`, `font_family`, `font_weight`, `bold`, `font_style`,
+`italic`, `font_features`, `mono`, `line_height`, `letter_spacing`,
+`text_stroke` and `text_shadow` are declared on `Text` and `TextInput` — the two
 widgets that draw glyphs — from one list, so the two cannot drift apart.
 `color` and `font_size` are declarations, so they carry how they move as well
 as what they are: `color(theme.warn.transition(200.0))`. The rest take values,
-because a family and a weight snap to an installed face and a stroke and a
-shadow have nothing to interpolate.
+because a family, a weight and a style snap to an installed face, a feature is
+on or off, and a stroke and a shadow have nothing to interpolate.
 
 A weight the family has no face for is drawn in the family's nearest one, as
 CSS Fonts 4 §5.2 matches it, and never in another family that happens to have
@@ -301,6 +341,25 @@ tests that pin this are in `src/renderer/text_measurer.rs`, and
 `letter_spacing_reaches_every_path` in `tests/golden_images.rs` draws it.
 A `TextInput` places its caret, its selection and its clicks from the same
 spaced shaping, and a `PasswordInput` spaces the mask characters it draws.
+
+`font_style` is `FontStyle::Normal`, `Italic` or `Oblique`, as CSS
+`font-style`. The style goes into the face query beside the weight, so a
+family with an italic face draws an italic in it and takes its line height
+from it; a family with none is drawn in its upright face, which cosmic-text
+shears (`CacheKeyFlags::FAKE_ITALIC`), as CSS `font-synthesis` allows.
+
+`font_features` takes a `FontFeatures`: OpenType tags with values, as CSS
+`font-feature-settings` — `FontFeatures::new().enable(b"tnum")` gives every
+digit one width, so a clock does not shift sideways as it ticks. It is `Copy`
+and four bytes: an id into `FEATURE_SETS`, a process-wide table of every
+distinct set, held sorted so that equal sets are one id however they were
+written — the same arrangement, for the same reasons, as a named
+`FontFamily` and `FAMILIES`. Caches key on the id; the tags are read from the
+table only where a text is shaped. It reaches cosmic-text as
+`Attrs::font_features`, in `shape`. Both are keyed by every cache that keeps a
+shaping — the measurer's, glyphon's buffers, the quad's textures and the
+frost's masks — and `tests/font_style_and_features_across_frames.rs` changes
+each alone to say so.
 
 `cursor_color`, `selection_color` and
 `placeholder_color` are `TextInput`'s own methods and nothing else's, because
