@@ -18,7 +18,7 @@ use wgpu::{
 };
 
 use super::textured_vertex::{TexturedVertex, to_ndc};
-use crate::render_stats::{self, Pipeline, QuadObject};
+use crate::render_stats::{self, GpuObject, Pipeline};
 
 /// Pipeline, bind group layout, sampler, and the frame's vertices for
 /// textured quads.
@@ -208,7 +208,7 @@ impl TexturedQuadPipeline {
         }
         if quads > self.capacity {
             let capacity = quads.max(self.capacity * 2).max(16);
-            render_stats::record_quad_allocation(QuadObject::Buffer);
+            render_stats::record_quad_allocation(GpuObject::Buffer);
             self.vertex_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("TexturedQuad Vertex Buffer"),
                 size: (capacity * 4 * std::mem::size_of::<TexturedVertex>()) as u64,
@@ -221,7 +221,7 @@ impl TexturedQuadPipeline {
                     [v, v + 1, v + 2, v + 1, v + 3, v + 2]
                 })
                 .collect();
-            render_stats::record_quad_allocation(QuadObject::Buffer);
+            render_stats::record_quad_allocation(GpuObject::Buffer);
             let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("TexturedQuad Index Buffer"),
                 size: (indices.len() * std::mem::size_of::<u32>()) as u64,
@@ -246,7 +246,7 @@ impl TexturedQuadPipeline {
         view: &TextureView,
         label: &str,
     ) -> Rc<BindGroup> {
-        render_stats::record_quad_allocation(QuadObject::BindGroup);
+        render_stats::record_quad_allocation(GpuObject::BindGroup);
         Rc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: &self.bind_group_layout,

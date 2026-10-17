@@ -11,7 +11,7 @@
 mod common;
 
 use guido::prelude::*;
-use guido::render_stats::{self, DrawCalls, PathMeshes, QuadAllocations, StatsSnapshot};
+use guido::render_stats::{self, DrawCalls, GpuAllocations, PathMeshes, StatsSnapshot};
 use guido::widget_prelude::*;
 
 const IMAGES: usize = 7;
@@ -389,7 +389,7 @@ fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
 
     assert_eq!(
         stats.quad_allocations,
-        QuadAllocations {
+        GpuAllocations {
             buffers: 2,
             bind_groups: 1,
         }
@@ -424,7 +424,7 @@ fn a_frame_that_draws_cached_textures_again_makes_no_buffer_and_no_bind_group() 
         stats.draw_calls.images > 0,
         "the second frame drew no image"
     );
-    assert_eq!(stats.quad_allocations, QuadAllocations::default());
+    assert_eq!(stats.quad_allocations, GpuAllocations::default());
 }
 
 /// A distinct `side`×`side` source per index.
@@ -655,4 +655,146 @@ fn a_merged_shape_is_a_draw_between_the_shapes_around_it() {
         },
         "the background, the merged shape and the box after it: three runs"
     );
+}
+
+/// A cell of its own colour with a white stripe down its middle, and a frosted
+/// panel over the whole of it. Through the frost the middle is the two mixed:
+/// green says how much white the blur drew in, and red and blue say the rest
+/// was this cell's colour and no other's.
+fn frosted_cell(index: usize) -> Container {
+    let (red, blue) = cell_colour(index);
+    container()
+        .width(16.0)
+        .height(16.0)
+        .background(Color::rgb(red as f32 / 255.0, 0.0, blue as f32 / 255.0))
+        .layout(ZStack::new())
+        .children([
+            container()
+                .width(fill())
+                .height(fill())
+                .layout(Flex::row())
+                .child(container().width(5.0))
+                .child(
+                    container()
+                        .width(6.0)
+                        .height(fill())
+                        .background(Color::WHITE),
+                )
+                .into_any(),
+            container()
+                .width(fill())
+                .height(fill())
+                .backdrop_blur(BackdropBlur::new(4.0).sources(BackdropSources::SURFACE))
+                .into_any(),
+        ])
+}
+
+/// Red and blue of the cell at `index`; green is always nothing.
+fn cell_colour(index: usize) -> (u8, u8) {
+    let red = (index * 40 % 256) as u8;
+    (red, 255 - red)
+}
+
+/// A frosted panel and a frosted text, blurred again over a background that
+/// changed: the passes' uniforms are rewritten where they already are, and
+/// every texture they read is one they have bound before.
+#[test]
+fn a_frame_that_blurs_its_backdrop_again_makes_no_buffer_and_no_bind_group() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .background(backdrop)
+                .layout(Flex::row())
+                .child(frosted_cell(0))
+                .child(text("frost").backdrop_blur(8.0))
+        },
+    );
+    app.configure(surface, 240, 40, 1.0);
+
+    render_stats::reset_stats();
+    app.step();
+    let first = render_stats::get_stats();
+    assert!(
+        first.backdrop_allocations.buffers > 0 && first.backdrop_allocations.bind_groups > 0,
+        "the first frame made nothing to blur with: {:?}",
+        first.backdrop_allocations
+    );
+
+    for shade in [0.2, 0.3] {
+        backdrop.set(Color::rgb(shade, shade, shade));
+        render_stats::reset_stats();
+        app.step();
+        let stats = render_stats::get_stats();
+        assert_eq!(stats.frames_painted, 1, "the frame was not painted");
+        assert!(stats.draw_calls.backdrop > 0, "the frame drew no backdrop");
+        assert_eq!(stats.backdrop_allocations, GpuAllocations::default());
+    }
+}
+
+/// More backdrops than the uniforms have held grow them; the same number again
+/// does not. And on every frame, the one that grew among them, each cell shows
+/// its own colour through its frost, which is what says each pass read its own
+/// uniforms and not a neighbour's — or a slot the growth left unwritten.
+#[test]
+fn the_backdrop_uniforms_grow_only_past_what_they_have_held() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let count = create_signal(1usize);
+    // What forces a frame when the count does not change.
+    let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(16)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container().background(backdrop).child(move || {
+                container()
+                    .layout(Flex::row())
+                    .children((0..count.get()).map(frosted_cell))
+            })
+        },
+    );
+    app.configure(surface, 240, 16, 1.0);
+
+    let mut buffers = Vec::new();
+    for (frame, cells) in [1, 1, 9, 9].into_iter().enumerate() {
+        count.set(cells);
+        let shade = frame as f32 / 10.0;
+        backdrop.set(Color::rgb(shade, shade, shade));
+        render_stats::reset_stats();
+        app.step();
+        let stats = render_stats::get_stats();
+        assert_eq!(stats.frames_painted, 1, "{cells} cells were painted");
+        buffers.push(stats.backdrop_allocations.buffers);
+
+        for index in 0..cells {
+            let [r, g, b, _] = app.read_pixel(surface, index as u32 * 16 + 8, 8);
+            assert!(
+                (32..224).contains(&g),
+                "cell {index} reads [{r}, {g}, {b}] in the middle: the stripe was not blurred"
+            );
+            let white = f32::from(g) / 255.0;
+            let mixed = |own: u8| f32::from(own) + (255.0 - f32::from(own)) * white;
+            let (red, blue) = cell_colour(index);
+            assert!(
+                (f32::from(r) - mixed(red)).abs() <= 8.0
+                    && (f32::from(b) - mixed(blue)).abs() <= 8.0,
+                "cell {index} reads [{r}, {g}, {b}] in the middle, which is not its own \
+                 colour blurred into the white"
+            );
+        }
+    }
+
+    assert!(buffers[0] > 0, "the first frame made no uniform buffer");
+    assert_eq!(buffers[1], 0, "the same backdrop again made a buffer");
+    assert!(buffers[2] > 0, "nine backdrops fit where one did");
+    assert_eq!(buffers[3], 0, "nine backdrops again made a buffer");
 }
