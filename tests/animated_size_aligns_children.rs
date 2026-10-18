@@ -792,11 +792,14 @@ fn assert_inner_keeps_its_own_pace(from: f32, to: f32, settled: (f32, f32)) {
         last = (outer, inner);
     }
     // Arriving is for good: neither box, once where the content is heading,
-    // goes back the way it came.
+    // goes back the way it came — further than the spring's own second swing,
+    // which is its overshoot squared of the move: a spring that overshoots
+    // swings back below its target once, by that much, before it settles.
+    let swing = SpringConfig::DEFAULT.peak_overshoot().powi(2) * (settled.0 - frames[0].0.0).abs();
     let outer_width = |f: &Both| f.0.0;
     let inner_width = |f: &Both| f.1.0;
     for along in [outer_width, inner_width] {
-        let near = |f: &Both| (along(f) - settled.0).abs() < 0.1;
+        let near = |f: &Both| (along(f) - settled.0).abs() < 0.1 + swing;
         let arrived = frames.iter().position(near);
         assert!(
             arrived.is_some_and(|at| frames[at..].iter().all(near)),
