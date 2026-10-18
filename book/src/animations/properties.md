@@ -20,6 +20,10 @@ Works with:
 - Solid colors
 - State layer overrides (lighter, darker, explicit)
 
+Every animated colour — a background, a border, an outline, a shadow, a text
+colour — moves as [colours mix](../building-ui/colors.md#mixing), so a fade from
+`Color::TRANSPARENT` comes in in the colour it is fading to, not through grey.
+
 ## Border
 
 A border is declared as a pair, and each half carries its own timing. Its width

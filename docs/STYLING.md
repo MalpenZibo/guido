@@ -53,6 +53,10 @@ container().gradient(LinearGradient::vertical(Color::RED, Color::BLUE))
 container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
 ```
 
+The stops are mixed with alpha premultiplied, as `Color::mix` mixes two
+colours and as CSS mixes a gradient's stops: a stop at `Color::TRANSPARENT`
+fades the other one out in its own colour.
+
 ## Borders
 
 ### Basic Border

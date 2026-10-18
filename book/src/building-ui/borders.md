@@ -85,6 +85,10 @@ container()
 # }
 ```
 
+The ring fades in from `Color::TRANSPARENT` in the accent's own colour — the
+halfway is the accent at half alpha, not a grey (see
+[Mixing](colors.md#mixing)).
+
 A rounded corner of the ring is the box's radius grown by `offset + width`, and a
 square one stays square. A negative offset draws the ring inside the box, over
 its edge. All three halves are declared together, on the container and in a

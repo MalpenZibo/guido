@@ -153,13 +153,9 @@ impl Animatable for f32 {
 }
 
 impl Animatable for Color {
+    /// With alpha premultiplied — see [`Color::mix`].
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
-        Color {
-            r: from.r + (to.r - from.r) * t,
-            g: from.g + (to.g - from.g) * t,
-            b: from.b + (to.b - from.b) * t,
-            a: from.a + (to.a - from.a) * t,
-        }
+        from.mix(*to, t)
     }
 
     fn is_reverse(from: &Self, to: &Self) -> bool {
@@ -168,8 +164,10 @@ impl Animatable for Color {
         (to.a, to.luminance()) < (from.a, from.luminance())
     }
 
+    /// Premultiplied, because that is the space `lerp` is straight in, and a
+    /// spring's momentum has to be read where the motion is a line.
     fn channels(&self) -> Channels {
-        Channels::from_slice(&[self.r, self.g, self.b, self.a])
+        Channels::from_slice(&self.premultiplied())
     }
 }
 
@@ -211,15 +209,16 @@ impl Animatable for Shadow {
     }
 
     fn channels(&self) -> Channels {
+        let [r, g, b, a] = self.color.premultiplied();
         Channels::from_slice(&[
             self.offset.0,
             self.offset.1,
             self.blur,
             self.spread,
-            self.color.r,
-            self.color.g,
-            self.color.b,
-            self.color.a,
+            r,
+            g,
+            b,
+            a,
         ])
     }
 }
@@ -236,16 +235,14 @@ impl Shadow {
 impl Animatable for Shadows {
     /// Shadow by shadow, the way CSS interpolates a `box-shadow` list.
     ///
-    /// The shorter list is padded with shadows that draw nothing — no length,
-    /// and the colour of the shadow they stand opposite at no alpha, so one
-    /// arriving fades in rather than through black — each inset where its
-    /// counterpart is. Where a shadow is inset at one end and not at the
-    /// other there is no shape between the two, and the whole list steps
-    /// halfway instead.
+    /// The shorter list is padded with `Shadow::none()`, inset where its
+    /// counterpart is; colours interpolate premultiplied, so one arriving
+    /// fades in in its own colour. Where a shadow is inset at one end and not
+    /// at the other there is no shape between the two, and the whole list
+    /// steps halfway instead.
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         let (a, b) = (from.as_slice(), to.as_slice());
         let absent = |opposite: &Shadow| Shadow {
-            color: opposite.color.with_alpha(0.0),
             inset: opposite.inset,
             ..Shadow::none()
         };
@@ -464,7 +461,9 @@ mod tests {
         assert_eq!(mid.offset, (-2.0, 7.0), "both axes, one crossing zero");
         assert_eq!(mid.blur, 14.0);
         assert_eq!(mid.spread, 3.0);
-        assert_eq!(mid.color.r, 0.5);
+        // Premultiplied: red weighted by the 0.6 it is drawn at against the
+        // black's 0.4, so it is more than half red.
+        assert!((mid.color.r - 0.6).abs() < 1e-6, "{:?}", mid.color);
         assert!((mid.color.a - 0.5).abs() < 1e-6);
 
         // Past the target, which is what a spring needs of it.
@@ -590,6 +589,141 @@ mod tests {
         assert_eq!(mid.r, 0.5);
         assert_eq!(mid.g, 0.5);
         assert_eq!(mid.b, 0.5);
+    }
+
+    /// A fade from `TRANSPARENT` keeps the colour it fades to. `TRANSPARENT`
+    /// is black at no alpha, and interpolated channel by channel the halfway
+    /// was grey at half alpha — over a white page, darker than either end.
+    #[test]
+    fn a_fade_from_transparent_keeps_the_colour_it_fades_to() {
+        let half_white = Color::rgba(1.0, 1.0, 1.0, 0.5);
+        assert_eq!(
+            Color::lerp(&Color::TRANSPARENT, &Color::WHITE, 0.5),
+            half_white
+        );
+        assert_eq!(
+            Color::lerp(&Color::WHITE, &Color::TRANSPARENT, 0.5),
+            half_white
+        );
+    }
+
+    /// Premultiplying changes nothing where nothing is translucent: between
+    /// two opaque colours the lerp is the straight one, to the bit. An
+    /// overshoot past either end is clamped into `[0, 1]`, as CSS clamps an
+    /// interpolated colour.
+    #[test]
+    fn between_opaque_colours_the_lerp_is_channel_by_channel() {
+        let pairs = [
+            (Color::BLACK, Color::WHITE),
+            (Color::RED, Color::BLUE),
+            (Color::rgb(0.2, 0.4, 0.6), Color::from_hex(0x3a7bd5)),
+        ];
+        for (from, to) in pairs {
+            for t in [0.0, 0.1, 0.25, 0.5, 0.9, 1.0, 1.3, -0.2] {
+                let f = |a: f32, b: f32| a + (b - a) * t;
+                let straight = Color::rgba(f(from.r, to.r), f(from.g, to.g), f(from.b, to.b), 1.0);
+                let expected = if (0.0..=1.0).contains(&t) {
+                    straight
+                } else {
+                    let c = |x: f32| x.clamp(0.0, 1.0);
+                    Color::rgba(c(straight.r), c(straight.g), c(straight.b), 1.0)
+                };
+                assert_eq!(
+                    Color::lerp(&from, &to, t),
+                    expected,
+                    "{from:?} -> {to:?} at {t}"
+                );
+            }
+        }
+    }
+
+    /// Where the alpha comes out at zero or below — two transparent ends, or a
+    /// spring overshooting a fade out — there is no premultiplied colour to
+    /// divide back, and the lerp still answers a colour rather than a NaN.
+    #[test]
+    fn a_colour_with_no_alpha_left_is_still_a_number() {
+        let clear_red = Color::rgba(1.0, 0.0, 0.0, 0.0);
+        for (from, to, t) in [
+            (Color::TRANSPARENT, clear_red, 0.5),
+            (Color::WHITE, Color::TRANSPARENT, 1.0),
+            (Color::WHITE, Color::TRANSPARENT, 1.2),
+            (Color::TRANSPARENT, Color::WHITE, -0.1),
+        ] {
+            let c = Color::lerp(&from, &to, t);
+            assert!(
+                c.channels().iter().all(|x| x.is_finite()),
+                "{from:?} -> {to:?} at {t} gave {c:?}"
+            );
+        }
+        assert_eq!(
+            Color::lerp(&Color::TRANSPARENT, &clear_red, 0.5),
+            Color::rgba(0.5, 0.0, 0.0, 0.0)
+        );
+    }
+
+    /// A spring overshooting a fade toward a nearly transparent colour takes
+    /// the mixed alpha through zero — white to black at 0.1 does at t ≈ 1.11.
+    /// Unclamped, the premultiplied channels just before it are below zero
+    /// and darken what is behind, and just after it nothing is drawn: a step
+    /// of about 0.11 over white in one frame. Clamped, as CSS clamps, the
+    /// colour drawn over white moves by no more than the alpha does.
+    #[test]
+    fn an_overshoot_through_zero_alpha_does_not_jump() {
+        let faint = Color::rgba(0.0, 0.0, 0.0, 0.1);
+        let over_white = |c: Color| {
+            let a = c.a.clamp(0.0, 1.0);
+            c.r * a + (1.0 - a)
+        };
+        let mut previous = over_white(Color::lerp(&Color::WHITE, &faint, 1.0));
+        for step in 1..=300 {
+            let t = 1.0 + step as f32 * 0.001;
+            let c = Color::lerp(&Color::WHITE, &faint, t);
+            let drawn = over_white(c);
+            assert!(
+                (drawn - previous).abs() < 0.002,
+                "at {t}: {previous} -> {drawn}"
+            );
+            previous = drawn;
+        }
+        for t in [1.05, 1.11, 1.2] {
+            let c = Color::lerp(&Color::WHITE, &faint, t);
+            assert!(
+                (0.0..=1.0).contains(&c.a)
+                    && [c.r, c.g, c.b].iter().all(|x| (0.0..=1.0).contains(x)),
+                "at {t} it is clamped: {c:?}"
+            );
+        }
+    }
+
+    /// A spring carried through a clamped value keeps a finite speed: the
+    /// clamp moves the value, not the spring, so a retarget from a clamped
+    /// colour reads a direction rather than sticking or dividing by nothing.
+    #[test]
+    fn a_retarget_from_a_clamped_colour_carries_a_finite_speed() {
+        let faint = Color::rgba(0.0, 0.0, 0.0, 0.1);
+        let clamped = Color::lerp(&Color::WHITE, &faint, 1.2);
+        assert_eq!(clamped.a, 0.0, "past the crossing nothing shows");
+        let carried = carry_velocity(3.0, &Color::WHITE, &faint, &clamped, &Color::WHITE);
+        assert!(carried.is_finite() && carried < 0.0, "got {carried}");
+    }
+
+    /// A spring's momentum is read in the space its lerp is straight in. A
+    /// fade in turned back halfway has half the way to go back, so the same
+    /// speed is twice the normalised one, reversed. Read in straight channels
+    /// the way back is a different direction — the colour channels fall while
+    /// the alpha falls by half as much — and the spring left at about half the
+    /// speed it had.
+    #[test]
+    fn a_fade_turned_back_halfway_keeps_its_speed() {
+        let halfway = Color::lerp(&Color::TRANSPARENT, &Color::WHITE, 0.5);
+        let carried = carry_velocity(
+            2.0,
+            &Color::TRANSPARENT,
+            &Color::WHITE,
+            &halfway,
+            &Color::TRANSPARENT,
+        );
+        assert!((carried + 4.0).abs() < 1e-5, "got {carried}");
     }
 
     #[test]

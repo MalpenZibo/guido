@@ -91,15 +91,38 @@ impl Color {
         }
     }
 
-    /// Linear interpolate with another color by `t` (0.0 = self, 1.0 = other).
-    /// Interpolates all channels including alpha.
+    /// Linear interpolate with another color by `t` (0.0 = self, 1.0 = other),
+    /// with alpha premultiplied, as CSS Color 4 interpolates: the colour
+    /// channels are weighted by their alpha, so a mix with `TRANSPARENT` keeps
+    /// the other colour's hue rather than passing through black. Between two
+    /// opaque colours it is the plain channel-by-channel mix.
+    ///
+    /// The result is clamped as CSS clamps an interpolated colour — alpha into
+    /// `[0, 1]`, then the channels — which is what holds a spring or an easing
+    /// overshooting past a fade inside the colours that can be drawn. Where the mixed alpha is zero or below there is nothing
+    /// to divide back by, and the colour channels are mixed as they are.
     pub fn mix(self, other: Color, t: f32) -> Self {
+        let f = |a: f32, b: f32| a + (b - a) * t;
+        let a = f(self.a, other.a);
+        let (from, to, unweight) = if a > 0.0 {
+            (self.premultiplied(), other.premultiplied(), 1.0 / a)
+        } else {
+            let straight = |c: Self| [c.r, c.g, c.b, c.a];
+            (straight(self), straight(other), 1.0)
+        };
+        let channel = |i: usize| (f(from[i], to[i]) * unweight).clamp(0.0, 1.0);
         Self {
-            r: self.r + (other.r - self.r) * t,
-            g: self.g + (other.g - self.g) * t,
-            b: self.b + (other.b - self.b) * t,
-            a: self.a + (other.a - self.a) * t,
+            r: channel(0),
+            g: channel(1),
+            b: channel(2),
+            a: a.clamp(0.0, 1.0),
         }
+    }
+
+    /// The colour channels multiplied by alpha, and the alpha: the space
+    /// [`mix`](Self::mix) is a straight line in.
+    pub(crate) fn premultiplied(self) -> [f32; 4] {
+        [self.r * self.a, self.g * self.a, self.b * self.a, self.a]
     }
 
     /// Invert RGB channels (1.0 - r/g/b). Preserves alpha.

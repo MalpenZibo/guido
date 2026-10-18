@@ -709,6 +709,39 @@ fn borders_and_gradients() {
     golden("borders_and_gradients", (440.0, 224.0), 1.0, BACKDROP, view);
 }
 
+/// A gradient from `TRANSPARENT` keeps the colour it fades to, as CSS
+/// gradients do: the stops are mixed with alpha premultiplied, so halfway to
+/// red over white is a pale red. Mixed channel by channel it is half of black
+/// and half of red at half alpha — over white, a dull pink darker than both
+/// ends.
+#[test]
+fn a_gradient_from_transparent_keeps_its_colour() {
+    const NAME: &str = "a_gradient_from_transparent_keeps_its_colour";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let view = container().background(Color::WHITE).child(
+        box_of(200.0, 20.0).gradient(LinearGradient::horizontal(Color::TRANSPARENT, Color::RED)),
+    );
+    let pixels = render_with_own_renderer(ctx, view, (200.0, 20.0), 1.0, Color::WHITE);
+    let at = |x: u32| {
+        let i = ((10 * pixels.width + x) * 4) as usize;
+        (pixels.data[i], pixels.data[i + 1])
+    };
+    for x in [20, 100, 180] {
+        let (red, green) = at(x);
+        assert!(
+            red >= 255 - TOLERANCE,
+            "at x={x} the red is all there, and less of the white: red {red}, green {green}"
+        );
+    }
+    let (_, green) = at(100);
+    assert!(
+        green.abs_diff(128) <= TOLERANCE,
+        "halfway, half the white shows: green {green}"
+    );
+}
+
 /// A ladder of shadows. Shadows are the one thing in the pipeline that draws
 /// outside the widget's own box, so a golden catches both the falloff and the
 /// quad expansion that has to make room for it.
