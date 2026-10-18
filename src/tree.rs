@@ -308,10 +308,59 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
 }
 
 /// How far a widget paints past its box: its own reach or what its children
-/// add, whichever is further — the latter spread by the layer that holds it,
-/// which holds what they draw as well as what the widget does.
-fn reach_of(own: Outsets, children_outset: Outsets, layer_spread: f32) -> Outsets {
-    own.max(children_outset + Outsets::all(layer_spread))
+/// add, whichever is further — the latter carried as the widget carries what
+/// they draw.
+fn reach_of(own: Outsets, children_outset: Outsets, carry: Carry) -> Outsets {
+    own.max(carry.apply(children_outset))
+}
+
+/// How a widget carries what its children draw outside its box into its
+/// parent's space: spread by the blur of the layer that holds it, then moved
+/// by its transform and its slide, which draw the children with the widget.
+///
+/// A bound on what the transform does to any overhang rather than the
+/// transform itself, because the overhang moves on a schedule of its own — a
+/// child publishes, and the walk upward has the tree and no widget to ask.
+/// `reach + gain · overhang`, side by side, is what a translate and a slide
+/// do exactly; a scale grows an overhang by its factor, and a turn can land
+/// one side's overhang on any other, so it is taken as the widest.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Carry {
+    /// How far past what the children draw the layer's blur spreads it.
+    pub(crate) spread: f32,
+    /// The most the transform can stretch a distance by.
+    pub(crate) gain: f32,
+    /// Whether the transform can carry one side's overhang onto another.
+    pub(crate) turns: bool,
+    /// Where the transform and the slide can take the widget's bare box.
+    pub(crate) reach: Outsets,
+}
+
+impl Carry {
+    /// Children drawn where they stand: nearly every widget.
+    pub(crate) const NONE: Self = Self {
+        spread: 0.0,
+        gain: 1.0,
+        turns: false,
+        reach: Outsets::ZERO,
+    };
+
+    /// Where an overhang of `overhang` past the box lands once carried.
+    ///
+    /// None at all is what the widget's own reach already answers: the box,
+    /// blurred and moved, holds whatever its children draw inside it.
+    fn apply(self, overhang: Outsets) -> Outsets {
+        if overhang == Outsets::ZERO {
+            return Outsets::ZERO;
+        }
+        let spread = overhang + Outsets::all(self.spread);
+        let spread = if self.turns {
+            Outsets::all(spread.widest())
+        } else {
+            spread
+        };
+        spread * self.gain + self.reach
+    }
 }
 
 /// Whether a child that reached `old` and now reaches `new` can have moved a
@@ -641,10 +690,10 @@ pub struct Tree {
     /// [`Tree::set_merge_reach`]. A map rather than a slot field, for the
     /// reason `positions` is one.
     merge_reaches: rustc_hash::FxHashMap<WidgetId, f32>,
-    /// How far each widget whose layer blurs spreads what it and its children
-    /// draw — see [`Tree::set_own_paint_reach_and_spread`]. A map rather than
-    /// a slot field, for the reason `positions` is one.
-    layer_spreads: rustc_hash::FxHashMap<WidgetId, f32>,
+    /// How each widget that blurs, transforms or slides carries what its
+    /// children draw — see [`Tree::set_own_paint_reach_and_carry`]. A map
+    /// rather than a slot field, for the reason `positions` is one.
+    carries: rustc_hash::FxHashMap<WidgetId, Carry>,
     /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
     /// surface without it keeps its focus, and a field holding that focus
     /// draws no caret until the keyboard is back (#726).
@@ -688,7 +737,7 @@ impl Tree {
             tab_stops: rustc_hash::FxHashMap::default(),
             positions: rustc_hash::FxHashMap::default(),
             merge_reaches: rustc_hash::FxHashMap::default(),
-            layer_spreads: rustc_hash::FxHashMap::default(),
+            carries: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
             keyboard: KeyboardAt::Unknown,
@@ -929,7 +978,7 @@ impl Tree {
         self.declared_visible.remove(&id);
         self.positions.remove(&id);
         self.merge_reaches.remove(&id);
-        self.layer_spreads.remove(&id);
+        self.carries.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1306,37 +1355,43 @@ impl Tree {
     /// from the reach the widget has *now*, so nothing else would ever name
     /// the pixels it painted a frame ago.
     pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: impl Into<Outsets>) {
-        let spread = self.layer_spread(id);
-        self.set_own_paint_reach_and_spread(id, reach, spread);
+        let carry = self.carry(id);
+        self.set_own_paint_reach_and_carry(id, reach, carry);
     }
 
-    /// The same, and how far past everything this widget and its children
-    /// draw its layer spreads it — what a blur reaches. `reach` already
-    /// carries the spread of the widget's own drawing; `spread` is what the
-    /// tree adds to the children's overhang.
+    /// The same, and how this widget carries what its children draw — the
+    /// blur its layer spreads them by, and where its transform and its slide
+    /// take them. `reach` already carries the widget's own drawing; `carry`
+    /// is what the tree does to the children's overhang, which it gathers on
+    /// a schedule of its own.
     ///
-    /// One write for both, so a blur in flight compares and walks once a
-    /// frame rather than once for each half.
-    pub(crate) fn set_own_paint_reach_and_spread(
+    /// One write for both, so a blur or a transform in flight compares and
+    /// walks once a frame rather than once for each half.
+    pub(crate) fn set_own_paint_reach_and_carry(
         &mut self,
         id: WidgetId,
         reach: impl Into<Outsets>,
-        spread: f32,
+        carry: Carry,
     ) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
         let reach = reach.into().map(|side| side.max(0.0));
-        let (spread, had_spread) = (spread.max(0.0), self.layer_spread(id));
-        if self.dense[idx].own_paint_reach == reach && had_spread == spread {
+        let carry = Carry {
+            spread: carry.spread.max(0.0),
+            ..carry
+        };
+        let had_carry = self.carry(id);
+        if self.dense[idx].own_paint_reach == reach && had_carry == carry {
             return;
         }
         // Against the union, not against the half being written: an ancestor
         // reads `paint_overflow`, so a widget whose children already reach
         // further has moved nothing anyone can see, and the walk above it —
         // whose shrink path re-measures siblings — is pure cost.
-        let before = self.slot_reach(id, idx);
-        let after = reach_of(reach, self.dense[idx].children_outset, spread);
+        let slot = &self.dense[idx];
+        let before = reach_of(slot.own_paint_reach, slot.children_outset, had_carry);
+        let after = reach_of(reach, slot.children_outset, carry);
         // A reach that shrinks vacates the ring between the two, and the rect
         // built from the new one stops short of it. Damaged before the write,
         // while the old reach is still what this widget answers — the same
@@ -1351,11 +1406,11 @@ impl Tree {
             self.expand_damage_rect(root, vacated);
         }
         self.dense[idx].own_paint_reach = reach;
-        if spread != had_spread {
-            if spread > 0.0 {
-                self.layer_spreads.insert(id, spread);
+        if carry != had_carry {
+            if carry == Carry::NONE {
+                self.carries.remove(&id);
             } else {
-                self.layer_spreads.remove(&id);
+                self.carries.insert(id, carry);
             }
         }
         if before == after {
@@ -2206,20 +2261,21 @@ impl Tree {
     /// `paint_overflow`, for a widget already resolved to its slot.
     fn slot_reach(&self, id: WidgetId, idx: usize) -> Outsets {
         let slot = &self.dense[idx];
-        reach_of(
-            slot.own_paint_reach,
-            slot.children_outset,
-            self.layer_spread(id),
-        )
+        // Children inside the box carry nothing past it — nearly every
+        // widget, and no reason to look the carry up.
+        if slot.children_outset == Outsets::ZERO {
+            return slot.own_paint_reach;
+        }
+        reach_of(slot.own_paint_reach, slot.children_outset, self.carry(id))
     }
 
-    /// How far this widget's layer spreads what it holds; zero for one that
-    /// does not blur, which is nearly all of them.
-    fn layer_spread(&self, id: WidgetId) -> f32 {
-        if self.layer_spreads.is_empty() {
-            return 0.0;
+    /// How this widget carries what its children draw; `Carry::NONE` for one
+    /// that neither blurs, transforms nor slides, which is nearly all of them.
+    fn carry(&self, id: WidgetId) -> Carry {
+        if self.carries.is_empty() {
+            return Carry::NONE;
         }
-        self.layer_spreads.get(&id).copied().unwrap_or(0.0)
+        self.carries.get(&id).copied().unwrap_or(Carry::NONE)
     }
 
     /// A widget's bounds grown by its paint reach, side by side: where it can
@@ -2539,7 +2595,7 @@ impl Tree {
             y += self.dense[dense_idx].origin.1;
             match self.dense[dense_idx].parent {
                 Some(parent) => {
-                    spread += self.layer_spread(parent);
+                    spread += self.carry(parent).spread;
                     current = parent;
                 }
                 None => break,

@@ -617,7 +617,14 @@ impl Container {
         let (dx, dy) = self.position_offset(tree, id);
         let toward = bounds.offset(dx, dy).outset_beyond(bounds);
         let reach = self.max_transform_reach(bounds, extent) + toward;
-        tree.set_own_paint_reach_and_spread(id, reach, blur);
+        tree.set_own_paint_reach_and_carry(
+            id,
+            reach,
+            crate::tree::Carry {
+                spread: blur,
+                ..crate::tree::Carry::NONE
+            },
+        );
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two
         // distances are within its reach of each other, and takes a quarter of

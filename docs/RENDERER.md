@@ -341,7 +341,7 @@ drawing again. The container's damage is sized by `blur_reach_bound`, which no
 blur at any scale of one or more exceeds, added past everything the texture
 holds: the container's own shadow and outline, and whatever its children draw
 outside it. The tree keeps that last half apart
-(`Tree::set_own_paint_reach_and_spread`), because the children's overhang is
+(`Tree::set_own_paint_reach_and_carry`), because the children's overhang is
 gathered into it on a schedule of its own.
 What a child inside it repaints is spread as far, so the damage a child
 names — a mark, the ring a shrinking reach vacates, a move — is widened by the
