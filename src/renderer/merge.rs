@@ -306,10 +306,7 @@ impl MergeRecord {
         let shape = PlacedShape::placed(member.rect, member.radius, member.curvature, placement);
         let inverse = shape.to_local(scale)?;
         let opacity = opacity * member.opacity;
-        let premultiplied = |c: Color| {
-            let a = c.a * opacity;
-            [c.r * a, c.g * a, c.b * a, a]
-        };
+        let premultiplied = |c: Color| c.scale_alpha(opacity).premultiplied();
         let border = border.or(member.border);
         let r = member.rect;
         Some(Self {
