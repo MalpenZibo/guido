@@ -58,6 +58,11 @@ and its inset ones over it, inside the child's box.
 
 - A child whose fill is a gradient. It is drawn on its own, as it would be
   without `merge_children`, and a debug build says so once.
+- A child drawn as a layer: one with `blur`, or one that fades with something
+  drawn over its background — a disabled tab with a label, faded by
+  `when_disabled`, say. Its background is drawn with the rest of it, blurred or
+  faded as one, and a debug build says so once. A child that fades with
+  nothing over its background is no layer, and stays merged as it fades.
 - Children after the sixteenth with a background, for the same reason and with
   the same warning: every fragment of the merged shape measures every member, so
   the cost is kept bounded.

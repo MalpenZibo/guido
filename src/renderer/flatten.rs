@@ -775,6 +775,35 @@ impl FlattenScratch {
         }
     }
 
+    /// Whether `id` was composited as a layer after `mark` — drawn this frame
+    /// or laid down again from a replay, both of which leave its
+    /// [`DrawCommand::Layer`] in the frame.
+    fn composited_since(&self, mark: Mark, id: NodeId) -> bool {
+        self.tails_since(mark)
+            .flatten()
+            .any(|cmd| matches!(&*cmd.command, DrawCommand::Layer { id: at, .. } if *at == id))
+    }
+
+    /// Put `with` in place of the command at `at`, by address, among what was
+    /// added after `mark`.
+    fn replace_since(&mut self, mark: Mark, at: *const DrawCommand, with: &Rc<DrawCommand>) {
+        let groups = &mut self.groups[mark.groups - 1..self.used];
+        for (index, group) in groups.iter_mut().enumerate() {
+            for (bucket_index, bucket) in group.buckets_mut().into_iter().enumerate() {
+                let from = if index == 0 {
+                    mark.buckets[bucket_index]
+                } else {
+                    0
+                };
+                for cmd in &mut bucket[from..] {
+                    if Rc::as_ptr(&cmd.command) == at {
+                        cmd.command = Rc::clone(with);
+                    }
+                }
+            }
+        }
+    }
+
     /// The part of each bucket that was added after `mark`, in draw order.
     fn tails_since(&self, mark: Mark) -> impl Iterator<Item = &[FlattenedCommand]> {
         self.live()
@@ -1462,6 +1491,7 @@ fn flatten_contents(
             crate::reactive::diagnostics::merge_member_left_out(node.id, why.reason());
         })
     });
+    let merge_mark = merged.as_ref().map(|_| out.mark());
     if let Some(merged) = &merged {
         for (index, shadow) in &merged.shadows {
             let child = &node.children[*index];
@@ -1484,6 +1514,7 @@ fn flatten_contents(
 
     // Recurse to children with effective clip
     let mut subtree_partial = node.partial;
+    let mut layers = SmallVec::<[usize; 2]>::new();
     for (index, child) in node.children.iter().enumerate() {
         let taken = merged
             .as_ref()
@@ -1495,9 +1526,36 @@ fn flatten_contents(
         // child's own entry is made inside that call and has to hold its
         // background, because the next frame may replay it under a parent
         // that no longer merges it.
+        //
+        // Unless the child was composited: its background went into its layer,
+        // to be blurred or faded with the rest of it, so it is the merged
+        // shape that has to let it go.
         if let (Some(taken), Some(mark)) = (taken, mark) {
-            out.take_out_since(mark, taken);
+            if out.composited_since(mark, child.id) {
+                layers.push(index);
+            } else {
+                out.take_out_since(mark, taken);
+            }
         }
+    }
+    if let (Some(merged), Some(mark)) = (&merged, merge_mark)
+        && !layers.is_empty()
+    {
+        crate::reactive::diagnostics::merge_member_left_out(
+            node.id,
+            super::merge::LeftOut::Layer.reason(),
+        );
+        let mut gone: SmallVec<[*const DrawCommand; 4]> = merged
+            .shadows
+            .iter()
+            .filter(|(child, _)| layers.contains(child))
+            .map(|(_, shadow)| Rc::as_ptr(shadow))
+            .collect();
+        match merged.without(&layers) {
+            Some(rest) => out.replace_since(mark, Rc::as_ptr(&merged.command), &rest),
+            None => gone.push(Rc::as_ptr(&merged.command)),
+        }
+        out.take_out_since(mark, &gone);
     }
 
     // Add overlay commands (layer = Overlay) with overlay-specific clip.

@@ -1510,10 +1510,13 @@ impl Container {
     /// cast by it. Its inset shadows, and its own background, stay on its own
     /// box, drawn underneath as usual.
     ///
-    /// Three things do not merge, and are drawn on their own: a child whose
-    /// fill is a [`gradient`](Self::gradient), every child after the first
+    /// Four things do not merge, and are drawn on their own: a child whose
+    /// fill is a [`gradient`](Self::gradient), a child drawn as a layer —
+    /// one that [blurs](Self::blur), or fades under [`opacity`](Self::opacity)
+    /// with something drawn over its background, which is then drawn in its
+    /// layer, blurred or faded with the rest of it — every child after the first
     /// [`MAX_MEMBERS`](crate::renderer::MAX_MEMBERS), and anything below the
-    /// direct children. A debug build says so for the first two. The neck
+    /// direct children. A debug build says so for the first three. The neck
     /// takes no input — each child answers clicks in its own box. A container
     /// that also [scrolls](Self::scroll) merges its scrollbar track too, since
     /// the track is one of its children.

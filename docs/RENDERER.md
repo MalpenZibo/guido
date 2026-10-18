@@ -941,11 +941,25 @@ shrinks damages the area it vacates before it goes, as a paint reach does.
 
 **Limits.** At most `MAX_MEMBERS` (16) members. A member with a gradient, and any
 child past the limit, keeps its own background and is reported once per
-container and reason in debug builds (`merge_member_left_out`). The neck takes no
+container and reason in debug builds (`merge_member_left_out`). So does a child
+drawn as a layer, which only its own flatten knows: `flatten_as_layer` builds a
+texture or elides it once it has scanned what the child drew. A composited
+child's background has moved into its layer by the time `take_out_since`
+searches for it, so a merged shape that kept it would draw it twice, sharp
+under a blur and faded twice under a fade. So once each member is flattened,
+`FlattenScratch::composited_since` asks whether its `DrawCommand::Layer` came
+out — drawn this frame or replayed — and the members that were composited are
+let go: the merged command already in the frame is put back as
+`Gathered::without` them, and their shadows beneath it taken out. A fade that
+elides its layer, with nothing over the background, stays a member, faded
+there, and keeps its neck. `a_member_that_fades_over_nothing_keeps_its_neck`
+and `a_member_composited_leaves_the_merged_shape_and_comes_back` in
+`tests/paint_cache_across_frames.rs` hold both across frames. The neck takes no
 input: hit testing still asks each child's own box. The goldens are
 `merged_pills_at_three_gaps`, `merged_pills_apart_are_the_pills_alone`,
 `merged_borders_blend_along_the_neck` (and at 2x),
-`a_gradient_member_is_drawn_unmerged`, `a_merged_shape_casts_one_shadow`,
+`a_gradient_member_is_drawn_unmerged`, `a_layer_member_draws_as_it_does_unmerged`,
+`a_merged_shape_casts_one_shadow`,
 `a_merge_at_distance_zero_is_a_plain_union` and
 `a_merged_shape_is_cut_by_its_clip`. A child at no opacity is not a member: it
 draws nothing, and would otherwise pull its neighbours' outline towards where it
