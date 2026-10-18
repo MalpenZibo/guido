@@ -17,9 +17,12 @@
 //! refuses or aborts the lock (another lock client active, protocol
 //! missing), the state returns to `Unlocked` and the surfaces are dropped.
 //!
-//! An app whose only surfaces are lock surfaces keeps running after
-//! unlocking (it idles waiting for the next [`lock_session`] call) — unlike
-//! ordinary surfaces, closing lock surfaces never exits the app.
+//! A lock surface lasts as long as the lock: `close()` on its
+//! [`SurfaceHandle`](crate::surface::SurfaceHandle) does nothing but log a
+//! warning, and [`unlock_session`] is the way out. An app whose only surfaces
+//! are lock surfaces keeps running after unlocking (it idles waiting for the
+//! next [`lock_session`] call) — unlike ordinary surfaces, taking lock
+//! surfaces away never exits the app.
 
 use rustc_hash::FxHashMap;
 
@@ -239,6 +242,9 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
                 continue;
             }
 
+            // Recorded before the build, so a close the cover's own tree asks
+            // for while it is being built already finds a cover.
+            with_lock(|lock| lock.surfaces.insert(info.id, id));
             let output_id = info.id;
             // A shared borrow, not `with_lock`: the factory is the
             // application's own closure and builds a widget tree, so anything
@@ -257,13 +263,26 @@ pub(crate) fn process_session_lock<P: crate::Platform>(
             });
             let Some(managed) = managed else {
                 log::error!("Lock held but no lock widget factory is set");
+                with_lock(|lock| lock.surfaces.remove(&output_id));
                 wayland_state.destroy_surface(id);
                 continue;
             };
             surface_manager.add(managed);
-            with_lock(|lock| lock.surfaces.insert(output_id, id));
         }
     }
+}
+
+/// Whether `id` is a lock cover, which lasts as long as the lock: only the
+/// lock's end takes it away. A shared borrow, because a cover's own tree can
+/// ask while the factory that builds it holds one.
+pub(crate) fn is_lock_cover(id: SurfaceId) -> bool {
+    with_app_state(|app| {
+        app.lock
+            .borrow()
+            .surfaces
+            .values()
+            .any(|&cover| cover == id)
+    })
 }
 
 fn teardown_lock_surfaces<P: crate::Platform>(

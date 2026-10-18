@@ -355,9 +355,12 @@ impl Platform for Recorder {
         true
     }
 
+    /// Recorded only for a surface it holds: the Wayland platform sends
+    /// nothing for an id it no longer has, so neither does this.
     fn destroy_surface(&mut self, id: SurfaceId) {
-        self.destroyed.push(id);
-        self.surfaces.remove(&id);
+        if self.surfaces.remove(&id).is_some() {
+            self.destroyed.push(id);
+        }
     }
 
     /// The same rule the Wayland platform answers with — the recorder's job is
