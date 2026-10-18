@@ -241,6 +241,10 @@ pub enum DrawCommand {
         /// takes these into the merged shape and draws them there instead;
         /// see [`Container::merge_children`](crate::widgets::Container::merge_children).
         background: bool,
+        /// Drawn for its shadow alone, beneath a box drawn with the same fill:
+        /// a shadow past a box's first. The fill is not drawn here, but it says
+        /// how much of the shadow the box over it lets through.
+        shadow_only: bool,
     },
 
     /// The backgrounds of a container's direct children, drawn as one shape
@@ -473,6 +477,7 @@ impl DrawCommand {
             shadow: None,
             gradient: None,
             background: false,
+            shadow_only: false,
         }
     }
 
@@ -492,6 +497,7 @@ impl DrawCommand {
             shadow: None,
             gradient: None,
             background: false,
+            shadow_only: false,
         }
     }
 
@@ -512,6 +518,31 @@ impl DrawCommand {
             shadow: None,
             gradient: None,
             background: false,
+            shadow_only: false,
+        }
+    }
+
+    /// `shadow` alone, beneath a rounded rectangle drawn next with the same
+    /// `color` and `gradient`: the fill is not drawn, but the shader reads it
+    /// to leave the shadow out from under that rectangle.
+    pub fn shadow_beneath(
+        rect: Rect,
+        color: Color,
+        radius: CornerRadii,
+        curvature: f32,
+        shadow: Shadow,
+        gradient: Option<Gradient>,
+    ) -> Self {
+        Self::RoundedRect {
+            rect,
+            color,
+            radius,
+            curvature,
+            border: None,
+            shadow: Some(shadow),
+            gradient,
+            background: false,
+            shadow_only: true,
         }
     }
 

@@ -219,6 +219,11 @@ mod elevation {
 }
 ```
 
+An outer shadow is drawn outside the box alone, as CSS draws a `box-shadow`
+outside the border box: nothing of it is under the fill, so a translucent
+background shows what is behind it rather than its own shadow, and a coloured
+glow tints the box's surroundings and not the box.
+
 `examples/shadow_example.rs` shows that ladder beside the three things one
 number could never say: a shadow thrown sideways, a coloured one, and one with
 spread.

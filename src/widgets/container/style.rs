@@ -927,60 +927,45 @@ impl Container {
         // fully transparent colours draws nothing, and with both endpoints
         // reactive one animating out through transparent would push a rect per
         // frame to do it. One end still visible is still a gradient.
-        let gradient = d.gradient.filter(gradient_shows);
+        let gradient =
+            d.gradient
+                .filter(gradient_shows)
+                .map(|gradient| crate::renderer::Gradient {
+                    start_color: gradient.start_color,
+                    end_color: gradient.end_color,
+                    direction: gradient.direction.into(),
+                });
         let fills = gradient.is_some() || d.background.a > 0.0;
+        let fill = gradient.map_or(d.background, |g| g.start_color);
 
         // The first outer shadow rides the fill's own instance, as the only
         // shadow always did, so a box with one costs what it did. Every other
-        // one is a rect of its own that draws nothing but its shadow, under the
-        // fill and the last of them first, so the first in the list ends on top
-        // as CSS stacks them — the order a box per shadow, each on the last,
-        // would draw them in.
-        let mut shadow = None;
+        // one is the fill drawn again for its shadow alone, under the fill and
+        // the last of them first, so the first in the list ends on top as CSS
+        // stacks them — the order a box per shadow, each on the last, would
+        // draw them in.
         if fills {
             let mut outer = shadows.iter().filter(|s| !s.inset).filter(shows);
-            shadow = outer.next().copied();
+            let shadow = outer.next().copied();
             for under in outer.rev() {
-                ctx.draw_rounded_rect_with_shadow(
+                ctx.draw_shadow_beneath(
                     bounds,
-                    Color::TRANSPARENT,
+                    fill,
                     d.corner_radii,
                     d.corner_curvature,
                     *under,
+                    gradient,
                 );
             }
-        }
-
-        if let Some(ref gradient) = gradient {
             ctx.draw_rounded_rect_full(
                 bounds,
-                gradient.start_color,
+                fill,
                 d.corner_radii,
                 d.corner_curvature,
                 None,
                 shadow,
-                Some(crate::renderer::Gradient {
-                    start_color: gradient.start_color,
-                    end_color: gradient.end_color,
-                    direction: gradient.direction.into(),
-                }),
+                gradient,
             );
-        } else if d.background.a > 0.0 {
-            match shadow {
-                Some(shadow) => ctx.draw_rounded_rect_with_shadow(
-                    bounds,
-                    d.background,
-                    d.corner_radii,
-                    d.corner_curvature,
-                    shadow,
-                ),
-                None => ctx.draw_rounded_rect_with_curvature(
-                    bounds,
-                    d.background,
-                    d.corner_radii,
-                    d.corner_curvature,
-                ),
-            }
         }
 
         // Inset shadows go over the fill and under the border, a rect each,
