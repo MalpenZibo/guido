@@ -346,13 +346,23 @@ gathered into it on a schedule of its own. The composite is drawn through the
 container's transform and slide, so the spread overhang is carried by them
 too.
 What a child inside it repaints is spread as far, so the damage a child
-names — a mark, the ring a shrinking reach vacates, a move — is widened by the
-blur of every blurring ancestor between it and the surface, summed on the walk
-to the surface root that every damaged rect is measured on. A box that clips its
-children is no exception: the clip cuts them inside the layer, and the blur
-spreads what is left past it. The blurs are read from the same map as the
-carries, so a tree where nothing blurs, transforms or slides pays one emptiness
-check per ancestor, and any other one lookup.
+names — a mark, the ring a shrinking reach vacates, a move — is carried up the
+walk to the surface root that every damaged rect is measured on, through each
+ancestor as it draws it: widened by a blurring one's spread, in its own space,
+and then mapped through where its transform and its slide draw it now — the
+box around the result, under a rotation. A box that clips its children is no
+exception: the clip cuts them inside the layer, and the blur spreads what is
+left past it. Both are read from the same map as the carries, so a tree where
+nothing blurs, transforms or slides pays one emptiness check per ancestor, and
+any other one lookup.
+
+The transform the damage is carried through is the one the box draws with now
+(`Carry`'s `drawn`, published from `placement` with the rest of its reach), not
+the bound the reach is: a label repainting in a card lifted 4 pixels damages
+the label, 4 pixels up, rather than everywhere the card can be. A box whose
+transform changes marks itself and damages both the place it leaves and the
+one it reaches, so a child repainting in that frame is covered whichever of the
+two publishes first (`a_child_repainting_as_its_box_moves_damages_both_places`).
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
