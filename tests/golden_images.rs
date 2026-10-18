@@ -4836,6 +4836,73 @@ fn a_gradient_member_is_drawn_unmerged() {
     );
 }
 
+/// A member drawn as a layer — it blurs, or fades with a label over its
+/// background — is drawn as it is without `merge_children`: its background
+/// once, in its layer, blurred or faded with the rest of it. Were it in the
+/// merged shape as well, a blurred box would keep the merged shape's sharp
+/// edge under its blur, and a box at 0.5 would have its fill laid twice.
+///
+/// Held against the same row unmerged over every pixel left of the middle of
+/// the gap: past it is the plain member's merged shape of one, whose quad keeps
+/// the antialiasing row a box drawn alone cuts off, as
+/// `merged_pills_apart_are_the_pills_alone` says.
+#[test]
+fn a_layer_member_draws_as_it_does_unmerged() {
+    const NAME: &str = "a_layer_member_draws_as_it_does_unmerged";
+    const PAD: f32 = 12.0;
+    const BOX: (f32, f32) = (60.0, 40.0);
+    const GAP: f32 = 4.0;
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    // Each with the point that shows it plainest: the blurred box's edge, which
+    // the merged shape kept sharp, and the faded box's fill, laid twice.
+    let inside = (PAD + 1.0) as u32;
+    let centre = (PAD + BOX.0 / 2.0) as u32;
+    let middle = (PAD + BOX.1 / 2.0) as u32;
+    type Layer = fn(Container) -> Container;
+    let layered: [(&str, Layer, u32); 2] = [
+        ("blurred by 6", |member| member.blur(6.0), inside),
+        ("at opacity 0.5", |member| member.opacity(0.5), centre),
+    ];
+    for (how, layer, at) in layered {
+        let row = |merge: bool| {
+            let first = swatch(BOX.0, BOX.1, Color::RED)
+                .layout(Flex::row().main_alignment(MainAlignment::Center))
+                .child(label("Ab", 16.0));
+            let row = container()
+                .layout(Flex::row().spacing(GAP))
+                .child(layer(first))
+                .child(swatch(BOX.0, BOX.1, Color::RED));
+            let row = if merge { row.merge_children(12.0) } else { row };
+            render_with_own_renderer(
+                ctx,
+                container().padding(PAD).child(row),
+                (PAD + BOX.0 + GAP + BOX.0 + PAD, PAD + BOX.1 + PAD),
+                1.0,
+                Color::BLACK,
+            )
+        };
+        let (merged, alone) = (row(true), row(false));
+        let red = |pixels: &Pixels| pixels.data[((middle * pixels.width + at) * 4) as usize];
+        assert!(
+            red(&merged).abs_diff(red(&alone)) <= 1,
+            "the member {how} reads red {} merged and {} unmerged at ({at}, {middle})",
+            red(&merged),
+            red(&alone)
+        );
+        let middle_of_gap = (PAD + BOX.0 + GAP / 2.0) as u32;
+        for (index, (m, a)) in merged.data.chunks(4).zip(alone.data.chunks(4)).enumerate() {
+            let (x, y) = (index as u32 % merged.width, index as u32 / merged.width);
+            assert!(
+                x >= middle_of_gap || m.iter().zip(a).all(|(p, q)| p.abs_diff(*q) <= 1),
+                "the member {how} is {m:?} merged and {a:?} unmerged at ({x}, {y}): \
+                 its background is drawn by the merged shape as well as in its layer"
+            );
+        }
+    }
+}
+
 /// The merging container's shadow is the merged shape's: cast around the
 /// neck as well as the members, once, rather than around the container's box
 /// or around each member. The round member is turned, which it shows nothing

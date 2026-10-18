@@ -294,8 +294,10 @@ each other and are joined by a neck once the gap is half of it, overlapping ones
 are one outline, and ones further apart are left exactly as they were. `0.0` is a plain union. Fills, border colours and border
 widths blend across a neck by the share the smooth minimum gives each child, so
 the border follows the merged outline. The container's own `border` and
-outer shadows are the merged shape's; its inset shadows stay on its own box. A child with a gradient, and any child past
-`MAX_MEMBERS` (16), is drawn on its own with a warning in debug builds; the neck
+outer shadows are the merged shape's; its inset shadows stay on its own box. A child with a gradient, a child drawn as a
+layer — it blurs, or fades with something drawn over its background — and any
+child past `MAX_MEMBERS` (16), is drawn on its own with a warning in debug
+builds; the neck
 takes no input. A scrolling container that merges merges its scrollbar track
 too, since the track is one of its children. How it is built is in [RENDERER.md](RENDERER.md#merged-shapes).
 

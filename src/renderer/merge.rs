@@ -70,6 +70,25 @@ pub(crate) struct Gathered {
     /// same `Rc` the child's node holds, which a replay of the child's own
     /// cache hands back too.
     pub(crate) taken: Vec<Taken>,
+    /// The child each member is the background of, in member order.
+    members_of: Vec<usize>,
+    merge: MergeChildren,
+}
+
+impl Gathered {
+    /// The merged command once `children` are no longer members, or `None`
+    /// when no member is left.
+    pub(crate) fn without(&self, children: &[usize]) -> Option<Rc<DrawCommand>> {
+        let DrawCommand::MergedShape { members, .. } = &*self.command else {
+            unreachable!("gather builds a merged shape")
+        };
+        let kept = members
+            .iter()
+            .zip(&self.members_of)
+            .filter(|(_, child)| !children.contains(child))
+            .map(|(member, _)| *member);
+        merged_shape(kept.collect(), &self.merge)
+    }
 }
 
 /// One child's fill and border frame, at most.
@@ -82,6 +101,9 @@ pub(crate) enum LeftOut {
     Gradient,
     /// [`MAX_MEMBERS`] came before it.
     TooMany,
+    /// It was composited as a layer, which holds its background, blurred or
+    /// faded with the rest of it.
+    Layer,
 }
 
 impl LeftOut {
@@ -89,6 +111,7 @@ impl LeftOut {
         match self {
             Self::Gradient => "its fill is a gradient, which a merged shape does not blend",
             Self::TooMany => "a merged shape takes no more members than `MAX_MEMBERS`",
+            Self::Layer => "it is drawn as a layer, which holds its background",
         }
     }
 }
@@ -99,16 +122,18 @@ impl LeftOut {
 /// A child's background is every `RoundedRect` it marked as one — its fill,
 /// and the border frame a container draws as a second command. A child whose
 /// fill is a gradient keeps its background, as does every child past
-/// [`MAX_MEMBERS`]; `left_out` hears about each.
+/// [`MAX_MEMBERS`]; `left_out` hears about each. A child that turns out to be
+/// drawn as a layer is only known once it is flattened, and is left out then
+/// — see [`Gathered::without`].
 pub(crate) fn gather(
     node: &RenderNode,
     merge: &MergeChildren,
     mut left_out: impl FnMut(LeftOut),
 ) -> Option<Gathered> {
     let mut members = Vec::new();
+    let mut members_of = Vec::new();
     let mut shadows = Vec::new();
     let mut taken = Vec::with_capacity(node.children.len());
-    let mut bounds: Option<Rect> = None;
 
     for (index, child) in node.children.iter().enumerate() {
         taken.push(Taken::new());
@@ -197,26 +222,34 @@ pub(crate) fn gather(
                 )),
             ));
         }
-        let reach = member.placement.map_rect(member.rect);
-        bounds = Some(bounds.map_or(reach, |held| union_of(held, reach)));
         members.push(member);
+        members_of.push(index);
     }
 
+    Some(Gathered {
+        command: merged_shape(members, merge)?,
+        shadows,
+        taken,
+        members_of,
+        merge: *merge,
+    })
+}
+
+/// One merged command of `members`, or `None` for none.
+fn merged_shape(members: Vec<MergeMember>, merge: &MergeChildren) -> Option<Rc<DrawCommand>> {
+    let reach = |member: &MergeMember| member.placement.map_rect(member.rect);
+    let bounds = members.iter().map(reach).reduce(union_of)?;
     // Where a smooth minimum of `k` lies at or below zero, `min(a, b)` is at
     // most `k / 4` — the most it ever takes off — so the neck never reaches
     // further than a quarter of the distance past the members' boxes.
-    let bounds = bounds?.outset(merge.distance * 0.25);
-    Some(Gathered {
-        command: Rc::new(DrawCommand::MergedShape {
-            members,
-            distance: merge.distance,
-            border: merge.border,
-            shadows: merge.shadows,
-            bounds,
-        }),
-        shadows,
-        taken,
-    })
+    let bounds = bounds.outset(merge.distance * 0.25);
+    Some(Rc::new(DrawCommand::MergedShape {
+        members,
+        distance: merge.distance,
+        border: merge.border,
+        shadows: merge.shadows,
+        bounds,
+    }))
 }
 
 /// The record the members of a merged shape continue at, or the end of them.
@@ -472,6 +505,34 @@ mod tests {
             gathered.taken[1].is_empty(),
             "it is drawn as it was, at nothing"
         );
+    }
+
+    /// A merged shape without some of its members holds the rest, over their
+    /// own bounds, and is nothing once none is left. Members are named by
+    /// child, which a child that is no member at all does not upset.
+    #[test]
+    fn a_merged_shape_lets_members_go() {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let mut group = RenderNode::new(0);
+        group.children.push(child((0.0, 0.0), &[]));
+        for at in [0.0, 30.0, 60.0] {
+            group
+                .children
+                .push(child((at, 0.0), &[background(rect, Color::GREEN, None)]));
+        }
+        let gathered = gather(&group, &MERGE, |_| panic!("nothing is left out")).unwrap();
+
+        let rest = gathered.without(&[2]).expect("two members are left");
+        let DrawCommand::MergedShape {
+            members, bounds, ..
+        } = &*rest
+        else {
+            panic!("a merged shape");
+        };
+        let at: Vec<_> = members.iter().map(|m| m.placement.tx()).collect();
+        assert_eq!(at, [0.0, 60.0]);
+        assert_eq!(*bounds, Rect::new(-2.0, -2.0, 84.0, 24.0));
+        assert!(gathered.without(&[1, 2, 3]).is_none());
     }
 
     /// Sixteen members merge and the seventeenth is drawn on its own.

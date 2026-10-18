@@ -1441,6 +1441,190 @@ fn a_member_that_slides_moves_the_merged_shape() {
     );
 }
 
+const DOT_FILL: Color = Color::rgb(0.2, 0.8, 0.4);
+
+/// A merging group beside a box the test can poke, so a frame can be drawn
+/// that replays the group untouched. Its bubble fades by `opacity`, and holds
+/// a dot over its background when `dot` is set — the overlap that makes its
+/// fade a layer.
+fn fading_group(opacity: RwSignal<f32>, dot: bool) -> Container {
+    let bubble = container()
+        .width(BUBBLE)
+        .height(BUBBLE)
+        .background(BUBBLE_FILL)
+        .opacity(opacity);
+    let bubble = if dot {
+        bubble.padding(10.0).child(
+            container()
+                .width(BUBBLE - 20.0)
+                .height(BUBBLE - 20.0)
+                .background(DOT_FILL),
+        )
+    } else {
+        bubble
+    };
+    container()
+        .layout(Flex::row().spacing(GAP))
+        .padding(PAD)
+        .child(container().width(BOX_HEIGHT).height(BOX_HEIGHT))
+        .child(
+            container()
+                .layout(Flex::row())
+                .merge_children(12.0)
+                .child(
+                    container()
+                        .width(MEMBER_WIDTH)
+                        .height(BUBBLE)
+                        .background(MEMBER_FILL),
+                )
+                .child(bubble),
+        )
+}
+
+impl Surface {
+    /// The members' fills and opacities in the frame's one merged shape.
+    fn members(&self) -> Vec<(Color, f32)> {
+        let (_, members) = self.merged();
+        members.iter().map(|m| (m.color, m.opacity)).collect()
+    }
+}
+
+/// A member that fades with nothing drawn over its background builds no
+/// layer — fading it draw by draw is the same picture — so it stays in the
+/// merged shape on every frame of the fade, faded there, and keeps its neck.
+/// The member beside it is replayed from its cache on each of those frames
+/// and still taken into the shape.
+#[test]
+fn a_member_that_fades_over_nothing_keeps_its_neck() {
+    let opacity = create_signal(1.0f32);
+    let mut s = Surface::new(
+        fading_group(opacity, false),
+        PAD + BOX_HEIGHT + GAP + MEMBER_WIDTH + BUBBLE + PAD,
+        PAD + BUBBLE + PAD,
+    );
+    s.frame();
+    let group = s.surface.tree.get_children(s.surface.root)[1];
+    let [fixed, bubble] = s.surface.tree.get_children(group)[..] else {
+        panic!("the group holds two members");
+    };
+    s.frames(bubble, 1);
+    let entry = s.node_of(fixed).cached_flatten.borrow().clone();
+
+    for fade in [0.75, 0.5, 0.25, 1.0] {
+        opacity.set(fade);
+        s.surface.tree.mark_needs_paint(bubble);
+        s.frame();
+        assert_eq!(
+            s.members(),
+            [(MEMBER_FILL, 1.0), (BUBBLE_FILL, fade)],
+            "at {fade} the fading member left the merged shape, and its neck with it"
+        );
+        assert!(
+            !s.drawn_alone(BUBBLE_FILL) && !s.drawn_alone(MEMBER_FILL),
+            "at {fade} a member's background was drawn on its own beside the merged shape"
+        );
+    }
+    let replayed = s.node_of(fixed).cached_flatten.borrow().clone();
+    assert!(
+        entry.zip(replayed).is_some_and(|(a, b)| Rc::ptr_eq(&a, &b)),
+        "the fixed member was flattened again rather than replayed"
+    );
+}
+
+/// A member whose fade builds a layer — a dot is drawn over its background —
+/// leaves the merged shape for as long as it is one, since its background is
+/// in its layer, faded with the dot. A frame that replays the whole group
+/// replays the shape without it; once the member is opaque it is taken back.
+#[test]
+fn a_member_composited_leaves_the_merged_shape_and_comes_back() {
+    let opacity = create_signal(1.0f32);
+    let mut s = Surface::new(
+        fading_group(opacity, true),
+        PAD + BOX_HEIGHT + GAP + MEMBER_WIDTH + BUBBLE + PAD,
+        PAD + BUBBLE + PAD,
+    );
+    s.frame();
+    let [poke, group] = s.surface.tree.get_children(s.surface.root)[..] else {
+        panic!("a box and the group");
+    };
+    let bubble = s.surface.tree.get_children(group)[1];
+    assert_eq!(s.members(), [(MEMBER_FILL, 1.0), (BUBBLE_FILL, 1.0)]);
+
+    opacity.set(0.5);
+    s.surface.tree.mark_needs_paint(bubble);
+    s.frame();
+    assert_eq!(
+        s.members(),
+        [(MEMBER_FILL, 1.0)],
+        "the composited member is still in the merged shape, so its background \
+         is drawn there as well as in its layer"
+    );
+    let fills = s
+        .commands
+        .iter()
+        .filter(|cmd| {
+            matches!(&*cmd.command, DrawCommand::RoundedRect { color, .. } if *color == BUBBLE_FILL)
+        })
+        .count();
+    assert_eq!(
+        fills, 1,
+        "the composited member's background is drawn once, in its layer"
+    );
+
+    // The group flattened again around the bubble's replayed layer: the
+    // composite it lays down is what says it is still one.
+    let fixed = s.surface.tree.get_children(group)[0];
+    let bubble_entry = s.node_of(bubble).cached_flatten.borrow().clone();
+    s.frames(fixed, 1);
+    assert!(
+        bubble_entry
+            .zip(s.node_of(bubble).cached_flatten.borrow().clone())
+            .is_some_and(|(a, b)| Rc::ptr_eq(&a, &b)),
+        "the bubble was flattened again rather than replayed"
+    );
+    assert_eq!(
+        s.members(),
+        [(MEMBER_FILL, 1.0)],
+        "a replayed layer was taken back into the merged shape"
+    );
+    // Its texture is kept, so its content is not drawn again: the composite
+    // is all of it in the frame.
+    assert!(
+        s.commands
+            .iter()
+            .any(|cmd| matches!(&*cmd.command, DrawCommand::Layer { .. }))
+            && !s.drawn_alone(BUBBLE_FILL),
+        "the replayed member's background is drawn beside its layer"
+    );
+    let (cmd, _) = s.merged();
+    let without = Rc::clone(&cmd.command);
+
+    s.frames(poke, 1);
+    let (cmd, _) = s.merged();
+    assert!(
+        Rc::ptr_eq(&without, &cmd.command),
+        "the group was flattened again rather than replayed"
+    );
+    assert_eq!(
+        s.members(),
+        [(MEMBER_FILL, 1.0)],
+        "the replay put the composited member back"
+    );
+
+    opacity.set(1.0);
+    s.surface.tree.mark_needs_paint(bubble);
+    s.frame();
+    assert_eq!(
+        s.members(),
+        [(MEMBER_FILL, 1.0), (BUBBLE_FILL, 1.0)],
+        "the opaque member did not rejoin the merged shape"
+    );
+    assert!(
+        !s.drawn_alone(BUBBLE_FILL) && !s.drawn_alone(MEMBER_FILL),
+        "a member's background was drawn on its own beside the merged shape"
+    );
+}
+
 /// A group that moves as a whole replays its merged shape, moved, rather than
 /// building it again — and its members' backgrounds stay out of the frame.
 #[test]
