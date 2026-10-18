@@ -120,12 +120,27 @@ struct Slot {
     needs_paint: bool,
     /// Whether this widget is a relayout boundary
     is_relayout_boundary: bool,
-    /// What the last layout that ran was asked for, and what it answered,
-    /// with the pass it ran in — because a measure and a layout can want
-    /// different answers from the same widget and neither may be handed the
-    /// other's. One entry, not one per pass: a layout that runs replaces what
-    /// either pass left, so a second entry was only ever empty.
-    cached: Option<CachedLayout>,
+    /// What the last layout that ran was asked for, and what it answered.
+    laid_out: Option<CachedLayout>,
+    /// What the last measure that ran was asked for, and what it answered.
+    ///
+    /// Apart from the layout's, because a box in flight asks its children
+    /// both on every frame — a measure at the box it is heading to, which is
+    /// the same question frame after frame, and a layout in the box it has,
+    /// which is not — and one entry for the two meant each evicted the other.
+    /// Taffy keeps a node's final layout apart from its measures, and
+    /// Chromium's LayoutNG its measure results apart from its layout results,
+    /// for the same reason. Dropped when the widget is marked, since what a
+    /// measure answers can change with what changed it.
+    measured: Option<CachedLayout>,
+    /// Which pass last ran this widget's layout, and so placed what is below
+    /// it where it is now. A layout's answer stands only with its placement:
+    /// a measure that runs after it moves the children, and a layout at the
+    /// same constraints must not then hand back the old answer.
+    placed_by: Option<LayoutPass>,
+    /// Which of the two entries it last answered from, run or skipped: what
+    /// its parent reads the least it can be from.
+    answered: Option<LayoutPass>,
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -178,6 +193,25 @@ struct Slot {
     /// shrank re-measures the siblings, because the child that shrank may have
     /// been the widest and the new answer is whatever the others say.
     children_reach: f32,
+}
+
+impl Slot {
+    /// Say this widget has to be laid out again, and forget what its last
+    /// measure answered, which what marked it may have changed. The layout's
+    /// answer is kept, for the constraints a boundary is restarted under; the
+    /// flag is what keeps it from being read.
+    fn mark_needs_layout(&mut self) {
+        self.needs_layout = true;
+        self.measured = None;
+    }
+
+    /// The answer `pass` last gave.
+    fn entry(&self, pass: LayoutPass) -> Option<CachedLayout> {
+        match pass {
+            LayoutPass::Layout => self.laid_out,
+            LayoutPass::Measure => self.measured,
+        }
+    }
 }
 
 /// A widget sliding from where it was drawn to where layout has moved it.
@@ -233,13 +267,15 @@ impl LayoutPass {
 /// What one pass asked a widget for, and what it answered.
 #[derive(Clone, Copy)]
 struct CachedLayout {
-    /// The pass that ran it.
-    pass: LayoutPass,
     constraints: Constraints,
     size: Size,
     /// The least it could be, as the layout recorded it with
     /// [`LayoutCtx::set_minimum`] — or its size, when it recorded nothing.
     minimum: Size,
+    /// The baseline it reported, which a parent aligning on it reads as it
+    /// reads the size: given back with the answer, because a measure skipped
+    /// after a layout ran answers for constraints the layout did not have.
+    baseline: Option<f32>,
     /// Whether this answer belongs to the pass that asked — because something
     /// below was in flight, or a measure placed a value without spending its
     /// appearance. A settled subtree is neither, and either pass may read it.
@@ -819,7 +855,10 @@ impl Tree {
             needs_layout: false,
             needs_paint: true,
             is_relayout_boundary: false,
-            cached: None,
+            laid_out: None,
+            measured: None,
+            placed_by: None,
+            answered: None,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -964,13 +1003,20 @@ impl Tree {
 
         // Nothing to redo: this pass asked the same question last time and
         // nothing has marked the widget since.
-        if let Some(entry) = cached
+        if let Some((pass, entry)) = cached
             && !dirty
         {
             crate::render_stats::record_layout_skipped();
             // A skipped subtree read nothing this pass, and still answers what
             // it answered last time.
             self.pass_dependent = enclosing || entry.pass_dependent;
+            // And beside its size, what the parent laying it out reads next:
+            // the least it can be, and its baseline.
+            if let Some(idx) = self.get_dense_index(id) {
+                let slot = &mut self.dense[idx];
+                slot.answered = Some(pass);
+                slot.baseline = entry.baseline;
+            }
             return Some(entry.size);
         }
         crate::render_stats::record_layout_executed_with_reasons(
@@ -1052,10 +1098,15 @@ impl Tree {
 
     /// Run `f` under `pass`, and put back whatever pass was running.
     fn with_pass<R>(&mut self, pass: LayoutPass, f: impl FnOnce(&mut Tree) -> R) -> R {
-        let previous = std::mem::replace(&mut self.pass, pass);
+        let previous = self.enter_pass(pass);
         let out = f(self);
-        self.pass = previous;
+        self.enter_pass(previous);
         out
+    }
+
+    /// Make `pass` the running one, and answer with the one it replaced.
+    fn enter_pass(&mut self, pass: LayoutPass) -> LayoutPass {
+        std::mem::replace(&mut self.pass, pass)
     }
 
     /// Mutate a widget via a closure.
@@ -2134,7 +2185,7 @@ impl Tree {
     /// `clear_needs_layout` after completing layout.
     pub fn mark_needs_layout(&mut self, widget_id: WidgetId) -> Option<WidgetId> {
         let mut idx = self.get_dense_index(widget_id)?;
-        self.dense[idx].needs_layout = true;
+        self.dense[idx].mark_needs_layout();
 
         let mut current = widget_id;
         while let Some(parent) = self.dense[idx].parent {
@@ -2142,7 +2193,7 @@ impl Tree {
             if self.dense[idx].needs_layout {
                 return None;
             }
-            self.dense[idx].needs_layout = true;
+            self.dense[idx].mark_needs_layout();
             if self.dense[idx].is_relayout_boundary {
                 return Some(parent);
             }
@@ -2500,16 +2551,21 @@ impl Tree {
         // The reads say so as they happen, and each child folded its own
         // subtree's answer into the same flag on its way out — so this is the
         // whole subtree's, and there is nothing to walk.
-        let pass_dependent = self.pass_dependent;
-        let pass = self.pass;
-        self.dense[idx].cached = Some(CachedLayout {
-            pass,
+        let slot = &mut self.dense[idx];
+        let entry = CachedLayout {
             constraints,
             size,
             minimum,
-            pass_dependent,
-        });
-        self.dense[idx].cached_size = Some(size);
+            baseline: slot.baseline,
+            pass_dependent: self.pass_dependent,
+        };
+        *match self.pass {
+            LayoutPass::Layout => &mut slot.laid_out,
+            LayoutPass::Measure => &mut slot.measured,
+        } = Some(entry);
+        slot.placed_by = Some(self.pass);
+        slot.answered = Some(self.pass);
+        slot.cached_size = Some(size);
         // Damages the new rect and marks the ancestors, which have to redraw
         // to re-emit this widget at its new geometry.
         self.mark_needs_paint(id);
@@ -2521,20 +2577,42 @@ impl Tree {
     /// Per pass, because the two do not answer the same question: a measure
     /// reads where an animation is going, a layout reads where it is now, and
     /// a measure runs before a surface exists so an appearance must not be
-    /// spent in one. One shared entry meant a skip across the passes handed
-    /// back the other pass's size, or never placed what a measure declined to.
-    fn cached_for_pass(&self, id: WidgetId, constraints: Constraints) -> Option<CachedLayout> {
+    /// spent in one.
+    ///
+    /// A layout's answer is read only while its placement stands — while it
+    /// was the last to run — because a skip leaves what is below the widget
+    /// where the last run put it. A measure's is read whatever ran since:
+    /// nothing reads where a measure placed anything, and what it answers
+    /// changes only with what marks the widget, which drops it.
+    fn cached_for_pass(
+        &self,
+        id: WidgetId,
+        constraints: Constraints,
+    ) -> Option<(LayoutPass, CachedLayout)> {
+        let slot = &self.dense[self.get_dense_index(id)?];
+        let asked = |pass: LayoutPass| {
+            slot.entry(pass)
+                .filter(|entry| entry.constraints == constraints)
+                .map(|entry| (pass, entry))
+        };
+        let placed = |pass: LayoutPass| slot.placed_by == Some(pass);
         // This pass's own answer, or the other pass's — which may be read only
-        // where nothing below would have answered differently. Without that, a
-        // measure re-lays out a settled tree it could have read off the layout
-        // before it; with it, a value in flight, or an enter a measure declined
-        // to spend, is never handed across.
-        self.dense[self.get_dense_index(id)?]
-            .cached
-            .filter(|entry| {
-                entry.constraints == constraints
-                    && (entry.pass == self.pass || !entry.pass_dependent)
-            })
+        // where nothing below would have answered differently, and only where
+        // what it placed is what stands, since this pass's skip keeps that.
+        // Without it, a measure re-lays out a settled tree it could have read
+        // off the layout before it; with it, a value in flight, or an enter a
+        // measure declined to spend, is never handed across.
+        let across = |pass: LayoutPass| {
+            asked(pass).filter(|(_, entry)| !entry.pass_dependent && placed(pass))
+        };
+        match self.pass {
+            LayoutPass::Layout => asked(LayoutPass::Layout)
+                .filter(|_| placed(LayoutPass::Layout))
+                .or_else(|| across(LayoutPass::Measure)),
+            LayoutPass::Measure => {
+                asked(LayoutPass::Measure).or_else(|| across(LayoutPass::Layout))
+            }
+        }
     }
 
     /// The constraints a real layout last ran this widget under, whichever
@@ -2545,22 +2623,20 @@ impl Tree {
     /// on screen rather than about the pass asking.
     pub(crate) fn last_layout_constraints(&self, id: WidgetId) -> Option<Constraints> {
         self.dense[self.get_dense_index(id)?]
-            .cached
-            .filter(|entry| entry.pass == LayoutPass::Layout)
+            .laid_out
             .map(|entry| entry.constraints)
     }
 
-    /// The least `id` can be on each axis, as its last layout recorded it:
-    /// what a flex whose children do not fit takes it down to and no further.
-    /// Never more than the size it was laid out at, and that size itself for
-    /// a widget that recorded nothing — nothing shrinks it.
+    /// The least `id` can be on each axis, as the answer it gave last records
+    /// it: what a flex whose children do not fit takes it down to and no
+    /// further. Never more than the size it was laid out at, and that size
+    /// itself for a widget that recorded nothing — nothing shrinks it.
     ///
     /// Recorded with the size, so a layout that is skipped as clean still
     /// answers the minimum it recorded, and a layout that runs replaces it.
     pub fn minimum(&self, id: WidgetId) -> Option<Size> {
-        self.dense[self.get_dense_index(id)?]
-            .cached
-            .map(|entry| entry.minimum)
+        let slot = &self.dense[self.get_dense_index(id)?];
+        slot.entry(slot.answered?).map(|entry| entry.minimum)
     }
 
     pub fn cached_size(&self, id: WidgetId) -> Option<Size> {
@@ -2754,20 +2830,60 @@ mod tests {
     use super::*;
 
     /// Every widget in every tree is a slot, so a field on it is paid by all
-    /// of them. It held a second layout-cache entry that was always empty,
-    /// and gave it back: what a minimum costs is a size inside the one entry
-    /// there is, not a field of its own.
+    /// of them. It once held a second layout-cache entry that was always
+    /// empty, and gave it back: what a minimum costs is a size inside an
+    /// entry, not a field of its own.
     ///
-    /// It grew once on purpose since: from 192 to 216, when a widget's own
-    /// reach and its children's outset became four sides each instead of one
-    /// number (#757) — 24 bytes, with no padding left to absorb them.
+    /// It grew on purpose since: from 192 to 216, when a widget's own reach
+    /// and its children's outset became four sides each instead of one
+    /// number (#757) — 24 bytes, with no padding left to absorb them; and to
+    /// 272, when a measure's answer got an entry of its own beside the
+    /// layout's (#792, #794), so that a box in flight, which asks its children
+    /// both on every frame, stopped having each answer evict the other.
     #[test]
-    fn a_slot_is_no_larger_than_its_one_cache_entry_leaves_it() {
+    fn a_slot_is_no_larger_than_its_two_cache_entries_leave_it() {
         assert!(
-            size_of::<Slot>() <= 216,
+            size_of::<Slot>() <= 272,
             "a slot is {} bytes",
             size_of::<Slot>()
         );
+    }
+
+    /// A leaf whose least size and baseline follow the width it is offered.
+    struct Widthwise;
+
+    impl Widget for Widthwise {
+        fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+            let width = constraints.max_width;
+            ctx.set_minimum(Size::new(width / 2.0, 0.0));
+            let id = ctx.id();
+            ctx.tree().set_baseline(id, width / 4.0);
+            Size::new(width, 10.0)
+        }
+
+        fn paint(&self, _: &mut crate::renderer::PaintContext) {}
+    }
+
+    /// A skip answers with the least size and the baseline of the entry it
+    /// was read from, not of whichever pass ran last: a measure skipped after
+    /// a layout ran at other constraints is read by a parent measuring, which
+    /// takes both from it as it takes the size.
+    #[test]
+    fn a_skipped_measure_answers_its_own_minimum_and_baseline() {
+        let mut tree = Tree::new();
+        let id = tree.register(Box::new(Widthwise));
+        let (heading_to, now) = (
+            Constraints::new(0.0, 0.0, 200.0, 100.0),
+            Constraints::new(0.0, 0.0, 120.0, 100.0),
+        );
+        tree.measure_widget(id, heading_to);
+        tree.layout_widget(id, now);
+        assert_eq!(
+            tree.measure_widget(id, heading_to),
+            Some(Size::new(200.0, 10.0))
+        );
+        assert_eq!(tree.minimum(id), Some(Size::new(100.0, 0.0)));
+        assert_eq!(tree.baseline(id), Some(50.0));
     }
 
     /// A hover that flips and flips back within one event changed nothing, so
