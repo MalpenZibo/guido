@@ -350,6 +350,11 @@ container()
 - GIF
 - WebP
 
+A photo is shown the way its EXIF orientation says, as a browser shows it. A
+phone often stores a portrait photo's pixels landscape and records the turn in
+the metadata; such a photo is laid out portrait and drawn upright. JPEG, PNG and
+WebP carry the orientation; a GIF has none and is shown as stored.
+
 ### Vector Formats
 - SVG
 
