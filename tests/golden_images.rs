@@ -1746,6 +1746,94 @@ fn a_stretched_svg_is_rasterized_at_the_size_it_is_stretched_to() {
     assert_golden(NAME, adapter, pixels);
 }
 
+/// An SVG covering its box is rasterized only where the box shows it, and
+/// that part is exactly the middle of the whole (#813).
+///
+/// A circle crossed by two bars, 40 pixels a side, covering a 160 × 40 box:
+/// the box shows its middle quarter. Above, the SVG; below, an
+/// `ImageSource::Rgba` of the same document rasterized whole at the covering
+/// scale — 320 × 320, at the 2× SVG quality — by resvg directly, and its
+/// middle 80 rows cut out by hand. Not to the bit: tiny-skia's antialiasing
+/// of a curve moves by sixteenths of coverage with where the pixmap's edge
+/// falls, which is ten levels at most here. A crop one raster row out of place
+/// is a hundred, at the off-centre bar, which is there for that.
+///
+/// The SVG's raster is the 320 × 80 it shows rather than the 320 × 320 it is
+/// cut from: past the line an SVG is drawn inside the frame, so the worker's,
+/// and waiting for it needs `testing`.
+#[cfg(all(feature = "svg", feature = "testing"))]
+#[test]
+fn a_covering_svg_is_the_middle_of_the_same_svg_rasterized_whole() {
+    const NAME: &str = "a_covering_svg_is_the_middle_of_the_same_svg_rasterized_whole";
+    const TOLERANCE: u8 = 12;
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let svg: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#f27340"/><rect x="2" y="17" width="36" height="2" fill="#357ac9"/><rect x="8" y="22" width="24" height="1" fill="#1d1d24"/></svg>"##;
+
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())
+        .expect("the SVG parses");
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(320, 320).expect("a 320-pixel pixmap");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(8.0, 8.0),
+        &mut pixmap.as_mut(),
+    );
+    let middle: Vec<u8> = pixmap.pixels()[120 * 320..200 * 320]
+        .iter()
+        .flat_map(|pixel| {
+            let c = pixel.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+
+    let tile = |source: ImageSource, fit: ContentFit| {
+        box_of(160.0, 40.0)
+            .background(Color::rgb(0.92, 0.92, 0.88))
+            .child(image(source).content_fit(fit))
+    };
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(tile(
+            ImageSource::SvgBytes(svg.to_vec().into()),
+            ContentFit::Cover,
+        ))
+        .child(tile(
+            ImageSource::Rgba {
+                width: 320,
+                height: 80,
+                pixels: middle.into(),
+            },
+            ContentFit::Fill,
+        ));
+    let pixels = render_with_own_renderer(ctx, view, (180.0, 110.0), 1.0, BACKDROP);
+
+    let pixel = |x: u32, y: u32| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    let apart = |x: u32, y: u32| {
+        pixel(x, y)
+            .iter()
+            .zip(pixel(x, y + 50))
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0)
+    };
+    let (worst, at) = (10..50)
+        .flat_map(|y| (10..170).map(move |x| (x, y)))
+        .map(|(x, y)| (apart(x, y), (x, y)))
+        .max()
+        .unwrap();
+    assert!(
+        worst <= TOLERANCE,
+        "the covering SVG is {worst} levels from the middle of the same SVG rasterized \
+         whole at {at:?}: svg {:?}, raster {:?}",
+        pixel(at.0, at.1),
+        pixel(at.0, at.1 + 50),
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
 /// An 80 × 240 raster, past the line an SVG is drawn inside the frame below:
 /// it is the worker's, and waiting for the worker needs `testing`.
 #[cfg(all(feature = "svg", feature = "testing"))]
