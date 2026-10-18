@@ -2091,21 +2091,13 @@ impl Widget for Container {
         self.seed_animations(ctx, id);
 
         let lengths = self.read_box_lengths(ctx, id, constraints);
-        let child = self.child_layout(ctx, &lengths, constraints);
+        let mut child = self.child_layout(ctx, &lengths, constraints);
         let padding = lengths.padding;
 
-        let children = self.children_source.reconcile_and_get(ctx.tree());
-
-        // A layout reads its own reactive properties — Flex's spacing and
-        // alignment, whatever a user-written `Layout` declares — and those
-        // reads belong to this container, which is whose scope the call is
-        // already inside.
-        let content_size = if !children.is_empty() {
-            self.layout
-                .layout(ctx, children, child.constraints, child.origin)
-        } else {
-            Size::zero()
-        };
+        self.children_source.reconcile_and_get(ctx.tree());
+        let (content_size, in_flight) =
+            self.lay_out_content(ctx, id, &lengths, &mut child, constraints);
+        let children = self.children_source.get();
 
         // A box sits on the baseline of its content, as CSS has it: without
         // this a styled label reports nothing, and a parent aligning on the
@@ -2133,13 +2125,11 @@ impl Widget for Container {
             sd.scroll_state.clamp_offsets();
         }
 
-        self.update_size_targets(ctx, id, &lengths, content_size);
-
-        let size = self.resolve_size(ctx, &lengths, constraints, content_size);
+        let size = self.resolve_size(ctx, &lengths, constraints, content_size, in_flight);
         // What the layout recorded its children can be arranged in, or — a
         // layout that says nothing — the size they were.
         let content_least = ctx.minimum().unwrap_or(content_size);
-        ctx.set_minimum(self.least_size(&lengths, content_least, size));
+        ctx.set_minimum(self.least_size(&lengths, content_least, size, in_flight));
 
         self.layout_scrollbar_containers(ctx, id, size, lengths.border);
 

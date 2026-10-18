@@ -83,6 +83,12 @@ impl Container {
             return;
         }
         let frame_instant = ctx.tree_ref().frame_instant();
+        // A measure has already said where the content is heading this frame
+        // — an ancestor's, at the box the ancestor is heading to — so a size
+        // that follows it keeps that target, rather than one taken from the
+        // content laid out in a box the ancestor is only passing through.
+        // Taking that one restarted the transition on every frame.
+        let measured = ctx.measured_this_frame();
         let Some(ref mut anims) = self.anims else {
             return;
         };
@@ -119,7 +125,7 @@ impl Container {
                 } else {
                     anim.set_immediate(ctx, target);
                 }
-            } else if (target - *anim.target()).abs() > 0.001 {
+            } else if !(measured && exact.is_none()) && (target - *anim.target()).abs() > 0.001 {
                 anim.animate_to(target, frame_instant);
                 retargeted = true;
             }

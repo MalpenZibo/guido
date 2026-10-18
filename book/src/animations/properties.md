@@ -169,8 +169,26 @@ container()
 ```
 
 A size follows the content it holds as well as the length declared here, so the
-animation is over the resolved extent. These are the one pair that cannot carry
-a timeline: they declare a `Length`, which is not an animatable value in itself.
+animation is over the resolved extent. What the box holds is laid out in the
+box as it is on each frame, as CSS's `interpolate-size` has it, so a centred
+child stays centred while a box that sizes to its content grows or shrinks
+toward it. Content that is not [`natural()`](../concepts/layout.md#natural-size)
+is laid out in that box too, and a label in it may wrap differently until the
+box arrives. While it does, the box keeps the size its animation gives it on
+both axes, even one with nowhere to go, and the content runs past it — cut off
+only under `Overflow::Hidden` — rather than the box jumping to fit a line it
+only wraps onto on the way.
+
+The size a box heads for is where its content is heading, not where it is on
+this frame: a box around a child that animates its own width with the same
+transition grows and shrinks with it, frame for frame, while the child is
+drawn at its in-flight size. A box of this kind inside another heads, too,
+for where its content will be once the outer box arrives, rather than for the
+width the outer box is passing through, so the two run one transition each
+and neither jumps when it lands; a box that arrives before what it holds stays
+where it arrived while the rest catches up. These are the one pair that cannot
+carry a timeline: they declare a `Length`, which is not an animatable value in
+itself.
 
 ## Position
 
