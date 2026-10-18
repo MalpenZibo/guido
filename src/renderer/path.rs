@@ -134,7 +134,7 @@ impl Path {
     /// per quarter turn or less, and closed once the sweep is a full turn.
     pub(crate) fn arc(center: Point, radius: f32, start: f32, sweep: f32) -> Self {
         let ring = sweep.abs() >= 360.0;
-        let sweep = if ring { 360.0 } else { sweep };
+        let sweep = sweep.clamp(-360.0, 360.0);
         let at = |angle: f32| {
             let (sin, cos) = angle.to_radians().sin_cos();
             Point::new(center.x + radius * sin, center.y - radius * cos)
@@ -527,6 +527,24 @@ mod tests {
             "four quarters, a move and a close"
         );
         assert_eq!(ring.elements().last(), Some(&PathElement::Close));
+    }
+
+    /// A full turn or more keeps its sweep's direction, so a dashed ring lays
+    /// its dashes the same way round as the arc a hair short of it.
+    #[test]
+    fn a_full_turn_keeps_its_sweep_s_direction() {
+        let first_quarter_ends = |sweep: f32| {
+            let PathElement::CubicTo { to, .. } =
+                Path::arc(Point::new(0.0, 0.0), 10.0, 0.0, sweep).elements()[1]
+            else {
+                panic!("an arc is cubics");
+            };
+            (to.x.round(), to.y.round())
+        };
+        assert_eq!(first_quarter_ends(-359.9), (-10.0, 0.0));
+        assert_eq!(first_quarter_ends(-360.0), (-10.0, 0.0), "nine o'clock");
+        assert_eq!(first_quarter_ends(-400.0), (-10.0, 0.0), "nine o'clock");
+        assert_eq!(first_quarter_ends(360.0), (10.0, 0.0), "three o'clock");
     }
 
     #[test]

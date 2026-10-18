@@ -838,6 +838,115 @@ fn shadow_variations() {
     );
 }
 
+/// The side of a card in `translucent_cards`, and how far apart they stand.
+const TRANSLUCENT_CARD: (f32, f32) = (80.0, 90.0);
+const TRANSLUCENT_STEP: f32 = 110.0;
+const TRANSLUCENT_PADDING: f32 = 30.0;
+const TRANSLUCENT_SIZE: (f32, f32) = (470.0, 160.0);
+
+/// Four translucent cards over bright bars, each casting its outer shadows by
+/// one of the paths that draws them, or none when `shadowed` is false: a black
+/// shadow on the fill's own instance; a coloured glow pulled in by a negative
+/// spread; a second shadow, drawn by an instance of its own under the fill;
+/// and a merged shape with a shadow and a glow, drawn by `fs_merged` and again
+/// for the glow alone.
+fn translucent_cards(shadowed: bool) -> Container {
+    let glass = Color::rgba(0.02, 0.02, 0.03, 0.6);
+    let drop = Shadow::new((0.0, 10.0), 18.0, 0.0, Color::BLACK.with_alpha(0.5));
+    let glow = Shadow::new((0.0, 0.0), 14.0, -4.0, Color::rgba(0.95, 0.25, 0.2, 0.8));
+    let shadows = |list: Shadows| if shadowed { list } else { Shadows::none() };
+    let (w, h) = TRANSLUCENT_CARD;
+    let card = |list: Shadows| {
+        swatch(w, h, glass)
+            .corners(Corners::squircle(20.0))
+            .shadow(shadows(list))
+    };
+    let merged = container()
+        .layout(Flex::row())
+        .merge_children(MERGE_DISTANCE)
+        .shadow(shadows(Shadows::new([drop, glow])))
+        .children([0, 1].map(|_| swatch(w / 2.0, h, glass).corners(20.0)));
+
+    let bars: Vec<AnyWidget> = (0..47)
+        .map(|i| {
+            let colour = [
+                Color::rgb(0.98, 0.86, 0.25),
+                Color::rgb(0.96, 0.96, 0.96),
+                Color::rgb(0.25, 0.82, 0.92),
+            ][i % 3];
+            swatch(10.0, TRANSLUCENT_SIZE.1, colour).into_any()
+        })
+        .collect();
+    container()
+        .width(TRANSLUCENT_SIZE.0)
+        .height(TRANSLUCENT_SIZE.1)
+        .layout(ZStack::new())
+        .child(container().layout(Flex::row()).children(bars))
+        .child(
+            container()
+                .padding(TRANSLUCENT_PADDING)
+                .layout(Flex::row().spacing(TRANSLUCENT_STEP - w))
+                .child(card(drop.into()))
+                .child(card(glow.into()))
+                .child(card(Shadows::new([glow, drop])))
+                .child(merged),
+        )
+}
+
+/// An outer shadow is drawn outside its box and nowhere under it, as CSS
+/// draws a `box-shadow` outside the border box alone: a translucent fill
+/// shows the bars behind it exactly as it does with no shadow at all.
+///
+/// Every path an outer shadow is drawn by — the fill's own instance, a further
+/// shadow's instance of its own, and a merged shape's — is held to the cards
+/// without shadows over the whole of each card but a band along its edge, at
+/// every pixel and exactly. The golden keeps the shadows outside.
+#[test]
+fn an_outer_shadow_is_drawn_outside_a_translucent_fill() {
+    const NAME: &str = "an_outer_shadow_is_drawn_outside_a_translucent_fill";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let render = |shadowed: bool| {
+        render_with_own_renderer(
+            ctx,
+            translucent_cards(shadowed),
+            TRANSLUCENT_SIZE,
+            1.0,
+            BACKDROP,
+        )
+    };
+    let (shadowed, bare) = (render(true), render(false));
+
+    // Ten pixels in from every side: past the edge's antialiasing, and inside
+    // a squircle's corner, which bulges further out than a circle's.
+    let inset = 10;
+    let (w, h) = (TRANSLUCENT_CARD.0 as u32, TRANSLUCENT_CARD.1 as u32);
+    let top = TRANSLUCENT_PADDING as u32;
+    for card in 0..4 {
+        let left = TRANSLUCENT_PADDING as u32 + card * TRANSLUCENT_STEP as u32;
+        for y in top + inset..top + h - inset {
+            for x in left + inset..left + w - inset {
+                let (drawn, expected) = (rgba(&shadowed, x, y), rgba(&bare, x, y));
+                assert_eq!(
+                    drawn, expected,
+                    "card {card} at ({x}, {y}) is {drawn:?} with its shadows and \
+                     {expected:?} without: an outer shadow shows through its fill"
+                );
+            }
+        }
+        // And the shadows are drawn at all, below each card.
+        let (x, y) = (left + w / 2, top + h + 4);
+        assert_ne!(
+            rgba(&shadowed, x, y),
+            rgba(&bare, x, y),
+            "card {card} casts nothing below it at ({x}, {y})"
+        );
+    }
+
+    assert_golden(NAME, adapter, shadowed);
+}
+
 /// A shadow draws nothing past the reach it reports.
 ///
 /// `Shadow::extent` is what a damage rect and a cull rect grow by. The shader

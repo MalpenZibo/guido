@@ -24,6 +24,12 @@ to the right, `(0.0, -6.0)` throws it upward. Blur is the softness of the edge.
 Spread grows the shadow in every direction before it is blurred. The colour is a
 colour, alpha included — a shadow does not have to be black.
 
+A shadow is drawn outside the box and never under it, as a browser draws a
+`box-shadow`. With an opaque background that makes no difference; with a
+translucent one it does: the box shows what is behind it, exactly as it would
+with no shadow, and a coloured glow lights up the box's surroundings rather
+than tinting the box.
+
 ## Inset shadows
 
 `.inset()` casts the same shadow inside the box, as CSS's `inset` keyword does:

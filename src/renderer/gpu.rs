@@ -234,11 +234,11 @@ pub const SHAPE_ARC_SQUARE: u32 = 3;
 /// [`ShapeInstance::merged`].
 pub const SHAPE_MERGED: u32 = 4;
 
-/// Set in [`ShapeInstance::shape_kind`] on a merged shape drawn for its
-/// shadow alone: a merging container that casts more than one outer shadow
-/// draws the merged shape once per further shadow, under it, as a box draws
-/// a rect per further shadow.
-pub const MERGED_SHADOW_ONLY: u32 = 1 << 9;
+/// Set in [`ShapeInstance::shape_kind`] on a shape drawn for its shadow
+/// alone: a box, or a merging container, that casts more than one outer
+/// shadow draws its shape once per further shadow, under it. The shape is not
+/// drawn, but the shader reads its fill to leave the shadow out from under it.
+pub const SHADOW_ONLY: u32 = 1 << 9;
 
 /// The kind in [`ShapeInstance::shape_kind`], without the bits above it.
 pub fn kind_of(shape_kind: u32) -> u32 {
@@ -645,7 +645,7 @@ mod tests {
             ("SHAPE_ARC_SQUARE", SHAPE_ARC_SQUARE),
             ("SHADOW_INSET", SHADOW_INSET),
             ("SHAPE_MERGED", SHAPE_MERGED),
-            ("MERGED_SHADOW_ONLY", MERGED_SHADOW_ONLY),
+            ("SHADOW_ONLY", SHADOW_ONLY),
         ] {
             assert!(
                 shader.contains(&format!("const {name}: u32 = {value}u;")),
