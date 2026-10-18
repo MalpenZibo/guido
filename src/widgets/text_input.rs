@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
-use unicode_segmentation::GraphemeCursor;
+use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 use zeroize::Zeroizing;
 
 use crate::clock::{EventInstant, FrameInstant};
@@ -182,11 +182,38 @@ impl History {
     }
 }
 
-/// Whether a character stands between words rather than in one. The one rule
-/// for both Ctrl+arrow and a double click, so the two agree about where a word
-/// ends.
-fn separates_words(c: char) -> bool {
-    c.is_whitespace()
+/// What a piece of [`word_segments`] is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Piece {
+    /// It holds a letter or a digit.
+    Word,
+    /// It is all whitespace.
+    Space,
+    /// Anything else: punctuation, a symbol, an emoji.
+    Punctuation,
+}
+
+/// `text` cut where Unicode's word segmentation (UAX #29) cuts it, as GTK, Qt
+/// and the browsers do: each piece as a range of characters, and what it is.
+/// `example.com` and `don't` are one word each; `/usr/local` is two, with a
+/// slash before each.
+///
+/// The one rule for both Ctrl+arrow and a double click, so the two agree about
+/// where a word ends.
+fn word_segments(text: &str) -> impl Iterator<Item = (Range<usize>, Piece)> + '_ {
+    let mut end = 0;
+    text.split_word_bounds().map(move |segment| {
+        let start = end;
+        end += segment.chars().count();
+        let piece = if segment.chars().any(char::is_alphanumeric) {
+            Piece::Word
+        } else if segment.chars().all(char::is_whitespace) {
+            Piece::Space
+        } else {
+            Piece::Punctuation
+        };
+        (start..end, piece)
+    })
 }
 
 /// What a selection drag extends by, which is decided by the press that began
@@ -1303,7 +1330,10 @@ impl<C: Content> TextInput<C> {
         if inside { self.step(at, false) } else { at }
     }
 
-    /// Find word boundary in given direction
+    /// Where Ctrl+arrow from `start` lands: the end of the word it is in or
+    /// the next one going right, the start of the word it is in or the one
+    /// before going left, past whatever spaces and punctuation lie between —
+    /// or the edge, when there is no word left.
     fn find_word_boundary(&self, start: usize, direction: i32) -> usize {
         let len = self.cached_char_count;
 
@@ -1313,53 +1343,20 @@ impl<C: Content> TextInput<C> {
             return if direction < 0 { 0 } else { len };
         }
 
-        if direction < 0 {
-            // Move left - collect only the prefix up to cursor (not entire string)
-            if start == 0 {
-                return 0;
+        self.content.with_text(|text| {
+            let mut words = word_segments(text)
+                .filter_map(|(range, piece)| (piece == Piece::Word).then_some(range));
+            if direction < 0 {
+                words
+                    .take_while(|word| word.start < start)
+                    .last()
+                    .map_or(0, |word| word.start)
+            } else {
+                words
+                    .find(|word| word.end > start)
+                    .map_or(len, |word| word.end)
             }
-
-            // Collect characters before cursor position
-            let prefix: Vec<char> = self.content.with_text(|t| t.chars().take(start).collect());
-            let mut pos = prefix.len() - 1;
-
-            // Skip whitespace going backwards
-            while pos > 0 && separates_words(prefix[pos]) {
-                pos -= 1;
-            }
-            // Skip word characters going backwards
-            while pos > 0 && !separates_words(prefix[pos - 1]) {
-                pos -= 1;
-            }
-            pos
-        } else {
-            // Move right - use iterator directly, no allocation
-            if start >= len {
-                return len;
-            }
-
-            self.content.with_text(|text| {
-                let mut pos = start;
-                let mut chars = text.chars().skip(start).peekable();
-
-                // Skip word characters
-                while let Some(&c) = chars.peek() {
-                    if separates_words(c) {
-                        break;
-                    }
-                    chars.next();
-                    pos += 1;
-                }
-                // Skip whitespace
-                for c in chars {
-                    if !separates_words(c) {
-                        break;
-                    }
-                    pos += 1;
-                }
-                pos.min(len)
-            })
-        }
+        })
     }
 
     /// Extend the selection a drag is making to the pointer at `x`, and say
@@ -1405,23 +1402,28 @@ impl<C: Content> TextInput<C> {
         under.min(self.cached_char_count.saturating_sub(1))
     }
 
-    /// The run of characters around `at` that a double click selects: the
-    /// word it is part of, or the whitespace between two words — by the rule
-    /// Ctrl+arrow moves by, [`separates_words`]. All of a hidden text, whose
-    /// words are part of what is hidden.
+    /// The piece of the text around `at` that a double click selects, by the
+    /// rule Ctrl+arrow moves by, [`word_segments`]: the word it is part of, or
+    /// the spaces it is on, or the whole run of punctuation — which Unicode
+    /// cuts one mark at a time. All of a hidden text, whose words are part of
+    /// what is hidden.
     fn word_around(&self, at: usize) -> (usize, usize) {
         if C::HIDDEN {
             return (0, self.cached_char_count);
         }
-        let byte = self.char_to_byte_index(at);
         self.content.with_text(|text| {
-            let Some(under) = text[byte..].chars().next() else {
-                return (at, at);
-            };
-            let same = |c: &char| separates_words(*c) == separates_words(under);
-            let before = text[..byte].chars().rev().take_while(same).count();
-            let after = text[byte..].chars().take_while(same).count();
-            (at - before, at + after)
+            let mut run: Option<(Range<usize>, Piece)> = None;
+            for (range, piece) in word_segments(text) {
+                match &mut run {
+                    Some((run, Piece::Punctuation)) if piece == Piece::Punctuation => {
+                        run.end = range.end;
+                    }
+                    Some((run, _)) if run.contains(&at) => break,
+                    _ => run = Some((range, piece)),
+                }
+            }
+            run.filter(|(run, _)| run.contains(&at))
+                .map_or((at, at), |(run, _)| (run.start, run.end))
         })
     }
 
