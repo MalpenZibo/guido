@@ -182,20 +182,37 @@ impl History {
     }
 }
 
+/// What a piece of [`word_segments`] is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Piece {
+    /// It holds a letter or a digit.
+    Word,
+    /// It is all whitespace.
+    Space,
+    /// Anything else: punctuation, a symbol, an emoji.
+    Punctuation,
+}
+
 /// `text` cut where Unicode's word segmentation (UAX #29) cuts it, as GTK, Qt
-/// and the browsers do: each piece as a range of characters, and whether it is
-/// a word — whether it holds a letter or a digit — rather than spaces or
-/// punctuation. `example.com` and `don't` are one word each; `/usr/local` is
-/// two, with a slash before each.
+/// and the browsers do: each piece as a range of characters, and what it is.
+/// `example.com` and `don't` are one word each; `/usr/local` is two, with a
+/// slash before each.
 ///
 /// The one rule for both Ctrl+arrow and a double click, so the two agree about
 /// where a word ends.
-fn word_segments(text: &str) -> impl Iterator<Item = (Range<usize>, bool)> + '_ {
+fn word_segments(text: &str) -> impl Iterator<Item = (Range<usize>, Piece)> + '_ {
     let mut end = 0;
     text.split_word_bounds().map(move |segment| {
         let start = end;
         end += segment.chars().count();
-        (start..end, segment.chars().any(char::is_alphanumeric))
+        let piece = if segment.chars().any(char::is_alphanumeric) {
+            Piece::Word
+        } else if segment.chars().all(char::is_whitespace) {
+            Piece::Space
+        } else {
+            Piece::Punctuation
+        };
+        (start..end, piece)
     })
 }
 
@@ -1327,7 +1344,8 @@ impl<C: Content> TextInput<C> {
         }
 
         self.content.with_text(|text| {
-            let mut words = word_segments(text).filter_map(|(range, word)| word.then_some(range));
+            let mut words = word_segments(text)
+                .filter_map(|(range, piece)| (piece == Piece::Word).then_some(range));
             if direction < 0 {
                 words
                     .take_while(|word| word.start < start)
@@ -1386,16 +1404,26 @@ impl<C: Content> TextInput<C> {
 
     /// The piece of the text around `at` that a double click selects, by the
     /// rule Ctrl+arrow moves by, [`word_segments`]: the word it is part of, or
-    /// the spaces or the punctuation it is on. All of a hidden text, whose
-    /// words are part of what is hidden.
+    /// the spaces it is on, or the whole run of punctuation — which Unicode
+    /// cuts one mark at a time. All of a hidden text, whose words are part of
+    /// what is hidden.
     fn word_around(&self, at: usize) -> (usize, usize) {
         if C::HIDDEN {
             return (0, self.cached_char_count);
         }
         self.content.with_text(|text| {
-            word_segments(text)
-                .find(|(range, _)| range.contains(&at))
-                .map_or((at, at), |(range, _)| (range.start, range.end))
+            let mut run: Option<(Range<usize>, Piece)> = None;
+            for (range, piece) in word_segments(text) {
+                match &mut run {
+                    Some((run, Piece::Punctuation)) if piece == Piece::Punctuation => {
+                        run.end = range.end;
+                    }
+                    Some((run, _)) if run.contains(&at) => break,
+                    _ => run = Some((range, piece)),
+                }
+            }
+            run.filter(|(run, _)| run.contains(&at))
+                .map_or((at, at), |(run, _)| (run.start, run.end))
         })
     }
 

@@ -1599,6 +1599,24 @@ fn a_double_click_on_punctuation_selects_only_the_punctuation() {
     );
 }
 
+/// Unicode cuts a run of punctuation into one piece per mark, but a double
+/// click on it selects the whole run, as it does a run of spaces.
+#[test]
+fn a_double_click_on_a_run_of_punctuation_selects_the_run() {
+    let mut on_the_dots = vec![plain(Key::Home)];
+    on_the_dots.extend([plain(Key::Right); 5]);
+    assert_eq!(
+        double_click_then_type("wait... what", &on_the_dots, 1.0),
+        "waitX what"
+    );
+    let mut on_the_marks = vec![plain(Key::Home)];
+    on_the_marks.extend([plain(Key::Right); 3]);
+    assert_eq!(
+        double_click_then_type("hi!! there", &on_the_marks, 1.0),
+        "hiX there"
+    );
+}
+
 /// Ctrl+Right stops at the end of the next word and Ctrl+Left at the start of
 /// the one before, stepping over the punctuation between them as the browsers
 /// do — so a path is crossed a part at a time.
