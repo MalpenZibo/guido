@@ -1,5 +1,5 @@
 use super::owner::{child_scope, register_effect};
-use super::runtime::{EffectId, run_effect_by_id, with_runtime};
+use super::runtime::{EffectId, batch, run_effect_by_id, with_runtime};
 
 /// Run `f` now, and again whenever a signal it read changes.
 ///
@@ -60,8 +60,10 @@ where
     let id = with_runtime(|rt| rt.allocate_effect(Box::new(f), scope, memo));
 
     // Initial run establishes dependencies. Runs outside the runtime borrow, so
-    // the callback can freely write signals or create new ones.
-    run_effect_by_id(id);
+    // the callback can freely write signals or create new ones. Batched, so
+    // the effects its writes wake run after it, once it is subscribed, as they
+    // do after a later run.
+    batch(|| run_effect_by_id(id));
 
     // Register with the current owner for automatic cleanup
     register_effect(id);
@@ -133,6 +135,57 @@ mod tests {
             11,
             "write inside effect A must re-run effect B"
         );
+    }
+
+    /// An effect's first run is held as its later runs are: an effect its
+    /// write wakes runs after it, by which time it is subscribed to what it
+    /// read. It used to run inside, so a chain writing back what the first
+    /// run read found nothing subscribed to it (#811).
+    #[test]
+    fn a_first_run_sees_what_the_effects_it_woke_wrote_back() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let a = create_signal(0);
+        let b = create_signal(0);
+        create_effect(move || a.set(b.get()));
+
+        let seen = Rc::new(Cell::new(-1));
+        let seen_by_e = seen.clone();
+        create_effect(move || {
+            seen_by_e.set(a.get());
+            b.set(5);
+        });
+
+        assert_eq!(a.get_untracked(), 5);
+        assert_eq!(seen.get(), 5, "the effect ran again on the write back");
+    }
+
+    /// The same pair made by another effect's run, first outside a flush and
+    /// then inside one: the inner first run is held until the outer run ends.
+    #[test]
+    fn a_first_run_nested_in_another_sees_the_write_back() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let trigger = create_signal(0);
+        let seen = Rc::new(Cell::new(-1));
+        let seen_by_e = seen.clone();
+        create_effect(move || {
+            let start = trigger.get();
+            let a = create_signal(start);
+            let b = create_signal(start);
+            create_effect(move || a.set(b.get()));
+            let seen_by_e = seen_by_e.clone();
+            create_effect(move || {
+                seen_by_e.set(a.get());
+                b.set(start + 5);
+            });
+        });
+        assert_eq!(seen.get(), 5, "outside a flush");
+
+        trigger.set(10);
+        assert_eq!(seen.get(), 15, "inside a flush");
     }
 
     /// Signals created inside an effect must be fully reactive. Previously
