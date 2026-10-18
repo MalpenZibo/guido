@@ -571,6 +571,92 @@ fn every_lock_cover_holds_the_handle_of_its_own_surface() {
     assert_eq!(seen.borrow()[&external], cover_of(&app, external));
 }
 
+/// A lock with one cover, whose handle comes back for the test to call.
+fn lock_keeping_the_cover_handle(app: &mut Headless) -> (OutputId, SurfaceHandle) {
+    let laptop = app.connect_output("eDP-1");
+    let handle = Rc::new(RefCell::new(None));
+    let kept = handle.clone();
+    lock_session(move |_: OutputInfo| {
+        *kept.borrow_mut() = Some(expect_context::<SurfaceHandle>());
+        container()
+    });
+    app.step();
+    app.grant_lock();
+    assert_eq!(app.step(), None, "the grant is not the end of the app");
+    let handle = handle.borrow_mut().take().expect("the cover was built");
+    (laptop, handle)
+}
+
+/// #804: a lock screen that closes its own cover — a dismiss button, or a
+/// component written for ordinary surfaces — leaves it where it is. A cover
+/// lasts as long as the lock; `unlock_session` is the way out.
+///
+/// Closing it used to count as the last surface closing, so the application
+/// quit with the session still locked, and ext-session-lock-v1 keeps a session
+/// locked when the client holding it dies.
+#[test]
+fn closing_a_lock_cover_leaves_it_covering_its_output() {
+    let Some(mut app) = headless() else { return };
+    let (laptop, handle) = lock_keeping_the_cover_handle(&mut app);
+    let cover = cover_of(&app, laptop);
+
+    handle.close();
+
+    assert_eq!(app.step(), None, "the application keeps running");
+    assert!(app.is_locked(), "the session is still locked");
+    assert_eq!(lock_state().get_untracked(), LockState::Locked);
+    assert_eq!(app.surfaces_live(), [cover], "the output keeps its cover");
+    assert!(
+        app.surfaces_destroyed().is_empty(),
+        "and the compositor was told to destroy nothing"
+    );
+}
+
+/// A cover whose tree closes it while it is still being built — a component
+/// that dismisses itself on its first run — is a cover already, and stays.
+#[test]
+fn a_lock_cover_closed_while_it_is_built_still_covers_its_output() {
+    let Some(mut app) = headless() else { return };
+    let laptop = app.connect_output("eDP-1");
+    lock_session(|_: OutputInfo| {
+        expect_context::<SurfaceHandle>().close();
+        container()
+    });
+    app.step();
+    app.grant_lock();
+
+    assert_eq!(app.step(), None, "the application keeps running");
+    assert!(app.is_locked());
+    assert_eq!(app.surfaces_live(), [cover_of(&app, laptop)]);
+}
+
+/// A close that reaches a cover the unlock already took away — from a handle
+/// that outlived it — is a close of nothing. An application whose only
+/// surfaces were covers idles after unlocking, as it would without the close.
+#[test]
+fn closing_a_lock_cover_after_the_unlock_is_harmless() {
+    let Some(mut app) = headless() else { return };
+    let (laptop, handle) = lock_keeping_the_cover_handle(&mut app);
+    let cover = cover_of(&app, laptop);
+    unlock_session();
+    assert_eq!(app.step(), None, "unlocking is not the end of the app");
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [cover],
+        "the unlock took the cover"
+    );
+
+    handle.close();
+
+    assert_eq!(app.step(), None, "the application keeps running");
+    assert!(!app.is_locked());
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [cover],
+        "and the compositor was told about it once"
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Marker(u32);
 

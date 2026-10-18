@@ -316,19 +316,26 @@ struct SurfaceDefinition {
 /// FIRST — its wgpu `Surface<'static>` borrows the wl_surface through
 /// erased raw pointers, so the GPU surface must die before the Wayland
 /// surface it points at.
+///
+/// Returns whether the application still held the surface.
 fn close_surface_now<P: Platform>(
     id: SurfaceId,
     surface_manager: &mut SurfaceManager,
     wayland_state: &mut P,
     tree: &mut Tree,
-) {
+) -> bool {
     surface::mark_popup_dismissed(id);
-    if let Some(managed) = surface_manager.remove(id) {
-        // Unregister the widget tree and its signal subscribers before the
-        // drop disposes the reactive owner
-        surface_manager::teardown_widget_subtree(tree, managed.widget_id);
-    }
+    let held = match surface_manager.remove(id) {
+        Some(managed) => {
+            // Unregister the widget tree and its signal subscribers before the
+            // drop disposes the reactive owner
+            surface_manager::teardown_widget_subtree(tree, managed.widget_id);
+            true
+        }
+        None => false,
+    };
     wayland_state.destroy_surface(id);
+    held
 }
 
 /// Resolve the reservation policy against what the surface is anchored to and
@@ -418,8 +425,9 @@ fn process_surface_commands<P: Platform>(
                 for child in wayland_state.popup_descendants_bottom_up(id) {
                     close_surface_now(child, surface_manager, wayland_state, tree);
                 }
-                close_surface_now(id, surface_manager, wayland_state, tree);
-                closed_surface = true;
+                // A close that finds nothing — a lock cover the unlock already
+                // took — is not the last surface closing.
+                closed_surface |= close_surface_now(id, surface_manager, wayland_state, tree);
             }
             SurfaceCommand::SetLayer { id, layer } => {
                 with_surface(wayland_state, id, |s| s.set_layer(layer));
