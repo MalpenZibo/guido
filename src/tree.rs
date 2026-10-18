@@ -308,10 +308,59 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
 }
 
 /// How far a widget paints past its box: its own reach or what its children
-/// add, whichever is further — the latter spread by the layer that holds it,
-/// which holds what they draw as well as what the widget does.
-fn reach_of(own: Outsets, children_outset: Outsets, layer_spread: f32) -> Outsets {
-    own.max(children_outset + Outsets::all(layer_spread))
+/// add, whichever is further — the latter carried as the widget carries what
+/// they draw.
+fn reach_of(own: Outsets, children_outset: Outsets, carry: Carry) -> Outsets {
+    own.max(carry.apply(children_outset))
+}
+
+/// How a widget carries what its children draw outside its box into its
+/// parent's space: spread by the blur of the layer that holds it, then moved
+/// by its transform and its slide, which draw the children with the widget.
+///
+/// A bound on what the transform does to any overhang rather than the
+/// transform itself, because the overhang moves on a schedule of its own — a
+/// child publishes, and the walk upward has the tree and no widget to ask.
+/// `reach + gain · overhang`, side by side, is what a translate and a slide
+/// do exactly; a scale grows an overhang by its factor, and a turn can land
+/// one side's overhang on any other, so it is taken as the widest.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Carry {
+    /// How far past what the children draw the layer's blur spreads it.
+    pub(crate) spread: f32,
+    /// The most the transform can stretch a distance by.
+    pub(crate) gain: f32,
+    /// Whether the transform can carry one side's overhang onto another.
+    pub(crate) turns: bool,
+    /// Where the transform and the slide can take the widget's bare box.
+    pub(crate) reach: Outsets,
+}
+
+impl Carry {
+    /// Children drawn where they stand: nearly every widget.
+    pub(crate) const NONE: Self = Self {
+        spread: 0.0,
+        gain: 1.0,
+        turns: false,
+        reach: Outsets::ZERO,
+    };
+
+    /// Where an overhang of `overhang` past the box lands once carried.
+    ///
+    /// None at all is what the widget's own reach already answers: the box,
+    /// blurred and moved, holds whatever its children draw inside it.
+    fn apply(self, overhang: Outsets) -> Outsets {
+        if overhang == Outsets::ZERO {
+            return Outsets::ZERO;
+        }
+        let spread = overhang + Outsets::all(self.spread);
+        let spread = if self.turns {
+            Outsets::all(spread.widest())
+        } else {
+            spread
+        };
+        spread * self.gain + self.reach
+    }
 }
 
 /// Whether a child that reached `old` and now reaches `new` can have moved a
@@ -641,10 +690,10 @@ pub struct Tree {
     /// [`Tree::set_merge_reach`]. A map rather than a slot field, for the
     /// reason `positions` is one.
     merge_reaches: rustc_hash::FxHashMap<WidgetId, f32>,
-    /// How far each widget whose layer blurs spreads what it and its children
-    /// draw — see [`Tree::set_own_paint_reach_and_spread`]. A map rather than
-    /// a slot field, for the reason `positions` is one.
-    layer_spreads: rustc_hash::FxHashMap<WidgetId, f32>,
+    /// How each widget that blurs, transforms or slides carries what its
+    /// children draw — see [`Tree::set_own_paint_reach_and_carry`]. A map
+    /// rather than a slot field, for the reason `positions` is one.
+    carries: rustc_hash::FxHashMap<WidgetId, Carry>,
     /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
     /// surface without it keeps its focus, and a field holding that focus
     /// draws no caret until the keyboard is back (#726).
@@ -688,7 +737,7 @@ impl Tree {
             tab_stops: rustc_hash::FxHashMap::default(),
             positions: rustc_hash::FxHashMap::default(),
             merge_reaches: rustc_hash::FxHashMap::default(),
-            layer_spreads: rustc_hash::FxHashMap::default(),
+            carries: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
             keyboard: KeyboardAt::Unknown,
@@ -929,7 +978,7 @@ impl Tree {
         self.declared_visible.remove(&id);
         self.positions.remove(&id);
         self.merge_reaches.remove(&id);
-        self.layer_spreads.remove(&id);
+        self.carries.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1306,37 +1355,43 @@ impl Tree {
     /// from the reach the widget has *now*, so nothing else would ever name
     /// the pixels it painted a frame ago.
     pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: impl Into<Outsets>) {
-        let spread = self.layer_spread(id);
-        self.set_own_paint_reach_and_spread(id, reach, spread);
+        let carry = self.carry(id);
+        self.set_own_paint_reach_and_carry(id, reach, carry);
     }
 
-    /// The same, and how far past everything this widget and its children
-    /// draw its layer spreads it — what a blur reaches. `reach` already
-    /// carries the spread of the widget's own drawing; `spread` is what the
-    /// tree adds to the children's overhang.
+    /// The same, and how this widget carries what its children draw — the
+    /// blur its layer spreads them by, and where its transform and its slide
+    /// take them. `reach` already carries the widget's own drawing; `carry`
+    /// is what the tree does to the children's overhang, which it gathers on
+    /// a schedule of its own.
     ///
-    /// One write for both, so a blur in flight compares and walks once a
-    /// frame rather than once for each half.
-    pub(crate) fn set_own_paint_reach_and_spread(
+    /// One write for both, so a blur or a transform in flight compares and
+    /// walks once a frame rather than once for each half.
+    pub(crate) fn set_own_paint_reach_and_carry(
         &mut self,
         id: WidgetId,
         reach: impl Into<Outsets>,
-        spread: f32,
+        carry: Carry,
     ) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
         let reach = reach.into().map(|side| side.max(0.0));
-        let (spread, had_spread) = (spread.max(0.0), self.layer_spread(id));
-        if self.dense[idx].own_paint_reach == reach && had_spread == spread {
+        let carry = Carry {
+            spread: carry.spread.max(0.0),
+            ..carry
+        };
+        let had_carry = self.carry(id);
+        if self.dense[idx].own_paint_reach == reach && had_carry == carry {
             return;
         }
         // Against the union, not against the half being written: an ancestor
         // reads `paint_overflow`, so a widget whose children already reach
         // further has moved nothing anyone can see, and the walk above it —
         // whose shrink path re-measures siblings — is pure cost.
-        let before = self.slot_reach(id, idx);
-        let after = reach_of(reach, self.dense[idx].children_outset, spread);
+        let slot = &self.dense[idx];
+        let before = reach_of(slot.own_paint_reach, slot.children_outset, had_carry);
+        let after = reach_of(reach, slot.children_outset, carry);
         // A reach that shrinks vacates the ring between the two, and the rect
         // built from the new one stops short of it. Damaged before the write,
         // while the old reach is still what this widget answers — the same
@@ -1351,11 +1406,11 @@ impl Tree {
             self.expand_damage_rect(root, vacated);
         }
         self.dense[idx].own_paint_reach = reach;
-        if spread != had_spread {
-            if spread > 0.0 {
-                self.layer_spreads.insert(id, spread);
+        if carry != had_carry {
+            if carry == Carry::NONE {
+                self.carries.remove(&id);
             } else {
-                self.layer_spreads.remove(&id);
+                self.carries.insert(id, carry);
             }
         }
         if before == after {
@@ -2206,20 +2261,21 @@ impl Tree {
     /// `paint_overflow`, for a widget already resolved to its slot.
     fn slot_reach(&self, id: WidgetId, idx: usize) -> Outsets {
         let slot = &self.dense[idx];
-        reach_of(
-            slot.own_paint_reach,
-            slot.children_outset,
-            self.layer_spread(id),
-        )
+        // Children inside the box carry nothing past it — nearly every
+        // widget, and no reason to look the carry up.
+        if slot.children_outset == Outsets::ZERO {
+            return slot.own_paint_reach;
+        }
+        reach_of(slot.own_paint_reach, slot.children_outset, self.carry(id))
     }
 
-    /// How far this widget's layer spreads what it holds; zero for one that
-    /// does not blur, which is nearly all of them.
-    fn layer_spread(&self, id: WidgetId) -> f32 {
-        if self.layer_spreads.is_empty() {
-            return 0.0;
+    /// How this widget carries what its children draw; `Carry::NONE` for one
+    /// that neither blurs, transforms nor slides, which is nearly all of them.
+    fn carry(&self, id: WidgetId) -> Carry {
+        if self.carries.is_empty() {
+            return Carry::NONE;
         }
-        self.layer_spreads.get(&id).copied().unwrap_or(0.0)
+        self.carries.get(&id).copied().unwrap_or(Carry::NONE)
     }
 
     /// A widget's bounds grown by its paint reach, side by side: where it can
@@ -2539,7 +2595,7 @@ impl Tree {
             y += self.dense[dense_idx].origin.1;
             match self.dense[dense_idx].parent {
                 Some(parent) => {
-                    spread += self.layer_spread(parent);
+                    spread += self.carry(parent).spread;
                     current = parent;
                 }
                 None => break,
@@ -4160,19 +4216,8 @@ mod tests {
         crate::reactive::RwSignal<f32>,
     ) {
         let blur = crate::reactive::create_signal(4.0f32);
-        use crate::renderer::Shadow;
-        let (tree, root, card) =
-            padded_card(
-                crate::widgets::container()
-                    .width(40.0)
-                    .height(40.0)
-                    .blur(blur)
-                    .overflow(overflow)
-                    .child(crate::widgets::container().width(40.0).height(40.0).shadow(
-                        Shadow::new((0.0, 0.0), 0.0, 20.0, crate::widgets::Color::WHITE),
-                    )),
-            );
-        let child = tree.get_children(card)[0];
+        let (tree, root, card, child) =
+            moved_box_over_a_shadow(|card| card.blur(blur).overflow(overflow));
         (tree, root, card, child, blur)
     }
 
@@ -4355,6 +4400,166 @@ mod tests {
         );
     }
 
+    /// A 40 square box holding a 40 square child whose shadow spreads 20
+    /// past it, as `moves` declares it.
+    fn box_over_a_shadow(
+        moves: impl FnOnce(crate::widgets::Container) -> crate::widgets::Container,
+    ) -> crate::widgets::Container {
+        use crate::renderer::Shadow;
+        let shadow = Shadow::new((0.0, 0.0), 0.0, 20.0, crate::widgets::Color::WHITE);
+        moves(
+            crate::widgets::container().width(40.0).height(40.0).child(
+                crate::widgets::container()
+                    .width(40.0)
+                    .height(40.0)
+                    .shadow(shadow),
+            ),
+        )
+    }
+
+    /// `box_over_a_shadow`, padded, laid out and clean, as `padded_card`
+    /// leaves it. Returns the tree, the root, the box and the child.
+    fn moved_box_over_a_shadow(
+        moves: impl FnOnce(crate::widgets::Container) -> crate::widgets::Container,
+    ) -> (Tree, WidgetId, WidgetId, WidgetId) {
+        let (tree, root, card) = padded_card(box_over_a_shadow(moves));
+        let child = tree.get_children(card)[0];
+        (tree, root, card, child)
+    }
+
+    /// A translate carries what the box draws, its child's shadow included:
+    /// the shadow stands 20 past the box and the box is drawn 100 to the
+    /// right, so the shadow ends 120 past the right edge the box was laid
+    /// out at.
+    #[test]
+    fn a_translate_carries_what_its_children_overhang() {
+        let (tree, _, card, _) = moved_box_over_a_shadow(|card| card.translate((100.0, 0.0)));
+        let reach = tree.paint_overflow(card);
+        assert!(
+            reach.right >= 120.0,
+            "the box reaches {reach:?}, short of the 20 its child's shadow \
+             overhangs carried 100 to the right"
+        );
+    }
+
+    /// The tree carries the overhang, not the publish that last ran: a child
+    /// whose shadow grows after its moved parent published still reaches as
+    /// far as the transform takes it.
+    #[test]
+    fn a_translate_carries_an_overhang_that_grows_after_it() {
+        let (mut tree, _, card, child) =
+            moved_box_over_a_shadow(|card| card.translate((100.0, 0.0)));
+        tree.set_own_paint_reach(child, 60.0);
+        let reach = tree.paint_overflow(card);
+        assert!(
+            reach.right >= 160.0,
+            "the box reaches {reach:?}, short of the child's 60 carried 100 \
+             to the right"
+        );
+    }
+
+    /// A blur spreads in the layer's own space and the transform carries the
+    /// spread with the rest, as `flatten_as_layer` composites the blurred
+    /// texture through the node's transform.
+    #[test]
+    fn a_translate_carries_the_blur_past_the_overhang() {
+        let (tree, _, card, _) =
+            moved_box_over_a_shadow(|card| card.translate((100.0, 0.0)).blur(4.0));
+        let reach = tree.paint_overflow(card).right;
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert!(
+            reach >= 120.0 + spread,
+            "the box reaches {reach} to the right, short of the overhang of 20 \
+             spread by {spread} and carried 100"
+        );
+    }
+
+    /// Turned 45 degrees about its centre, the child's shadow — an 80 square
+    /// about the box's centre — stands 40√2 from the centre on every side,
+    /// which is 40√2 − 20 past each edge of the box.
+    #[test]
+    fn a_rotation_carries_what_its_children_overhang() {
+        let (tree, _, card, _) = moved_box_over_a_shadow(|card| card.rotate(45.0));
+        let reach = tree.paint_overflow(card);
+        let turned = 40.0 * std::f32::consts::SQRT_2 - 20.0 - 0.01;
+        for (side, at) in ["left", "top", "right", "bottom"]
+            .into_iter()
+            .zip(reach.sides())
+        {
+            assert!(
+                at >= turned,
+                "the box reaches {at} on the {side}, short of the {turned} its \
+                 child's shadow stands out once turned: {reach:?}"
+            );
+        }
+    }
+
+    /// Scaled twice about its centre, the 80 square of the shadow is 160, and
+    /// stands 60 past every edge of the box.
+    #[test]
+    fn a_scale_carries_what_its_children_overhang() {
+        let (tree, _, card, _) = moved_box_over_a_shadow(|card| card.scale(2.0));
+        let reach = tree.paint_overflow(card);
+        assert!(
+            reach.covers(Outsets::all(60.0)),
+            "the box reaches {reach:?}, short of the 60 its child's shadow \
+             stands out once doubled"
+        );
+    }
+
+    /// A translate easing home narrows the reach on the side it was carried
+    /// to, and the frame that narrows it has to name the overhang it carried
+    /// away.
+    #[test]
+    fn damage_covers_the_overhang_a_translate_carries_away() {
+        let offset = crate::reactive::create_signal(100.0f32);
+        let (mut tree, root, card, _) = moved_box_over_a_shadow(|card| {
+            card.translate(move || crate::transform::Translate::new(offset.get(), 0.0))
+        });
+        tree.mark_needs_paint(card);
+        let moved = partial_damage(&mut tree, root);
+        assert!(
+            moved.x + moved.width >= 50.0 + 40.0 + 120.0,
+            "the setup: the moved frame damages {moved:?}"
+        );
+        tree.clear_needs_paint(card);
+        tree.clear_needs_paint(root);
+
+        offset.set(0.0);
+        tree.with_widget_mut(card, |widget, id, tree| {
+            refresh_paint_reach(&*widget, tree, id)
+        });
+        tree.mark_needs_paint(card);
+        let home = partial_damage(&mut tree, root);
+        assert_eq!(
+            moved.outset_beyond(home),
+            Outsets::ZERO,
+            "the frame that brings the box home damages {home:?}, so the \
+             shadow it drew at {moved:?} stays on screen"
+        );
+    }
+
+    /// A slide carries the box by its offset, its child's shadow with it: a
+    /// box drawn 100 above where it was laid out has the shadow that
+    /// overhangs it by 20 standing 120 above its box.
+    #[test]
+    fn a_slide_carries_what_its_children_overhang() {
+        let (tree, _, card) = mid_slide(box_over_a_shadow(|card| card));
+        let (_, dy) = tree.position_offset(card);
+        assert!(
+            dy <= -50.0,
+            "the setup: the box is drawn {dy} from its place"
+        );
+
+        let reach = tree.paint_overflow(card);
+        assert!(
+            reach.top >= 20.0 - dy,
+            "the box reaches {reach:?}, short of the 20 its child's shadow \
+             overhangs carried {} up",
+            -dy
+        );
+    }
+
     /// A card in a padded box, laid out, painted once and clean, so a mark on
     /// it reports its own damage and nothing else: the box is 50 from every
     /// edge of a 300 square.
@@ -4417,16 +4622,10 @@ mod tests {
         );
     }
 
-    /// A card sliding 200 pixels down a column, with `animate_position`, is
-    /// drawn above where it was laid out and nowhere else: each frame of the
-    /// slide damages a rect no wider than the card and its own horizontal
-    /// reach — none here.
-    ///
-    /// One number for the four sides gave the slide's 200 to the left and the
-    /// right as well, and every frame of it damaged 440 pixels across for a
-    /// card 40 wide.
-    #[test]
-    fn a_vertical_slide_damages_no_wider_than_its_box() {
+    /// `card`, given a slide of 200 down a column with `animate_position`
+    /// and caught a frame into it: laid out 200 further down, drawn half of
+    /// that above, its reach refreshed and nothing marked since.
+    fn mid_slide(card: crate::widgets::Container) -> (Tree, WidgetId, WidgetId) {
         let gap = crate::reactive::create_signal(0.0f32);
         let t0 = std::time::Instant::now();
         let mut tree = Tree::new();
@@ -4440,15 +4639,10 @@ mod tests {
                     crate::widgets::container()
                         .layout(crate::layout::Flex::column())
                         .child(crate::widgets::container().width(40.0).height(gap))
-                        .child(
-                            crate::widgets::container()
-                                .width(40.0)
-                                .height(40.0)
-                                .animate_position(crate::animation::Transition::new(
-                                    200.0,
-                                    crate::animation::TimingFunction::Linear,
-                                )),
-                        ),
+                        .child(card.animate_position(crate::animation::Transition::new(
+                            200.0,
+                            crate::animation::TimingFunction::Linear,
+                        ))),
                 ),
         ));
         tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
@@ -4466,8 +4660,8 @@ mod tests {
         assert_eq!(tree.position_offset(card), (0.0, -200.0), "the setup");
         let _ = tree.take_damage(root);
 
-        // One frame of the slide, as the loop runs it: the motion advances,
-        // the reach is refreshed from it, and the card is marked.
+        // One frame of the slide, as the loop runs it: the motion advances
+        // and the reach is refreshed from it.
         let mid = t0 + std::time::Duration::from_millis(116);
         tree.set_frame_instant(Some(mid));
         assert_eq!(tree.advance_position(card, mid.into()), Some(true));
@@ -4475,6 +4669,21 @@ mod tests {
         tree.with_widget_mut(card, |widget, id, tree| {
             refresh_paint_reach(&*widget, tree, id)
         });
+        (tree, root, card)
+    }
+
+    /// A card sliding 200 pixels down a column, with `animate_position`, is
+    /// drawn above where it was laid out and nowhere else: each frame of the
+    /// slide damages a rect no wider than the card and its own horizontal
+    /// reach — none here.
+    ///
+    /// One number for the four sides gave the slide's 200 to the left and the
+    /// right as well, and every frame of it damaged 440 pixels across for a
+    /// card 40 wide.
+    #[test]
+    fn a_vertical_slide_damages_no_wider_than_its_box() {
+        let (mut tree, root, card) =
+            mid_slide(crate::widgets::container().width(40.0).height(40.0));
         tree.mark_needs_paint(card);
 
         let reach = tree.paint_overflow(card);
