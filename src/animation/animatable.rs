@@ -608,8 +608,9 @@ mod tests {
     }
 
     /// Premultiplying changes nothing where nothing is translucent: between
-    /// two opaque colours the lerp is the straight one, to the bit, overshoot
-    /// included.
+    /// two opaque colours the lerp is the straight one, to the bit. An
+    /// overshoot past either end is clamped into `[0, 1]`, as CSS clamps an
+    /// interpolated colour.
     #[test]
     fn between_opaque_colours_the_lerp_is_channel_by_channel() {
         let pairs = [
@@ -621,9 +622,15 @@ mod tests {
             for t in [0.0, 0.1, 0.25, 0.5, 0.9, 1.0, 1.3, -0.2] {
                 let f = |a: f32, b: f32| a + (b - a) * t;
                 let straight = Color::rgba(f(from.r, to.r), f(from.g, to.g), f(from.b, to.b), 1.0);
+                let expected = if (0.0..=1.0).contains(&t) {
+                    straight
+                } else {
+                    let c = |x: f32| x.clamp(0.0, 1.0);
+                    Color::rgba(c(straight.r), c(straight.g), c(straight.b), 1.0)
+                };
                 assert_eq!(
                     Color::lerp(&from, &to, t),
-                    straight,
+                    expected,
                     "{from:?} -> {to:?} at {t}"
                 );
             }
@@ -652,6 +659,52 @@ mod tests {
             Color::lerp(&Color::TRANSPARENT, &clear_red, 0.5),
             Color::rgba(0.5, 0.0, 0.0, 0.0)
         );
+    }
+
+    /// A spring overshooting a fade toward a nearly transparent colour takes
+    /// the mixed alpha through zero — white to black at 0.1 does at t ≈ 1.11.
+    /// Unclamped, the premultiplied channels just before it are below zero
+    /// and darken what is behind, and just after it nothing is drawn: a step
+    /// of about 0.11 over white in one frame. Clamped, as CSS clamps, the
+    /// colour drawn over white moves by no more than the alpha does.
+    #[test]
+    fn an_overshoot_through_zero_alpha_does_not_jump() {
+        let faint = Color::rgba(0.0, 0.0, 0.0, 0.1);
+        let over_white = |c: Color| {
+            let a = c.a.clamp(0.0, 1.0);
+            c.r * a + (1.0 - a)
+        };
+        let mut previous = over_white(Color::lerp(&Color::WHITE, &faint, 1.0));
+        for step in 1..=300 {
+            let t = 1.0 + step as f32 * 0.001;
+            let c = Color::lerp(&Color::WHITE, &faint, t);
+            let drawn = over_white(c);
+            assert!(
+                (drawn - previous).abs() < 0.002,
+                "at {t}: {previous} -> {drawn}"
+            );
+            previous = drawn;
+        }
+        for t in [1.05, 1.11, 1.2] {
+            let c = Color::lerp(&Color::WHITE, &faint, t);
+            assert!(
+                (0.0..=1.0).contains(&c.a)
+                    && [c.r, c.g, c.b].iter().all(|x| (0.0..=1.0).contains(x)),
+                "at {t} it is clamped: {c:?}"
+            );
+        }
+    }
+
+    /// A spring carried through a clamped value keeps a finite speed: the
+    /// clamp moves the value, not the spring, so a retarget from a clamped
+    /// colour reads a direction rather than sticking or dividing by nothing.
+    #[test]
+    fn a_retarget_from_a_clamped_colour_carries_a_finite_speed() {
+        let faint = Color::rgba(0.0, 0.0, 0.0, 0.1);
+        let clamped = Color::lerp(&Color::WHITE, &faint, 1.2);
+        assert_eq!(clamped.a, 0.0, "past the crossing nothing shows");
+        let carried = carry_velocity(3.0, &Color::WHITE, &faint, &clamped, &Color::WHITE);
+        assert!(carried.is_finite() && carried < 0.0, "got {carried}");
     }
 
     /// A spring's momentum is read in the space its lerp is straight in. A

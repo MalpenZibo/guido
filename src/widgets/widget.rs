@@ -97,8 +97,10 @@ impl Color {
     /// the other colour's hue rather than passing through black. Between two
     /// opaque colours it is the plain channel-by-channel mix.
     ///
-    /// Where the mixed alpha is zero or below there is nothing to divide back
-    /// by, and the colour channels are mixed as they are.
+    /// The result is clamped as CSS clamps an interpolated colour — alpha into
+    /// `[0, 1]`, then the channels — which is what holds a spring or an easing
+    /// overshooting past a fade inside the colours that can be drawn. Where the mixed alpha is zero or below there is nothing
+    /// to divide back by, and the colour channels are mixed as they are.
     pub fn mix(self, other: Color, t: f32) -> Self {
         let f = |a: f32, b: f32| a + (b - a) * t;
         let a = f(self.a, other.a);
@@ -108,11 +110,12 @@ impl Color {
             let straight = |c: Self| [c.r, c.g, c.b, c.a];
             (straight(self), straight(other), 1.0)
         };
+        let channel = |i: usize| (f(from[i], to[i]) * unweight).clamp(0.0, 1.0);
         Self {
-            r: f(from[0], to[0]) * unweight,
-            g: f(from[1], to[1]) * unweight,
-            b: f(from[2], to[2]) * unweight,
-            a,
+            r: channel(0),
+            g: channel(1),
+            b: channel(2),
+            a: a.clamp(0.0, 1.0),
         }
     }
 

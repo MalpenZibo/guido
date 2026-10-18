@@ -91,7 +91,9 @@ interpolates colours: each channel is weighted by how much of it shows.
 `Color::TRANSPARENT` is black at no alpha, and mixing with it thins a colour
 out rather than darkening it; between two opaque colours it is the plain
 channel-by-channel blend. A transition between two colours, and a gradient
-between its stops, blend the same way:
+between its stops, blend the same way. A spring or an easing that overshoots
+is clamped, as CSS clamps: alpha and channels stay within `0.0..=1.0`, so a
+bounce past a fade out never darkens what is behind it:
 
 ```rust
 # extern crate guido;
