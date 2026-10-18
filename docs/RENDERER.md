@@ -343,6 +343,13 @@ holds: the container's own shadow and outline, and whatever its children draw
 outside it. The tree keeps that last half apart
 (`Tree::set_own_paint_reach_and_spread`), because the children's overhang is
 gathered into it on a schedule of its own.
+What a child inside it repaints is spread as far, so the damage a child
+names — a mark, the ring a shrinking reach vacates, a move — is widened by the
+blur of every blurring ancestor between it and the surface, summed on the walk
+to the surface root that every damaged rect is measured on. A box that clips its
+children is no exception: the clip cuts them inside the layer, and the blur
+spreads what is left past it. A tree with no blur pays one emptiness check per
+ancestor.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
