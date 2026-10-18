@@ -482,7 +482,10 @@ fn compute_gradient_color(
         case 4u: { t = (local_uv.x + (1.0 - local_uv.y)) / 2.0; } // DiagonalReverse (top-right to bottom-left)
         default: { return start_color; }                          // No gradient (0 or invalid)
     }
-    return mix(start_color, end_color, clamp(t, 0.0, 1.0));
+    // Mixed premultiplied, as CSS mixes a gradient's stops and `Color::mix`
+    // mixes two colours, so a stop at `TRANSPARENT` fades the other one out
+    // in its own colour rather than through black.
+    return unpremultiplied(mix(premultiplied(start_color), premultiplied(end_color), clamp(t, 0.0, 1.0)));
 }
 
 // === Fragment Shader ===
@@ -786,6 +789,10 @@ fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
         i = r.next;
     }
     return m;
+}
+
+fn premultiplied(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(c.rgb * c.a, c.a);
 }
 
 fn unpremultiplied(c: vec4<f32>) -> vec4<f32> {
