@@ -1673,6 +1673,79 @@ fn coloured_svg_edges_blend_like_a_raster() {
     assert_golden(NAME, adapter, pixels);
 }
 
+/// An SVG stretched by `Fill` is rasterized at the size it is stretched to
+/// (#813).
+///
+/// A circle 40 pixels a side, drawn into a 160 × 40 box, twice: above as the
+/// SVG, below as an `ImageSource::Rgba` of the same circle rasterized at the
+/// box's size — 320 × 80, at the 2× SVG quality — by resvg directly. So they
+/// match to the bit, or the SVG was rasterized at some other size and
+/// stretched.
+///
+/// Red before: the raster was the size that fits inside the box, 80 × 80,
+/// stretched four times across, so the ellipse's left and right edges were
+/// smeared over four pixels each. A 320 × 80 raster past the line an SVG is
+/// drawn inside the frame: the worker's, and waiting for it needs `testing`.
+#[cfg(all(feature = "svg", feature = "testing"))]
+#[test]
+fn a_stretched_svg_is_rasterized_at_the_size_it_is_stretched_to() {
+    const NAME: &str = "a_stretched_svg_is_rasterized_at_the_size_it_is_stretched_to";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let svg: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><circle cx="20" cy="20" r="17" fill="#f27340"/></svg>"##;
+
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())
+        .expect("the SVG parses");
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(320, 80).expect("a 320 × 80 pixmap");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(8.0, 2.0),
+        &mut pixmap.as_mut(),
+    );
+    let straight: Vec<u8> = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|pixel| {
+            let c = pixel.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+
+    let tile = |source: ImageSource| {
+        box_of(160.0, 40.0)
+            .background(Color::rgb(0.92, 0.92, 0.88))
+            .child(image(source).content_fit(ContentFit::Fill))
+    };
+    let view = container()
+        .background(BACKDROP)
+        .padding(10.0)
+        .layout(Flex::column().spacing(10.0))
+        .child(tile(ImageSource::SvgBytes(svg.to_vec().into())))
+        .child(tile(ImageSource::Rgba {
+            width: 320,
+            height: 80,
+            pixels: straight.into(),
+        }));
+    let pixels = render_with_own_renderer(ctx, view, (180.0, 110.0), 1.0, BACKDROP);
+
+    let pixel = |x: u32, y: u32| &pixels.data[((y * pixels.width + x) * 4) as usize..][..4];
+    let differ: Vec<_> = (10..50)
+        .flat_map(|y| (10..170).map(move |x| (x, y)))
+        .filter(|&(x, y)| pixel(x, y) != pixel(x, y + 50))
+        .collect();
+    assert!(
+        differ.is_empty(),
+        "{} pixels of the stretched SVG differ from the same circle rasterized at its box, \
+         first at {:?}: svg {:?}, raster {:?}",
+        differ.len(),
+        differ[0],
+        pixel(differ[0].0, differ[0].1),
+        pixel(differ[0].0, differ[0].1 + 50),
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
 /// An 80 × 240 raster, past the line an SVG is drawn inside the frame below:
 /// it is the worker's, and waiting for the worker needs `testing`.
 #[cfg(all(feature = "svg", feature = "testing"))]
