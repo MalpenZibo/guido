@@ -571,6 +571,49 @@ fn every_lock_cover_holds_the_handle_of_its_own_surface() {
     assert_eq!(seen.borrow()[&external], cover_of(&app, external));
 }
 
+/// A lock with one cover, whose handle comes back for the test to call.
+fn lock_keeping_the_cover_handle(app: &mut Headless) -> (OutputId, SurfaceHandle) {
+    let laptop = app.connect_output("eDP-1");
+    let handle = Rc::new(RefCell::new(None));
+    let kept = handle.clone();
+    lock_session(move |_: OutputInfo| {
+        *kept.borrow_mut() = Some(expect_context::<SurfaceHandle>());
+        container()
+    });
+    app.step();
+    app.grant_lock();
+    assert_eq!(app.step(), None, "the grant is not the end of the app");
+    let handle = handle.borrow_mut().take().expect("the cover was built");
+    (laptop, handle)
+}
+
+/// A close that reaches a cover the unlock already took away — from a handle
+/// that outlived it — is a close of nothing. An application whose only
+/// surfaces were covers idles after unlocking, as it would without the close.
+#[test]
+fn closing_a_lock_cover_after_the_unlock_is_harmless() {
+    let Some(mut app) = headless() else { return };
+    let (laptop, handle) = lock_keeping_the_cover_handle(&mut app);
+    let cover = cover_of(&app, laptop);
+    unlock_session();
+    assert_eq!(app.step(), None, "unlocking is not the end of the app");
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [cover],
+        "the unlock took the cover"
+    );
+
+    handle.close();
+
+    assert_eq!(app.step(), None, "the application keeps running");
+    assert!(!app.is_locked());
+    assert_eq!(
+        app.surfaces_destroyed(),
+        [cover],
+        "and the compositor was told about it once"
+    );
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Marker(u32);
 
