@@ -948,9 +948,11 @@ The paint system tracks which widgets need repainting:
   widget's transform and slide, which draw the children with it (`Carry`). A shadow cast
   downward, a card lifted by a translate and a box sliding up with `animate_position` each
   widen damage, the cull and the pointer's test only on the sides they reach.
-- **Damage under a blur**: a blurring ancestor spreads whatever a widget inside it draws,
-  so every rect the tree damages for a widget is grown by the blur of each blurring
-  ancestor above it, added up on the walk to the surface root.
+- **Damage where it is drawn**: every rect the tree damages for a widget is carried up
+  the walk to the surface root as each ancestor draws it — spread by a blurring one's
+  layer, then moved by a transformed or sliding one to where it draws it now (`Carry`'s
+  `drawn`, the same `placement` it paints with). A label repainting in a lifted card
+  damages the label where the card holds it, not where layout put it.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.

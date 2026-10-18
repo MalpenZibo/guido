@@ -324,6 +324,9 @@ fn reach_of(own: Outsets, children_outset: Outsets, carry: Carry) -> Outsets {
 /// `reach + gain · overhang`, side by side, is what a translate and a slide
 /// do exactly; a scale grows an overhang by its factor, and a turn can land
 /// one side's overhang on any other, so it is taken as the widest.
+///
+/// Beside the bound, the transform itself as it stands: what a child repaints
+/// is carried through it to be damaged where it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Carry {
     /// How far past what the children draw the layer's blur spreads it.
@@ -334,6 +337,9 @@ pub(crate) struct Carry {
     pub(crate) turns: bool,
     /// Where the transform and the slide can take the widget's bare box.
     pub(crate) reach: Outsets,
+    /// Where the transform and the slide draw the box and its children now,
+    /// about its pivot, in its own coordinates: the value, not a bound.
+    pub(crate) drawn: Transform,
 }
 
 impl Carry {
@@ -343,6 +349,7 @@ impl Carry {
         gain: 1.0,
         turns: false,
         reach: Outsets::ZERO,
+        drawn: Transform::IDENTITY,
     };
 
     /// Where an overhang of `overhang` past the box lands once carried.
@@ -360,6 +367,18 @@ impl Carry {
             spread
         };
         spread * self.gain + self.reach
+    }
+
+    /// Where `rect`, drawn inside the box in its own coordinates, lands once
+    /// carried: spread by the layer's blur in the box's own space, then moved
+    /// by the transform and the slide, as the layer is composited.
+    fn carry_rect(self, rect: Rect) -> Rect {
+        let rect = rect.outset(self.spread);
+        if self.drawn.is_identity() {
+            rect
+        } else {
+            self.drawn.map_rect(rect)
+        }
     }
 }
 
@@ -1438,13 +1457,8 @@ impl Tree {
             return;
         }
         let wider = was.unwrap_or(0.0).max(reach.unwrap_or(0.0));
-        if let Some((root, laid_out, spread)) = self.surface_relative_layout_and_spread(id) {
-            self.expand_damage_rect(
-                root,
-                laid_out
-                    .outset_by(self.paint_overflow(id))
-                    .outset(wider + spread),
-            );
+        if let Some((root, area)) = self.surface_relative_damage_past(id, wider) {
+            self.expand_damage_rect(root, area);
         }
         match reach {
             Some(reach) => self.merge_reaches.insert(id, reach),
@@ -2572,57 +2586,61 @@ impl Tree {
 
     /// Walk to the surface root, returning it together with the widget's
     /// laid-out box relative to the surface: origins summed along the chain,
-    /// with no scroll and no transform. What damage is measured from.
+    /// with no scroll and no transform. Where the tab order reads a widget's
+    /// place.
     fn surface_relative_layout_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
-        let (root, laid_out, _) = self.surface_relative_layout_and_spread(id)?;
-        Some((root, laid_out))
-    }
-
-    /// The same, and how far the layers of the widget's ancestors spread what
-    /// it draws: each blurring one spreads what the one inside it already
-    /// spread, so their reaches add up on the walk the origins are summed on.
-    /// Not the widget's own, which its paint reach already carries.
-    fn surface_relative_layout_and_spread(&self, id: WidgetId) -> Option<(WidgetId, Rect, f32)> {
-        let idx = self.get_dense_index(id)?;
-        let size = self.dense[idx].cached_size?;
-        let mut x = 0.0f32;
-        let mut y = 0.0f32;
-        let mut spread = 0.0f32;
+        let size = self.cached_size(id)?;
+        let (mut x, mut y) = (0.0f32, 0.0f32);
         let mut current = id;
         loop {
             let dense_idx = self.get_dense_index(current)?;
             x += self.dense[dense_idx].origin.0;
             y += self.dense[dense_idx].origin.1;
             match self.dense[dense_idx].parent {
-                Some(parent) => {
-                    spread += self.carry(parent).spread;
-                    current = parent;
-                }
+                Some(parent) => current = parent,
                 None => break,
             }
         }
-        Some((current, Rect::new(x, y, size.width, size.height), spread))
+        Some((current, Rect::new(x, y, size.width, size.height)))
     }
 
     // -------------------------------------------------------------------------
     // Damage Region Tracking
     // -------------------------------------------------------------------------
 
-    /// The same, widened by whatever the widget paints outside itself, so a
-    /// shadow is re-composited along with the thing that cast it — and so is a
-    /// widget its own transform has carried off its laid-out box, the shape a
-    /// container merging its children draws past them, and the fringe a
-    /// blurring ancestor spreads all of it into. What damage is measured from,
-    /// and not what the widget's bounds are.
+    /// Where a widget's paint lands on its surface, and the surface root:
+    /// its laid-out box widened by whatever it paints outside itself, so a
+    /// shadow is re-composited along with the thing that cast it — and so is
+    /// a widget its own transform has carried off its laid-out box, and the
+    /// shape a container merging its children draws past them. Then carried
+    /// up through every ancestor as it draws it: spread by a blurring one's
+    /// layer, and moved by a transformed or sliding one to where it draws it
+    /// now (#830). What damage is measured from, and not what the widget's
+    /// bounds are.
     fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
-        let (root, laid_out, spread) = self.surface_relative_layout_and_spread(id)?;
         let merged = self.merge_reaches.get(&id).copied().unwrap_or(0.0);
-        Some((
-            root,
-            laid_out
-                .outset_by(self.paint_overflow(id))
-                .outset(merged + spread),
-        ))
+        self.surface_relative_damage_past(id, merged)
+    }
+
+    /// The same, `past` further out than the widget's paint reach on every
+    /// side. A tree where no widget blurs, transforms or slides pays one
+    /// emptiness check per ancestor and sums the origins.
+    fn surface_relative_damage_past(&self, id: WidgetId, past: f32) -> Option<(WidgetId, Rect)> {
+        let size = self.cached_size(id)?;
+        let mut rect = Rect::from_size(size)
+            .outset_by(self.paint_overflow(id))
+            .outset(past);
+        let mut current = id;
+        loop {
+            let dense_idx = self.get_dense_index(current)?;
+            let (x, y) = self.dense[dense_idx].origin;
+            rect = rect.offset(x, y);
+            let Some(parent) = self.dense[dense_idx].parent else {
+                return Some((current, rect));
+            };
+            rect = self.carry(parent).carry_rect(rect);
+            current = parent;
+        }
     }
 
     /// Find the surface root (topmost ancestor) of a widget.
@@ -4558,6 +4576,168 @@ mod tests {
              overhangs carried {} up",
             -dy
         );
+    }
+
+    /// What marking `id` alone damages, on a surface with nothing else damaged.
+    fn damage_of_marking(tree: &mut Tree, root: WidgetId, id: WidgetId) -> Rect {
+        let _ = tree.take_damage(root);
+        tree.mark_needs_paint(id);
+        partial_damage(tree, root)
+    }
+
+    /// `damage` is `expected` to within float error, side by side.
+    fn assert_damage(damage: Rect, expected: Rect, what: &str) {
+        let off = [
+            damage.x - expected.x,
+            damage.y - expected.y,
+            damage.width - expected.width,
+            damage.height - expected.height,
+        ];
+        assert!(
+            off.iter().all(|d| d.abs() < 0.01),
+            "{what}: damaged {damage:?}, drawn at {expected:?}"
+        );
+    }
+
+    /// A child repainting in a box translated 100 to the right damages where
+    /// it and its shadow are drawn, x 130–210, and not where they were laid
+    /// out, x 30–110 (#830).
+    #[test]
+    fn a_child_in_a_translated_box_damages_where_it_is_drawn() {
+        let (mut tree, root, _, child) =
+            moved_box_over_a_shadow(|card| card.translate((100.0, 0.0)));
+        let damage = damage_of_marking(&mut tree, root, child);
+        assert_damage(
+            damage,
+            Rect::new(130.0, 30.0, 80.0, 80.0),
+            "the child and its shadow",
+        );
+    }
+
+    /// The same mid-slide: a box drawn above where `animate_position` laid it
+    /// out carries the child that repaints in it, shadow and all.
+    #[test]
+    fn a_child_in_a_sliding_box_damages_where_it_is_drawn() {
+        let (mut tree, root, card) = mid_slide(box_over_a_shadow(|card| card));
+        let child = tree.get_children(card)[0];
+        let (_, dy) = tree.position_offset(card);
+        assert!(
+            dy <= -50.0,
+            "the setup: the box is drawn {dy} from its place"
+        );
+        let (drawn, laid_out) = tree.surface_relative_boxes(child).unwrap();
+        assert_eq!(drawn, laid_out.offset(0.0, dy), "the setup");
+
+        let damage = damage_of_marking(&mut tree, root, child);
+        assert_damage(damage, drawn.outset(20.0), "the child and its shadow");
+    }
+
+    /// Turned 45 degrees about its centre at (70, 70), the 80 square of the
+    /// child's shadow is drawn inside the box 40√2 from that centre on every
+    /// side.
+    #[test]
+    fn a_child_in_a_rotated_box_damages_the_box_around_where_it_is_drawn() {
+        let (mut tree, root, _, child) = moved_box_over_a_shadow(|card| card.rotate(45.0));
+        let damage = damage_of_marking(&mut tree, root, child);
+        let half = 40.0 * std::f32::consts::SQRT_2;
+        assert_damage(
+            damage,
+            Rect::new(70.0 - half, 70.0 - half, half * 2.0, half * 2.0),
+            "the child and its shadow, turned",
+        );
+    }
+
+    /// Scaled by a half about its centre at (70, 70), the 80 square of the
+    /// child's shadow is drawn 40 across.
+    #[test]
+    fn a_child_in_a_scaled_box_damages_where_it_is_drawn() {
+        let (mut tree, root, _, child) = moved_box_over_a_shadow(|card| card.scale(0.5));
+        let damage = damage_of_marking(&mut tree, root, child);
+        assert_damage(
+            damage,
+            Rect::new(50.0, 50.0, 40.0, 40.0),
+            "the child and its shadow, halved",
+        );
+    }
+
+    /// A box that blurs and is scaled by a half: its layer spreads the
+    /// child's shadow in the box's own space and is composited through the
+    /// scale, so the spread is halved with the rest — as the renderer draws it,
+    /// blur first and then the transform.
+    #[test]
+    fn a_blur_spreads_a_child_s_damage_before_its_box_s_scale_carries_it() {
+        let (mut tree, root, _, child) = moved_box_over_a_shadow(|card| card.scale(0.5).blur(4.0));
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        let damage = damage_of_marking(&mut tree, root, child);
+        let half = (40.0 + spread) / 2.0;
+        assert_damage(
+            damage,
+            Rect::new(70.0 - half, 70.0 - half, half * 2.0, half * 2.0),
+            "the child's shadow, blurred and halved",
+        );
+    }
+
+    /// Each ancestor carries the damage in turn: a blurring box spreads its
+    /// child's, and the translated box around it moves the spread 100 to the
+    /// right.
+    #[test]
+    fn a_child_s_damage_is_carried_through_every_ancestor_in_turn() {
+        let (mut tree, root, outer) = padded_card(
+            crate::widgets::container()
+                .width(40.0)
+                .height(40.0)
+                .translate((100.0, 0.0))
+                .child(box_over_a_shadow(|inner| inner.blur(4.0))),
+        );
+        let inner = tree.get_children(outer)[0];
+        let child = tree.get_children(inner)[0];
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        let damage = damage_of_marking(&mut tree, root, child);
+        assert_damage(
+            damage,
+            Rect::new(130.0, 30.0, 80.0, 80.0).outset(spread),
+            "the child's shadow, blurred and moved",
+        );
+    }
+
+    /// A box whose translate changes in the frame its child repaints: the
+    /// child may be marked before the box has published where it now draws,
+    /// or after, and either way the frame damages both places the child was
+    /// drawn — the one the box leaves is the box's own to name.
+    #[test]
+    fn a_child_repainting_as_its_box_moves_damages_both_places() {
+        for child_first in [true, false] {
+            let offset = crate::reactive::create_signal(100.0f32);
+            let (mut tree, root, card, child) = moved_box_over_a_shadow(|card| {
+                card.translate(move || crate::transform::Translate::new(offset.get(), 0.0))
+            });
+            let _ = tree.take_damage(root);
+
+            offset.set(0.0);
+            if child_first {
+                tree.mark_needs_paint(child);
+            }
+            tree.with_widget_mut(card, |widget, id, tree| {
+                refresh_paint_reach(&*widget, tree, id)
+            });
+            tree.mark_needs_paint(card);
+            if !child_first {
+                tree.mark_needs_paint(child);
+            }
+            let damage = partial_damage(&mut tree, root);
+            for (place, drawn) in [
+                ("left", Rect::new(130.0, 30.0, 80.0, 80.0)),
+                ("reached", Rect::new(30.0, 30.0, 80.0, 80.0)),
+            ] {
+                assert_eq!(
+                    drawn.outset_beyond(damage),
+                    Outsets::ZERO,
+                    "marked {}: the frame damages {damage:?}, short of the \
+                     place the child {place}, {drawn:?}",
+                    if child_first { "first" } else { "last" },
+                );
+            }
+        }
     }
 
     /// A card in a padded box, laid out, painted once and clean, so a mark on
