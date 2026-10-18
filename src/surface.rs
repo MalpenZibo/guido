@@ -922,7 +922,21 @@ impl SurfaceHandle {
     /// The surface goes on the loop's next pass, but its widgets take no
     /// further input from the moment this is called: a key press or a click
     /// already queued behind the one that closed it is not delivered.
+    ///
+    /// A lock cover from [`lock_session`](crate::session_lock::lock_session)
+    /// is the exception: it lasts as long as the lock, so closing one does
+    /// nothing but log a warning, and
+    /// [`unlock_session`](crate::session_lock::unlock_session) is the way
+    /// out. Leaving an output uncovered, or ending the application while the
+    /// session is still locked, is what closing it would otherwise do.
     pub fn close(&self) {
+        if crate::session_lock::is_lock_cover(self.id) {
+            log::warn!(
+                "close() on lock cover {:?} ignored: a cover lasts as long as the lock, call unlock_session() to end it",
+                self.id
+            );
+            return;
+        }
         push_surface_command(SurfaceCommand::Close(self.id));
     }
 

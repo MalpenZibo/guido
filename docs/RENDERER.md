@@ -299,7 +299,14 @@ that cut them (`ClipTree::twin_segment`), so the regions read off the frame are
 the ones the same tree publishes without a layer.
 
 The texture is cut to what of the node's space can reach the surface, and to
-`MAX_LAYER_TEXELS` a side.
+`MAX_LAYER_TEXELS` a side. A blurred layer reaches the surface from further
+off: its cut is widened by the blur's margin (`blur_margin`, the same reach its
+composite spreads by), so near the edge the blur reads the content that goes on
+past it rather than the texture's last texel smeared outwards. Where the
+content itself ends inside that margin the cut ends with it, and the blur fades
+it there. The cut is the surface's only — the content was flattened under none
+of the clips around it, so a blur inside a clipping parent already reads past
+the clip, and only its composite is cut by it.
 
 **The frame carries its layers ahead of the surface.** `FlatFrame::passes`
 lists them, a layer inside another first, each with its commands, its groups
@@ -331,7 +338,11 @@ is not drawn blocky, up to the backdrop's quarter and beyond only where the
 kernel would not fit its taps. A blurred texture is kept with the content and
 the radius it was blurred by, so a radius that animates blurs again without
 drawing again. The container's damage is sized by `blur_reach_bound`, which no
-blur at any scale of one or more exceeds.
+blur at any scale of one or more exceeds, added past everything the texture
+holds: the container's own shadow and outline, and whatever its children draw
+outside it. The tree keeps that last half apart
+(`Tree::set_own_paint_reach_and_spread`), because the children's overhang is
+gathered into it on a schedule of its own.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
@@ -363,8 +374,10 @@ sizes, which drew the layer stretched (#808).
 `a_layer_off_the_pixel_grid_draws_its_content_on_it`,
 `clips_inside_a_layer_cut_where_they_cut_without_one` and
 `paths_inside_a_layer_are_drawn_where_they_are_without_one` are the goldens;
-`tests/draw_calls_are_counted.rs` counts the passes and
-`tests/paint_cache_across_frames.rs` says a fade hands over the content it drew.
+`tests/draw_calls_are_counted.rs` counts the passes,
+`tests/paint_cache_across_frames.rs` says a fade hands over the content it drew,
+and `tests/a_blur_reads_past_the_surface.rs` reads a blur at the surface's edge
+back in pixels.
 `benches/fade` says what a fade costs a frame, against modulation.
 
 ### RenderLayer Ordering
