@@ -1848,6 +1848,27 @@ fn reconfigure<P: Platform, R>(
     result
 }
 
+/// The buffer pixels a logical damage rect names: out to the whole pixels it
+/// touches at both ends — a rect at a fractional place, a list mid-glide,
+/// covers part of the pixel its far edge falls in, and a width rounded on its
+/// own stops a pixel short of it — and past them the fringe a shape's
+/// antialiased edge is drawn in, which no widget's box holds. Cut to the
+/// buffer.
+fn buffer_damage(rect: widgets::Rect, scale: f32, buffer: (i32, i32)) -> (i32, i32, i32, i32) {
+    let reach = renderer::ANTIALIASING_REACH;
+    let drawn = widgets::Rect::new(
+        rect.x * scale - reach,
+        rect.y * scale - reach,
+        rect.width * scale + reach * 2.0,
+        rect.height * scale + reach * 2.0,
+    );
+    let buffer = widgets::Rect::new(0.0, 0.0, buffer.0 as f32, buffer.1 as f32);
+    drawn
+        .intersection(&buffer)
+        .and_then(region::RegionRect::covering)
+        .map_or((0, 0, 0, 0), |r| (r.x, r.y, r.width, r.height))
+}
+
 /// Paint, flatten, hand the frame to the GPU, and re-arm the pacing gate.
 ///
 /// The order at the end is not free-form: the frame callback and the damage
@@ -1988,18 +2009,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     );
     let (x, y, width, height) = match damage {
         DamageRegion::Partial(rect) => {
-            // Out to the whole pixels it touches at both ends: a rect at a
-            // fractional place — a list mid-glide — covers part of the pixel
-            // its far edge falls in, and a width rounded on its own stops a
-            // pixel short of it.
-            let scale = frame.scale_factor;
-            region::RegionRect::covering(widgets::Rect::new(
-                rect.x * scale,
-                rect.y * scale,
-                rect.width * scale,
-                rect.height * scale,
-            ))
-            .map_or((0, 0, 0, 0), |r| (r.x, r.y, r.width, r.height))
+            buffer_damage(rect, frame.scale_factor, (buffer_width, buffer_height))
         }
         // `None` shouldn't happen since we're rendering, but full damage is
         // the safe report for it.

@@ -1068,8 +1068,11 @@ the instance's own space, from the inverse of its transform, two device pixels
 upright and more under a shrink. A shadow's reach is taken where it goes
 further. A quad that was the box alone drew only the inner half of the fade,
 and the same shape gained a fringe the moment it gained a shadow, even an
-invisible one (#836). `an_edge_is_drawn_whole_with_or_without_a_shadow` in
-`tests/golden_images.rs` watches it.
+invisible one (#836). The pixels past the box are the ones a repaint has to
+damage, so damage grows by `ANTIALIASING_REACH` (`buffer_damage` in
+`src/lib.rs`). `an_edge_is_drawn_whole_with_or_without_a_shadow` in
+`tests/golden_images.rs` and `a_repainting_shape_damages_the_fringe_of_its_edge`
+in `tests/headless_app.rs` watch them.
 
 An inset instance carries the container's border width with a transparent
 border colour: the shader casts the shadow inside `dist + border_width`, the

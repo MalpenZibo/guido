@@ -5913,3 +5913,59 @@ fn a_row_repainting_in_a_scrolled_list_is_damaged_where_each_frame_draws_it() {
          frames, the only ones where the row's own damage has to say where it is"
     );
 }
+
+/// A shape that repaints damages the ring its antialiased edge is drawn in,
+/// past its box: up to two device pixels out, the furthest the shader's fade
+/// reaches (#836). Short of it, the compositor keeps that ring from the frame
+/// before, and a box that changed colour keeps a fringe of the old one.
+#[test]
+fn a_repainting_shape_damages_the_fringe_of_its_edge() {
+    for scale in [1.0f32, 2.0] {
+        let Some(mut app) = headless() else { return };
+        let tint = create_signal(false);
+        let surface = app.surface(SurfaceConfig::new().width(200).height(200), move || {
+            container()
+                .width(fill())
+                .height(fill())
+                .padding(Padding::all(50.0).with_left(50.3).with_top(50.6))
+                .child(
+                    container()
+                        .width(40.0)
+                        .height(40.0)
+                        .corners(8.0)
+                        .background(move || {
+                            if tint.get() {
+                                Color::rgb(1.0, 0.0, 0.0)
+                            } else {
+                                Color::rgb(0.0, 0.0, 1.0)
+                            }
+                        }),
+                )
+        });
+        app.configure(surface, 200, 200, scale);
+        app.step();
+
+        let before = app.damage_reported(surface).len();
+        tint.set(true);
+        app.step();
+        let damage = &app.damage_reported(surface)[before..];
+        assert!(!damage.is_empty(), "at {scale}x: nothing damaged");
+        let covered = damage.iter().fold(
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+            |(x0, y0, x1, y1), &(x, y, w, h)| (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h)),
+        );
+        let fringe = (
+            (50.3 * scale).floor() as i32 - 2,
+            (50.6 * scale).floor() as i32 - 2,
+            (90.3 * scale).ceil() as i32 + 2,
+            (90.6 * scale).ceil() as i32 + 2,
+        );
+        assert!(
+            covered.0 <= fringe.0
+                && covered.1 <= fringe.1
+                && covered.2 >= fringe.2
+                && covered.3 >= fringe.3,
+            "at {scale}x: damaged {damage:?}, the box and its fringe drawn over {fringe:?}"
+        );
+    }
+}

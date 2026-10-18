@@ -211,6 +211,14 @@ pub struct ShapeInstance {
     pub shape_kind: u32,
 }
 
+/// How far past its edge a shape's antialiasing can draw, in device pixels:
+/// what the shape shader's `antialiasing_reach` outsets an upright, unscaled
+/// quad by. The fade runs over `fwidth` of the distance, which is one pixel
+/// along a straight side and up to two across a square corner's diagonal.
+/// What a repaint damages past the widgets it names, and what a layer's
+/// texture holds past its content, so neither cuts the fringe off.
+pub(crate) const ANTIALIASING_REACH: f32 = 2.0;
+
 /// How far from its centre an arc's pixels can be: a square cap's outer
 /// corner, which is the furthest any cap reaches, and a pixel beyond it for
 /// the ramp of the edge. In whatever units the two lengths are given.
