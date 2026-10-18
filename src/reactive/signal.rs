@@ -186,8 +186,7 @@ impl<T: Clone + 'static> Signal<T> {
     /// Get the current value without tracking.
     ///
     /// Untracked all the way down for a derived one: its closure runs with the
-    /// widget and effect scopes suspended, the same three-part suspension
-    /// [`create_memo`](crate::reactive::create_memo) seeds itself with. The
+    /// widget and effect scopes suspended, inside a diagnostic zone. The
     /// diagnostic zone alone was not it — in release it compiles to nothing, so
     /// every signal the closure read was still recorded against whatever
     /// happened to be tracking. A `get_untracked` inside a dynamic-children

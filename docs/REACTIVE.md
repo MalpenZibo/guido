@@ -189,7 +189,8 @@ it, and before each re-run it is emptied in the order an owner is disposed:
 child scopes, then `on_cleanup`s last-first, then effects, then signals. So a
 signal, nested effect, timer, task, `on_cleanup` or context declared by one run
 is gone when the next starts, and the last run's go with the effect. A memo and `watch()` are
-effects, so what a memo's closure makes is disposed when it recomputes. This is
+effects, so what a memo's closure makes is disposed when it recomputes; its
+closure runs once when the memo is made, as that effect's first run. This is
 Solid's and Leptos's rule.
 
 Something a run makes to keep — a signal handed to code outside the effect — is
