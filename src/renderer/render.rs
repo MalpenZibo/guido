@@ -1365,7 +1365,7 @@ fn merged_instances(
     let shadows = shadows.as_slice();
     for further in shadows.iter().skip(1).rev() {
         let mut alone = instance.with_shadow(further, scale).faded(cmd.opacity);
-        alone.shape_kind |= super::gpu::MERGED_SHADOW_ONLY;
+        alone.shape_kind |= super::gpu::SHADOW_ONLY;
         out.push(alone);
     }
     if let Some(shadow) = shadows.first() {
@@ -1385,6 +1385,7 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             border,
             shadow,
             gradient,
+            shadow_only,
             ..
         } => {
             let mut instance = ShapeInstance::from_rect(
@@ -1411,6 +1412,9 @@ fn command_to_instance(cmd: &FlattenedCommand, scale: f32) -> Option<ShapeInstan
             }
             if let Some(clip) = cmd.clip() {
                 instance = instance.with_clip(&clip, scale);
+            }
+            if *shadow_only {
+                instance.shape_kind |= super::gpu::SHADOW_ONLY;
             }
 
             Some(instance)
@@ -1826,6 +1830,7 @@ mod tests {
                 shadow: None,
                 gradient: None,
                 background: false,
+                shadow_only: false,
             }),
             world_transform: Transform::IDENTITY,
             layer: RenderLayer::Shapes,

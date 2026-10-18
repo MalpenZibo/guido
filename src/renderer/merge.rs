@@ -127,6 +127,7 @@ pub(crate) fn gather(
                 shadow: cast,
                 gradient: fill,
                 background: true,
+                shadow_only,
             } = &**command
             else {
                 continue;
@@ -150,9 +151,9 @@ pub(crate) fn gather(
             match (border, cast) {
                 // The frame a container draws over its fill.
                 (Some(border), _) => into.border = Some(*border),
-                // A further shadow, which a box draws as a rect of its own
-                // beneath its fill: moved beneath the merged shape whole.
-                (None, Some(_)) if color.a <= 0.0 && fill.is_none() => {
+                // A further shadow, which a box draws as its fill again
+                // beneath it: moved beneath the merged shape whole.
+                (None, Some(_)) if *shadow_only => {
                     own_shadows.push((index, Rc::clone(command)));
                 }
                 (None, cast) => {
@@ -181,20 +182,19 @@ pub(crate) fn gather(
         taken[index] = replaced;
         shadows.append(&mut own_shadows);
         // The first shadow rides the fill's own rect, and has to be drawn on
-        // its own now the fill is the merged shape's.
+        // its own now the fill is the merged shape's: beneath it, as a further
+        // shadow is.
         if let Some(cast) = riding {
             shadows.push((
                 index,
-                Rc::new(DrawCommand::RoundedRect {
-                    rect: member.rect,
-                    color: Color::TRANSPARENT,
-                    radius: member.radius,
-                    curvature: member.curvature,
-                    border: None,
-                    shadow: Some(cast),
-                    gradient: None,
-                    background: false,
-                }),
+                Rc::new(DrawCommand::shadow_beneath(
+                    member.rect,
+                    member.color,
+                    member.radius,
+                    member.curvature,
+                    cast,
+                    None,
+                )),
             ));
         }
         let reach = member.placement.map_rect(member.rect);
@@ -350,6 +350,7 @@ mod tests {
             shadow: None,
             gradient: None,
             background: true,
+            shadow_only: false,
         })
     }
 
@@ -434,6 +435,7 @@ mod tests {
                 direction: crate::renderer::GradientDir::Horizontal,
             }),
             background: true,
+            shadow_only: false,
         });
         let mut group = RenderNode::new(0);
         group.children.push(child((0.0, 0.0), &[gradient]));
