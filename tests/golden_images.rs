@@ -980,6 +980,154 @@ fn an_outer_shadow_is_drawn_outside_a_translucent_fill() {
     assert_golden(NAME, adapter, shadowed);
 }
 
+/// Where `translucent_shadow_rings` puts its boxes: one per row, down the
+/// left side.
+const RING_BOX: (f32, f32) = (100.0, 20.0);
+const RING_PADDING: f32 = 20.0;
+const RING_STEP: f32 = 40.0;
+const RING_SPREAD: f32 = 5.0;
+const RING_SIZE: (f32, f32) = (140.0, 220.0);
+
+/// Five boxes over black, each with a spread shadow and no blur, so the ring
+/// around each is flat: white at 11% around a fill of the same glass, as a
+/// hover ring is spelled; white at 50%; red at 50% on the fill's own
+/// instance; red at 50% as a second shadow, drawn by an instance of its own
+/// beneath a thin black first one; and red at 50% around a merged shape.
+fn translucent_shadow_rings() -> (Container, [[f32; 3]; 5]) {
+    let ring = |c: Color| Shadow::new((0.0, 0.0), 0.0, RING_SPREAD, c);
+    let glass = Color::WHITE.with_alpha(0.11);
+    let half_white = Color::WHITE.with_alpha(0.5);
+    let half_red = Color::rgb(1.0, 0.0, 0.0).with_alpha(0.5);
+    let grey = Color::rgb(0.5, 0.5, 0.5);
+    let (w, h) = RING_BOX;
+    let pill = |fill: Color| swatch(w, h, fill).corners(9.0);
+    let hairline = Shadow::new((0.0, 0.0), 0.0, 1.0, Color::BLACK);
+    let merged = container()
+        .layout(Flex::row())
+        .merge_children(MERGE_DISTANCE)
+        .shadow(ring(half_red))
+        .children([0, 1].map(|_| pill(grey).width(w / 2.0)));
+    let view = container()
+        .padding(RING_PADDING)
+        .layout(Flex::column().spacing(RING_STEP - h))
+        .child(pill(glass).shadow(ring(glass)))
+        .child(pill(grey).shadow(ring(half_white)))
+        .child(pill(grey).shadow(ring(half_red)))
+        .child(pill(grey).shadow([hairline, ring(half_red)]))
+        .child(merged);
+    let expected = [
+        [0.11; 3],
+        [0.5; 3],
+        [0.5, 0.0, 0.0],
+        [0.5, 0.0, 0.0],
+        [0.5, 0.0, 0.0],
+    ];
+    (view, expected)
+}
+
+/// A shadow's colour is drawn at its own alpha, as a fill of that colour
+/// is: over black, a ring of alpha `a` reads `a × 255`, on every path an
+/// outer shadow is drawn by — the fill's own instance, a further shadow's
+/// instance, and a merged shape's.
+///
+/// The shader once handed the blend a colour already multiplied by its
+/// alpha, and the blend multiplied it again: a white ring at 11% read 3
+/// where its fill beside it read 28.
+#[test]
+fn a_shadow_is_drawn_at_its_own_alpha() {
+    const NAME: &str = "a_shadow_is_drawn_at_its_own_alpha";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let (view, expected) = translucent_shadow_rings();
+    let pixels = render_with_own_renderer(ctx, view, RING_SIZE, 1.0, Color::BLACK);
+
+    // Half the spread out from the box's left side, on its middle row: inside
+    // the ring, clear of both its edges.
+    let x = (RING_PADDING - RING_SPREAD / 2.0) as u32;
+    for (row, colour) in expected.iter().enumerate() {
+        let y = (RING_PADDING + row as f32 * RING_STEP + RING_BOX.1 / 2.0) as u32;
+        let drawn = rgba(&pixels, x, y);
+        for c in 0..3 {
+            let want = (colour[c] * 255.0).round() as u8;
+            assert!(
+                drawn[c].abs_diff(want) <= 1,
+                "row {row}: the ring at ({x}, {y}) reads {drawn:?}, where a shadow of \
+                 {colour:?} over black reads {want} in channel {c}"
+            );
+        }
+    }
+
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// A shape over its own shadow keeps the colour it has without one: a black
+/// shadow over black adds nothing, so a shape casting one is the same shape,
+/// pixel for pixel, at its antialiased edge as much as anywhere — for an
+/// opaque fill and a translucent one, on each path an outer shadow is drawn by.
+///
+/// The edge is where the shadow shows through: there the shape covers part of
+/// the pixel and the shadow the rest, and a composite handing the blend a
+/// colour already multiplied by its alpha darkened the shape's share too.
+#[test]
+fn a_shape_over_its_shadow_keeps_its_own_colour() {
+    const NAME: &str = "a_shape_over_its_shadow_keeps_its_own_colour";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let shadow = Shadow::new((0.0, 0.0), 0.0, RING_SPREAD, Color::BLACK.with_alpha(0.5));
+    let render = |shadowed: bool| {
+        let shadows = |list: Shadows| if shadowed { list } else { Shadows::none() };
+        let pill = |fill: Color| swatch(80.0, 30.0, fill).corners(Corners::squircle(12.0));
+        let row = |fill: Color| {
+            container()
+                .layout(Flex::row().spacing(20.0))
+                .child(pill(fill).shadow(shadows(shadow.into())))
+                .child(pill(fill).shadow(shadows(Shadows::new([shadow, shadow]))))
+                .child(
+                    container()
+                        .layout(Flex::row())
+                        .merge_children(MERGE_DISTANCE)
+                        .shadow(shadows(shadow.into()))
+                        .children([0, 1].map(|_| pill(fill).width(40.0))),
+                )
+        };
+        let view = container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(20.0))
+            .child(row(Color::rgb(0.9, 0.6, 0.2)))
+            .child(row(Color::rgb(0.9, 0.6, 0.2).with_alpha(0.6)));
+        render_with_own_renderer(ctx, view, (320.0, 120.0), 1.0, Color::BLACK)
+    };
+    // Inside each shape's own box. Without a shadow a shape's quad is that
+    // box, and the outer half of its antialiased edge past it is not drawn;
+    // a shadow's quad is larger and draws it, which is the quad and not the
+    // composite.
+    let in_a_box = |x: u32, y: u32| {
+        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+        let rows = [(20.0, 50.0), (70.0, 100.0)];
+        let columns = [(20.0, 100.0), (120.0, 200.0), (220.0, 300.0)];
+        rows.iter().any(|&(top, bottom)| (top..bottom).contains(&y))
+            && columns.iter().any(|&(l, r)| (l..r).contains(&x))
+    };
+    let (shadowed, bare) = (
+        only_where(&render(true), in_a_box),
+        only_where(&render(false), in_a_box),
+    );
+    let edge_pixels = bare
+        .data
+        .chunks(4)
+        .filter(|p| p[0] > 0 && p[0] < 120)
+        .count();
+    assert!(
+        edge_pixels > 0,
+        "the shapes have to have an antialiased edge for the comparison to mean anything"
+    );
+    if let Some(report) = differences(NAME, &bare, &shadowed) {
+        panic!("a black shadow over black changes the shape that casts it: {report}");
+    }
+}
+
 /// A shadow draws nothing past the reach it reports.
 ///
 /// `Shadow::extent` is what a damage rect and a cull rect grow by. The shader
@@ -1095,6 +1243,29 @@ fn a_blur_below_zero_draws_a_hard_shadow() {
 
     if let Some(report) = differences(NAME, &hard, &render(-1.0)) {
         panic!("a blur of -1 is not drawn as a blur of 0.01 is: {report}");
+    }
+}
+
+/// `pixels` with every pixel `keep` turns down cleared, so a comparison reads
+/// only the ones it keeps.
+fn only_where(pixels: &Pixels, keep: impl Fn(u32, u32) -> bool) -> Pixels {
+    let data = pixels
+        .data
+        .chunks(4)
+        .enumerate()
+        .flat_map(|(i, p)| {
+            let (x, y) = (i as u32 % pixels.width, i as u32 / pixels.width);
+            if keep(x, y) {
+                [p[0], p[1], p[2], p[3]]
+            } else {
+                [0; 4]
+            }
+        })
+        .collect();
+    Pixels {
+        width: pixels.width,
+        height: pixels.height,
+        data,
     }
 }
 
@@ -1248,23 +1419,7 @@ fn two_shadows_draw_as_two_stacked_boxes() {
         let distance = outside + qx.max(qy).min(0.0) - r;
         distance.abs() <= 2.5
     };
-    let off_the_outline = |pixels: &Pixels| Pixels {
-        width: pixels.width,
-        height: pixels.height,
-        data: pixels
-            .data
-            .chunks(4)
-            .enumerate()
-            .flat_map(|(i, p)| {
-                let (x, y) = (i as u32 % pixels.width, i as u32 / pixels.width);
-                if outline(x, y) {
-                    [0; 4]
-                } else {
-                    [p[0], p[1], p[2], p[3]]
-                }
-            })
-            .collect(),
-    };
+    let off_the_outline = |pixels: &Pixels| only_where(pixels, |x, y| !outline(x, y));
     if let Some(report) = differences(NAME, &off_the_outline(&stacked), &off_the_outline(&layered))
     {
         panic!("two shadows on one box are not drawn as two stacked boxes: {report}");
