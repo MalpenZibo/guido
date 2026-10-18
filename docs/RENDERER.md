@@ -361,7 +361,10 @@ drops what nobody took after as many again. Its own surface's frames, because
 the renderer is shared: a still panel beside a surface animating at full rate
 would otherwise lose its texture in two seconds. One no surface has named for
 thirty times as long is let go regardless, which is what releases the texture
-of a surface that has gone.
+of a surface that has gone. A blur's two working textures are taken as a pair
+of one size (`take_pair`): the blur reads both through the first one's size,
+and a pool holding a larger layer's texture once handed it two of different
+sizes, which drew the layer stretched (#808).
 
 `group_opacity_fades_an_overlap_as_one_picture`,
 `an_opacity_over_nothing_that_overlaps_is_drawn_without_a_layer`,

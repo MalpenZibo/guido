@@ -125,6 +125,8 @@ impl Drawn {
 
 /// A layer's blurred texture, and what it was blurred from.
 struct Blurred {
+    /// The two the blur ping-pongs between, one size — see
+    /// [`LayerTextures::take_pair`] — so if the first fits, both do.
     work: [LayerTexture; 2],
     plan: BlurPlan,
     /// The working texels the result covers.
@@ -310,10 +312,7 @@ impl LayerTextures {
                                 self.give_blurred(old);
                             }
                             Blurred {
-                                work: [
-                                    self.take(device, images, region),
-                                    self.take(device, images, region),
-                                ],
+                                work: self.take_pair(device, images, region),
                                 plan,
                                 region,
                                 current: false,
@@ -498,8 +497,17 @@ impl LayerTextures {
         {
             return self.spare.swap_remove(at).texture;
         }
+        self.allocate(device, images, (stepped(size.0), stepped(size.1)))
+    }
+
+    /// A new texture of exactly `size`.
+    fn allocate(
+        &mut self,
+        device: &Device,
+        images: &ImageQuadRenderer,
+        size: (u32, u32),
+    ) -> LayerTexture {
         render_stats::record_layer(render_stats::LayerEvent::TextureAllocated);
-        let size = (stepped(size.0), stepped(size.1));
         let texture = make_target(device, self.format, "Layer", size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = images.bind_texture(device, &view);
@@ -509,6 +517,33 @@ impl LayerTextures {
             bind_group,
             size,
         }
+    }
+
+    /// Two textures of one size, at least `size` — what a blur ping-pongs
+    /// between.
+    ///
+    /// One size because the blur reads either through the first one's: its
+    /// passes are sized and stepped by [`Working::size`], and a second texture
+    /// of another size is read stretched by the ratio between them. Two calls
+    /// to [`take`](Self::take) can be handed different ones — a texture
+    /// another layer left in the pool suits the first, and nothing there
+    /// suits the second (#808).
+    fn take_pair(
+        &mut self,
+        device: &Device,
+        images: &ImageQuadRenderer,
+        size: (u32, u32),
+    ) -> [LayerTexture; 2] {
+        let first = self.take(device, images, size);
+        let second = match self
+            .spare
+            .iter()
+            .position(|spare| spare.texture.size == first.size)
+        {
+            Some(at) => self.spare.swap_remove(at).texture,
+            None => self.allocate(device, images, first.size),
+        };
+        [first, second]
     }
 
     fn give(&mut self, texture: LayerTexture) {
@@ -565,5 +600,29 @@ mod tests {
         assert_eq!(stepped(0), TEXTURE_STEP);
         assert_eq!(stepped(TEXTURE_STEP), TEXTURE_STEP);
         assert_eq!(stepped(TEXTURE_STEP + 1), 2 * TEXTURE_STEP);
+    }
+
+    /// A blur's two textures are one size, even when the pool holds one that
+    /// suits the first and nothing that suits the second (#808).
+    #[test]
+    fn a_blur_s_two_textures_are_one_size() {
+        let Some(gpu) = crate::or_skip(crate::renderer::GpuContext::try_new()) else {
+            return;
+        };
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let images = ImageQuadRenderer::new(
+            &gpu.device,
+            format,
+            super::super::clip_records::ClipRecords::new(&gpu.device).layout(),
+        );
+        let mut layers = LayerTextures::new(format);
+        // What a larger layer leaves behind: twice the size a small blur
+        // would be allocated each way, and within what `suits` lets it take.
+        let left = layers.allocate(&gpu.device, &images, (256, 128));
+        layers.give(left);
+
+        let [first, second] = layers.take_pair(&gpu.device, &images, (73, 39));
+        assert_eq!(first.size, (256, 128), "the first is the one left behind");
+        assert_eq!(second.size, first.size, "and the second is its size");
     }
 }
