@@ -225,6 +225,10 @@ SVGs are automatically rasterized at the appropriate scale for crisp rendering:
 - HiDPI displays: SVGs render at the display scale factor
 - Transforms: When scaled via container transforms, SVGs re-rasterize at the higher resolution
 - Quality: A 2x supersampling multiplier ensures smooth edges
+- Content fit: The raster is made at the size the fit draws it at — the box's
+  width and height for `ContentFit::Fill`, the scale that covers the box for
+  `ContentFit::Cover`, cropped as it is drawn — so a stretched or covering SVG
+  is as sharp as a contained one
 
 This means SVGs stay crisp regardless of how they're scaled or transformed.
 
