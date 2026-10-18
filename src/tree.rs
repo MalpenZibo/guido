@@ -2627,6 +2627,14 @@ impl Tree {
             .map(|entry| entry.constraints)
     }
 
+    /// Whether the last layout that ran `id` said its answer depended on the
+    /// pass: something in flight, in it or below it.
+    pub(crate) fn last_layout_depended_on_the_pass(&self, id: WidgetId) -> bool {
+        self.get_dense_index(id)
+            .and_then(|idx| self.dense[idx].laid_out)
+            .is_some_and(|entry| entry.pass_dependent)
+    }
+
     /// The least `id` can be on each axis, as the answer it gave last records
     /// it: what a flex whose children do not fit takes it down to and no
     /// further. Never more than the size it was laid out at, and that size
@@ -4397,6 +4405,36 @@ impl LayoutCtx<'_> {
     /// second answer is the one that stands.
     pub(crate) fn forget_minimum(&mut self) {
         self.minimum = None;
+    }
+
+    /// Run `f`, and answer as well with whether what it laid out said its
+    /// answer depends on the pass — something below in flight. Folded into
+    /// this widget's own answer as well, as it would have been.
+    pub(crate) fn children_depend_on_the_pass<R>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> (R, bool) {
+        let enclosing = std::mem::replace(&mut self.tree.pass_dependent, false);
+        let out = f(self);
+        let depends = self.tree.pass_dependent;
+        self.tree.pass_dependent |= enclosing;
+        (out, depends)
+    }
+
+    /// Whether this widget's last layout said its answer depended on the
+    /// pass: something in flight, in it or below it, as of the last frame.
+    pub(crate) fn last_layout_depended_on_the_pass(&self) -> bool {
+        self.tree.last_layout_depended_on_the_pass(self.id)
+    }
+
+    /// Run `f` as a measure: what it lays out reads where animations are
+    /// going, and what that answers is kept as a measure's — for a layout that
+    /// asks its children where they are heading before it places them.
+    pub(crate) fn measure_with<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = self.tree.enter_pass(LayoutPass::Measure);
+        let out = f(self);
+        self.tree.enter_pass(previous);
+        out
     }
 
     /// A context for the tests of what a layout *reads*, which are about the

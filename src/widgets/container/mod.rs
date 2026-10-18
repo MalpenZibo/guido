@@ -2095,27 +2095,8 @@ impl Widget for Container {
         let padding = lengths.padding;
 
         self.children_source.reconcile_and_get(ctx.tree());
-        let mut content_size = self.lay_out_children(ctx, &child);
-
-        // The content just measured is where a size in flight is heading, and
-        // only that: nothing below this feeds back into the target.
-        self.update_size_targets(ctx, id, &lengths, content_size);
-
-        // A content-sized axis in flight has a box the children were not laid
-        // out in, so they are laid out again in the one it has on this frame,
-        // and that placement stands: what the box reports below — its minimum,
-        // baseline, scroll extents, and its size on an axis not in flight — is
-        // of the content as it is now. Only while something is in flight, and
-        // only where the content does not already fill that box exactly.
-        let in_flight = self.lengths_in_flight(ctx, &lengths);
-        if let Some(in_flight) = in_flight {
-            let frame = self.child_layout(ctx, &in_flight, constraints);
-            if frame.constraints.constrain(content_size) != content_size {
-                ctx.forget_minimum();
-                content_size = self.lay_out_children(ctx, &frame);
-                child = frame;
-            }
-        }
+        let (content_size, in_flight) =
+            self.lay_out_content(ctx, id, &lengths, &mut child, constraints);
         let children = self.children_source.get();
 
         // A box sits on the baseline of its content, as CSS has it: without
@@ -2144,7 +2125,6 @@ impl Widget for Container {
             sd.scroll_state.clamp_offsets();
         }
 
-        let in_flight = in_flight.is_some();
         let size = self.resolve_size(ctx, &lengths, constraints, content_size, in_flight);
         // What the layout recorded its children can be arranged in, or — a
         // layout that says nothing — the size they were.

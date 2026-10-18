@@ -175,8 +175,8 @@ impl Container {
     /// in-flight value so alignment tracks the box as it glides. A shrink-to-fit
     /// length keeps using the declared value instead: feeding the animated size
     /// back in would make the content define the target that defines the
-    /// content. Its in-flight value reaches the children in a second layout,
-    /// through [`lengths_in_flight`](Self::lengths_in_flight), once the first
+    /// content. Its in-flight value reaches the children through
+    /// [`lengths_in_flight`](Self::lengths_in_flight), once what they measure
     /// has set the target.
     ///
     /// Everything outside the running-animation case falls through to the same
@@ -355,13 +355,97 @@ impl Container {
             .layout(ctx, children, child.constraints, child.origin)
     }
 
+    /// Lay the children out, set the size targets from where they are
+    /// heading, and answer with the content's size and whether the box is in
+    /// flight — `child` left as what the placement that stands was laid out
+    /// into.
+    ///
+    /// Two questions, which agree while nothing below this box moves: where
+    /// the content is heading, which the size targets are taken from, and
+    /// where it is on this frame, which the children are placed and drawn at.
+    /// The first is a measure, at the box the size is heading to; the second
+    /// a layout, in the box it has on this frame, so that what the box
+    /// reports — its minimum, baseline, scroll extents, and its size on an
+    /// axis not in flight — is of the content as it is now (#792). Taking the
+    /// target from a layout instead took it from the content's in-flight
+    /// size, and a child animating its own size restarted this box's
+    /// transition on every frame (#794).
+    ///
+    /// A measure is asked for only where the answers can differ: this box's
+    /// last layout read a value in flight — its size, or anything else of its
+    /// own that moves layout, such as a padding — or a layout below it says
+    /// its answer depends on the pass, which the children report on their way
+    /// out of layout, so nothing walks the subtree. What moves only in paint, an
+    /// opacity or a ripple, says nothing. The measure comes first where the
+    /// last layout said so, which is the frame after a motion starts and every
+    /// one until it settles; it is the same question on each of them, and the
+    /// children answer it from their cache until something below changes.
+    pub(super) fn lay_out_content(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        id: WidgetId,
+        lengths: &BoxLengths,
+        child: &mut ChildLayout,
+        constraints: Constraints,
+    ) -> (Size, bool) {
+        // What the children answered, where that is also where they are
+        // heading. A measure already reads where everything is heading, and a
+        // box with no transition on a size that follows its content has no
+        // target to take from one. Where the last layout below said it was in
+        // flight, it is asked where it is heading first; where this one says
+        // so, the motion starts on this frame, and the layout that found it
+        // is where the content is, not where it is going.
+        let measures = !ctx.measuring() && self.animates_to_its_content(lengths);
+        let settled = if !measures {
+            Some(self.lay_out_children(ctx, child))
+        } else if ctx.last_layout_depended_on_the_pass() {
+            None
+        } else {
+            let (content, moving) =
+                ctx.children_depend_on_the_pass(|ctx| self.lay_out_children(ctx, child));
+            (!moving).then_some(content)
+        };
+        let heading_to = match settled {
+            Some(content) => content,
+            None => ctx.measure_with(|ctx| self.lay_out_children(ctx, child)),
+        };
+        self.update_size_targets(ctx, id, lengths, heading_to);
+        self.lay_out_in_flight(ctx, lengths, child, constraints, settled)
+    }
+
+    /// Lay the children out in the box this one has on this frame, and answer
+    /// with their size and whether that box is in flight. `laid_out` is what
+    /// they already answered in `child`, where that placement stands: kept
+    /// where the box is not in flight, or the content fills the box it has.
+    fn lay_out_in_flight(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        lengths: &BoxLengths,
+        child: &mut ChildLayout,
+        constraints: Constraints,
+        laid_out: Option<Size>,
+    ) -> (Size, bool) {
+        let in_flight = self.lengths_in_flight(ctx, lengths);
+        let frame = in_flight.map(|lengths| self.child_layout(ctx, &lengths, constraints));
+        match (frame, laid_out) {
+            (None, Some(content)) => return (content, false),
+            (Some(frame), Some(content)) if frame.constraints.constrain(content) == content => {
+                return (content, true);
+            }
+            (Some(frame), _) => *child = frame,
+            (None, None) => {}
+        }
+        ctx.forget_minimum();
+        (self.lay_out_children(ctx, child), in_flight.is_some())
+    }
+
     /// The lengths this box has on this frame, where a content-sized axis is
     /// in flight: every content-sized axis that animates held where its
     /// animation has it, as an exact length is held. `None` where no such axis
     /// is in flight.
     ///
-    /// What the children are laid out in a second time, once the first layout
-    /// has measured the content and set the target from it — the CSS
+    /// What the children are placed in, once the content has been measured
+    /// at the box the size is heading to and the target set from it — the CSS
     /// `interpolate-size` model, where the box animates between two content
     /// sizes and what is inside is laid out in the box as it is. An axis whose
     /// animation has nowhere to go holds too: what is laid out in a box it is
@@ -373,7 +457,7 @@ impl Container {
         lengths: &BoxLengths,
     ) -> Option<BoxLengths> {
         // A measure reads where the size is going, which is what the content
-        // was just laid out for.
+        // is measured for.
         if ctx.measuring() {
             return None;
         }
@@ -396,13 +480,27 @@ impl Container {
         })
     }
 
-    /// The animation a content-sized `axis` holds at while the box is in
-    /// flight: the one declared on its size, where the axis is neither exact
-    /// nor scrolled and the animation has a value to hold.
-    fn held_anim(&self, axis: Axis, length: &Length) -> Option<&AnimationState<f32>> {
-        let content_sized = length.exact_size().is_none() && !self.scrolls(axis);
+    /// Whether a size of this box follows its content with a transition, on
+    /// either axis: what sets a size target from what the content measures.
+    fn animates_to_its_content(&self, lengths: &BoxLengths) -> bool {
+        self.content_anim(Axis::Horizontal, &lengths.width)
+            .is_some()
+            || self.content_anim(Axis::Vertical, &lengths.height).is_some()
+    }
+
+    /// The animation declared on this box's size along `axis`, where that
+    /// size follows its content rather than an exact length.
+    fn content_anim(&self, axis: Axis, length: &Length) -> Option<&AnimationState<f32>> {
         self.size_anim(axis)
-            .filter(|a| content_sized && !a.is_initial())
+            .filter(|_| length.exact_size().is_none())
+    }
+
+    /// The animation a content-sized `axis` holds at while the box is in
+    /// flight: the one that follows its content, where the axis is not
+    /// scrolled and the animation has a value to hold.
+    fn held_anim(&self, axis: Axis, length: &Length) -> Option<&AnimationState<f32>> {
+        self.content_anim(axis, length)
+            .filter(|a| !self.scrolls(axis) && !a.is_initial())
     }
 
     /// The container's final size, given what its content measured, and
