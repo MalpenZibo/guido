@@ -949,10 +949,11 @@ The paint system tracks which widgets need repainting:
   downward, a card lifted by a translate and a box sliding up with `animate_position` each
   widen damage, the cull and the pointer's test only on the sides they reach.
 - **Damage where it is drawn**: every rect the tree damages for a widget is carried up
-  the walk to the surface root as each ancestor draws it — spread by a blurring one's
-  layer, then moved by a transformed or sliding one to where it draws it now (`Carry`'s
-  `drawn`, the same `placement` it paints with). A label repainting in a lifted card
-  damages the label where the card holds it, not where layout put it.
+  the walk to the surface root as each ancestor draws it — moved by a scroller's offset,
+  spread by a blurring one's layer, then moved by a transformed or sliding one to where
+  it draws it now (`Carry`'s `scroll` and `drawn`, the same `placement` it paints with).
+  A label repainting in a lifted card or a scrolled list damages the label where it is
+  drawn, not where layout put it.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.

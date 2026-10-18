@@ -348,13 +348,14 @@ too.
 What a child inside it repaints is spread as far, so the damage a child
 names — a mark, the ring a shrinking reach vacates, a move — is carried up the
 walk to the surface root that every damaged rect is measured on, through each
-ancestor as it draws it: widened by a blurring one's spread, in its own space,
-and then mapped through where its transform and its slide draw it now — the
-box around the result, under a rotation. A box that clips its children is no
-exception: the clip cuts them inside the layer, and the blur spreads what is
-left past it. Both are read from the same map as the carries, so a tree where
-nothing blurs, transforms or slides pays one emptiness check per ancestor, and
-any other one lookup.
+ancestor as it draws it: moved by a scroller's offset, widened by a blurring
+one's spread, in its own space, and then mapped through where its transform
+and its slide draw it now — the box around the result, under a rotation. A box
+that clips its children is no exception: the clip cuts them inside the layer,
+and the blur spreads what is left past it. All three are read from the same map
+as the carries, so a tree where nothing blurs, transforms, slides or is
+scrolled from its start pays one emptiness check per ancestor, and any other
+one lookup.
 
 The transform the damage is carried through is the one the box draws with now
 (`Carry`'s `drawn`, published from `placement` with the rest of its reach), not
@@ -363,6 +364,16 @@ the label, 4 pixels up, rather than everywhere the card can be. A box whose
 transform changes marks itself and damages both the place it leaves and the
 one it reaches, so a child repainting in that frame is covered whichever of the
 two publishes first (`a_child_repainting_as_its_box_moves_damages_both_places`).
+
+A scroller's offset is carried the same way (`Carry`'s `scroll`, republished by
+the Paint job every scroll asks for): a row repainting in a list scrolled 40
+damages the row 40 up, where it is drawn (#833). Its own track and handle are
+drawn clear of the offset, so the walk does not move them with it
+(`Tree::draw_clear_of_scroll`). A scroll damages the whole viewport, so a row
+marked in that frame before the offset is republished is covered
+(`a_row_repainting_as_its_list_scrolls_damages_where_it_is_drawn`). The walk
+does not clip: a row scrolled out of the viewport that repaints still damages
+its whole box, outside the viewport.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
