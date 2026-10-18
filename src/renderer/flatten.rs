@@ -957,8 +957,16 @@ impl FlattenScratch {
             };
             scan.overlaps |= drawn.intersects(rect);
             drawn.record(Some(rect));
+            // A shape's antialiased edge is drawn past the box its extent
+            // says, and the texture holds that fringe too, inside the empty
+            // texel kept round it. Two shapes whose fringes alone meet do not
+            // overlap: what they share is a sixth of a pixel's coverage.
+            let drawn_to = rect.outset(antialiased_past(cmd) / self.scale);
+            scan.bounds = Some(
+                scan.bounds
+                    .map_or(drawn_to, |held| union_of(held, drawn_to)),
+            );
         }
-        scan.bounds = drawn.union;
         scan
     }
 
@@ -1871,6 +1879,18 @@ fn spilled(rect: Rect, border: f32, shadow: Option<&crate::renderer::Shadow>) ->
         rect.width + grow * 2.0 + offset.0.abs(),
         rect.height + grow * 2.0 + offset.1.abs(),
     )
+}
+
+/// How far past its extent a command draws, in device pixels: the fringe the
+/// shape shader's antialiasing lays outside a shape, which nothing else draws.
+fn antialiased_past(cmd: &FlattenedCommand) -> f32 {
+    match &*cmd.command {
+        DrawCommand::RoundedRect { .. }
+        | DrawCommand::MergedShape { .. }
+        | DrawCommand::Circle { .. }
+        | DrawCommand::Arc { .. } => super::ANTIALIASING_REACH,
+        _ => 0.0,
+    }
 }
 
 /// The box a command's pixels land in, in the space it was flattened in — the
@@ -3529,13 +3549,14 @@ mod layer_tests {
         let DrawCommand::Layer { frame, .. } = &*composite.command else {
             unreachable!()
         };
-        // The texture covers the card, a texel of empty edge round it, its
+        // The texture covers the card and the two texels its antialiased
+        // edge is drawn in past it, a texel of empty edge round both, its
         // origin on an even texel.
-        assert_eq!(*frame, Rect::new(-2.0, -2.0, 103.0, 63.0));
-        assert_eq!(flat.scratch.passes()[0].size, (103, 63));
+        assert_eq!(*frame, Rect::new(-4.0, -4.0, 107.0, 67.0));
+        assert_eq!(flat.scratch.passes()[0].size, (107, 67));
         assert!(
-            content.iter().all(|cmd| cmd.world_transform.tx() >= 2.0),
-            "drawn in the texture's space, the card two texels in"
+            content.iter().all(|cmd| cmd.world_transform.tx() >= 4.0),
+            "drawn in the texture's space, the card four texels in"
         );
     }
 
