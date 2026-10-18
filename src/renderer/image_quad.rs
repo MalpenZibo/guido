@@ -158,29 +158,40 @@ struct RgbaKey {
 
 /// The pixel size to rasterize an SVG of `intrinsic` size at.
 ///
-/// With a `target` — the box it is shown in, in logical pixels — the raster
-/// is fitted to that box, preserving aspect ratio, rather than to the SVG's
-/// intrinsic size: a 16px weather icon with a 104px viewBox costs a 16px
-/// raster, not a 104px one, which is both faster and sharper. `scale` carries
-/// transform scale, HiDPI factor and the quality multiplier.
+/// The raster is made at the size `fit` draws the SVG at in a box of
+/// `box_size` logical pixels, rather than at its intrinsic size: a 16px
+/// weather icon with a 104px viewBox costs a 16px raster, not a 104px one,
+/// which is both faster and sharper. `Contain` scales by the smaller of the
+/// box's ratios to the image, `Cover` by the larger — the part outside the box
+/// is cropped when it is drawn — and `Fill` by each axis's own, stretching the
+/// image in the raster as it is stretched on screen. `None` draws it at its
+/// intrinsic size, whatever the box. `scale` carries transform scale, HiDPI
+/// factor and the quality multiplier.
 ///
 /// Both are quantized first — the scale to quarters, the box to whole pixels —
 /// so a scale animation asks for a raster per step rather than per frame.
 fn svg_extent(
     (width, height): (f32, f32),
     scale: f32,
-    target: Option<(f32, f32)>,
+    fit: ContentFit,
+    (box_width, box_height): (f32, f32),
     limit: u32,
 ) -> Option<(u32, u32)> {
     let scale = (scale * 4.0).round() / 4.0;
-    let scale = match target {
-        Some((tw, th)) if tw >= 1.0 && th >= 1.0 => {
-            scale * (tw.round() / width).min(th.round() / height)
-        }
-        _ => scale,
+    let (across, down) = (box_width.round() / width, box_height.round() / height);
+    let (fit_x, fit_y) = match fit {
+        _ if box_width < 1.0 || box_height < 1.0 => (1.0, 1.0),
+        ContentFit::None => (1.0, 1.0),
+        ContentFit::Contain => (across.min(down), across.min(down)),
+        ContentFit::Cover => (across.max(down), across.max(down)),
+        ContentFit::Fill => (across, down),
     };
-    let scale = scale.min(limit as f32 / width.max(height));
-    let extent = ((width * scale).ceil(), (height * scale).ceil());
+    let (scale_x, scale_y) = (scale * fit_x, scale * fit_y);
+    let shrink = (limit as f32 / (width * scale_x).max(height * scale_y)).min(1.0);
+    let extent = (
+        (width * scale_x * shrink).ceil(),
+        (height * scale_y * shrink).ceil(),
+    );
     (extent.0 >= 1.0 && extent.1 >= 1.0)
         .then_some(((extent.0 as u32).min(limit), (extent.1 as u32).min(limit)))
 }
@@ -438,10 +449,8 @@ impl ImageQuadRenderer {
 
     /// Get or create a cached texture for the given source.
     ///
-    /// `svg_target` is the widget rect the SVG will be displayed in (logical
-    /// pixels), which its raster is sized to — see [`svg_extent`]. `None`
-    /// (ContentFit::None) keeps the intrinsic size, which is what that fit
-    /// mode displays.
+    /// `fit` and `box_size` — the box in logical pixels — are how the SVG is
+    /// drawn, which its raster is sized to: see [`svg_extent`].
     ///
     /// An SVG with no raster of that size yet draws one now if it is small;
     /// a larger one is asked of the worker, and is drawn from the raster it
@@ -452,14 +461,15 @@ impl ImageQuadRenderer {
         queue: &Queue,
         source: &ImageSource,
         render_scale: f32,
-        svg_target: Option<(f32, f32)>,
+        (fit, box_size): (ContentFit, (f32, f32)),
         decoded: Option<&DecodedImage>,
     ) -> Option<Rc<CachedTexture>> {
         let extent = match decoded.and_then(DecodedImage::svg_size) {
             Some(size) => Some(svg_extent(
                 size,
                 render_scale,
-                svg_target,
+                fit,
+                box_size,
                 self.texture_limit,
             )?),
             None => None,
@@ -720,10 +730,6 @@ impl ImageQuadRenderer {
         // Extract scale from transform for SVG quality
         let transform_scale = cmd.world_transform.extract_scale().max(1.0);
 
-        // Rasterize SVGs at the size they are displayed at; ContentFit::None
-        // shows the image at intrinsic size, so no target there.
-        let svg_target = (*content_fit != ContentFit::None).then_some((rect.width, rect.height));
-
         // Get or create the texture
         // An SVG is rasterised at the scale it is shown at; a raster image is
         // uploaded at its own size.
@@ -738,7 +744,7 @@ impl ImageQuadRenderer {
             queue,
             source,
             render_scale,
-            svg_target,
+            (*content_fit, (rect.width, rect.height)),
             decoded.as_ref(),
         ) else {
             self.unsettled += 1;
@@ -949,22 +955,58 @@ mod limit_tests {
 
     #[test]
     fn svg_raster_extents_fit_both_axes() {
+        let intrinsic = |size, scale| svg_extent(size, scale, ContentFit::None, (0.0, 0.0), 8192);
         for ((width, height), expected) in [
             ((8193.0, 1.0), (8192, 1)),
             ((1.0, 8193.0), (1, 8192)),
             ((12000.0, 6000.0), (8192, 4096)),
             ((6000.0, 12000.0), (4096, 8192)),
         ] {
-            assert_eq!(svg_extent((width, height), 2.0, None, 8192), Some(expected));
+            assert_eq!(intrinsic((width, height), 2.0), Some(expected));
         }
-        assert_eq!(svg_extent((20.0, 10.0), 2.0, None, 8192), Some((40, 20)));
+        assert_eq!(intrinsic((20.0, 10.0), 2.0), Some((40, 20)));
         assert_eq!(
-            svg_extent((8193.0, 1.0), 2.0, Some((20.0, 20.0)), 8192),
+            svg_extent((8193.0, 1.0), 2.0, ContentFit::Contain, (20.0, 20.0), 8192),
             Some((40, 1))
         );
-        assert_eq!(svg_extent((0.0, 10.0), 2.0, None, 8192), None);
-        assert_eq!(svg_extent((10.0, 0.0), 2.0, None, 8192), None);
-        assert_eq!(svg_extent((20.0, 10.0), 0.0, None, 8192), None);
+        assert_eq!(intrinsic((0.0, 10.0), 2.0), None);
+        assert_eq!(intrinsic((10.0, 0.0), 2.0), None);
+        assert_eq!(intrinsic((20.0, 10.0), 0.0), None);
+    }
+
+    /// An SVG is rasterized at the size its fit draws it at, so a stretched or
+    /// cropped one is as sharp as a contained one (#813).
+    #[test]
+    fn svg_raster_extents_are_the_size_each_fit_draws() {
+        let fill = svg_extent((10.0, 10.0), 1.0, ContentFit::Fill, (400.0, 4.0), 8192).unwrap();
+        assert!(
+            fill.0 >= 400 && fill.1 >= 4,
+            "Fill in 400×4 asks for {fill:?}"
+        );
+        let cover = svg_extent((16.0, 16.0), 1.0, ContentFit::Cover, (64.0, 16.0), 8192).unwrap();
+        assert!(cover.0 >= 64, "Cover in 64×16 asks for {cover:?}");
+
+        for (size, fit, box_size, expected) in [
+            ((10.0, 10.0), ContentFit::Fill, (400.0, 4.0), (800, 8)),
+            ((16.0, 16.0), ContentFit::Cover, (64.0, 16.0), (128, 128)),
+            ((16.0, 16.0), ContentFit::Contain, (64.0, 16.0), (32, 32)),
+            ((16.0, 16.0), ContentFit::None, (64.0, 16.0), (32, 32)),
+            // The limit shrinks a stretched raster as it does any other,
+            // keeping the shape the fit asked for.
+            ((10.0, 10.0), ContentFit::Fill, (8000.0, 40.0), (8192, 41)),
+            (
+                (10.0, 10.0),
+                ContentFit::Cover,
+                (8000.0, 40.0),
+                (8192, 8192),
+            ),
+        ] {
+            assert_eq!(
+                svg_extent(size, 2.0, fit, box_size, 8192),
+                Some(expected),
+                "{fit:?} in {box_size:?}"
+            );
+        }
     }
 
     #[test]
