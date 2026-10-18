@@ -375,8 +375,8 @@ mod tests {
         );
     }
 
-    /// A memo's body is an effect body, and it runs twice: once where it was
-    /// created, and again whenever a dependency changes — which happens at the
+    /// A memo's body is an effect body: it runs where the memo was created,
+    /// and again whenever a dependency changes — which happens at the
     /// flush, with the root current. So the row's declaration answered the
     /// first computation and the application's answered every one after it
     /// (#337).
