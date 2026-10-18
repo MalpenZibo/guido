@@ -467,6 +467,14 @@ an effect notifies its subscribers normally, so effect → effect and memo → m
 chains work. Panics inside effects or `batch()` are unwind-safe — scope state
 restores via Drop guards and the effect stays alive and re-runnable.
 
+An effect's first run, in `create_effect`, is held in a `batch()`: the effects
+its writes wake run after it, as they do after a later run inside a flush, and
+not inside it. By then it is subscribed to what it read, so a chain that writes
+back a signal the first run read runs it again (#811). Created inside a flush
+or a batch, the outer one drains them instead. The price is a later run's: a
+memo the first run's own write changes is stale until that run ends, and the
+effect runs again with the settled value.
+
 A write queues its readers in two queues: memos, and plain effects. A flush
 runs every queued memo before any plain effect, and a memo whose value changes
 queues the memos that read it behind those still pending. So an effect that
