@@ -196,7 +196,8 @@ included, plus the reach of the blur, cut to the part that can be on the
 surface. A radius of zero is drawn the same way and looks exactly like no
 blur. A backdrop blur
 inside a blurred container frosts only what the container drew beneath it. The blur spreads
-past the container's edges by about one and a quarter of its radius. It
+past everything the container draws — its edges, or a child's shadow standing
+outside them — by about one and a quarter of its radius. It
 animates — see [Animated Properties](../animations/properties.md#blur).
 
 ## Padding
