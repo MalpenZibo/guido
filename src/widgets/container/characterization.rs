@@ -7766,14 +7766,22 @@ fn a_value_that_is_not_a_number_is_reported_once() {
 
     let angle = create_signal(f32::NAN);
     let mut h = H::new(box_of(50.0, 50.0).rotate(angle));
-    h.fit(200.0, 200.0);
 
+    // From before the layout: the reach it publishes resolves the transform
+    // the paints do, and whichever reads it first is the one that says so.
+    // Inside a frame, as the loop lays out, so the clock has nothing to say.
     let before = report_count();
+    h.tree.set_frame_instant(Some(std::time::Instant::now()));
+    h.fit(200.0, 200.0);
+    h.tree.set_frame_instant(None);
     for _ in 0..5 {
         h.paint();
     }
     let reports = report_count() - before;
-    assert_eq!(reports, 1, "five paints, and it should have said so once");
+    assert_eq!(
+        reports, 1,
+        "a layout and five paints, and it should have said so once"
+    );
 }
 
 /// Every declared property goes through the door, not the six somebody

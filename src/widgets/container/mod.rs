@@ -615,12 +615,21 @@ impl Container {
         // and only toward where it is drawn: a box drawn above its place
         // reaches further up and no further either side. The transform and
         // the slide draw the children with the box, so both carry their
-        // overhang too, blurred first, as the layer is composited.
+        // overhang too, blurred first, as the layer is composited — and
+        // whatever a child repaints, which is carried through where they
+        // draw the box now.
         let (dx, dy) = self.position_offset(tree, id);
         let toward = bounds.offset(dx, dy).outset_beyond(bounds);
         let reach = self.max_transform_reach(bounds, extent).slid(toward);
         let carry = crate::tree::Carry {
             spread: blur,
+            // Asked only of a box that can be drawn elsewhere, so a plain
+            // one subscribes to nothing more than it did.
+            drawn: if self.moving_components().any() || (dx, dy) != (0.0, 0.0) {
+                self.placement(tree, id).own
+            } else {
+                Transform::IDENTITY
+            },
             ..reach.carry
         };
         tree.set_own_paint_reach_and_carry(id, reach.painted, carry);
