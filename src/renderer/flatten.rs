@@ -2115,6 +2115,7 @@ mod tests {
                 shadow: Some(shadow),
                 gradient: None,
                 background: false,
+                shadow_only: false,
             }),
             ..command(Shapes)
         });

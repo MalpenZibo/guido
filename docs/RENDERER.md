@@ -884,10 +884,10 @@ pipeline: the same `vs_main`, and `fs_merged` in place of `fs_main`. A shape
 drawn alone runs the fragment shader it ran before merging existed, with no
 loop and no record in it to size its registers by. The two share what follows
 the distance — the functions that cast the shadow, fill and border the shape,
-put it over its shadow and cut it by its clip — so both are composited by one
-definition. A group's shapes are one draw as before; only a group holding a
-merged shape is drawn in runs, a draw per change of pipeline, so a frame that
-merges nothing issues the draws it always did.
+leave the shadow out from under it and cut it by its clip — so both are
+composited by one definition. A group's shapes are one draw as before; only a
+group holding a merged shape is drawn in runs, a draw per change of pipeline,
+so a frame that merges nothing issues the draws it always did.
 
 `fs_merged` folds the members with the quadratic polynomial smooth minimum,
 which leaves two distances further apart than its reach exactly as `min` leaves
@@ -896,11 +896,12 @@ distance, the share of the fragment each side keeps. The fill, the border
 colour and the border width blend by that share, so the border follows the
 merged outline and fades along a neck towards a member without one. The shadow
 is evaluated over the merged distance: the same SDF through the same
-`smoothstep` a lone shape's shadow uses. The merging container's outer shadows
-are all the merged shape's, each taking an instance as a box's do: the first
-rides the merged instance, and every further one is the merged shape drawn
-again beneath it with `MERGED_SHADOW_ONLY` set, for that shadow alone. Its
-inset shadows stay on its own box. A member's own outer shadows are moved
+`smoothstep` a lone shape's shadow uses, and it is left out from under the
+merged shape as a lone shape's is from under that shape. The merging
+container's outer shadows are all the merged shape's, each taking an instance
+as a box's do: the first rides the merged instance, and every further one is
+the merged shape drawn again beneath it with `SHADOW_ONLY` set, for that shadow
+alone. Its inset shadows stay on its own box. A member's own outer shadows are moved
 beneath the merged shape; its inset ones stay with the member, over the merged
 fill. The shape and its shadow take the same
 clip any instance takes.
@@ -971,18 +972,30 @@ pub struct ShapeInstance {
 
 **One shadow per instance.** A container casting several takes an instance for
 each shadow past the first: the first outer shadow rides the fill's own
-instance, every other outer one is an instance with a transparent fill drawn
-before it, and every inset one an instance drawn after it and before the border
-frame — so a box with one shadow costs what it always did, and only a box that
-asks for more pays for more. Every comparable renderer that draws a list of box
-shadows draws one primitive per shadow; a fixed array in the instance would have
-widened every shape drawn, shadow or none, by the three it rarely uses. An
-inset instance carries the container's border width with a transparent border
-colour: the shader casts the shadow inside `dist + border_width`, the edge the
-border frame's inner side is drawn on, which is where CSS casts one. Whether a
-shadow is inset is the `SHADOW_INSET` bit of `shape_kind`, above the byte the
-kinds use: the arcs had taken the tail padding, and every inter-stage location
-was already spoken for.
+instance, every other outer one is that instance again with `SHADOW_ONLY` set,
+drawn before it for its shadow alone, and every inset one an instance drawn
+after it and before the border frame — so a box with one shadow costs what it
+always did, and only a box that asks for more pays for more. Every comparable
+renderer that draws a list of box shadows draws one primitive per shadow; a
+fixed array in the instance would have widened every shape drawn, shadow or
+none, by the three it rarely uses.
+
+An outer shadow is drawn outside its shape alone, as CSS draws a `box-shadow`
+outside the border box, so a translucent fill shows what is behind it and not
+the shadow. Drawn with its shape, the shadow is weighted by `1 - coverage`, the
+shape's edge antialiased as its fill is. Drawn apart, beneath the shape, it has
+to come out the same once the shape is drawn over it, which is why a
+`SHADOW_ONLY` instance carries the fill rather than a transparent one: it draws
+`(1 - coverage) / (1 - alpha)` of the shadow, `alpha` the fill's at that
+fragment. Under an opaque fill that is the whole shadow along the edge, as it
+was before, and a cut that ignored the fill would show there as a light seam.
+
+An inset instance carries the container's border width with a transparent
+border colour: the shader casts the shadow inside `dist + border_width`, the
+edge the border frame's inner side is drawn on, which is where CSS casts one.
+Whether a shadow is inset is the `SHADOW_INSET` bit of `shape_kind`, above the
+byte the kinds use: the arcs had taken the tail padding, and every inter-stage
+location was already spoken for.
 
 **It arrives as a storage buffer, not as vertex attributes.** The vertex shader
 reads `instances[instance_index]`, which is why the struct can hold whatever it

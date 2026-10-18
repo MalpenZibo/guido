@@ -400,8 +400,8 @@ const SHAPE_ARC_SQUARE: u32 = 3u;
 const SHADOW_INSET: u32 = 256u;
 // The members of a merged shape, drawn by `fs_merged` alone.
 const SHAPE_MERGED: u32 = 4u;
-// Above the kinds too: a merged shape drawn for one of its shadows alone.
-const MERGED_SHADOW_ONLY: u32 = 512u;
+// Above the kinds too: a shape drawn for one of its shadows alone.
+const SHADOW_ONLY: u32 = 512u;
 
 // The distance to a stroked circular arc, centred in `rect`.
 //
@@ -501,7 +501,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Compute SDF for the shape
     let gradient_type = in.kinds.x;
-    let shape_kind = in.kinds.y & ~SHADOW_INSET;
+    let shape_kind = in.kinds.y & 0xffu;
     let inset = (in.kinds.y & SHADOW_INSET) != 0u;
     var dist: f32;
     if (shape_kind == SHAPE_ROUNDED_RECT) {
@@ -580,7 +580,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    return clipped(in, over_shadow(shape_result, shadow_contribution));
+    return with_outer_shadow(in, shape_result, shadow_contribution, dist, aa);
 }
 
 // The shadow at a fragment whose shadow distance is `shadow_dist`: the colour,
@@ -630,6 +630,43 @@ fn filled_and_bordered(
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
     return vec4<f32>(result_rgb / result_a, result_a);
+}
+
+// How much of an outer shadow is drawn at a fragment its shape covers by
+// `coverage`, the shape's edge antialiased as its fill is, where what is drawn
+// over the shadow there has the alpha `above`: the shape itself, or for a
+// shadow drawn alone, the same shape drawn next.
+//
+// A shadow is cast outside the shape alone, as CSS casts a `box-shadow`
+// outside the border box, so once the shape is over it `1 - coverage` of it
+// shows: none under a translucent fill. Under an opaque one `above` is the
+// coverage, the share is 1, and the edge is drawn as it always was.
+fn outside(coverage: f32, above: f32) -> f32 {
+    if (above >= 1.0) {
+        return 0.0;
+    }
+    return min((1.0 - coverage) / (1.0 - above), 1.0);
+}
+
+// `shape` over its outer `shadow`, left out from under it, and cut by the
+// clip: what both fragment shaders end in. A shape drawn for its shadow alone
+// reads its fill to know how much of the shadow to leave, and draws none of it.
+fn with_outer_shadow(
+    in: VertexOutput,
+    shape: vec4<f32>,
+    shadow: vec4<f32>,
+    dist: f32,
+    aa: f32,
+) -> vec4<f32> {
+    var cut = shadow;
+    if (cut.a > 0.0) {
+        cut.a *= outside(1.0 - smoothstep(-aa, aa, dist), shape.a);
+    }
+    var drawn = shape;
+    if ((in.kinds.y & SHADOW_ONLY) != 0u) {
+        drawn = vec4<f32>(0.0);
+    }
+    return clipped(in, over_shadow(drawn, cut));
 }
 
 // `shape` composited over its `shadow`.
@@ -774,16 +811,13 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // A further shadow is the merged shape drawn again beneath it for that
-    // shadow alone, as a box draws a rect per further shadow.
-    var shape = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    if ((in.kinds.y & MERGED_SHADOW_ONLY) == 0u) {
-        shape = filled_and_bordered(
-            merged.dist,
-            aa,
-            unpremultiplied(merged.fill),
-            unpremultiplied(merged.border_color),
-            merged.border_width,
-        );
-    }
-    return clipped(in, over_shadow(shape, shadow));
+    // shadow alone, as a box draws its fill again for each.
+    let shape = filled_and_bordered(
+        merged.dist,
+        aa,
+        unpremultiplied(merged.fill),
+        unpremultiplied(merged.border_color),
+        merged.border_width,
+    );
+    return with_outer_shadow(in, shape, shadow, merged.dist, aa);
 }

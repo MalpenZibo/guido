@@ -144,9 +144,10 @@ container()
 with `KeyboardInteractivity` set, or a popup holding a grab.
 
 A key is a `Key`: a character, `Key::Char`, or one of the named keys — Enter,
-Tab, Escape, Backspace, Delete, the arrows, Home and End, `Key::PageUp` and
-`Key::PageDown` from the main block or the keypad, and the function keys
-`Key::F(1)` to `Key::F(12)`. A text input takes neither Up, Down, Page Up,
+Tab, Escape, Backspace, Delete, the arrows, Home and End, `Key::PageUp`,
+`Key::PageDown`, and the function keys `Key::F(1)` to `Key::F(12)`. The
+keypad's Enter, and with NumLock off its arrows, Home, End, Page Up, Page Down
+and Delete, are the same keys as the main block's. A text input takes neither Up, Down, Page Up,
 Page Down nor a function key, so they reach the listener around it — unless a
 scroller stands between them, which scrolls with the arrows, Page Up, Page
 Down, Home and End while it can move: see

@@ -394,6 +394,7 @@ impl<'a> PaintContext<'a> {
             shadow: None,
             gradient: None,
             background: false,
+            shadow_only: false,
         }));
     }
 
@@ -414,6 +415,7 @@ impl<'a> PaintContext<'a> {
             shadow: None,
             gradient: None,
             background: false,
+            shadow_only: false,
         }));
     }
 
@@ -453,7 +455,24 @@ impl<'a> PaintContext<'a> {
             shadow: Some(shadow),
             gradient: None,
             background: false,
+            shadow_only: false,
         }));
+    }
+
+    /// Draw `shadow` alone, beneath a rounded rectangle drawn next with the
+    /// same `color` and `gradient` — see [`DrawCommand::shadow_beneath`].
+    pub(crate) fn draw_shadow_beneath(
+        &mut self,
+        rect: Rect,
+        color: Color,
+        radius: CornerRadii,
+        curvature: f32,
+        shadow: Shadow,
+        gradient: Option<Gradient>,
+    ) {
+        self.node.commands.push(Rc::new(DrawCommand::shadow_beneath(
+            rect, color, radius, curvature, shadow, gradient,
+        )));
     }
 
     /// Draw a fully configured rounded rectangle.
@@ -477,6 +496,7 @@ impl<'a> PaintContext<'a> {
             shadow,
             gradient,
             background: false,
+            shadow_only: false,
         }));
     }
 
@@ -991,6 +1011,7 @@ impl<'a> PaintContext<'a> {
                 shadow: None,
                 gradient: None,
                 background: false,
+                shadow_only: false,
             }));
     }
 }

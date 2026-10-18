@@ -1013,16 +1013,16 @@ fn keysym_to_key(keysym: Keysym, utf8: Option<&str>, is_press: bool) -> Option<K
     // Named keys first
     match keysym {
         Keysym::BackSpace => return Some(Key::Backspace),
-        Keysym::Delete => return Some(Key::Delete),
+        Keysym::Delete | Keysym::KP_Delete => return Some(Key::Delete),
         Keysym::Return | Keysym::KP_Enter => return Some(Key::Enter),
         Keysym::Tab | Keysym::ISO_Left_Tab => return Some(Key::Tab),
         Keysym::Escape => return Some(Key::Escape),
-        Keysym::Left => return Some(Key::Left),
-        Keysym::Right => return Some(Key::Right),
-        Keysym::Up => return Some(Key::Up),
-        Keysym::Down => return Some(Key::Down),
-        Keysym::Home => return Some(Key::Home),
-        Keysym::End => return Some(Key::End),
+        Keysym::Left | Keysym::KP_Left => return Some(Key::Left),
+        Keysym::Right | Keysym::KP_Right => return Some(Key::Right),
+        Keysym::Up | Keysym::KP_Up => return Some(Key::Up),
+        Keysym::Down | Keysym::KP_Down => return Some(Key::Down),
+        Keysym::Home | Keysym::KP_Home => return Some(Key::Home),
+        Keysym::End | Keysym::KP_End => return Some(Key::End),
         Keysym::Prior | Keysym::KP_Prior => return Some(Key::PageUp),
         Keysym::Next | Keysym::KP_Next => return Some(Key::PageDown),
         _ => {}
@@ -1146,6 +1146,30 @@ mod tests {
         }
         // F13 is past what a widget is told about, and is not F(13).
         assert_eq!(keysym_to_key(Keysym::F13, None, true), None);
+    }
+
+    /// With NumLock off the keypad sends its own navigation keysyms, and they
+    /// stand for the same keys as the main block's. Keypad Delete also brings
+    /// U+007F as its text, which must not turn it back into no key.
+    #[test]
+    fn keypad_navigation_keys_reach_widgets() {
+        let named = [
+            (Keysym::KP_Up, Key::Up),
+            (Keysym::KP_Down, Key::Down),
+            (Keysym::KP_Left, Key::Left),
+            (Keysym::KP_Right, Key::Right),
+            (Keysym::KP_Home, Key::Home),
+            (Keysym::KP_End, Key::End),
+            (Keysym::KP_Delete, Key::Delete),
+        ];
+        for (keysym, key) in named {
+            assert_eq!(keysym_to_key(keysym, None, true), Some(key), "{keysym:?}");
+            assert_eq!(keysym_to_key(keysym, None, false), Some(key), "{keysym:?}");
+        }
+        assert_eq!(
+            keysym_to_key(Keysym::KP_Delete, Some("\u{7f}"), true),
+            Some(Key::Delete)
+        );
     }
 
     /// Ordinary typing still goes through the text, not the keysym: that is
