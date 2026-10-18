@@ -372,7 +372,8 @@ The `SurfaceHandle` allows controlling a surface after creation:
 # // not compiled: a signature listing — these declarations have no bodies.
 impl SurfaceHandle {
     /// Close and destroy the surface. Input already queued for it is
-    /// not delivered once this is called
+    /// not delivered once this is called. On a lock cover it does nothing
+    /// but log a warning: `unlock_session()` is what takes covers away
     pub fn close(&self);
 
     /// Get the surface ID
@@ -921,8 +922,12 @@ Details worth knowing:
 - If the compositor refuses the lock (no protocol support, or another
   lock client is active), `lock_state` returns to `Unlocked` and the
   lock surfaces already made are dropped.
-- Unlike ordinary surfaces, closing lock surfaces never exits the app:
-  a lock daemon whose only surfaces are lock surfaces keeps running
+- A lock surface lasts as long as the lock. `close()` on its
+  `SurfaceHandle` does nothing but log a warning — a dismiss button, or
+  a component written for ordinary surfaces, cannot leave an output
+  uncovered — and `unlock_session` is the way out.
+- Unlike ordinary surfaces, taking lock surfaces away never exits the
+  app: a lock daemon whose only surfaces are lock surfaces keeps running
   after unlocking, idle until the next `lock_session` call.
 - Layer-shell properties (anchor, margins, exclusive zone…) don't
   apply to lock surfaces; their size always comes from the compositor.
