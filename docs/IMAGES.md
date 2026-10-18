@@ -144,10 +144,20 @@ SVGs are rasterized at an effective scale that accounts for:
 - Transform scale (from parent containers)
 - Quality multiplier (2.0x for crisp rendering)
 
-This ensures SVGs remain crisp when scaled up via transforms. The scale is
+This ensures SVGs remain crisp when scaled up via transforms. The raster is
+made at the size the content fit draws the SVG at: `Contain` by the smaller of
+the box's two ratios to the image, `Cover` by the larger and only the middle
+its box shows — a square icon across a 1920 × 32 bar is a raster of the bar,
+not of the square it is cut from — and `Fill` at the box's own width and height,
+the image stretched in the raster as it is on screen, so a stretched or cropped
+SVG is as sharp as a contained one. `None` keeps the intrinsic size. The crop is
+part of the raster's key (`SvgRaster` in `src/image_decode.rs`), so two crops of
+one SVG are two textures. The scale is
 quantized to quarters and the box to whole pixels before the raster's pixel
 size is worked out (`svg_extent` in `src/renderer/image_quad.rs`), so a scale
-animation asks for a raster per step rather than per frame.
+animation asks for a raster per step rather than per frame. The part a `Cover`
+raster keeps is the exception: it follows the box as it is, since the draw
+crops by that box.
 
 ## Decoding Off the Frame
 
