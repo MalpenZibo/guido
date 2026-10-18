@@ -86,7 +86,12 @@ let darker = color.darker(0.2);    // 20% toward black
 
 ### Mixing
 
-Linear interpolation between two colors:
+Linear interpolation between two colors, with alpha premultiplied as CSS
+interpolates colours: each channel is weighted by how much of it shows.
+`Color::TRANSPARENT` is black at no alpha, and mixing with it thins a colour
+out rather than darkening it; between two opaque colours it is the plain
+channel-by-channel blend. A transition between two colours, and a gradient
+between its stops, blend the same way:
 
 ```rust
 # extern crate guido;
