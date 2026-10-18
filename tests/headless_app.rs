@@ -5671,3 +5671,139 @@ fn a_resize_that_keeps_the_buffer_still_lays_the_surface_out_again() {
     assert_eq!(app.physical_size(surface), (3840, 48), "the same buffer");
     assert_eq!(app.root_size(surface), (3840.0, 48.0));
 }
+
+/// A 40 square card holding a 40 square child whose shadow spreads 20, the
+/// child's colour following `tint`, under a spacer `gap` tall in a padded
+/// column; `moves` says how the card moves. The child is reported through
+/// `child`.
+fn a_card_whose_child_repaints(
+    gap: RwSignal<f32>,
+    tint: RwSignal<bool>,
+    child: WidgetRef,
+    moves: impl FnOnce(Container) -> Container,
+) -> Container {
+    let shadow = Shadow::new((0.0, 0.0), 0.0, 20.0, Color::WHITE);
+    container()
+        .width(fill())
+        .height(fill())
+        .padding(50.0)
+        .layout(Flex::column())
+        .child(container().width(40.0).height(gap))
+        .child(
+            moves(container().width(40.0).height(40.0)).child(
+                container()
+                    .width(40.0)
+                    .height(40.0)
+                    .shadow(shadow)
+                    .background(move || {
+                        if tint.get() {
+                            Color::rgb(1.0, 0.0, 0.0)
+                        } else {
+                            Color::rgb(0.0, 0.0, 1.0)
+                        }
+                    })
+                    .widget_ref(child),
+            ),
+        )
+}
+
+/// Frame by frame through a move and a second after it, the child repainting
+/// in every frame: each frame's damage covers the child and its shadow where
+/// that frame draws them (#830). While the card moves, its animation advances
+/// before its Paint job republishes where it draws, so the child is marked
+/// against the frame before, and the card's own damage covers it. Once the
+/// card rests away from its place, nothing but the child repaints, and only
+/// the child's own damage can name where it is drawn.
+fn a_repainting_child_is_damaged_where_each_frame_draws_it(
+    start: impl FnOnce(RwSignal<f32>, RwSignal<f32>),
+    moves: impl FnOnce(Container, RwSignal<f32>) -> Container + 'static,
+    case: &str,
+) {
+    let Some(mut app) = headless() else { return };
+    let (gap, offset, tint) = (
+        create_signal(0.0f32),
+        create_signal(0.0f32),
+        create_signal(false),
+    );
+    let child = create_widget_ref();
+    let surface = app.surface(SurfaceConfig::new().width(400).height(400), move || {
+        a_card_whose_child_repaints(gap, tint, child, |card| moves(card, offset))
+    });
+    app.configure(surface, 400, 400, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    start(gap, offset);
+    let mut moved = 0;
+    for frame in 0..60 {
+        tint.set(frame % 2 == 0);
+        let before = app.damage_reported(surface).len();
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        let drawn = child.rect().get_untracked();
+        if drawn != child.layout_rect().get_untracked() {
+            moved += 1;
+        }
+        let shadowed = (
+            (drawn.x - 20.0).floor() as i32,
+            (drawn.y - 20.0).floor() as i32,
+            (drawn.x + drawn.width + 20.0).ceil() as i32,
+            (drawn.y + drawn.height + 20.0).ceil() as i32,
+        );
+        let damage = &app.damage_reported(surface)[before..];
+        assert!(!damage.is_empty(), "{case}, frame {frame}: nothing damaged");
+        let covered = damage.iter().fold(
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+            |(x0, y0, x1, y1), &(x, y, w, h)| (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h)),
+        );
+        assert!(
+            covered.0 <= shadowed.0
+                && covered.1 <= shadowed.1
+                && covered.2 >= shadowed.2
+                && covered.3 >= shadowed.3,
+            "{case}, frame {frame}: damaged {damage:?}, the child and its shadow \
+             drawn at {shadowed:?}"
+        );
+    }
+    assert!(
+        moved > 3,
+        "{case}: the setup: the child moved in {moved} frames"
+    );
+}
+
+#[test]
+fn a_child_repainting_in_a_sliding_card_is_damaged_where_each_frame_draws_it() {
+    a_repainting_child_is_damaged_where_each_frame_draws_it(
+        |gap, _| gap.set(200.0),
+        |card, _| card.animate_position(Transition::new(160.0, TimingFunction::Linear)),
+        "a slide",
+    );
+}
+
+#[test]
+fn a_child_repainting_in_a_card_translated_by_a_transition_is_damaged_where_each_frame_draws_it() {
+    a_repainting_child_is_damaged_where_each_frame_draws_it(
+        |_, offset| offset.set(200.0),
+        |card, offset| {
+            card.translate(
+                (move || Translate::new(offset.get(), 0.0))
+                    .transition(Transition::new(160.0, TimingFunction::Linear)),
+            )
+        },
+        "a translate",
+    );
+}
+
+#[test]
+fn a_child_repainting_in_a_card_translated_by_a_spring_is_damaged_where_each_frame_draws_it() {
+    a_repainting_child_is_damaged_where_each_frame_draws_it(
+        |_, offset| offset.set(200.0),
+        |card, offset| {
+            card.translate(
+                (move || Translate::new(offset.get(), 0.0))
+                    .transition(Transition::spring(SpringConfig::BOUNCY)),
+            )
+        },
+        "a spring",
+    );
+}
