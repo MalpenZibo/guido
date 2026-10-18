@@ -1,8 +1,8 @@
-use super::diagnostics::snapshot_zone;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use super::effect::create_memo_effect;
 use super::into_signal::{IntoSignal, MemoMarker};
-use super::invalidation::suspend_widget_tracking;
-use super::runtime::suspend_effect_tracking;
 use super::signal::{RwSignal, Signal, create_signal};
 
 /// Eager computed value that recomputes immediately when dependencies change.
@@ -56,26 +56,29 @@ where
     T: Clone + PartialEq + Send + 'static,
     F: Fn() -> T + 'static,
 {
-    // The seed value is computed with tracking suspended. A memo is often
-    // created inside something that is itself being tracked — a dynamic
-    // children closure building a component, a paint/layout pass, another
-    // effect — and attributing this first read to that scope would hand it
-    // every dependency the memo exists to absorb: a hot signal read only
-    // inside the memo would rebuild the enclosing subtree on every write.
-    // The memo's own effect below establishes the real dependencies.
-    let initial = snapshot_zone(|| suspend_widget_tracking(|| suspend_effect_tracking(&f)));
-    let signal = create_signal(initial);
-    // The effect runs immediately (establishing dependencies) and re-runs
-    // whenever any dependency changes. Signal::set() uses PartialEq to
-    // skip notification when the value hasn't changed.
+    // `f` runs once, as the effect's first run: in the effect's own scope, so
+    // what it makes is disposed when it recomputes, and with the effect's own
+    // read tracking, so whatever is tracking around the caller — a dynamic
+    // children closure, a paint pass, another effect — is not handed the
+    // dependencies the memo exists to absorb.
     //
-    // Lifetime: the effect belongs to whatever scope created the memo, and
-    // outlives the binding either way — a memo created outside any scope
-    // keeps updating for as long as the application runs. Being an effect,
-    // what `f` itself creates is disposed when it recomputes.
+    // The signal is made afterwards, in the caller's scope, from the value
+    // that run left behind. A memo created outside any scope keeps updating
+    // for as long as the application runs.
+    let seed = Rc::new(RefCell::new(None));
+    let target = Rc::new(Cell::new(None::<RwSignal<T>>));
+    let (first, later) = (seed.clone(), target.clone());
     create_memo_effect(move || {
-        signal.set(f());
+        let value = f();
+        match later.get() {
+            // `set` compares with `PartialEq`, so an unchanged value notifies nobody.
+            Some(signal) => signal.set(value),
+            None => *first.borrow_mut() = Some(value),
+        }
     });
+    let initial = seed.take().expect("a memo's effect runs when it is made");
+    let signal = create_signal(initial);
+    target.set(Some(signal));
     Memo { signal }
 }
 
@@ -234,6 +237,57 @@ mod tests {
 
         trigger.set(1);
         assert_eq!(runs.get(), 2, "its own dependencies must still fire");
+    }
+
+    /// `f` runs once when the memo is made, in the memo's own scope, so what
+    /// that run registers goes when the memo recomputes and not with the scope
+    /// that made the memo.
+    #[test]
+    fn a_memo_runs_once_at_creation_and_its_first_run_is_disposed_on_the_next() {
+        use crate::reactive::owner::{on_cleanup, with_owner};
+
+        let source = create_signal(0);
+        let calls = Rc::new(Cell::new(0));
+        let cleanups = Rc::new(Cell::new(0));
+        let (calls_f, cleanups_f) = (calls.clone(), cleanups.clone());
+        let (memo, _scope) = with_owner(|| {
+            create_memo(move || {
+                calls_f.set(calls_f.get() + 1);
+                let cleanups = cleanups_f.clone();
+                on_cleanup(move || cleanups.set(cleanups.get() + 1));
+                source.get()
+            })
+        });
+        assert_eq!(calls.get(), 1, "f runs once when the memo is made");
+        assert_eq!(memo.get(), 0);
+
+        let registered = calls.get();
+        source.set(1);
+        assert_eq!(
+            cleanups.get(),
+            registered,
+            "every cleanup registered before the change has run"
+        );
+        assert_eq!(calls.get(), 2);
+        assert_eq!(memo.get(), 1);
+    }
+
+    /// A recompute that lands on the same value notifies nobody.
+    #[test]
+    fn a_memo_that_recomputes_the_same_value_does_not_notify() {
+        let source = create_signal(1);
+        let parity = create_memo(move || source.get() % 2);
+        let runs = Rc::new(Cell::new(0));
+        let runs_c = runs.clone();
+        crate::reactive::create_effect(move || {
+            parity.get();
+            runs_c.set(runs_c.get() + 1);
+        });
+
+        source.set(3);
+        assert_eq!(runs.get(), 1, "the value did not change");
+        source.set(4);
+        assert_eq!(runs.get(), 2);
     }
 
     /// Memo-of-memo chains must propagate through both levels.

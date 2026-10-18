@@ -479,6 +479,67 @@ fn raster_files_are_drawn_regardless_of_their_extensions() {
     }
 }
 
+/// A 32×16 JPEG, red on the left and green on the right, whose EXIF says to
+/// show it a quarter turn clockwise: a portrait photo as a phone stores it.
+fn sideways_photo() -> Vec<u8> {
+    use ::image::ImageEncoder;
+    let pixels = ::image::RgbImage::from_fn(32, 16, |x, _| {
+        ::image::Rgb(if x < 16 { [255, 0, 0] } else { [0, 255, 0] })
+    });
+    // A little-endian TIFF header and one IFD with one entry: Orientation
+    // (tag 0x0112), a SHORT, 6.
+    let exif = b"II*\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0".to_vec();
+    let mut encoded = Vec::new();
+    let mut encoder = ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 100);
+    encoder.set_exif_metadata(exif).unwrap();
+    encoder
+        .write_image(pixels.as_raw(), 32, 16, ::image::ExtendedColorType::Rgb8)
+        .unwrap();
+    encoded
+}
+
+/// The photo is laid out 16×32 and drawn upright — what was on the left is on
+/// top — so the box and the pixels in it agree.
+///
+/// Red before #814: laid out 32×16, and drawn as stored.
+fn a_sideways_photo_is_drawn_upright(source: ImageSource) {
+    let _serial = serial();
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(40)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+            .background_color(BACKDROP),
+        move || container().child(image(source)),
+    );
+    app.configure(surface, 40, 40, 1.0);
+    app.step();
+    app.wait_for_image_decodes();
+    app.step();
+
+    let top = app.read_pixel(surface, 8, 8);
+    let bottom = app.read_pixel(surface, 8, 24);
+    let beside = app.read_pixel(surface, 24, 8);
+    assert!(is_red(top), "the left half is on top, got {top:?}");
+    assert!(is_green(bottom), "the right half is below, got {bottom:?}");
+    assert!(
+        is_backdrop(beside),
+        "the photo is 16 wide, got {beside:?} at x = 24"
+    );
+}
+
+#[test]
+fn a_sideways_photo_file_is_drawn_upright() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sideways.jpg");
+    std::fs::write(&path, sideways_photo()).unwrap();
+    a_sideways_photo_is_drawn_upright(ImageSource::Path(path));
+}
+
+#[test]
+fn sideways_photo_bytes_are_drawn_upright() {
+    a_sideways_photo_is_drawn_upright(ImageSource::Bytes(sideways_photo().into()));
+}
+
 #[test]
 fn unreadable_raster_files_stay_failed() {
     let _serial = serial();

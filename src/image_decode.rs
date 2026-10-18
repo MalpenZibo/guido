@@ -40,6 +40,7 @@
 //! every step; the first one draws nothing, as a raster source does.
 
 use std::hash::{Hash, Hasher};
+use std::io::{BufRead, Cursor, Seek};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -766,10 +767,9 @@ fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
     let key = &image.0.key;
     let decoded = match key {
         DecodeKey::Path(path) => image::ImageReader::open(path)
-            .and_then(image::ImageReader::with_guessed_format)
             .map_err(image::ImageError::IoError)
-            .and_then(image::ImageReader::decode),
-        DecodeKey::Bytes(bytes) => image::load_from_memory(bytes),
+            .and_then(decode_raster),
+        DecodeKey::Bytes(bytes) => decode_raster(image::ImageReader::new(Cursor::new(&bytes[..]))),
         DecodeKey::SvgPath(_) | DecodeKey::SvgBytes(_) => {
             return rasterize(image.0.svg.as_ref()?, extent?);
         }
@@ -797,6 +797,22 @@ fn decode(image: &DecodedImage, extent: Extent) -> Option<Pixels> {
             None
         }
     }
+}
+
+/// A raster's pixels, turned as its metadata says to show them.
+fn decode_raster<R: BufRead + Seek>(
+    reader: image::ImageReader<R>,
+) -> image::ImageResult<image::DynamicImage> {
+    let (mut decoder, orientation) = crate::image_metadata::raster_decoder(reader)?;
+    // What `ImageReader::decode` does and `from_decoder` leaves to its
+    // caller: the pixels are counted against the allocation cap, and the
+    // decoder is left what remains.
+    let mut limits = image::Limits::default();
+    limits.reserve(image::ImageDecoder::total_bytes(&decoder))?;
+    image::ImageDecoder::set_limits(&mut decoder, limits)?;
+    let mut pixels = image::DynamicImage::from_decoder(decoder)?;
+    pixels.apply_orientation(orientation);
+    Ok(pixels)
 }
 
 /// Scale each texel's colour by its alpha, in place: the textured-quad

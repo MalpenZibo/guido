@@ -166,7 +166,8 @@ rasterized at 1024 px costs 4–8 ms the same way.
   handle the entry, the worker's job and every draw command share.
 - **The header, synchronously.** Making an entry reads the intrinsic size from
   the header (`image_metadata::get_intrinsic_size`, which for bytes too reads
-  only the header), so the first layout gives the box its size. A header that
+  only the header), so the first layout gives the box its size. The size is
+  the one the image is shown at: see Orientation below. A header that
   cannot be read makes the entry `Failed` at once, and no worker is involved.
   An SVG has no header: its entry parses the document once
   (`image_metadata::parse_svg`) for the size, and keeps it, so every raster
@@ -278,6 +279,20 @@ first frame.
 `tests/image_decode.rs` holds the worker (`Headless::hold_image_decodes`) to
 make "not yet decoded" deterministic, and is a binary of its own because the
 background-write queue is process-wide.
+
+## Orientation
+
+A raster is shown the way its EXIF orientation says, as browsers show it
+(`image-orientation: from-image` is CSS's default): a phone's portrait photo,
+stored landscape with a quarter turn recorded, is laid out portrait and drawn
+upright. `image_metadata::raster_decoder` opens a raster's decoder and reads
+the decoder's `orientation()`; the header read turns the size by it and the
+worker turns the pixels by it (`DynamicImage::apply_orientation`), so the box
+and what is drawn in it agree. The renderer takes its sizes from the decoded
+pixels, which are already turned. Reading the orientation parses the header
+again from what the decoder already holds; the file is read and the pixels
+decoded once. A decoder that reads no orientation — GIF's — and metadata that
+cannot be read leave the image as stored.
 
 ## Tint
 

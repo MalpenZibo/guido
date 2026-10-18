@@ -150,7 +150,7 @@ pub fn record_effect_read(signal_id: SignalId) {
 /// Reads inside the closure are attributed to no effect. The counterpart of
 /// [`suspend_widget_tracking`](super::invalidation::suspend_widget_tracking):
 /// together they make a computation invisible to whatever is tracking around
-/// it, which is what a memo's seed computation needs.
+/// it, which is what an untracked read of a derived signal needs.
 pub(crate) fn suspend_effect_tracking<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,

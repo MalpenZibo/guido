@@ -189,7 +189,8 @@ it, and before each re-run it is emptied in the order an owner is disposed:
 child scopes, then `on_cleanup`s last-first, then effects, then signals. So a
 signal, nested effect, timer, task, `on_cleanup` or context declared by one run
 is gone when the next starts, and the last run's go with the effect. A memo and `watch()` are
-effects, so what a memo's closure makes is disposed when it recomputes. This is
+effects, so what a memo's closure makes is disposed when it recomputes; its
+closure runs once when the memo is made, as that effect's first run. This is
 Solid's and Leptos's rule.
 
 Something a run makes to keep — a signal handed to code outside the effect — is
@@ -465,6 +466,14 @@ Effect callbacks execute with no internal borrow held: writing a signal inside
 an effect notifies its subscribers normally, so effect → effect and memo → memo
 chains work. Panics inside effects or `batch()` are unwind-safe — scope state
 restores via Drop guards and the effect stays alive and re-runnable.
+
+An effect's first run, in `create_effect`, is held in a `batch()`: the effects
+its writes wake run after it, as they do after a later run inside a flush, and
+not inside it. By then it is subscribed to what it read, so a chain that writes
+back a signal the first run read runs it again (#811). Created inside a flush
+or a batch, the outer one drains them instead. The price is a later run's: a
+memo the first run's own write changes is stale until that run ends, and the
+effect runs again with the settled value.
 
 A write queues its readers in two queues: memos, and plain effects. A flush
 runs every queued memo before any plain effect, and a memo whose value changes
