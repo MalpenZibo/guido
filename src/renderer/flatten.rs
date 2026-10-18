@@ -960,7 +960,8 @@ impl FlattenScratch {
             // A shape's antialiased edge is drawn past the box its extent
             // says, and the texture holds that fringe too, inside the empty
             // texel kept round it. Two shapes whose fringes alone meet do not
-            // overlap: what they share is a sixth of a pixel's coverage.
+            // overlap: on the pixel grid the fringes cover nothing, and off it
+            // they share the pixel the two edges fall in.
             let drawn_to = rect.outset(antialiased_past(cmd) / self.scale);
             scan.bounds = Some(
                 scan.bounds
@@ -3549,14 +3550,14 @@ mod layer_tests {
         let DrawCommand::Layer { frame, .. } = &*composite.command else {
             unreachable!()
         };
-        // The texture covers the card and the two texels its antialiased
-        // edge is drawn in past it, a texel of empty edge round both, its
-        // origin on an even texel.
-        assert_eq!(*frame, Rect::new(-4.0, -4.0, 107.0, 67.0));
-        assert_eq!(flat.scratch.passes()[0].size, (107, 67));
+        // The texture covers the card and the texel its antialiased edge is
+        // drawn in past it, a texel of empty edge round both, its origin on an
+        // even texel.
+        assert_eq!(*frame, Rect::new(-2.0, -2.0, 104.0, 64.0));
+        assert_eq!(flat.scratch.passes()[0].size, (104, 64));
         assert!(
-            content.iter().all(|cmd| cmd.world_transform.tx() >= 4.0),
-            "drawn in the texture's space, the card four texels in"
+            content.iter().all(|cmd| cmd.world_transform.tx() >= 2.0),
+            "drawn in the texture's space, the card two texels in"
         );
     }
 

@@ -1119,11 +1119,10 @@ fn a_shape_over_its_shadow_keeps_its_own_colour() {
 /// every pixel as it was — the ring just outside each box included — at scale
 /// one and two, upright, turned and shrunk, alone and merged (#836).
 ///
-/// The shader fades an edge over a pixel either side of it, and up to two
-/// across a square corner. The quad a shadow is drawn on reaches past the box
-/// and holds the outer half of that fade; a quad that was the box alone held
-/// only the inner half, and the same shape lost its fringe the moment it lost
-/// its shadow.
+/// The shader fades an edge over half a pixel either side of it. The quad a
+/// shadow is drawn on reaches past the box and holds the outer half of that
+/// fade; a quad that was the box alone held only the inner half, and the same
+/// shape lost its fringe the moment it lost its shadow.
 #[test]
 fn an_edge_is_drawn_whole_with_or_without_a_shadow() {
     const NAME: &str = "an_edge_is_drawn_whole_with_or_without_a_shadow";
@@ -1175,6 +1174,70 @@ fn an_edge_is_drawn_whole_with_or_without_a_shadow() {
                  shape that casts it: {report}"
             );
         }
+    }
+}
+
+/// Square shapes on the pixel grid are drawn as their pixels: four opaque
+/// squares meeting in a block, each of its own colour, at scale one and two —
+/// every pixel inside a square is that square's colour, every pixel outside
+/// the block the background, and nothing at a seam is a mix of the two sides.
+///
+/// The edge's fade is a pixel wide, half the distance's `fwidth` either side
+/// of it, which is the share of a pixel the shape covers. Twice that, a pixel
+/// either side, smeared a sixth of each square into its neighbour and its
+/// own edge row a sixth towards what was beneath.
+#[test]
+fn abutting_squares_on_the_pixel_grid_do_not_mix() {
+    const NAME: &str = "abutting_squares_on_the_pixel_grid_do_not_mix";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let colours = [
+        [Color::rgb(0.9, 0.2, 0.2), Color::rgb(0.2, 0.3, 0.9)],
+        [Color::rgb(0.2, 0.8, 0.3), Color::rgb(0.95, 0.85, 0.2)],
+    ];
+    let (margin, side) = (10.0, 20.0);
+    for scale in [1.0f32, 2.0] {
+        let view = container()
+            .padding(margin)
+            .layout(Flex::column())
+            .children(colours.map(|row| {
+                container()
+                    .layout(Flex::row())
+                    .children(row.map(|colour| swatch(side, side, colour)))
+            }));
+        let logical = margin * 2.0 + side * 2.0;
+        let pixels = render_with_own_renderer(ctx, view, (logical, logical), scale, BACKDROP);
+        let expected = |x: u32, y: u32| -> Color {
+            let at = |p: u32| ((p as f32 + 0.5) / scale - margin) / side;
+            let (column, row) = (at(x), at(y));
+            if (0.0..2.0).contains(&column) && (0.0..2.0).contains(&row) {
+                colours[row as usize][column as usize]
+            } else {
+                BACKDROP
+            }
+        };
+        let mut wrong = Vec::new();
+        for y in 0..pixels.height {
+            for x in 0..pixels.width {
+                let want = expected(x, y).to_rgba8();
+                let got = rgba(&pixels, x, y);
+                if [want.0, want.1, want.2]
+                    .iter()
+                    .zip(&got)
+                    .any(|(w, g)| w.abs_diff(*g) > 1)
+                {
+                    wrong.push(((x, y), got, want));
+                }
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "at {scale}x, {} pixels are not the colour of the square or the background \
+             they lie in, the first {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(6)]
+        );
     }
 }
 

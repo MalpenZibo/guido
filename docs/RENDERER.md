@@ -1061,20 +1061,34 @@ same shape's without one. `a_shadow_is_drawn_at_its_own_alpha` and
 `a_shape_over_its_shadow_keeps_its_own_colour` in `tests/golden_images.rs`
 watch it.
 
-**The quad an instance is drawn on reaches past its box.** The fragment stage
-fades an edge over `fwidth` of the distance either side of it — a pixel along
-a straight side, up to two across a square corner, where both partials count —
-so `vs_main` outsets every quad by `antialiasing_reach`: that bound measured in
-the instance's own space, from the inverse of its transform, two device pixels
-upright and more under a shrink. A shadow's reach is taken where it goes
-further. A quad that was the box alone drew only the inner half of the fade,
-and the same shape gained a fringe the moment it gained a shadow, even an
-invisible one (#836). The pixels past the box are the ones a repaint has to
-damage and a layer's texture has to hold, so both grow by
-`ANTIALIASING_REACH`: `buffer_damage` in `src/lib.rs`, and `scan_layer` in
-`src/renderer/flatten.rs`. `an_edge_is_drawn_whole_with_or_without_a_shadow` in
-`tests/golden_images.rs` and `a_repainting_shape_damages_the_fringe_of_its_edge`
-in `tests/headless_app.rs` watch them.
+**An edge fades across the pixel it falls in.** `edge_fade` is half the
+distance's `fwidth`: half a device pixel's extent along the edge's normal,
+either side of it, so `smoothstep` ramps across about the share of the pixel
+the shape covers, as the backdrop composite feathers its shape. A whole
+`fwidth` either side ramped over two pixels, so a square on the pixel grid
+lost a sixth of its edge row and put a sixth of itself into the pixel beside
+it, and two squares that met mixed at the seam. A square corner is faded as
+its two sides, each on its own and the two multiplied (`shape_coverage`):
+faded as one distance, which bends along the corner's diagonal, `fwidth`
+across the bend sums both sides' slopes and the pixel off the corner came out
+a sixth covered. `abutting_squares_on_the_pixel_grid_do_not_mix` in
+`tests/golden_images.rs` watches both.
+
+**The quad an instance is drawn on reaches past its box** by that fade:
+`vs_main` outsets it by `antialiasing_reach`, measured in the instance's own
+space from the inverse of its transform, along each axis — half a device pixel
+upright and unscaled, more under a turn or a shrink. A shadow's reach is taken
+where it goes further. A quad that was the box alone drew only the inner half
+of the fade, and the same shape gained a fringe the moment it gained a shadow,
+even an invisible one (#836). The pixels past the box are the ones a repaint
+has to damage and a layer's texture has to hold, so both grow by
+`ANTIALIASING_REACH`, that reach's bound in device pixels under a turn or a
+uniform scale — a shape turned and then stretched unevenly is sheared, and its
+acute corners reach further: `buffer_damage` in `src/lib.rs`, and `scan_layer` in
+`src/renderer/flatten.rs`. `an_edge_is_drawn_whole_with_or_without_a_shadow`
+in `tests/golden_images.rs` and
+`a_repainting_shape_damages_the_fringe_of_its_edge` in `tests/headless_app.rs`
+watch them.
 
 An inset instance carries the container's border width with a transparent
 border colour: the shader casts the shadow inside `dist + border_width`, the

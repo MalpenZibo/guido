@@ -143,20 +143,23 @@ fn to_ndc(pos: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ndc_x, ndc_y);
 }
 
-// How far the fragment stage's fade can reach past an edge, in the instance's
-// own space, where the linear part of its transform is `a b / c d`. The fade
-// runs over `fwidth` of the distance, the sum of its two screen partials, and
-// a distance moves at most one unit a unit — so at most the length of what one
-// device pixel across and one down are here. Two upright and unscaled: one
-// along a straight side, and the two partials' whole sum across a square
-// corner's diagonal, where each takes one side. More under a shrink. A
-// transform that collapses draws nothing, and reaches nothing.
-fn antialiasing_reach(a: f32, b: f32, c: f32, d: f32) -> f32 {
+// How far the fragment stage's fade can reach past the shape's box, in the
+// instance's own space, across its left and right sides and across its top and
+// bottom, where the linear part of its transform is `a b / c d`. The fade runs
+// `edge_fade` either side of an edge, half its distance's `fwidth`: half a
+// device pixel's extent along the edge's normal — measured here, from the
+// inverse of the transform, along each axis. Half a unit each way upright and
+// unscaled, more under a turn or a shrink. A square corner fades as its two
+// sides do, so it reaches no further; a rounded one bends away from the box's
+// corner, which leaves it the room. A transform that collapses draws nothing,
+// and reaches nothing. `ANTIALIASING_REACH` in `gpu.rs` bounds this in device
+// pixels under a turn or a uniform scale; a shear's acute corners reach past it.
+fn antialiasing_reach(a: f32, b: f32, c: f32, d: f32) -> vec2<f32> {
     let det = abs(a * d - b * c);
     if (det <= 0.0) {
-        return 0.0;
+        return vec2<f32>(0.0);
     }
-    return (length(vec2<f32>(d, c)) + length(vec2<f32>(b, a))) / det;
+    return 0.5 * vec2<f32>(abs(d) + abs(b), abs(c) + abs(a)) / det;
 }
 
 // === Vertex Shader ===
@@ -192,11 +195,11 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
         expand.z = max(shadow_blur * fadeout + shadow_offset.x, 0.0) + shadow_spread;
         expand.w = max(shadow_blur * fadeout + shadow_offset.y, 0.0) + shadow_spread;
     }
-    // The fragment stage fades an edge over `fwidth` either side of it, so
+    // The fragment stage fades an edge over `edge_fade` either side of it, so
     // the quad reaches as far past the box as that fade can, or its outer
     // half is never drawn (#836). A shadow reaching less far on a side, or a
     // negative spread, leaves this.
-    expand = max(expand, vec4<f32>(antialiasing_reach(a, b, c, d)));
+    expand = max(expand, antialiasing_reach(a, b, c, d).xyxy);
 
     // Compute expanded quad bounds
     let quad_min = vec2<f32>(
@@ -532,8 +535,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         dist = arc_sdf(pos, in.shape_rect, radii, shape_kind);
     }
 
-    // Anti-aliasing using fwidth
-    let aa = fwidth(dist) * 1.0;
+    let covered = shape_coverage(pos, in.shape_rect, radii, shape_kind, dist, border_width);
 
     // Compute local UV coordinates (0..1 within the shape rect)
     let local_uv = (pos - in.shape_rect.xy) / in.shape_rect.zw;
@@ -561,7 +563,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // === Main Shape ===
-    var shape_result = filled_and_bordered(dist, aa, fill_color, in.border_color, border_width);
+    var shape_result = filled_and_bordered(covered, fill_color, in.border_color, border_width);
 
     // === Inset shadow, over the fill ===
     // The outer shadow mirrored: the box inside the border — its edge
@@ -593,7 +595,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
         let hole = rounded_rect_sdf(pos - in.shadow_params.xy, hole_rect, hole_radii, curvature)
             - (shrink - s);
-        let inside = 1.0 - smoothstep(-aa, aa, dist + border_width);
+        let inside = covered.y;
         let a = in.shadow_color.a * smoothstep(0.0, shadow_blur * 3.0, hole) * inside;
         let out_a = a + shape_result.a * (1.0 - a);
         if (out_a > 0.0) {
@@ -602,7 +604,61 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    return with_outer_shadow(in, shape_result, shadow_contribution, dist, aa);
+    return with_outer_shadow(in, shape_result, shadow_contribution, covered.x);
+}
+
+// How far either side of an edge at distance `dist` it fades, in the units the
+// distance is measured in: half a device pixel, so that `smoothstep(-aa, aa,
+// dist)` ramps across the one pixel the edge falls in, and covers about the
+// share of it the shape does — as the backdrop composite feathers its shape.
+// A pixel either side, `fwidth` whole, mixed a sixth of a pixel-aligned square
+// into the pixel beside it. Floored, because at zero `smoothstep`'s two edges
+// meet and WGSL leaves it undefined.
+fn edge_fade(dist: f32) -> f32 {
+    return max(fwidth(dist) * 0.5, 1e-4);
+}
+
+// How much of this fragment the edge at distance `dist` leaves inside.
+fn edge_coverage(dist: f32, aa: f32) -> f32 {
+    return 1.0 - smoothstep(-aa, aa, dist);
+}
+
+// How much of this fragment the shape covers, and how much of it lies inside
+// the border `border_width` in from the shape's edge.
+//
+// A square corner is the two sides that meet there, each faded on its own and
+// the two multiplied, which is what a pixel's box covers of a corner. Faded
+// as one distance it would not be: the distance there is the larger of the
+// two sides', so it bends along the diagonal, and `fwidth` across the bend
+// sums both sides' slopes — the corner pixel of a square on the pixel grid
+// came out a sixth covered rather than not at all. Every derivative is taken
+// before anything is chosen, as WGSL requires of them.
+fn shape_coverage(
+    pos: vec2<f32>,
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    shape_kind: u32,
+    dist: f32,
+    border_width: f32,
+) -> vec2<f32> {
+    let half_size = rect.zw * 0.5;
+    let rel = pos - (rect.xy + half_size);
+    let sides = abs(rel) - half_size;
+    // Each side's distance moves with the position as the position does, so
+    // its fade is the position's: one derivative for both, and none of the
+    // fold `abs` puts down the middle.
+    let side_fade = max(fwidth(pos) * 0.5, vec2<f32>(1e-4));
+    let aa = edge_fade(dist);
+    let top = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
+    let radius = select(top.y, top.x, rel.y < 0.0);
+    if (shape_kind == SHAPE_ROUNDED_RECT && radius <= 0.0) {
+        return vec2<f32>(
+            edge_coverage(sides.x, side_fade.x) * edge_coverage(sides.y, side_fade.y),
+            edge_coverage(sides.x + border_width, side_fade.x)
+                * edge_coverage(sides.y + border_width, side_fade.y),
+        );
+    }
+    return vec2<f32>(edge_coverage(dist, aa), edge_coverage(dist + border_width, aa));
 }
 
 // The shadow at a fragment whose shadow distance is `shadow_dist`: the colour,
@@ -614,26 +670,21 @@ fn cast_shadow(in: VertexOutput, shadow_dist: f32) -> vec4<f32> {
     return vec4<f32>(in.shadow_color.rgb, shadow_alpha);
 }
 
-// A shape at distance `dist`, antialiased over `aa`: its fill, and its border
-// `border_width` deep inside the edge.
+// A shape covering `covered.x` of the fragment, and the inside of its border
+// `covered.y`: its fill, and its border `border_width` deep inside the edge.
 fn filled_and_bordered(
-    dist: f32,
-    aa: f32,
+    covered: vec2<f32>,
     fill_color: vec4<f32>,
     border_color: vec4<f32>,
     border_width: f32,
 ) -> vec4<f32> {
     if (border_width <= 0.0) {
         // No border - simple filled shape
-        let alpha = 1.0 - smoothstep(-aa, aa, dist);
-        return vec4<f32>(fill_color.rgb, fill_color.a * alpha);
+        return vec4<f32>(fill_color.rgb, fill_color.a * covered.x);
     }
     // With border
-    let outer_edge = dist;
-    let inner_edge = dist + border_width;
-
-    let shape_alpha = 1.0 - smoothstep(-aa, aa, outer_edge);
-    let fill_alpha = 1.0 - smoothstep(-aa, aa, inner_edge);
+    let shape_alpha = covered.x;
+    let fill_alpha = covered.y;
     let border_alpha = max(shape_alpha - fill_alpha, 0.0);
 
     if (fill_color.a <= 0.0) {
@@ -677,12 +728,11 @@ fn with_outer_shadow(
     in: VertexOutput,
     shape: vec4<f32>,
     shadow: vec4<f32>,
-    dist: f32,
-    aa: f32,
+    coverage: f32,
 ) -> vec4<f32> {
     var cut = shadow;
     if (cut.a > 0.0) {
-        cut.a *= outside(1.0 - smoothstep(-aa, aa, dist), shape.a);
+        cut.a *= outside(coverage, shape.a);
     }
     var drawn = shape;
     if ((in.kinds.y & SHADOW_ONLY) != 0u) {
@@ -830,7 +880,11 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     let pos = in.frag_pos;
     let first = in.kinds.x;
     let merged = merged_shape(pos, first);
-    let aa = fwidth(merged.dist);
+    let aa = edge_fade(merged.dist);
+    let covered = vec2<f32>(
+        edge_coverage(merged.dist, aa),
+        edge_coverage(merged.dist + merged.border_width, aa),
+    );
 
     var shadow = vec4<f32>(0.0, 0.0, 0.0, 0.0);
     if (in.shadow_color.a > 0.0) {
@@ -841,11 +895,10 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     // A further shadow is the merged shape drawn again beneath it for that
     // shadow alone, as a box draws its fill again for each.
     let shape = filled_and_bordered(
-        merged.dist,
-        aa,
+        covered,
         unpremultiplied(merged.fill),
         unpremultiplied(merged.border_color),
         merged.border_width,
     );
-    return with_outer_shadow(in, shape, shadow, merged.dist, aa);
+    return with_outer_shadow(in, shape, shadow, covered.x);
 }

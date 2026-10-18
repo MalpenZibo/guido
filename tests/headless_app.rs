@@ -5915,7 +5915,7 @@ fn a_row_repainting_in_a_scrolled_list_is_damaged_where_each_frame_draws_it() {
 }
 
 /// A shape that repaints damages the ring its antialiased edge is drawn in,
-/// past its box: up to two device pixels out, the furthest the shader's fade
+/// past its box: up to a device pixel out, the furthest the shader's fade
 /// reaches (#836). Short of it, the compositor keeps that ring from the frame
 /// before, and a box that changed colour keeps a fringe of the old one.
 #[test]
@@ -5955,10 +5955,10 @@ fn a_repainting_shape_damages_the_fringe_of_its_edge() {
             |(x0, y0, x1, y1), &(x, y, w, h)| (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h)),
         );
         let fringe = (
-            (50.3 * scale).floor() as i32 - 2,
-            (50.6 * scale).floor() as i32 - 2,
-            (90.3 * scale).ceil() as i32 + 2,
-            (90.6 * scale).ceil() as i32 + 2,
+            (50.3 * scale - 1.0).floor() as i32,
+            (50.6 * scale - 1.0).floor() as i32,
+            (90.3 * scale + 1.0).ceil() as i32,
+            (90.6 * scale + 1.0).ceil() as i32,
         );
         assert!(
             covered.0 <= fringe.0
