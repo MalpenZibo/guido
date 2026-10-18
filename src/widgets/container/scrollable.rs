@@ -37,15 +37,11 @@ impl Container {
             let (track, handle, scale_anim) =
                 Self::create_scrollbar_components(&self.scroll_data().scroll);
 
-            // Register track in Tree
-            let track_id = tree.register(Box::new(track));
-            tree.set_parent(track_id, id);
-            self.scroll_mut().v_scrollbar_track_id = Some(track_id);
+            self.scroll_mut().v_scrollbar_track_id =
+                Some(Self::register_scrollbar_part(tree, id, track));
 
-            // Register handle in Tree
-            let handle_id = tree.register(Box::new(handle));
-            tree.set_parent(handle_id, id);
-            self.scroll_mut().v_scrollbar_handle_id = Some(handle_id);
+            self.scroll_mut().v_scrollbar_handle_id =
+                Some(Self::register_scrollbar_part(tree, id, handle));
 
             self.scroll_mut().v_scrollbar_scale_anim = Some(scale_anim);
         }
@@ -56,18 +52,23 @@ impl Container {
             let (track, handle, scale_anim) =
                 Self::create_scrollbar_components(&self.scroll_data().scroll);
 
-            // Register track in Tree
-            let track_id = tree.register(Box::new(track));
-            tree.set_parent(track_id, id);
-            self.scroll_mut().h_scrollbar_track_id = Some(track_id);
+            self.scroll_mut().h_scrollbar_track_id =
+                Some(Self::register_scrollbar_part(tree, id, track));
 
-            // Register handle in Tree
-            let handle_id = tree.register(Box::new(handle));
-            tree.set_parent(handle_id, id);
-            self.scroll_mut().h_scrollbar_handle_id = Some(handle_id);
+            self.scroll_mut().h_scrollbar_handle_id =
+                Some(Self::register_scrollbar_part(tree, id, handle));
 
             self.scroll_mut().h_scrollbar_scale_anim = Some(scale_anim);
         }
+    }
+
+    /// Register a track or a handle in the tree under this scroller, which
+    /// draws it clear of its scroll offset.
+    fn register_scrollbar_part(tree: &mut Tree, id: WidgetId, part: Container) -> WidgetId {
+        let part_id = tree.register(Box::new(part));
+        tree.set_parent(part_id, id);
+        tree.draw_clear_of_scroll(part_id);
+        part_id
     }
 
     /// The track and the handle, as the two containers they are.

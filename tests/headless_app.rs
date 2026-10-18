@@ -5807,3 +5807,109 @@ fn a_child_repainting_in_a_card_translated_by_a_spring_is_damaged_where_each_fra
         "a spring",
     );
 }
+
+/// Frame by frame through a wheel, a flick and the glide after it, then a
+/// second at rest, a row of a scrolled list repainting in every frame: each
+/// frame's damage covers what of the row the viewport shows, where that frame
+/// draws it (#833). While the list moves the scroller damages its viewport,
+/// which covers the row however late its offset is published; once it rests,
+/// nothing but the row repaints, and only the row's own damage, carried
+/// through the scroll offset, can name where it is drawn.
+#[test]
+fn a_row_repainting_in_a_scrolled_list_is_damaged_where_each_frame_draws_it() {
+    let Some(mut app) = headless() else { return };
+    let tint = create_signal(false);
+    let row = create_widget_ref();
+    let surface =
+        app.surface(SurfaceConfig::new().width(400).height(400), move || {
+            container().padding(8.0).child(
+                container()
+                    .width(200.0)
+                    .height(200.0)
+                    .scroll(Scroll::vertical())
+                    .child(container().layout(Flex::column()).children((0..10).map(
+                        move |index| {
+                            let rows = container().width(200.0).height(80.0);
+                            if index != 3 {
+                                return rows.background(Color::rgb(0.3, 0.3, 0.3));
+                            }
+                            rows.background(move || {
+                                if tint.get() {
+                                    Color::rgb(1.0, 0.0, 0.0)
+                                } else {
+                                    Color::rgb(0.0, 0.0, 1.0)
+                                }
+                            })
+                            .widget_ref(row)
+                        },
+                    ))),
+            )
+        });
+    app.configure(surface, 400, 400, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    let viewport = Rect::new(8.0, 8.0, 200.0, 200.0);
+    let (mut scrolled_frames, mut resting_away) = (0, 0);
+    let mut was = row.rect().get_untracked();
+    for frame in 0..80 {
+        tint.set(frame % 2 == 0);
+        match frame {
+            0..6 => app.event_at(
+                surface,
+                Event::scroll(100.0, 100.0, 0.0, 10.0, ScrollSource::Wheel),
+                at,
+            ),
+            6..12 => app.event_at(
+                surface,
+                Event::scroll(100.0, 100.0, 0.0, 5.0, ScrollSource::Finger),
+                at,
+            ),
+            12 => app.event_at(surface, Event::scroll_end(100.0, 100.0), at),
+            _ => {}
+        }
+        let before = app.damage_reported(surface).len();
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        let drawn = row.rect().get_untracked();
+        // Laid out at 8 + 3 · 80.
+        if drawn.y != 248.0 {
+            scrolled_frames += 1;
+            if drawn == was {
+                resting_away += 1;
+            }
+        }
+        was = drawn;
+        let Some(shown) = drawn.intersection(&viewport) else {
+            continue;
+        };
+        let shown = (
+            shown.x.floor() as i32,
+            shown.y.floor() as i32,
+            (shown.x + shown.width).ceil() as i32,
+            (shown.y + shown.height).ceil() as i32,
+        );
+        let damage = &app.damage_reported(surface)[before..];
+        assert!(!damage.is_empty(), "frame {frame}: nothing damaged");
+        let covered = damage.iter().fold(
+            (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+            |(x0, y0, x1, y1), &(x, y, w, h)| (x0.min(x), y0.min(y), x1.max(x + w), y1.max(y + h)),
+        );
+        assert!(
+            covered.0 <= shown.0
+                && covered.1 <= shown.1
+                && covered.2 >= shown.2
+                && covered.3 >= shown.3,
+            "frame {frame}: damaged {damage:?}, the row shown at {shown:?}"
+        );
+    }
+    assert!(
+        scrolled_frames > 40,
+        "the setup: the row was drawn off its place in {scrolled_frames} frames"
+    );
+    assert!(
+        resting_away > 10,
+        "the setup: the list rested away from its start in {resting_away} \
+         frames, the only ones where the row's own damage has to say where it is"
+    );
+}

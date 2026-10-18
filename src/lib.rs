@@ -1988,13 +1988,18 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     );
     let (x, y, width, height) = match damage {
         DamageRegion::Partial(rect) => {
+            // Out to the whole pixels it touches at both ends: a rect at a
+            // fractional place — a list mid-glide — covers part of the pixel
+            // its far edge falls in, and a width rounded on its own stops a
+            // pixel short of it.
             let scale = frame.scale_factor;
-            (
-                (rect.x * scale) as i32,
-                (rect.y * scale) as i32,
-                (rect.width * scale).ceil() as i32,
-                (rect.height * scale).ceil() as i32,
-            )
+            region::RegionRect::covering(widgets::Rect::new(
+                rect.x * scale,
+                rect.y * scale,
+                rect.width * scale,
+                rect.height * scale,
+            ))
+            .map_or((0, 0, 0, 0), |r| (r.x, r.y, r.width, r.height))
         }
         // `None` shouldn't happen since we're rendering, but full damage is
         // the safe report for it.

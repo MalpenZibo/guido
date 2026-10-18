@@ -630,6 +630,9 @@ impl Container {
             } else {
                 Transform::IDENTITY
             },
+            // Every scroll asks for a Paint job, which republishes it here
+            // before the frame paints.
+            scroll: self.scroll_offset(),
             ..reach.carry
         };
         tree.set_own_paint_reach_and_carry(id, reach.painted, carry);
@@ -685,18 +688,22 @@ impl Container {
     /// A slide to where layout moved it is part of the transform, applied
     /// last, so it carries the box as a translate does.
     fn placed(&self, tree: &Tree, id: WidgetId, bounds: Rect) -> Placed {
-        let scroll = if self.scroll_axis != ScrollAxis::None {
-            let sd = self.scroll_data();
-            (sd.scroll_state.offset_x, sd.scroll_state.offset_y)
-        } else {
-            (0.0, 0.0)
-        };
         let (dx, dy) = self.position_offset(tree, id);
         Placed {
             transform: self.animated_transform(id, bounds).translated(dx, dy),
             pivot: self.resolved_pivot(id),
-            scroll,
+            scroll: self.scroll_offset(),
         }
+    }
+
+    /// How far this container has scrolled its content; nothing for one that
+    /// does not scroll.
+    fn scroll_offset(&self) -> (f32, f32) {
+        if self.scroll_axis == ScrollAxis::None {
+            return (0.0, 0.0);
+        }
+        let state = &self.scroll_data().scroll_state;
+        (state.offset_x, state.offset_y)
     }
 
     /// Whether this container slides to where layout moves it.

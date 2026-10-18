@@ -175,6 +175,11 @@ struct Slot {
     /// re-measured only when that list is walked anyway.
     children_outset: Outsets,
 
+    /// Whether its parent draws it clear of the parent's scroll offset, where
+    /// layout put it: a scroller's own track and handle, which the damage
+    /// walk must not carry with the content they scroll.
+    drawn_clear_of_scroll: bool,
+
     /// Whether this widget clips its children to its own edges.
     ///
     /// A scroller's content runs far past its viewport by design, and what the
@@ -325,8 +330,9 @@ fn reach_of(own: Outsets, children_outset: Outsets, carry: Carry) -> Outsets {
 /// do exactly; a scale grows an overhang by its factor, and a turn can land
 /// one side's overhang on any other, so it is taken as the widest.
 ///
-/// Beside the bound, the transform itself as it stands: what a child repaints
-/// is carried through it to be damaged where it is drawn.
+/// Beside the bound, the scroll offset and the transform themselves as they
+/// stand: what a child repaints is carried through both to be damaged where it
+/// is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Carry {
     /// How far past what the children draw the layer's blur spreads it.
@@ -340,6 +346,11 @@ pub(crate) struct Carry {
     /// Where the transform and the slide draw the box and its children now,
     /// about its pivot, in its own coordinates: the value, not a bound.
     pub(crate) drawn: Transform,
+    /// How far a scroller has moved its content now, which draws its
+    /// children that much the other way before `drawn` takes them — all but
+    /// its own track and handle, which it draws clear of it. A scroller clips
+    /// its children, so this moves nothing of the bound above.
+    pub(crate) scroll: (f32, f32),
 }
 
 impl Carry {
@@ -350,6 +361,7 @@ impl Carry {
         turns: false,
         reach: Outsets::ZERO,
         drawn: Transform::IDENTITY,
+        scroll: (0.0, 0.0),
     };
 
     /// Where an overhang of `overhang` past the box lands once carried.
@@ -369,10 +381,16 @@ impl Carry {
         spread * self.gain + self.reach
     }
 
-    /// Where `rect`, drawn inside the box in its own coordinates, lands once
-    /// carried: spread by the layer's blur in the box's own space, then moved
+    /// Where `rect`, laid out inside the box in its own coordinates, lands
+    /// once carried: moved by the scroll offset if it `scrolls` with the
+    /// content, spread by the layer's blur in the box's own space, then moved
     /// by the transform and the slide, as the layer is composited.
-    fn carry_rect(self, rect: Rect) -> Rect {
+    fn carry_rect(self, rect: Rect, scrolls: bool) -> Rect {
+        let rect = if scrolls {
+            rect.offset(-self.scroll.0, -self.scroll.1)
+        } else {
+            rect
+        };
         let rect = rect.outset(self.spread);
         if self.drawn.is_identity() {
             rect
@@ -709,7 +727,7 @@ pub struct Tree {
     /// [`Tree::set_merge_reach`]. A map rather than a slot field, for the
     /// reason `positions` is one.
     merge_reaches: rustc_hash::FxHashMap<WidgetId, f32>,
-    /// How each widget that blurs, transforms or slides carries what its
+    /// How each widget that blurs, transforms, slides or scrolls carries what its
     /// children draw — see [`Tree::set_own_paint_reach_and_carry`]. A map
     /// rather than a slot field, for the reason `positions` is one.
     carries: rustc_hash::FxHashMap<WidgetId, Carry>,
@@ -962,6 +980,7 @@ impl Tree {
             baseline: None,
             own_paint_reach: Outsets::ZERO,
             children_outset: Outsets::ZERO,
+            drawn_clear_of_scroll: false,
             clips_children: false,
             children_reach: 0.0,
         });
@@ -1290,6 +1309,14 @@ impl Tree {
             if !children.contains(&child_id) {
                 children.push(child_id);
             }
+        }
+    }
+
+    /// Say that this widget's parent draws it clear of the parent's scroll
+    /// offset, where layout put it, as a scroller draws its own scrollbar.
+    pub(crate) fn draw_clear_of_scroll(&mut self, id: WidgetId) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].drawn_clear_of_scroll = true;
         }
     }
 
@@ -2284,7 +2311,8 @@ impl Tree {
     }
 
     /// How this widget carries what its children draw; `Carry::NONE` for one
-    /// that neither blurs, transforms nor slides, which is nearly all of them.
+    /// that neither blurs, transforms, slides nor is scrolled from its start,
+    /// which is nearly all of them.
     fn carry(&self, id: WidgetId) -> Carry {
         if self.carries.is_empty() {
             return Carry::NONE;
@@ -2613,18 +2641,19 @@ impl Tree {
     /// shadow is re-composited along with the thing that cast it — and so is
     /// a widget its own transform has carried off its laid-out box, and the
     /// shape a container merging its children draws past them. Then carried
-    /// up through every ancestor as it draws it: spread by a blurring one's
-    /// layer, and moved by a transformed or sliding one to where it draws it
-    /// now (#830). What damage is measured from, and not what the widget's
-    /// bounds are.
+    /// up through every ancestor as it draws it: moved by a scrolled one's
+    /// offset (#833), spread by a blurring one's layer, and moved by a
+    /// transformed or sliding one to where it draws it now (#830). What
+    /// damage is measured from, and not what the widget's bounds are.
     fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
         let merged = self.merge_reaches.get(&id).copied().unwrap_or(0.0);
         self.surface_relative_damage_past(id, merged)
     }
 
     /// The same, `past` further out than the widget's paint reach on every
-    /// side. A tree where no widget blurs, transforms or slides pays one
-    /// emptiness check per ancestor and sums the origins.
+    /// side. A tree where no widget blurs, transforms, slides or is scrolled
+    /// from its start pays one emptiness check per ancestor and sums the
+    /// origins.
     fn surface_relative_damage_past(&self, id: WidgetId, past: f32) -> Option<(WidgetId, Rect)> {
         let size = self.cached_size(id)?;
         let mut rect = Rect::from_size(size)
@@ -2633,12 +2662,14 @@ impl Tree {
         let mut current = id;
         loop {
             let dense_idx = self.get_dense_index(current)?;
-            let (x, y) = self.dense[dense_idx].origin;
-            rect = rect.offset(x, y);
-            let Some(parent) = self.dense[dense_idx].parent else {
+            let slot = &self.dense[dense_idx];
+            rect = rect.offset(slot.origin.0, slot.origin.1);
+            let Some(parent) = slot.parent else {
                 return Some((current, rect));
             };
-            rect = self.carry(parent).carry_rect(rect);
+            rect = self
+                .carry(parent)
+                .carry_rect(rect, !slot.drawn_clear_of_scroll);
             current = parent;
         }
     }
@@ -4737,6 +4768,225 @@ mod tests {
                     if child_first { "first" } else { "last" },
                 );
             }
+        }
+    }
+
+    /// Three rows 80 tall in a 200 square vertical scroller standing 8 from
+    /// the surface's corner — `scroller_of_tall_rows` in
+    /// `tests/paint_cache_across_frames.rs` — dressed by `dress`, laid out,
+    /// scrolled `by` and clean, the scroller having republished as its Paint
+    /// job does. Returns the tree, the root, the scroller and the list.
+    fn scrolled_list(
+        dress: impl FnOnce(crate::widgets::Container) -> crate::widgets::Container,
+        by: f32,
+    ) -> (Tree, WidgetId, WidgetId, WidgetId) {
+        use crate::widgets::container;
+        let rows = (0..3).map(|_| container().width(200.0).height(80.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container()
+                .width(400.0)
+                .height(400.0)
+                .padding(8.0)
+                .child(dress(
+                    container()
+                        .width(200.0)
+                        .height(200.0)
+                        .scroll(crate::widgets::Scroll::vertical())
+                        .child(
+                            container()
+                                .layout(crate::layout::Flex::column())
+                                .children(rows),
+                        ),
+                )),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        lay_out_in_a_frame(&mut tree, root);
+        let scroller = tree.get_children(root)[0];
+        let list = tree.get_children(scroller)[0];
+        scroll_and_settle(&mut tree, root, &[scroller], (108.0, 108.0), by);
+        (tree, root, scroller, list)
+    }
+
+    /// Lay a 400 square surface out inside a frame, as the loop does.
+    fn lay_out_in_a_frame(tree: &mut Tree, root: WidgetId) {
+        tree.set_frame_instant(Some(std::time::Instant::now()));
+        tree.layout_widget(root, Constraints::new(0.0, 0.0, 400.0, 400.0));
+        tree.set_frame_instant(None);
+    }
+
+    /// A wheel turned `by` at `at`, inside a dispatch, as the loop delivers it.
+    fn wheel(tree: &mut Tree, root: WidgetId, at: (f32, f32), by: f32) {
+        use crate::widgets::{Event, ScrollSource};
+        tree.set_event_instant(Some(std::time::Instant::now()));
+        tree.dispatch(
+            root,
+            &Event::scroll(at.0, at.1, 0.0, by, ScrollSource::Wheel),
+        );
+        tree.set_event_instant(None);
+    }
+
+    /// What a widget's Paint job does before the frame paints.
+    fn republish(tree: &mut Tree, id: WidgetId) {
+        tree.with_widget_mut(id, |widget, id, tree| {
+            refresh_paint_reach(&*widget, tree, id)
+        });
+    }
+
+    /// A wheel turned `by` at `at`, each of `scrollers` republishing as its
+    /// Paint job does, and every flag and damage the frame left cleared.
+    fn scroll_and_settle(
+        tree: &mut Tree,
+        root: WidgetId,
+        scrollers: &[WidgetId],
+        at: (f32, f32),
+        by: f32,
+    ) {
+        wheel(tree, root, at, by);
+        for &scroller in scrollers {
+            republish(tree, scroller);
+        }
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            tree.clear_needs_paint(id);
+            stack.extend_from_slice(tree.get_children(id));
+        }
+        let _ = tree.take_damage(root);
+    }
+
+    /// A row in a list scrolled 40 is drawn 40 above where it was laid out:
+    /// the second row, laid out at y 88, is drawn at y 48, and that is where
+    /// its repaint damages (#833).
+    #[test]
+    fn a_row_in_a_scrolled_list_damages_where_it_is_drawn() {
+        let (mut tree, root, _, list) = scrolled_list(|scroller| scroller, 40.0);
+        let row = tree.get_children(list)[1];
+        let drawn = tree.get_surface_relative_bounds(row).unwrap();
+        assert_eq!((drawn.y, drawn.height), (48.0, 80.0), "the setup");
+
+        let damage = damage_of_marking(&mut tree, root, row);
+        assert_damage(damage, drawn, "the second row, scrolled 40");
+    }
+
+    /// A list scrolled 30 inside a column scrolled 40: the inner scroller,
+    /// laid out at y 108, is drawn at 68, and its second row, 50 down its
+    /// content, at 68 + 50 − 30 = 88 — and not at 158, where it was laid out.
+    #[test]
+    fn a_row_in_nested_scrolled_lists_damages_where_it_is_drawn() {
+        use crate::widgets::container;
+        let rows = (0..4).map(|_| container().width(180.0).height(50.0));
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            container().width(400.0).height(400.0).padding(8.0).child(
+                container()
+                    .width(200.0)
+                    .height(200.0)
+                    .scroll(crate::widgets::Scroll::vertical())
+                    .child(
+                        container()
+                            .layout(crate::layout::Flex::column())
+                            .child(container().width(180.0).height(100.0))
+                            .child(
+                                container()
+                                    .width(180.0)
+                                    .height(100.0)
+                                    .scroll(crate::widgets::Scroll::vertical())
+                                    .child(
+                                        container()
+                                            .layout(crate::layout::Flex::column())
+                                            .children(rows),
+                                    ),
+                            )
+                            .child(container().width(180.0).height(200.0)),
+                    ),
+            ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        lay_out_in_a_frame(&mut tree, root);
+        let outer = tree.get_children(root)[0];
+        let column = tree.get_children(outer)[0];
+        let inner = tree.get_children(column)[1];
+        let row = tree.get_children(tree.get_children(inner)[0])[1];
+
+        // Over the spacer, so the outer one takes it; then over the inner one,
+        // drawn 40 higher by now.
+        scroll_and_settle(&mut tree, root, &[outer, inner], (58.0, 58.0), 40.0);
+        scroll_and_settle(&mut tree, root, &[outer, inner], (58.0, 100.0), 30.0);
+        let drawn = tree.get_surface_relative_bounds(row).unwrap();
+        assert_eq!((drawn.y, drawn.height), (88.0, 50.0), "the setup");
+
+        let damage = damage_of_marking(&mut tree, root, row);
+        assert_damage(damage, drawn, "the inner list's second row");
+    }
+
+    /// A scroller that is also halved about its centre scrolls its content
+    /// first and is scaled after, as it is drawn: the second row, at 40–120
+    /// once scrolled, is halved about the viewport's centre at 100 to
+    /// 70–110, which is 78–118 on the surface.
+    #[test]
+    fn a_row_in_a_scaled_scrolled_list_damages_where_it_is_drawn() {
+        let (mut tree, root, _, list) = scrolled_list(|scroller| scroller.scale(0.5), 40.0);
+        let row = tree.get_children(list)[1];
+        let drawn = tree.get_surface_relative_bounds(row).unwrap();
+        assert_eq!((drawn.y, drawn.height), (78.0, 40.0), "the setup");
+
+        let damage = damage_of_marking(&mut tree, root, row);
+        assert_damage(damage, drawn, "the second row, scrolled and halved");
+    }
+
+    /// A scroller draws its track and handle clear of its scroll offset,
+    /// where layout put them, and that is where they damage once it has
+    /// scrolled.
+    #[test]
+    fn a_scrollbar_damages_where_it_is_drawn_whatever_the_offset() {
+        let (mut tree, root, scroller, list) = scrolled_list(|scroller| scroller, 40.0);
+        let bars: Vec<_> = tree
+            .get_children(scroller)
+            .iter()
+            .copied()
+            .filter(|&child| child != list)
+            .collect();
+        assert_eq!(bars.len(), 2, "the setup: a track and a handle");
+        for bar in bars {
+            let (_, laid_out) = tree.surface_relative_layout_and_root(bar).unwrap();
+            let damage = damage_of_marking(&mut tree, root, bar);
+            assert_damage(
+                damage,
+                laid_out.outset_by(tree.paint_overflow(bar)),
+                "a scrollbar, the list scrolled 40",
+            );
+        }
+    }
+
+    /// A row that repaints in the frame its list scrolls may be marked before
+    /// the scroller has published its new offset, or after: either way the
+    /// frame damages what of the row the viewport shows, because the scroller
+    /// damages its whole box when it scrolls.
+    #[test]
+    fn a_row_repainting_as_its_list_scrolls_damages_where_it_is_drawn() {
+        for row_first in [true, false] {
+            let (mut tree, root, scroller, list) = scrolled_list(|scroller| scroller, 0.0);
+            let row = tree.get_children(list)[1];
+
+            wheel(&mut tree, root, (108.0, 108.0), 40.0);
+            if row_first {
+                tree.mark_needs_paint(row);
+            }
+            republish(&mut tree, scroller);
+            tree.mark_needs_paint(scroller);
+            if !row_first {
+                tree.mark_needs_paint(row);
+            }
+            let damage = partial_damage(&mut tree, root);
+            let drawn = tree.get_surface_relative_bounds(row).unwrap();
+            assert_eq!(drawn.y, 48.0, "the setup");
+            assert_eq!(
+                drawn.outset_beyond(damage),
+                Outsets::ZERO,
+                "marked {}: the frame damages {damage:?}, short of the row \
+                 drawn at {drawn:?}",
+                if row_first { "first" } else { "last" },
+            );
         }
     }
 
