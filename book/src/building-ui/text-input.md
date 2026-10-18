@@ -528,7 +528,7 @@ The TextInput widget supports standard text editing shortcuts:
 | `Ctrl+Z` | Undo (not in a password field) |
 | `Ctrl+Shift+Z` or `Ctrl+Y` | Redo (not in a password field) |
 | `Left/Right` | Move cursor |
-| `Ctrl+Left/Right` | Move by word (to the edge in a password field) |
+| `Ctrl+Left/Right` | Move to the start or the end of a word (to the edge in a password field) |
 | `Shift+Left/Right` | Extend selection |
 | `Home/End` | Move to start/end |
 | `Backspace` | Delete before cursor |
@@ -654,7 +654,12 @@ fn login_form() -> Container {
 - **Selection**: Click and drag to select text, or use Shift+Arrow keys. A
   double click selects the word under the pointer, and dragging after it
   extends the selection a word at a time; a triple click selects everything.
-  A word ends where `Ctrl+Left/Right` stops: at whitespace.
+  A word is what Unicode's word segmentation (UAX #29) makes one, as in GTK,
+  Qt and the browsers: a path or an address divides at its slashes and its
+  @, while a full stop or an apostrophe between two letters, as in
+  example.com or don't, stays inside the word. A double click on spaces or
+  punctuation selects only those. `Ctrl+Left/Right` stops at the same ends of
+  words, stepping over the spaces and punctuation between them.
 - **Clipboard**: Full copy/cut/paste support via Ctrl+C/X/V. Another
   application's copy is read only when you paste, off the UI thread, so a
   paste never blocks it: the text appears once that application answers.

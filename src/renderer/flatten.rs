@@ -1621,7 +1621,12 @@ fn flatten_as_layer(
     let Some(back) = to_world.inverse() else {
         return Layered::No;
     };
-    let visible = out.visible().map(|surface| back.map_rect(surface));
+    // A blur carries what lies past the surface onto it, so the layer holds
+    // that much more of its content than the surface shows.
+    let reach = node.blur.map_or(0.0, |radius| blur_margin(radius, scale));
+    let visible = out
+        .visible()
+        .map(|surface| back.map_rect(surface).outset(reach));
 
     let inherited = parent_clip.map(|index| out.clips.reference(index));
     out.open_layer(visible);
