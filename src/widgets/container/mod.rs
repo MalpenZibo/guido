@@ -606,16 +606,18 @@ impl Container {
         // its reach is carried by the transform with the shadow's. The blur
         // reaches as far on every side; the shadow each its own.
         // The outline stands outside the box beside the shadow, uniformly,
-        // and the blur spreads whichever reaches further.
-        let extent = shadow_extent.max(Outsets::all(self.max_outline_reach()))
-            + Outsets::all(self.max_blur_reach());
+        // and the blur spreads whichever reaches further — and, since the
+        // layer holds what the children draw too, their overhang, which the
+        // tree spreads by the same reach.
+        let blur = self.max_blur_reach();
+        let extent = shadow_extent.max(Outsets::all(self.max_outline_reach())) + Outsets::all(blur);
         // A slide carries the whole box by its offset, after everything else,
         // and only toward where it is drawn: a box drawn above its place
         // reaches further up and no further either side.
         let (dx, dy) = self.position_offset(tree, id);
         let toward = bounds.offset(dx, dy).outset_beyond(bounds);
         let reach = self.max_transform_reach(bounds, extent) + toward;
-        tree.set_own_paint_reach(id, reach);
+        tree.set_own_paint_reach_and_spread(id, reach, blur);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two
         // distances are within its reach of each other, and takes a quarter of

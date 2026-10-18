@@ -338,7 +338,11 @@ is not drawn blocky, up to the backdrop's quarter and beyond only where the
 kernel would not fit its taps. A blurred texture is kept with the content and
 the radius it was blurred by, so a radius that animates blurs again without
 drawing again. The container's damage is sized by `blur_reach_bound`, which no
-blur at any scale of one or more exceeds.
+blur at any scale of one or more exceeds, added past everything the texture
+holds: the container's own shadow and outline, and whatever its children draw
+outside it. The tree keeps that last half apart
+(`Tree::set_own_paint_reach_and_spread`), because the children's overhang is
+gathered into it on a schedule of its own.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
