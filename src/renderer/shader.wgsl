@@ -400,8 +400,8 @@ const SHAPE_ARC_SQUARE: u32 = 3u;
 const SHADOW_INSET: u32 = 256u;
 // The members of a merged shape, drawn by `fs_merged` alone.
 const SHAPE_MERGED: u32 = 4u;
-// Above the kinds too: a merged shape drawn for one of its shadows alone.
-const MERGED_SHADOW_ONLY: u32 = 512u;
+// Above the kinds too: a shape drawn for one of its shadows alone.
+const SHADOW_ONLY: u32 = 512u;
 
 // The distance to a stroked circular arc, centred in `rect`.
 //
@@ -501,8 +501,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Compute SDF for the shape
     let gradient_type = in.kinds.x;
-    let shape_kind = in.kinds.y & ~SHADOW_INSET;
+    let shape_kind = in.kinds.y & 0xffu;
     let inset = (in.kinds.y & SHADOW_INSET) != 0u;
+    let shadow_only = (in.kinds.y & SHADOW_ONLY) != 0u;
     var dist: f32;
     if (shape_kind == SHAPE_ROUNDED_RECT) {
         dist = rounded_rect_sdf(pos, in.shape_rect, radii, curvature);
@@ -540,6 +541,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // === Main Shape ===
     var shape_result = filled_and_bordered(dist, aa, fill_color, in.border_color, border_width);
+    if (shadow_only) {
+        shape_result = vec4<f32>(0.0);
+    }
 
     // === Inset shadow, over the fill ===
     // The outer shadow mirrored: the box inside the border — its edge
@@ -776,7 +780,7 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     // A further shadow is the merged shape drawn again beneath it for that
     // shadow alone, as a box draws a rect per further shadow.
     var shape = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    if ((in.kinds.y & MERGED_SHADOW_ONLY) == 0u) {
+    if ((in.kinds.y & SHADOW_ONLY) == 0u) {
         shape = filled_and_bordered(
             merged.dist,
             aa,

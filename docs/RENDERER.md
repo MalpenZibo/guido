@@ -899,7 +899,7 @@ is evaluated over the merged distance: the same SDF through the same
 `smoothstep` a lone shape's shadow uses. The merging container's outer shadows
 are all the merged shape's, each taking an instance as a box's do: the first
 rides the merged instance, and every further one is the merged shape drawn
-again beneath it with `MERGED_SHADOW_ONLY` set, for that shadow alone. Its
+again beneath it with `SHADOW_ONLY` set, for that shadow alone. Its
 inset shadows stay on its own box. A member's own outer shadows are moved
 beneath the merged shape; its inset ones stay with the member, over the merged
 fill. The shape and its shadow take the same
@@ -971,8 +971,8 @@ pub struct ShapeInstance {
 
 **One shadow per instance.** A container casting several takes an instance for
 each shadow past the first: the first outer shadow rides the fill's own
-instance, every other outer one is an instance with a transparent fill drawn
-before it, and every inset one an instance drawn after it and before the border
+instance, every other outer one is that instance again with `SHADOW_ONLY` set,
+drawn before it for its shadow alone, and every inset one an instance drawn after it and before the border
 frame — so a box with one shadow costs what it always did, and only a box that
 asks for more pays for more. Every comparable renderer that draws a list of box
 shadows draws one primitive per shadow; a fixed array in the instance would have

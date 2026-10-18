@@ -5975,9 +5975,11 @@ fn every_field_of_a_shadow_reaches_the_renderer() {
     assert_eq!(painted.color, Color::rgba(1.0, 0.0, 0.0, 0.5), "not black");
 }
 
-/// What each rounded rect a container draws carries: its fill, its shadow and
-/// whether it has a border, in paint order.
-fn decoration_layers(node: &RenderNode) -> Vec<(Color, Option<Shadow>, Option<f32>)> {
+/// What each rounded rect a container draws carries: its fill, its shadow,
+/// whether it has a border, and whether it is drawn for its shadow alone, in
+/// paint order.
+type Layer = (Color, Option<Shadow>, Option<f32>, bool);
+fn decoration_layers(node: &RenderNode) -> Vec<Layer> {
     node.commands
         .iter()
         .filter_map(|c| match &**c {
@@ -5985,8 +5987,9 @@ fn decoration_layers(node: &RenderNode) -> Vec<(Color, Option<Shadow>, Option<f3
                 color,
                 shadow,
                 border,
+                shadow_only,
                 ..
-            } => Some((*color, *shadow, border.map(|b| b.width))),
+            } => Some((*color, *shadow, border.map(|b| b.width), *shadow_only)),
             _ => None,
         })
         .collect()
@@ -5994,9 +5997,10 @@ fn decoration_layers(node: &RenderNode) -> Vec<(Color, Option<Shadow>, Option<f3
 
 /// A list of shadows is drawn as CSS stacks one, the first on top: outer
 /// shadows under the fill, the first of them on the fill's own rect and the
-/// rest on rects of their own beneath it, and inset shadows over the fill and
-/// under the border, each on a rect carrying the border's width so it is
-/// cast inside it.
+/// rest on the fill drawn again beneath it for their shadow alone — the fill
+/// it lies under is what the shader leaves it out from — and inset shadows
+/// over the fill and under the border, each on a rect carrying the border's
+/// width so it is cast inside it.
 #[test]
 fn a_list_of_shadows_is_drawn_first_on_top_around_the_fill() {
     let (near, far) = (
@@ -6020,11 +6024,11 @@ fn a_list_of_shadows_is_drawn_first_on_top_around_the_fill() {
     assert_eq!(
         decoration_layers(&h.paint()),
         vec![
-            (Color::TRANSPARENT, Some(far), None),
-            (Color::WHITE, Some(near), None),
-            (Color::TRANSPARENT, Some(glow), Some(3.0)),
-            (Color::TRANSPARENT, Some(rim), Some(3.0)),
-            (Color::TRANSPARENT, None, Some(3.0)),
+            (Color::WHITE, Some(far), None, true),
+            (Color::WHITE, Some(near), None, false),
+            (Color::TRANSPARENT, Some(glow), Some(3.0), false),
+            (Color::TRANSPARENT, Some(rim), Some(3.0), false),
+            (Color::TRANSPARENT, None, Some(3.0), false),
         ],
         "the far shadow, the fill casting the near one, the glow, the rim on \
          top of it, and the border over all of them"
@@ -6042,7 +6046,7 @@ fn an_inset_shadow_needs_no_fill_and_an_outer_one_does() {
 
     assert_eq!(
         decoration_layers(&h.paint()),
-        vec![(Color::TRANSPARENT, Some(inset), None)],
+        vec![(Color::TRANSPARENT, Some(inset), None, false)],
     );
 }
 
