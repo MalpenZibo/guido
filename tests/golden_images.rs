@@ -1099,21 +1099,7 @@ fn a_shape_over_its_shadow_keeps_its_own_colour() {
             .child(row(Color::rgb(0.9, 0.6, 0.2).with_alpha(0.6)));
         render_with_own_renderer(ctx, view, (320.0, 120.0), 1.0, Color::BLACK)
     };
-    // Inside each shape's own box. Without a shadow a shape's quad is that
-    // box, and the outer half of its antialiased edge past it is not drawn;
-    // a shadow's quad is larger and draws it, which is the quad and not the
-    // composite.
-    let in_a_box = |x: u32, y: u32| {
-        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
-        let rows = [(20.0, 50.0), (70.0, 100.0)];
-        let columns = [(20.0, 100.0), (120.0, 200.0), (220.0, 300.0)];
-        rows.iter().any(|&(top, bottom)| (top..bottom).contains(&y))
-            && columns.iter().any(|&(l, r)| (l..r).contains(&x))
-    };
-    let (shadowed, bare) = (
-        only_where(&render(true), in_a_box),
-        only_where(&render(false), in_a_box),
-    );
+    let (shadowed, bare) = (render(true), render(false));
     let edge_pixels = bare
         .data
         .chunks(4)
@@ -1125,6 +1111,70 @@ fn a_shape_over_its_shadow_keeps_its_own_colour() {
     );
     if let Some(report) = differences(NAME, &bare, &shadowed) {
         panic!("a black shadow over black changes the shape that casts it: {report}");
+    }
+}
+
+/// A shape's antialiased edge is drawn whole whether or not it casts a
+/// shadow: a shadow the colour of the background, which adds nothing, leaves
+/// every pixel as it was — the ring just outside each box included — at scale
+/// one and two, upright, turned and shrunk, alone and merged (#836).
+///
+/// The shader fades an edge over a pixel either side of it, and up to two
+/// across a square corner. The quad a shadow is drawn on reaches past the box
+/// and holds the outer half of that fade; a quad that was the box alone held
+/// only the inner half, and the same shape lost its fringe the moment it lost
+/// its shadow.
+#[test]
+fn an_edge_is_drawn_whole_with_or_without_a_shadow() {
+    const NAME: &str = "an_edge_is_drawn_whole_with_or_without_a_shadow";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    // Opaque and the background's own colour, so the shadow changes nothing
+    // it is drawn over; its spread is only there to make the quad larger.
+    let shadow = Shadow::new((0.0, 0.0), 0.0, 6.0, BACKDROP);
+    let render = |shadowed: bool, scale: f32| {
+        let shadows = |list: Shadows| if shadowed { list } else { Shadows::none() };
+        let fill = Color::rgb(0.9, 0.85, 0.7);
+        let shape = |w: f32, h: f32, fill: Color| swatch(w, h, fill).shadow(shadows(shadow.into()));
+        let first = container()
+            .layout(Flex::row().spacing(16.0))
+            .child(shape(60.0, 30.0, fill).corners(Corners::squircle(12.0)))
+            .child(shape(60.0, 30.0, fill.with_alpha(0.6)).corners(10.0))
+            .child(
+                shape(60.0, 30.0, fill)
+                    .corners(8.0)
+                    .border(3.0, Color::rgb(0.3, 0.6, 0.9)),
+            )
+            .child(shape(30.0, 30.0, fill));
+        let second = container()
+            .layout(Flex::row().spacing(16.0))
+            .child(shape(60.0, 30.0, fill).corners(8.0).rotate(17.0))
+            .child(shape(60.0, 30.0, fill).corners(8.0).scale(0.5))
+            .child(
+                container()
+                    .layout(Flex::row())
+                    .merge_children(MERGE_DISTANCE)
+                    .shadow(shadows(shadow.into()))
+                    .children([0, 1].map(|_| swatch(30.0, 30.0, fill).corners(10.0))),
+            );
+        // A fraction of a pixel off the grid at both scales, so no edge lands
+        // on a pixel boundary and every one has a fringe to lose.
+        let view = container()
+            .padding(Padding::all(20.0).with_left(20.3).with_top(20.6))
+            .layout(Flex::column().spacing(24.25))
+            .child(first)
+            .child(second);
+        render_with_own_renderer(ctx, view, (330.0, 140.0), scale, BACKDROP)
+    };
+    for scale in [1.0, 2.0] {
+        let (shadowed, bare) = (render(true, scale), render(false, scale));
+        if let Some(report) = differences(&format!("{NAME}_at_{scale}x"), &shadowed, &bare) {
+            panic!(
+                "at scale {scale}, a shadow that adds nothing changes the edge of the \
+                 shape that casts it: {report}"
+            );
+        }
     }
 }
 
@@ -5065,17 +5115,14 @@ fn merged_pills_at_three_gaps() {
 }
 
 /// Further apart than the distance, two merged pills are the two pills drawn
-/// alone: a smooth minimum leaves two distances further apart than its reach
-/// as `min` leaves them, and each member is measured in its own space, as a
-/// shape drawn alone is.
+/// alone, pixel for pixel: a smooth minimum leaves two distances further apart
+/// than its reach as `min` leaves them, and each member is measured in its own
+/// space, as a shape drawn alone is.
 ///
-/// Up to one thing, which is not the shape: a shape drawn alone is drawn over
-/// a quad exactly its own box, so the outer half of the antialiasing along a
-/// straight side — the pixel row just outside it, which the edge covers by a
-/// sixth — is cut off with the quad. A merged shape's quad has to reach the
-/// neck, so it keeps that row. Every pixel that differs has to be that row: one
-/// the pills alone leave as backdrop, and the merged ones cover by less than a
-/// quarter.
+/// Its antialiased edge included. A shape drawn alone used to be drawn over a
+/// quad exactly its own box, and lost the outer half of that edge with it,
+/// where a merged shape's quad reaches the neck and kept it; every quad now
+/// holds the fringe its edge is drawn in (#836).
 #[test]
 fn merged_pills_apart_are_the_pills_alone() {
     const NAME: &str = "merged_pills_apart_are_the_pills_alone";
@@ -5092,29 +5139,9 @@ fn merged_pills_apart_are_the_pills_alone() {
         )
     };
     let (merged, alone) = (apart(true), apart(false));
-    let backdrop = BACKDROP.to_rgba8();
-    let backdrop = [backdrop.0, backdrop.1, backdrop.2];
-    let pill = PILL.to_rgba8();
-    let pill = [pill.0, pill.1, pill.2];
-    let mut edge = 0;
-    for (index, (m, a)) in merged.data.chunks(4).zip(alone.data.chunks(4)).enumerate() {
-        if m.iter().zip(a).all(|(x, y)| x.abs_diff(*y) <= 1) {
-            continue;
-        }
-        let (x, y) = (index as u32 % merged.width, index as u32 / merged.width);
-        let coverage = (m[0] as f32 - backdrop[0] as f32) / (pill[0] as f32 - backdrop[0] as f32);
-        assert!(
-            a[..3] == backdrop && coverage < 0.25,
-            "({x}, {y}) is {m:?} merged and {a:?} alone: not the antialiasing just \
-             outside a straight side, so the merged pills are not the pills alone"
-        );
-        edge += 1;
+    if let Some(report) = differences(NAME, &alone, &merged) {
+        panic!("merged pills apart are not the pills alone: {report}");
     }
-    assert!(
-        edge > 0,
-        "nothing differs, so the quad a merged shape is drawn over has stopped \
-         reaching past its members — and a neck is drawn past them"
-    );
 }
 
 /// Two members whose borders differ — 1 px of one colour, 2 px of another —

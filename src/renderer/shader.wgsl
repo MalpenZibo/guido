@@ -143,6 +143,22 @@ fn to_ndc(pos: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(ndc_x, ndc_y);
 }
 
+// How far the fragment stage's fade can reach past an edge, in the instance's
+// own space, where the linear part of its transform is `a b / c d`. The fade
+// runs over `fwidth` of the distance, the sum of its two screen partials, and
+// a distance moves at most one unit a unit — so at most the length of what one
+// device pixel across and one down are here. Two upright and unscaled: one
+// along a straight side, and the two partials' whole sum across a square
+// corner's diagonal, where each takes one side. More under a shrink. A
+// transform that collapses draws nothing, and reaches nothing.
+fn antialiasing_reach(a: f32, b: f32, c: f32, d: f32) -> f32 {
+    let det = abs(a * d - b * c);
+    if (det <= 0.0) {
+        return 0.0;
+    }
+    return (length(vec2<f32>(d, c)) + length(vec2<f32>(b, a))) / det;
+}
+
 // === Vertex Shader ===
 
 @vertex
@@ -175,9 +191,12 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
         expand.y = max(shadow_blur * fadeout - shadow_offset.y, 0.0) + shadow_spread;
         expand.z = max(shadow_blur * fadeout + shadow_offset.x, 0.0) + shadow_spread;
         expand.w = max(shadow_blur * fadeout + shadow_offset.y, 0.0) + shadow_spread;
-        // A negative spread shrinks the shadow, never the shape's own quad.
-        expand = max(expand, vec4<f32>(0.0));
     }
+    // The fragment stage fades an edge over `fwidth` either side of it, so
+    // the quad reaches as far past the box as that fade can, or its outer
+    // half is never drawn (#836). A shadow reaching less far on a side, or a
+    // negative spread, leaves this.
+    expand = max(expand, vec4<f32>(antialiasing_reach(a, b, c, d)));
 
     // Compute expanded quad bounds
     let quad_min = vec2<f32>(

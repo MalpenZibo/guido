@@ -1060,6 +1060,17 @@ same shape's without one. `a_shadow_is_drawn_at_its_own_alpha` and
 `a_shape_over_its_shadow_keeps_its_own_colour` in `tests/golden_images.rs`
 watch it.
 
+**The quad an instance is drawn on reaches past its box.** The fragment stage
+fades an edge over `fwidth` of the distance either side of it — a pixel along
+a straight side, up to two across a square corner, where both partials count —
+so `vs_main` outsets every quad by `antialiasing_reach`: that bound measured in
+the instance's own space, from the inverse of its transform, two device pixels
+upright and more under a shrink. A shadow's reach is taken where it goes
+further. A quad that was the box alone drew only the inner half of the fade,
+and the same shape gained a fringe the moment it gained a shadow, even an
+invisible one (#836). `an_edge_is_drawn_whole_with_or_without_a_shadow` in
+`tests/golden_images.rs` watches it.
+
 An inset instance carries the container's border width with a transparent
 border colour: the shader casts the shadow inside `dist + border_width`, the
 edge the border frame's inner side is drawn on, which is where CSS casts one.
