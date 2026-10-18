@@ -672,14 +672,16 @@ fn with_outer_shadow(
     return clipped(in, over_shadow(drawn, cut));
 }
 
-// `shape` composited over its `shadow`.
+// `shape` composited over its `shadow`, both straight, and straight again:
+// the blend multiplies the colour by its alpha, so a premultiplied one here
+// would be multiplied twice.
 fn over_shadow(shape: vec4<f32>, shadow: vec4<f32>) -> vec4<f32> {
     if (shadow.a <= 0.0) {
         return shape;
     }
-    let final_rgb = shape.rgb * shape.a + shadow.rgb * shadow.a * (1.0 - shape.a);
     let final_a = shape.a + shadow.a * (1.0 - shape.a);
-    return vec4<f32>(final_rgb, final_a);
+    let final_rgb = shape.rgb * shape.a + shadow.rgb * shadow.a * (1.0 - shape.a);
+    return vec4<f32>(final_rgb / final_a, final_a);
 }
 
 // `color` cut by the instance's clip and the chain it continues in.

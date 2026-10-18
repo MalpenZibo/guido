@@ -1051,6 +1051,15 @@ to come out the same once the shape is drawn over it, which is why a
 fragment. Under an opaque fill that is the whole shadow along the edge, as it
 was before, and a cut that ignored the fill would show there as a light seam.
 
+Whichever way it is drawn, the shape over its shadow is handed to the blend as
+a straight colour, divided by the alpha the two make together, because
+`STRAIGHT_ALPHA_BLEND` multiplies the colour by its alpha itself. Handed a
+premultiplied one, the blend multiplied it twice: a shadow at alpha `a` came
+out at `a²` (#800), and a shadowed shape's antialiased edge darker than the
+same shape's without one. `a_shadow_is_drawn_at_its_own_alpha` and
+`a_shape_over_its_shadow_keeps_its_own_colour` in `tests/golden_images.rs`
+watch it.
+
 An inset instance carries the container's border width with a transparent
 border colour: the shader casts the shadow inside `dist + border_width`, the
 edge the border frame's inner side is drawn on, which is where CSS casts one.
