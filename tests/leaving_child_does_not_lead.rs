@@ -158,8 +158,8 @@ fn close(a: f32, b: f32) -> bool {
 
 /// The issue's acceptance: on the frame after the swap the shape is already on
 /// its way to 100×30 — at 300×40 the frame before and 100×30 400 ms later —
-/// while the wide view is still laid out 300×40, top centre in a stack of
-/// 100×30, and still painted.
+/// while the wide view is still laid out 300×40, top centre in the shape as
+/// it is on that frame, and still painted.
 #[test]
 fn a_leaving_view_does_not_hold_the_shape_open() {
     let Some(mut island) = Island::new() else {
@@ -176,16 +176,16 @@ fn a_leaving_view_does_not_hold_the_shape_open() {
     );
     assert_eq!(
         island.in_shape(island.wide),
-        Rect::new(-100.0, 0.0, 300.0, 40.0),
-        "laid out at its own size, top centre in a stack of 100x30"
+        Rect::new((w - 300.0) / 2.0, 0.0, 300.0, 40.0),
+        "laid out at its own size, top centre in the shape as it is (#792)"
     );
     assert_eq!(
         island.in_shape(island.narrow),
-        Rect::new(0.0, 0.0, 100.0, 30.0)
+        Rect::new((w - 100.0) / 2.0, 0.0, 100.0, 30.0)
     );
 
-    // Inside the shape, past the narrow view's right edge and below it: only
-    // the leaving view is there, and it is still drawn.
+    // Inside the shape, below the narrow view: only the leaving view is
+    // there, and it is still drawn.
     let [r, g, b, _] = island.app.read_pixel(island.surface, 160, 34);
     assert!(
         r > 128 && g > 128 && b > 128,
@@ -208,7 +208,11 @@ fn a_leaving_view_does_not_hold_the_shape_open() {
             close(w, 300.0 - 200.0 * t) && close(h, 40.0 - 10.0 * t),
             "at {ms} ms the shape is {w}x{h}: {frames:?}"
         );
-        assert_eq!(narrow, Rect::new(0.0, 0.0, 100.0, 30.0), "at {ms} ms");
+        assert_eq!(
+            narrow,
+            Rect::new((w - 100.0) / 2.0, 0.0, 100.0, 30.0),
+            "at {ms} ms"
+        );
     }
     assert_eq!(island.shape(), (100.0, 30.0));
     assert!(
@@ -217,8 +221,9 @@ fn a_leaving_view_does_not_hold_the_shape_open() {
     );
 }
 
-/// A `fill()` background leaving with its key is laid out at the stack's new
-/// size, so it shrinks with the shape rather than holding the old one.
+/// A `fill()` background leaving with its key follows the stack rather than
+/// holding the old size: it shrinks with the shape, at the size the shape has
+/// on each frame (#792).
 #[test]
 fn a_leaving_background_follows_the_new_size() {
     let Some(mut island) = Island::new() else {
@@ -230,9 +235,11 @@ fn a_leaving_background_follows_the_new_size() {
     );
     island.swap(vec![false]);
     island.frame();
+    let (w, h) = island.shape();
+    assert!(w < 300.0 && h < 40.0, "on its way down: {w}x{h}");
     assert_eq!(
         island.in_shape(island.wide_background),
-        Rect::new(0.0, 0.0, 100.0, 30.0)
+        Rect::new(0.0, 0.0, w, h)
     );
 }
 
@@ -274,6 +281,6 @@ fn a_key_that_comes_back_mid_exit_leads_again() {
     );
     assert_eq!(
         island.in_shape(island.wide),
-        Rect::new(0.0, 0.0, 300.0, 40.0)
+        Rect::new((after - 300.0) / 2.0, 0.0, 300.0, 40.0)
     );
 }

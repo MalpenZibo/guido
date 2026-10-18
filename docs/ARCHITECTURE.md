@@ -622,12 +622,33 @@ where it is. Only the reads that ask it are told, through
 `ctx.answer_depends_on_the_pass()` for a value in flight. A paint asks nothing:
 `displayed` has one answer.
 
-What that decides is the cache. A widget's answer is kept under the pass that
-laid it out, and the pass that did not may read it only where the subtree is
-settled — so a measure reads a layout's work rather than repeating it (42
-widget layouts a frame rather than 242, on a bar of 121), and a subtree with an
-animation in flight, or one a measure placed without letting it appear, is
-never handed across.
+What that decides is the cache. A widget keeps two answers, the last layout's
+and the last measure's, and the pass that did not run one may read it only
+where the subtree is settled — so a measure reads a layout's work rather than
+repeating it (42 widget layouts a frame rather than 242, on a bar of 121), and
+a subtree with an animation in flight, or one a measure placed without letting
+it appear, is never handed across. A layout's answer is read only while it was
+the last to run, since a skip leaves the children where the last run placed
+them, and a measure that ran since moved them; a mark drops the measure's
+answer, and the `needs_layout` flag keeps the layout's from being read.
+
+Two entries because a container whose size follows its content with a
+transition asks its children both questions on one frame: a measure at the box
+it is heading to, which its size targets are taken from, and a layout in the
+box it has, which they are placed and drawn in. It asks the measure only where
+the answers can differ — the box in flight, or a layout below it that said
+`answer_depends_on_the_pass`, which a child reports on its way out of layout,
+so nothing walks the subtree and a value that only paints asks for nothing.
+Frame after frame the measure is the same question, answered from the cache
+until something below changes. A measure also stamps each widget it asks with
+the frame (`measured_in`), and for the rest of that frame a size that follows
+its content keeps the target that measure gave it: a box inside one in flight
+is laid out in a width its ancestor is only passing through, and retargeting
+from that layout restarted its transition every frame. A mark clears the stamp.
+With one entry the two evicted each other and
+the children were laid out twice a frame; taffy keeps a node's final layout
+apart from its measures, and Chromium's LayoutNG its measure results apart from
+its layout results, for the same reason.
 
 ### Widgets written outside the crate
 
@@ -883,9 +904,9 @@ Layout only recalculates when:
 A layout can record the least its widget can be on each axis with
 `LayoutCtx::set_minimum`, read back by a parent with `Tree::minimum`: what a
 flex whose children do not fit takes a child down to. It is cached with the
-size, in the one entry a widget's layout cache holds, so a layout skipped as
-clean still answers the minimum it recorded and a layout that runs replaces
-it — nothing is invalidated separately. `Text` records its widest word, its
+size, in the cache entry the answer is kept in, so a layout skipped as clean
+still answers the minimum it recorded and a layout that runs replaces it —
+nothing is invalidated separately. `Text` records its widest word, its
 `…` or its whole width; a layout records the least its children can be
 arranged in, and the container holding it adds padding over that, keeps an
 exact length rigid, and goes to its declared minimum when it clips or
