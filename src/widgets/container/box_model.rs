@@ -405,18 +405,21 @@ impl Container {
                 ctx.children_depend_on_the_pass(|ctx| self.lay_out_children(ctx, child));
             (!moving).then_some(content)
         };
-        let heading_to = match settled {
-            Some(content) => content,
-            None => ctx.measure_with(|ctx| self.lay_out_children(ctx, child)),
+        let (heading_to, below) = match settled {
+            Some(content) => (content, false),
+            None => ctx.children_depend_on_the_pass(|ctx| {
+                ctx.measure_with(|ctx| self.lay_out_children(ctx, child))
+            }),
         };
         self.update_size_targets(ctx, id, lengths, heading_to);
-        self.lay_out_in_flight(ctx, lengths, child, constraints, settled)
+        self.lay_out_in_flight(ctx, lengths, child, constraints, settled, below)
     }
 
     /// Lay the children out in the box this one has on this frame, and answer
     /// with their size and whether that box is in flight. `laid_out` is what
     /// they already answered in `child`, where that placement stands: kept
     /// where the box is not in flight, or the content fills the box it has.
+    /// `below` is whether what the children measured is still in flight.
     fn lay_out_in_flight(
         &mut self,
         ctx: &mut LayoutCtx,
@@ -424,8 +427,9 @@ impl Container {
         child: &mut ChildLayout,
         constraints: Constraints,
         laid_out: Option<Size>,
+        below: bool,
     ) -> (Size, bool) {
-        let in_flight = self.lengths_in_flight(ctx, lengths);
+        let in_flight = self.lengths_in_flight(ctx, lengths, below);
         let frame = in_flight.map(|lengths| self.child_layout(ctx, &lengths, constraints));
         match (frame, laid_out) {
             (None, Some(content)) => return (content, false),
@@ -451,10 +455,17 @@ impl Container {
     /// animation has nowhere to go holds too: what is laid out in a box it is
     /// only passing through is no size to follow. A scrolled axis is left
     /// alone: its children are never laid out against the box.
+    ///
+    /// A box whose own animation has arrived holds too while what it holds is
+    /// still in flight, `below`: it is already where the content is heading,
+    /// and following the content as it is now would take it back the way the
+    /// content has still to come — a box that arrived before what it holds
+    /// grew back to the inner box's in-flight size, then shrank with it.
     pub(super) fn lengths_in_flight(
         &self,
         ctx: &mut LayoutCtx,
         lengths: &BoxLengths,
+        below: bool,
     ) -> Option<BoxLengths> {
         // A measure reads where the size is going, which is what the content
         // is measured for.
@@ -466,7 +477,8 @@ impl Container {
             self.held_anim(Axis::Vertical, &lengths.height),
         );
         let moving = |anim: Option<&AnimationState<f32>>| anim.is_some_and(|a| a.is_animating());
-        if !moving(width) && !moving(height) {
+        let holds = width.is_some() || height.is_some();
+        if !(moving(width) || moving(height) || below && holds) {
             return None;
         }
         let mut held = |anim: Option<&AnimationState<f32>>, length: Length| match anim {

@@ -294,6 +294,11 @@ impl TwoAxes {
         Self::build(words, true, linear())
     }
 
+    /// The same, the outer box moving by `outer` and the inner one linearly.
+    fn nested_under(words: f32, outer: Transition) -> Option<Self> {
+        Self::build(words, true, outer)
+    }
+
     fn build(words: f32, nested: bool, outer: Transition) -> Option<Self> {
         let mut app = common::headless()?;
         let w = create_signal(words);
@@ -757,4 +762,65 @@ fn nested_boxes_turn_together_when_the_content_changes_halfway() {
         "the change lands on a frame of the old transition: {turned_at}, then {from}"
     );
     assert_one_transition(&frames, from, (60.0, LINE));
+}
+
+/// Where the two move by different transitions — a spring outside, a linear
+/// one inside — the inner box goes at its own pace, never wider than the box
+/// it is in: held to it where it would run ahead, and the outer box left wider
+/// around it where it lags. Either way it arrives where the content does, and
+/// no frame moves it further than the faster of the two moves in one.
+fn assert_inner_keeps_its_own_pace(from: f32, to: f32, settled: (f32, f32)) {
+    let Some(mut shape) = TwoAxes::nested_under(from, Transition::spring(SpringConfig::DEFAULT))
+    else {
+        return;
+    };
+    let mut last = shape.both_for(1)[0];
+    shape.words.set(to);
+    let frames = shape.both_for(90);
+    for &(outer, inner) in &frames {
+        assert!(
+            inner.0 <= outer.0 + 0.01,
+            "the inner box is never wider than the outer: {frames:?}"
+        );
+        let step = (outer.0 - last.0.0)
+            .abs()
+            .max((settled.0 - from).abs().max(40.0) / 25.0);
+        assert!(
+            (inner.0 - last.1.0).abs() <= step + 0.01,
+            "no frame jumps the inner box: {frames:?}"
+        );
+        last = (outer, inner);
+    }
+    // Arriving is for good: neither box, once where the content is heading,
+    // goes back the way it came.
+    let outer_width = |f: &Both| f.0.0;
+    let inner_width = |f: &Both| f.1.0;
+    for along in [outer_width, inner_width] {
+        let near = |f: &Both| (along(f) - settled.0).abs() < 0.1;
+        let arrived = frames.iter().position(near);
+        assert!(
+            arrived.is_some_and(|at| frames[at..].iter().all(near)),
+            "a box that arrives stays: {frames:?}"
+        );
+    }
+    assert_eq!(
+        frames.last().map(|f| f.1),
+        Some(settled),
+        "and it arrives: {frames:?}"
+    );
+    assert_eq!(
+        frames.last().map(|f| f.0),
+        Some(settled),
+        "with the outer: {frames:?}"
+    );
+}
+
+#[test]
+fn a_box_in_a_springing_box_grows_at_its_own_pace() {
+    assert_inner_keeps_its_own_pace(60.0, 150.0, (100.0, 2.0 * LINE));
+}
+
+#[test]
+fn a_box_in_a_springing_box_shrinks_at_its_own_pace() {
+    assert_inner_keeps_its_own_pace(150.0, 60.0, (60.0, LINE));
 }
