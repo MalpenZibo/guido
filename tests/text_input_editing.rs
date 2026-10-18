@@ -323,8 +323,9 @@ fn end_after_a_backspace_is_the_end_of_what_is_left() {
     assert_eq!(field.text(), "h");
 }
 
-/// Ctrl+Left and Ctrl+Right stop at the edges of words, skipping the spaces
-/// between them — asked, like the test above, by moving and then writing.
+/// Ctrl+Left stops at the start of a word and Ctrl+Right at its end, skipping
+/// the spaces between them — asked, like the test above, by moving and then
+/// writing.
 #[test]
 fn ctrl_arrows_move_by_word() {
     let ctrl = Modifiers {
@@ -356,8 +357,8 @@ fn ctrl_arrows_move_by_word() {
     field.type_text("C");
     assert_eq!(
         field.text(),
-        "one  CBtwo Athree",
-        "forward over a word and both spaces after it"
+        "oneC  Btwo Athree",
+        "forward to the end of a word, not past the spaces after it"
     );
 
     field.key(Key::End);
@@ -365,7 +366,7 @@ fn ctrl_arrows_move_by_word() {
     field.type_text("D");
     assert_eq!(
         field.text(),
-        "one  CBtwo AthreeD",
+        "oneC  Btwo AthreeD",
         "and no further than the end"
     );
 }
@@ -1466,7 +1467,11 @@ fn a_drag_after_a_double_click_extends_by_words() {
         ..Default::default()
     };
     let mut field = Field::focused("one two three");
-    let two = field.x_after(&[(Key::Home, Modifiers::default()), (Key::Right, ctrl)]) + 3.0;
+    let two = field.x_after(&[
+        (Key::End, Modifiers::default()),
+        (Key::Left, ctrl),
+        (Key::Left, ctrl),
+    ]) + 3.0;
     let three = field.x_after(&[(Key::End, Modifiers::default())]) - 4.0;
 
     // Forwards, from "one" into "two".
@@ -1525,4 +1530,156 @@ fn a_double_click_in_a_scrolled_field_selects_the_word_drawn_there() {
     field.type_text("X");
 
     assert_eq!(field.text(), SENTENCE.replace("dog", "X"));
+}
+
+/// What a double click on `text`, at the x `keys` leave the caret at plus
+/// `nudge`, leaves once `X` is typed over its selection.
+fn double_click_then_type(text: &str, keys: &[(Key, Modifiers)], nudge: f32) -> String {
+    let mut field = Field::focused(text);
+    let x = field.x_after(keys) + nudge;
+    field.press_number(1, x);
+    field.press_number(2, x);
+    field.type_text("X");
+    field.text()
+}
+
+/// A key with nothing held, for [`Field::x_after`].
+fn plain(key: Key) -> (Key, Modifiers) {
+    (key, Modifiers::default())
+}
+
+/// A word is what Unicode's word segmentation (UAX #29) says it is, as GTK,
+/// Qt and the browsers have it, so the full stop after the last word of a
+/// sentence is not part of it: typing over the word keeps the stop.
+#[test]
+fn a_double_click_leaves_the_punctuation_beside_a_word() {
+    assert_eq!(
+        double_click_then_type("hello world.", &[plain(Key::End), plain(Key::Left)], -4.0),
+        "hello X."
+    );
+}
+
+/// A path is words between slashes, not one word: a double click in its last
+/// part selects that part.
+#[test]
+fn a_double_click_in_a_path_selects_one_part_of_it() {
+    assert_eq!(
+        double_click_then_type("/usr/local/bin", &[plain(Key::End)], -4.0),
+        "/usr/local/X"
+    );
+}
+
+/// An address divides at the `@` and nowhere else: a full stop between two
+/// letters is inside a word, so the domain is one, and so is `don't`.
+#[test]
+fn a_double_click_keeps_a_word_whole_across_a_full_stop_or_an_apostrophe() {
+    assert_eq!(
+        double_click_then_type("user@example.com", &[plain(Key::End)], -4.0),
+        "user@X"
+    );
+    assert_eq!(
+        double_click_then_type("user@example.com", &[plain(Key::Home)], 3.0),
+        "X@example.com"
+    );
+    assert_eq!(
+        double_click_then_type("say don't", &[plain(Key::End)], -4.0),
+        "say X"
+    );
+}
+
+/// A double click on punctuation selects the punctuation — less than a word,
+/// and neither word beside it.
+#[test]
+fn a_double_click_on_punctuation_selects_only_the_punctuation() {
+    let mut after_hello = vec![plain(Key::Home)];
+    after_hello.extend([plain(Key::Right); 5]);
+    assert_eq!(
+        double_click_then_type("hello, world", &after_hello, 1.0),
+        "helloX world"
+    );
+}
+
+/// Unicode cuts a run of punctuation into one piece per mark, but a double
+/// click on it selects the whole run, as it does a run of spaces.
+#[test]
+fn a_double_click_on_a_run_of_punctuation_selects_the_run() {
+    let mut on_the_dots = vec![plain(Key::Home)];
+    on_the_dots.extend([plain(Key::Right); 5]);
+    assert_eq!(
+        double_click_then_type("wait... what", &on_the_dots, 1.0),
+        "waitX what"
+    );
+    let mut on_the_marks = vec![plain(Key::Home)];
+    on_the_marks.extend([plain(Key::Right); 3]);
+    assert_eq!(
+        double_click_then_type("hi!! there", &on_the_marks, 1.0),
+        "hiX there"
+    );
+}
+
+/// Ctrl+Right stops at the end of the next word and Ctrl+Left at the start of
+/// the one before, stepping over the punctuation between them as the browsers
+/// do — so a path is crossed a part at a time.
+#[test]
+fn ctrl_arrows_stop_at_the_parts_of_a_path() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    let mut field = Field::focused("/usr/local/bin");
+    field.key(Key::Home);
+    field.press(Key::Right, ctrl);
+    field.type_text("X");
+    assert_eq!(
+        field.text(),
+        "/usrX/local/bin",
+        "to the end of usr, index 4"
+    );
+
+    let mut field = Field::focused("/usr/local/bin");
+    field.key(Key::End);
+    field.press(Key::Left, ctrl);
+    field.press(Key::Left, ctrl);
+    field.type_text("X");
+    assert_eq!(
+        field.text(),
+        "/usr/Xlocal/bin",
+        "back to the start of bin, then of local"
+    );
+}
+
+/// Punctuation is never a stop of its own: Ctrl+Right from the end of a word
+/// goes over the comma and the space to the end of the next word, and stops
+/// there rather than past the full stop; Ctrl+Left from the end goes back over
+/// the full stop to the start of the last word.
+#[test]
+fn ctrl_arrows_step_over_punctuation() {
+    let ctrl = Modifiers {
+        ctrl: true,
+        ..Modifiers::default()
+    };
+    let mut field = Field::focused("hello, world.");
+    field.key(Key::Home);
+    field.press(Key::Right, ctrl);
+    field.press(Key::Right, ctrl);
+    field.type_text("X");
+    assert_eq!(field.text(), "hello, worldX.");
+
+    let mut field = Field::focused("hello, world.");
+    field.key(Key::Home);
+    for _ in 0..3 {
+        field.press(Key::Right, ctrl);
+    }
+    field.type_text("Y");
+    assert_eq!(
+        field.text(),
+        "hello, world.Y",
+        "from the end of the last word, over the full stop to the end"
+    );
+
+    let mut field = Field::focused("hello, world.");
+    field.key(Key::End);
+    field.press(Key::Left, ctrl);
+    field.type_text("X");
+    assert_eq!(field.text(), "hello, Xworld.");
 }
