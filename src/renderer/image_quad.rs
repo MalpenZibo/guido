@@ -21,7 +21,7 @@ use super::flatten::FlattenedCommand;
 use super::image_atlas::{AtlasEntry, ImageAtlas};
 use super::textured_quad::{QuadDraw, TexturedQuadPipeline};
 use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
-use crate::image_decode::{DecodeKey, DecodedImage, Extent, SampledBytes};
+use crate::image_decode::{DecodeKey, DecodedImage, Extent, SampledBytes, SvgRaster};
 use crate::render_stats::Pipeline;
 use crate::widgets::Color;
 use crate::widgets::Rect;
@@ -77,6 +77,10 @@ struct CachedTexture {
     /// Its texels within that texture, `[x, y, width, height]` in texture
     /// coordinates — all of it, for a texture of its own.
     uv_rect: [f32; 4],
+    /// The part of the image those texels hold, `[u_min, v_min, u_max,
+    /// v_max]` in fractions of it: all of it, but for the middle of an SVG
+    /// that `Cover` cropped.
+    holds: [f32; 4],
     /// Original intrinsic dimensions
     intrinsic_width: f32,
     intrinsic_height: f32,
@@ -156,44 +160,146 @@ struct RgbaKey {
     pixels: SampledBytes,
 }
 
-/// The pixel size to rasterize an SVG of `intrinsic` size at.
+/// The raster to make of an SVG of `intrinsic` size.
 ///
 /// The raster is made at the size `fit` draws the SVG at in a box of
 /// `box_size` logical pixels, rather than at its intrinsic size: a 16px
 /// weather icon with a 104px viewBox costs a 16px raster, not a 104px one,
 /// which is both faster and sharper. `Contain` scales by the smaller of the
-/// box's ratios to the image, `Cover` by the larger — the part outside the box
-/// is cropped when it is drawn — and `Fill` by each axis's own, stretching the
-/// image in the raster as it is stretched on screen. `None` draws it at its
-/// intrinsic size, whatever the box. `scale` carries transform scale, HiDPI
-/// factor and the quality multiplier.
+/// box's ratios to the image, `Cover` by the larger and keeps only the middle
+/// its box shows, and `Fill` by each axis's own, stretching the image in the
+/// raster as it is stretched on screen. `None` draws it at its intrinsic size,
+/// whatever the box. `scale` carries transform scale, HiDPI factor and the
+/// quality multiplier.
 ///
 /// Both are quantized first — the scale to quarters, the box to whole pixels —
-/// so a scale animation asks for a raster per step rather than per frame.
+/// so a scale animation asks for a raster per step rather than per frame. The
+/// part a `Cover` raster keeps is the exception: it follows the box as it is,
+/// because the draw crops by that box, and a raster cut to the rounded one
+/// could hold less than the draw reads.
 fn svg_extent(
     (width, height): (f32, f32),
     scale: f32,
     fit: ContentFit,
     (box_width, box_height): (f32, f32),
     limit: u32,
-) -> Option<(u32, u32)> {
+) -> Option<SvgRaster> {
     let scale = (scale * 4.0).round() / 4.0;
     let (across, down) = (box_width.round() / width, box_height.round() / height);
-    let (fit_x, fit_y) = match fit {
-        _ if box_width < 1.0 || box_height < 1.0 => (1.0, 1.0),
-        ContentFit::None => (1.0, 1.0),
-        ContentFit::Contain => (across.min(down), across.min(down)),
-        ContentFit::Cover => (across.max(down), across.max(down)),
-        ContentFit::Fill => (across, down),
+    // How much the document is scaled on each axis, and what part of it the
+    // box shows.
+    let ((fit_x, fit_y), shown) = match fit {
+        _ if box_width < 1.0 || box_height < 1.0 => ((1.0, 1.0), (1.0, 1.0)),
+        ContentFit::None => ((1.0, 1.0), (1.0, 1.0)),
+        ContentFit::Contain => {
+            let fit = across.min(down);
+            ((fit, fit), (1.0, 1.0))
+        }
+        ContentFit::Cover => {
+            // What the box shows is the draw's to say, which crops by the box
+            // it has rather than the one rounded here.
+            let (across_exact, down_exact) = (box_width / width, box_height / height);
+            let shown_of = across_exact.max(down_exact);
+            let fit = across.max(down);
+            ((fit, fit), (across_exact / shown_of, down_exact / shown_of))
+        }
+        ContentFit::Fill => ((across, down), (1.0, 1.0)),
     };
-    let (scale_x, scale_y) = (scale * fit_x, scale * fit_y);
-    let shrink = (limit as f32 / (width * scale_x).max(height * scale_y)).min(1.0);
-    let extent = (
-        (width * scale_x * shrink).ceil(),
-        (height * scale_y * shrink).ceil(),
+    let whole = (width * scale * fit_x, height * scale * fit_y);
+    let shrink = (limit as f32 / (whole.0 * shown.0).max(whole.1 * shown.1)).min(1.0);
+    let whole = ((whole.0 * shrink).ceil(), (whole.1 * shrink).ceil());
+    // Rounded up from the whole raster's own pixels, so it holds at least
+    // what the box shows.
+    let size = (
+        (whole.0 * shown.0).ceil().min(whole.0),
+        (whole.1 * shown.1).ceil().min(whole.1),
     );
-    (extent.0 >= 1.0 && extent.1 >= 1.0)
-        .then_some(((extent.0 as u32).min(limit), (extent.1 as u32).min(limit)))
+    (size.0 >= 1.0 && size.1 >= 1.0).then(|| SvgRaster {
+        size: ((size.0 as u32).min(limit), (size.1 as u32).min(limit)),
+        whole: (whole.0 as u32, whole.1 as u32),
+    })
+}
+
+/// The part of an SVG `raster` holds, in fractions of the image: the middle
+/// `size` of its `whole`.
+fn held_part(SvgRaster { size, whole }: SvgRaster) -> [f32; 4] {
+    let margin = |size: u32, whole: u32| (1.0 - size as f32 / whole as f32) / 2.0;
+    let (u, v) = (margin(size.0, whole.0), margin(size.1, whole.1));
+    [u, v, 1.0 - u, 1.0 - v]
+}
+
+/// Where the part `[u_min, v_min, u_max, v_max]` of an image falls in the
+/// texels of a texture that `holds` only some of it. A crop reaching past what
+/// they hold — an older raster, drawn while the one for a new box is on the
+/// worker — is clamped to it, so the part the texels hold is stretched over
+/// the crop rather than read past into an atlas neighbour.
+fn uv_within(
+    (u_min, v_min, u_max, v_max): (f32, f32, f32, f32),
+    [h_u_min, h_v_min, h_u_max, h_v_max]: [f32; 4],
+) -> (f32, f32, f32, f32) {
+    let u = |u: f32| (u.clamp(h_u_min, h_u_max) - h_u_min) / (h_u_max - h_u_min);
+    let v = |v: f32| (v.clamp(h_v_min, h_v_max) - h_v_min) / (h_v_max - h_v_min);
+    (u(u_min), v(v_min), u(u_max), v(v_max))
+}
+
+/// Calculate the display rect and UV coordinates based on content fit.
+fn display_rect_and_uv(
+    rect: &Rect,
+    intrinsic_width: f32,
+    intrinsic_height: f32,
+    content_fit: ContentFit,
+) -> (Rect, (f32, f32, f32, f32)) {
+    let img_width = intrinsic_width;
+    let img_height = intrinsic_height;
+    let img_aspect = img_width / img_height;
+    let widget_aspect = rect.width / rect.height;
+
+    match content_fit {
+        ContentFit::Fill => {
+            // Stretch to fill - use full rect and full UV
+            (*rect, (0.0, 0.0, 1.0, 1.0))
+        }
+        ContentFit::Contain => {
+            // Fit within bounds, preserving aspect ratio (letterbox/pillarbox)
+            let (scaled_w, scaled_h) = if widget_aspect > img_aspect {
+                // Widget is wider - fit to height, center horizontally
+                (rect.height * img_aspect, rect.height)
+            } else {
+                // Widget is taller - fit to width, center vertically
+                (rect.width, rect.width / img_aspect)
+            };
+            let offset_x = (rect.width - scaled_w) / 2.0;
+            let offset_y = (rect.height - scaled_h) / 2.0;
+            (
+                Rect::new(rect.x + offset_x, rect.y + offset_y, scaled_w, scaled_h),
+                (0.0, 0.0, 1.0, 1.0),
+            )
+        }
+        ContentFit::Cover => {
+            // Cover bounds, cropping as needed (adjust UV to crop)
+            let (u_min, v_min, u_max, v_max) = if widget_aspect > img_aspect {
+                // Widget is wider - crop top/bottom
+                let visible_height = img_aspect / widget_aspect;
+                let v_offset = (1.0 - visible_height) / 2.0;
+                (0.0, v_offset, 1.0, v_offset + visible_height)
+            } else {
+                // Widget is taller - crop left/right
+                let visible_width = widget_aspect / img_aspect;
+                let u_offset = (1.0 - visible_width) / 2.0;
+                (u_offset, 0.0, u_offset + visible_width, 1.0)
+            };
+            (*rect, (u_min, v_min, u_max, v_max))
+        }
+        ContentFit::None => {
+            // Use intrinsic size, centered in widget
+            let offset_x = (rect.width - img_width) / 2.0;
+            let offset_y = (rect.height - img_height) / 2.0;
+            (
+                Rect::new(rect.x + offset_x, rect.y + offset_y, img_width, img_height),
+                (0.0, 0.0, 1.0, 1.0),
+            )
+        }
+    }
 }
 
 /// Fit premultiplied pixels within the texture limit.
@@ -586,15 +692,18 @@ impl ImageQuadRenderer {
             }
             ImageSource::SvgPath(_) | ImageSource::SvgBytes(_) => {
                 let decoded = decoded?;
+                let raster = key.extent?;
                 let pixels = decoded.take_or_rasterize(key.extent)?;
-                self.store(
+                let mut texture = self.store(
                     device,
                     queue,
                     pixels.width,
                     pixels.height,
                     &pixels.rgba,
                     decoded.svg_size()?,
-                )?
+                )?;
+                texture.holds = held_part(raster);
+                texture
             }
         };
         texture.decoded_from = decoded.map(|decoded| (decoded.key().clone(), key.extent));
@@ -660,6 +769,7 @@ impl ImageQuadRenderer {
             backing,
             bind_group,
             uv_rect,
+            holds: [0.0, 0.0, 1.0, 1.0],
             intrinsic_width,
             intrinsic_height,
             last_used: Cell::new(self.frame_started),
@@ -752,12 +862,13 @@ impl ImageQuadRenderer {
         };
 
         // Calculate display rect and UV coordinates based on content fit
-        let (display_rect, (u_min, v_min, u_max, v_max)) = self.calculate_display_rect_and_uv(
+        let (display_rect, part) = display_rect_and_uv(
             rect,
             cached.intrinsic_width,
             cached.intrinsic_height,
             *content_fit,
         );
+        let (u_min, v_min, u_max, v_max) = uv_within(part, cached.holds);
         // From the image's own coordinates to the texture it is drawn from,
         // which for one on an atlas page is a corner of the page.
         let [x, y, width, height] = cached.uv_rect;
@@ -788,67 +899,6 @@ impl ImageQuadRenderer {
             bind_group: cached.bind_group.clone(),
             _texture: Some(cached),
         })
-    }
-
-    /// Calculate the display rect and UV coordinates based on content fit.
-    fn calculate_display_rect_and_uv(
-        &self,
-        rect: &Rect,
-        intrinsic_width: f32,
-        intrinsic_height: f32,
-        content_fit: ContentFit,
-    ) -> (Rect, (f32, f32, f32, f32)) {
-        let img_width = intrinsic_width;
-        let img_height = intrinsic_height;
-        let img_aspect = img_width / img_height;
-        let widget_aspect = rect.width / rect.height;
-
-        match content_fit {
-            ContentFit::Fill => {
-                // Stretch to fill - use full rect and full UV
-                (*rect, (0.0, 0.0, 1.0, 1.0))
-            }
-            ContentFit::Contain => {
-                // Fit within bounds, preserving aspect ratio (letterbox/pillarbox)
-                let (scaled_w, scaled_h) = if widget_aspect > img_aspect {
-                    // Widget is wider - fit to height, center horizontally
-                    (rect.height * img_aspect, rect.height)
-                } else {
-                    // Widget is taller - fit to width, center vertically
-                    (rect.width, rect.width / img_aspect)
-                };
-                let offset_x = (rect.width - scaled_w) / 2.0;
-                let offset_y = (rect.height - scaled_h) / 2.0;
-                (
-                    Rect::new(rect.x + offset_x, rect.y + offset_y, scaled_w, scaled_h),
-                    (0.0, 0.0, 1.0, 1.0),
-                )
-            }
-            ContentFit::Cover => {
-                // Cover bounds, cropping as needed (adjust UV to crop)
-                let (u_min, v_min, u_max, v_max) = if widget_aspect > img_aspect {
-                    // Widget is wider - crop top/bottom
-                    let visible_height = img_aspect / widget_aspect;
-                    let v_offset = (1.0 - visible_height) / 2.0;
-                    (0.0, v_offset, 1.0, v_offset + visible_height)
-                } else {
-                    // Widget is taller - crop left/right
-                    let visible_width = widget_aspect / img_aspect;
-                    let u_offset = (1.0 - visible_width) / 2.0;
-                    (u_offset, 0.0, u_offset + visible_width, 1.0)
-                };
-                (*rect, (u_min, v_min, u_max, v_max))
-            }
-            ContentFit::None => {
-                // Use intrinsic size, centered in widget
-                let offset_x = (rect.width - img_width) / 2.0;
-                let offset_y = (rect.height - img_height) / 2.0;
-                (
-                    Rect::new(rect.x + offset_x, rect.y + offset_y, img_width, img_height),
-                    (0.0, 0.0, 1.0, 1.0),
-                )
-            }
-        }
     }
 
     /// Compute vertex positions by applying world transform to local corners.
@@ -955,7 +1005,10 @@ mod limit_tests {
 
     #[test]
     fn svg_raster_extents_fit_both_axes() {
-        let intrinsic = |size, scale| svg_extent(size, scale, ContentFit::None, (0.0, 0.0), 8192);
+        let size = |intrinsic, scale, fit, box_size| {
+            svg_extent(intrinsic, scale, fit, box_size, 8192).map(|raster| raster.size)
+        };
+        let intrinsic = |intrinsic, scale| size(intrinsic, scale, ContentFit::None, (0.0, 0.0));
         for ((width, height), expected) in [
             ((8193.0, 1.0), (8192, 1)),
             ((1.0, 8193.0), (1, 8192)),
@@ -966,7 +1019,7 @@ mod limit_tests {
         }
         assert_eq!(intrinsic((20.0, 10.0), 2.0), Some((40, 20)));
         assert_eq!(
-            svg_extent((8193.0, 1.0), 2.0, ContentFit::Contain, (20.0, 20.0), 8192),
+            size((8193.0, 1.0), 2.0, ContentFit::Contain, (20.0, 20.0)),
             Some((40, 1))
         );
         assert_eq!(intrinsic((0.0, 10.0), 2.0), None);
@@ -978,35 +1031,154 @@ mod limit_tests {
     /// cropped one is as sharp as a contained one (#813).
     #[test]
     fn svg_raster_extents_are_the_size_each_fit_draws() {
-        let fill = svg_extent((10.0, 10.0), 1.0, ContentFit::Fill, (400.0, 4.0), 8192).unwrap();
+        let raster = |intrinsic, scale, fit, box_size| {
+            svg_extent(intrinsic, scale, fit, box_size, 8192).unwrap()
+        };
+        let fill = raster((10.0, 10.0), 1.0, ContentFit::Fill, (400.0, 4.0)).size;
         assert!(
             fill.0 >= 400 && fill.1 >= 4,
             "Fill in 400×4 asks for {fill:?}"
         );
-        let cover = svg_extent((16.0, 16.0), 1.0, ContentFit::Cover, (64.0, 16.0), 8192).unwrap();
+        let cover = raster((16.0, 16.0), 1.0, ContentFit::Cover, (64.0, 16.0)).size;
         assert!(cover.0 >= 64, "Cover in 64×16 asks for {cover:?}");
 
-        for (size, fit, box_size, expected) in [
-            ((10.0, 10.0), ContentFit::Fill, (400.0, 4.0), (800, 8)),
-            ((16.0, 16.0), ContentFit::Cover, (64.0, 16.0), (128, 128)),
-            ((16.0, 16.0), ContentFit::Contain, (64.0, 16.0), (32, 32)),
-            ((16.0, 16.0), ContentFit::None, (64.0, 16.0), (32, 32)),
-            // The limit shrinks a stretched raster as it does any other,
-            // keeping the shape the fit asked for.
-            ((10.0, 10.0), ContentFit::Fill, (8000.0, 40.0), (8192, 41)),
+        for (intrinsic, fit, box_size, size, whole) in [
+            (
+                (10.0, 10.0),
+                ContentFit::Fill,
+                (400.0, 4.0),
+                (800, 8),
+                (800, 8),
+            ),
+            (
+                (16.0, 16.0),
+                ContentFit::Cover,
+                (64.0, 16.0),
+                (128, 32),
+                (128, 128),
+            ),
+            (
+                (16.0, 16.0),
+                ContentFit::Contain,
+                (64.0, 16.0),
+                (32, 32),
+                (32, 32),
+            ),
+            (
+                (16.0, 16.0),
+                ContentFit::None,
+                (64.0, 16.0),
+                (32, 32),
+                (32, 32),
+            ),
+            // The limit shrinks a stretched or cropped raster as it does any
+            // other, keeping the shape the fit asked for.
+            (
+                (10.0, 10.0),
+                ContentFit::Fill,
+                (8000.0, 40.0),
+                (8192, 41),
+                (8192, 41),
+            ),
             (
                 (10.0, 10.0),
                 ContentFit::Cover,
                 (8000.0, 40.0),
+                (8192, 41),
                 (8192, 8192),
             ),
         ] {
             assert_eq!(
-                svg_extent(size, 2.0, fit, box_size, 8192),
-                Some(expected),
+                raster(intrinsic, 2.0, fit, box_size),
+                SvgRaster { size, whole },
                 "{fit:?} in {box_size:?}"
             );
         }
+    }
+
+    /// A covering SVG is rasterized only where its box shows it: a square icon
+    /// across a 1920 × 32 bar at 2× is the bar's 3840 × 64 pixels, not the
+    /// 7680 × 7680 square it is cut from.
+    #[test]
+    fn a_covering_svg_is_rasterized_only_where_its_box_shows_it() {
+        let raster = svg_extent((16.0, 16.0), 2.0, ContentFit::Cover, (1920.0, 32.0), 8192);
+        assert_eq!(
+            raster,
+            Some(SvgRaster {
+                size: (3840, 64),
+                whole: (3840, 3840),
+            })
+        );
+    }
+
+    /// What a covering SVG's raster holds is at least the crop its box draws,
+    /// in a box of any size — the raster is keyed by a box rounded to whole
+    /// pixels, the crop is worked out from the box as it is — so drawing it
+    /// never reads past its texels into an atlas neighbour.
+    #[test]
+    fn a_covering_rasters_crop_holds_what_its_box_draws() {
+        for scale in [2.0, 4.0, 8.0] {
+            for (intrinsic, tenths) in [((16.0, 16.0), 300..500), ((24.0, 10.0), 80..400)] {
+                for (width, height) in tenths
+                    .clone()
+                    .step_by(7)
+                    .flat_map(|w| tenths.clone().step_by(11).map(move |h| (w, h)))
+                {
+                    let rect = Rect::new(0.0, 0.0, width as f32 / 10.0, height as f32 / 10.0);
+                    let raster = svg_extent(
+                        intrinsic,
+                        scale,
+                        ContentFit::Cover,
+                        (rect.width, rect.height),
+                        8192,
+                    )
+                    .unwrap();
+                    let [u_min, v_min, u_max, v_max] = held_part(raster);
+                    let (_, (du_min, dv_min, du_max, dv_max)) =
+                        display_rect_and_uv(&rect, intrinsic.0, intrinsic.1, ContentFit::Cover);
+                    let inside = du_min >= u_min - 1e-6
+                        && dv_min >= v_min - 1e-6
+                        && du_max <= u_max + 1e-6
+                        && dv_max <= v_max + 1e-6;
+                    assert!(
+                        inside,
+                        "{intrinsic:?} covering {rect:?} at {scale}: {raster:?} holds \
+                         {:?}, the draw crops {:?}",
+                        [u_min, v_min, u_max, v_max],
+                        (du_min, dv_min, du_max, dv_max),
+                    );
+                }
+            }
+        }
+    }
+
+    /// A crop is drawn from the texels that hold it, and what lies past them
+    /// — an older raster drawn while a wider crop is on the worker — from
+    /// their edge, never past it.
+    #[test]
+    fn a_crop_is_drawn_from_the_texels_that_hold_it() {
+        let middle = held_part(SvgRaster {
+            size: (100, 50),
+            whole: (100, 100),
+        });
+        assert_eq!(middle, [0.0, 0.25, 1.0, 0.75]);
+        assert_eq!(
+            uv_within((0.0, 0.25, 1.0, 0.75), middle),
+            (0.0, 0.0, 1.0, 1.0)
+        );
+        assert_eq!(
+            uv_within((0.0, 0.375, 1.0, 0.625), middle),
+            (0.0, 0.25, 1.0, 0.75)
+        );
+        assert_eq!(
+            uv_within((0.0, 0.1, 1.0, 0.9), middle),
+            (0.0, 0.0, 1.0, 1.0)
+        );
+        let whole = [0.0, 0.0, 1.0, 1.0];
+        assert_eq!(
+            uv_within((0.25, 0.0, 0.75, 1.0), whole),
+            (0.25, 0.0, 0.75, 1.0)
+        );
     }
 
     #[test]

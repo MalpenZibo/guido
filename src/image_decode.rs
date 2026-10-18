@@ -72,8 +72,18 @@ struct Shared {
 }
 
 /// Which raster of a source: `None` for a raster image, which has one, at its
-/// own size; an SVG's pixel size for one of its.
-pub(crate) type Extent = Option<(u32, u32)>;
+/// own size; which part of an SVG at which pixel size for one of its.
+pub(crate) type Extent = Option<SvgRaster>;
+
+/// A raster of an SVG: the document stretched to `whole` pixels, and the
+/// `size` of that around its centre the raster keeps. The two are one for
+/// every fit but `Cover`, whose box shows only the middle of the image — so a
+/// square icon across a wide bar costs the bar's pixels, not the square's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SvgRaster {
+    pub(crate) size: (u32, u32),
+    pub(crate) whole: (u32, u32),
+}
 
 /// The largest SVG raster drawn inside the frame, in bytes of RGBA: 128 × 128
 /// pixels, a 64 px icon at the renderer's 2× quality. Measured with resvg in
@@ -163,10 +173,10 @@ impl DecodedImage {
     /// asked already — a job, not a signal write, so it is on its way before
     /// the frame is out.
     pub(crate) fn take_or_rasterize(&self, extent: Extent) -> Option<Pixels> {
-        let size = extent?;
-        if inline(size) {
-            let Some(pixels) = rasterize(self.0.svg.as_ref()?, size) else {
-                log::warn!("Failed to rasterize {} at {size:?}", describe(self.key()));
+        let raster = extent?;
+        if inline(raster.size) {
+            let Some(pixels) = rasterize(self.0.svg.as_ref()?, raster) else {
+                log::warn!("Failed to rasterize {} at {raster:?}", describe(self.key()));
                 self.report(ImageEvent::Failed);
                 return None;
             };
@@ -842,17 +852,23 @@ pub(crate) fn premultiplied(rgba: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     std::borrow::Cow::Owned(copy)
 }
 
-/// Draw an SVG's document into `width` by `height` pixels, stretched to fill
-/// them: the pixel size was rounded up from the size it is shown at, and a
-/// texture is drawn whole, so a raster that left its last row empty would
-/// show that row stretched across the image.
+/// Draw an SVG's document stretched to `raster.whole` pixels, keeping the
+/// `raster.size` of them around its centre: the pixel size was rounded up
+/// from the size it is shown at, and a texture is drawn whole, so a raster
+/// that left its last row empty would show that row stretched across the
+/// image.
 #[cfg(feature = "svg")]
-fn rasterize(tree: &SvgTree, (width, height): (u32, u32)) -> Option<Pixels> {
+fn rasterize(tree: &SvgTree, SvgRaster { size, whole }: SvgRaster) -> Option<Pixels> {
+    let (width, height) = size;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
-    let size = tree.size();
+    let document = tree.size();
     let transform = resvg::tiny_skia::Transform::from_scale(
-        width as f32 / size.width(),
-        height as f32 / size.height(),
+        whole.0 as f32 / document.width(),
+        whole.1 as f32 / document.height(),
+    )
+    .post_translate(
+        -(whole.0.saturating_sub(width) as f32) / 2.0,
+        -(whole.1.saturating_sub(height) as f32) / 2.0,
     );
     resvg::render(tree, transform, &mut pixmap.as_mut());
     // Premultiplied already, which is what the textured-quad pipeline takes.
@@ -864,7 +880,7 @@ fn rasterize(tree: &SvgTree, (width, height): (u32, u32)) -> Option<Pixels> {
 }
 
 #[cfg(not(feature = "svg"))]
-fn rasterize(tree: &SvgTree, _extent: (u32, u32)) -> Option<Pixels> {
+fn rasterize(tree: &SvgTree, _raster: SvgRaster) -> Option<Pixels> {
     match *tree {}
 }
 
