@@ -141,6 +141,12 @@ struct Slot {
     /// Which of the two entries it last answered from, run or skipped: what
     /// its parent reads the least it can be from.
     answered: Option<LayoutPass>,
+    /// The frame a measure last asked this widget where it is heading, run or
+    /// skipped, or zero: until that frame ends, a size it follows its content
+    /// with heads where that measure found the content going, and nothing
+    /// laid out in a box an ancestor is only passing through points it
+    /// elsewhere. Zeroed by a mark, whose change the measure has not seen.
+    measured_in: u32,
     /// Cached size from last layout
     cached_size: Option<Size>,
     /// Widget origin (set after layout by parent)
@@ -203,6 +209,7 @@ impl Slot {
     fn mark_needs_layout(&mut self) {
         self.needs_layout = true;
         self.measured = None;
+        self.measured_in = 0;
     }
 
     /// The answer `pass` last gave.
@@ -507,6 +514,9 @@ pub struct Tree {
     /// paint draws it. `None` between frames, where nobody should be reading
     /// it.
     frame_instant: Option<std::time::Instant>,
+    /// Which frame this is, counted from one each time a frame opens: what a
+    /// widget's `measured_in` is compared with.
+    frame: u32,
     /// Which pass is laying out, for as long as one is. Written by the one
     /// entry point every layout goes through and put back when it returns, so
     /// a measure nested inside a layout — the popup path — restores the outer
@@ -652,6 +662,7 @@ impl Tree {
             free_indices: Vec::new(),
             damage: rustc_hash::FxHashMap::default(),
             frame_instant: None,
+            frame: 1,
             pass: LayoutPass::Layout,
             pass_dependent: false,
             event_instant: None,
@@ -818,6 +829,9 @@ impl Tree {
     /// the frame's instant is a widget whose behaviour over time can be asked
     /// about, and that needs somebody able to name the moment.
     pub fn set_frame_instant(&mut self, now: Option<std::time::Instant>) {
+        if now.is_some() {
+            self.frame = self.frame.wrapping_add(1).max(1);
+        }
         self.frame_instant = now;
     }
 
@@ -859,6 +873,7 @@ impl Tree {
             measured: None,
             placed_by: None,
             answered: None,
+            measured_in: 0,
             cached_size: None,
             origin: (0.0, 0.0),
             sparse_index,
@@ -1010,6 +1025,7 @@ impl Tree {
             // A skipped subtree read nothing this pass, and still answers what
             // it answered last time.
             self.pass_dependent = enclosing || entry.pass_dependent;
+            self.stamp_measure(id);
             // And beside its size, what the parent laying it out reads next:
             // the least it can be, and its baseline.
             if let Some(idx) = self.get_dense_index(id) {
@@ -1052,6 +1068,7 @@ impl Tree {
                 Size::new(least.width.min(size.width), least.height.min(size.height))
             });
             tree.cache_answer(id, constraints, size, minimum);
+            tree.stamp_measure(id);
             tree.clear_needs_layout(id);
             // What its children paint, and how far past its own box this one
             // does — both measured against the size it has just answered with,
@@ -1080,6 +1097,29 @@ impl Tree {
         // it has already said.
         self.pass_dependent |= enclosing;
         laid_out
+    }
+
+    /// Note that a measure has asked `id` where it is heading on this frame —
+    /// nothing, outside one: a measure with no frame open, a popup's before
+    /// its surface exists, leaves the layout after it to set the targets.
+    fn stamp_measure(&mut self, id: WidgetId) {
+        if self.measuring()
+            && self.frame_instant.is_some()
+            && let Some(idx) = self.get_dense_index(id)
+        {
+            self.dense[idx].measured_in = self.frame;
+        }
+    }
+
+    /// Whether a measure has already asked `id` where it is heading on this
+    /// frame: a size that follows its content has its target from that
+    /// measure until the frame ends. The first such measure's: a layout that
+    /// lays a child out twice within one measure — a flex sharing out room, a
+    /// stretch, a stack's followers — leaves the target its first layout
+    /// found.
+    pub(crate) fn measured_this_frame(&self, id: WidgetId) -> bool {
+        self.get_dense_index(id)
+            .is_some_and(|idx| self.dense[idx].measured_in == self.frame)
     }
 
     /// The same, as a measure: animations read where they are going, and what
@@ -4425,6 +4465,13 @@ impl LayoutCtx<'_> {
     /// pass: something in flight, in it or below it, as of the last frame.
     pub(crate) fn last_layout_depended_on_the_pass(&self) -> bool {
         self.tree.last_layout_depended_on_the_pass(self.id)
+    }
+
+    /// Whether a measure has already asked this widget where it is heading on
+    /// this frame, so the target a size that follows its content has is that
+    /// measure's.
+    pub(crate) fn measured_this_frame(&self) -> bool {
+        self.tree.measured_this_frame(self.id)
     }
 
     /// Run `f` as a measure: what it lays out reads where animations are

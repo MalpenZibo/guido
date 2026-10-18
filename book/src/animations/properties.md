@@ -182,7 +182,10 @@ only wraps onto on the way.
 The size a box heads for is where its content is heading, not where it is on
 this frame: a box around a child that animates its own width with the same
 transition grows and shrinks with it, frame for frame, while the child is
-drawn at its in-flight size. These are the one pair that cannot carry a
+drawn at its in-flight size. A box of this kind inside another heads, too,
+for where its content will be once the outer box arrives, rather than for the
+width the outer box is passing through, so the two run one transition each
+and neither jumps when it lands. These are the one pair that cannot carry a
 timeline: they declare a `Length`, which is not an animatable value in itself.
 
 ## Position

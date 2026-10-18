@@ -640,7 +640,12 @@ the answers can differ — the box in flight, or a layout below it that said
 `answer_depends_on_the_pass`, which a child reports on its way out of layout,
 so nothing walks the subtree and a value that only paints asks for nothing.
 Frame after frame the measure is the same question, answered from the cache
-until something below changes. With one entry the two evicted each other and
+until something below changes. A measure also stamps each widget it asks with
+the frame (`measured_in`), and for the rest of that frame a size that follows
+its content keeps the target that measure gave it: a box inside one in flight
+is laid out in a width its ancestor is only passing through, and retargeting
+from that layout restarted its transition every frame. A mark clears the stamp.
+With one entry the two evicted each other and
 the children were laid out twice a frame; taffy keeps a node's final layout
 apart from its measures, and Chromium's LayoutNG its measure results apart from
 its layout results, for the same reason.

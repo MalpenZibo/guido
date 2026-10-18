@@ -234,12 +234,30 @@ fn a_zstack_centres_its_child_while_its_height_grows() {
     shape.assert_centred_through(80.0);
 }
 
+/// The outer box and the inner one on one frame, each as its width and
+/// height.
+type Both = ((f32, f32), (f32, f32));
+
+/// The 400 ms linear transition, 25 frames long, that the boxes here follow
+/// their content with.
+fn linear() -> Transition {
+    Transition::new(400.0, TimingFunction::Linear)
+}
+
+/// Where a linear transition from `from` to `to` has a length `frame` frames
+/// after the frame its target is set on, which shows it where it was.
+fn linear_at(from: f32, to: f32, frame: usize) -> f32 {
+    from + (to - from) * (frame.min(25) as f32 / 25.0)
+}
+
 /// A box whose width and height both follow their content, at most 100 wide,
-/// holding [`Wrapping`] words `words` wide.
+/// holding [`Wrapping`] words `words` wide — or holding a box that follows
+/// its content the same way, which holds the words.
 struct TwoAxes {
     app: guido::testing::Headless,
     words: RwSignal<f32>,
     shape: WidgetRef,
+    inner: WidgetRef,
     at: Instant,
 }
 
@@ -268,20 +286,41 @@ impl Widget for Wrapping {
 
 impl TwoAxes {
     fn new(words: f32) -> Option<Self> {
+        Self::build(words, false, linear())
+    }
+
+    /// The same box, holding a second one that follows the words.
+    fn nested(words: f32) -> Option<Self> {
+        Self::build(words, true, linear())
+    }
+
+    fn build(words: f32, nested: bool, outer: Transition) -> Option<Self> {
         let mut app = common::headless()?;
         let w = create_signal(words);
         let shape = create_widget_ref();
+        let inner = create_widget_ref();
         let surface = app.surface(
             SurfaceConfig::new()
                 .height(200)
                 .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
             move || {
-                let follows = Transition::new(400.0, TimingFunction::Linear);
-                container()
-                    .width(at_most(100.0).transition(follows.clone()))
-                    .height(at_least(0.0).transition(follows))
-                    .child(Wrapping { words: w.into() })
-                    .widget_ref(shape)
+                let follows = linear();
+                let words = Wrapping { words: w.into() };
+                let outer = container()
+                    .width(at_most(100.0).transition(outer.clone()))
+                    .height(at_least(0.0).transition(outer.clone()))
+                    .widget_ref(shape);
+                if nested {
+                    outer.child(
+                        container()
+                            .width(at_least(0.0).transition(follows.clone()))
+                            .height(at_least(0.0).transition(follows))
+                            .child(words)
+                            .widget_ref(inner),
+                    )
+                } else {
+                    outer.child(words)
+                }
             },
         );
         app.configure(surface, 400, 200, 1.0);
@@ -291,6 +330,7 @@ impl TwoAxes {
             app,
             words: w,
             shape,
+            inner,
             at,
         };
         for _ in 0..40 {
@@ -303,6 +343,17 @@ impl TwoAxes {
         self.at += FRAME;
         self.app.step_at(self.at);
         self.shape.layout_rect().get_untracked()
+    }
+
+    /// The outer box and the inner one on each of `frames` frames.
+    fn both_for(&mut self, frames: usize) -> Vec<Both> {
+        (0..frames)
+            .map(|_| {
+                let outer = self.frame();
+                let inner = self.inner.layout_rect().get_untracked();
+                ((outer.width, outer.height), (inner.width, inner.height))
+            })
+            .collect()
     }
 
     /// Change the words, and answer with the box on every frame of the
@@ -605,4 +656,105 @@ fn layouts_while_the_height_changes(fading: bool) -> Option<(u64, u64)> {
     let stats = get_stats();
     assert!(stats.layout_executed > 0, "the view is laid out: {stats:?}");
     Some((stats.layout_executed, stats.layout_skipped))
+}
+
+/// A box inside another, both following wrapping words, heads where the words
+/// will be once the outer box arrives — the measure the outer one makes of it
+/// at the box it is heading to — not where they are laid out in the width the
+/// outer box is passing through. So each runs one transition, the inner as
+/// wide as the outer on every frame, and neither jumps when it arrives.
+/// Taking the target from its layout in the passing width restarted the inner
+/// one's transition on every frame, and when the outer box arrived the inner
+/// one fell back 98 to 76 and went on growing from there.
+fn assert_nested_boxes_move_as_one(from: f32, to: f32, settled: (f32, f32)) {
+    let Some(mut shape) = TwoAxes::nested(from) else {
+        return;
+    };
+    let start = shape.inner.layout_rect().get_untracked().width;
+    shape.words.set(to);
+    let frames = shape.both_for(32);
+    assert_one_transition(&frames, start, settled);
+}
+
+/// Both boxes on every frame of one uninterrupted linear transition, from an
+/// inner width of `start` to `settled`: the inner box as wide as the outer,
+/// moving one way on both axes from the first frame, and arriving.
+fn assert_one_transition(frames: &[Both], start: f32, settled: (f32, f32)) {
+    let inner: Vec<_> = frames.iter().map(|(_, inner)| *inner).collect();
+    let one_way = |along: fn(&(f32, f32)) -> f32| {
+        inner
+            .windows(2)
+            .all(|p| (along(&p[1]) - along(&p[0])) * (along(&settled) - along(&inner[0])) >= 0.0)
+    };
+    assert!(
+        one_way(|s| s.0) && one_way(|s| s.1),
+        "the inner box moves one way on both axes: {frames:?}"
+    );
+    for (frame, ((outer_width, _), (inner_width, _))) in frames.iter().enumerate() {
+        assert!(
+            (outer_width - inner_width).abs() < 0.5,
+            "the inner box is as wide as the outer on every frame: {frames:?}"
+        );
+        let on_time = linear_at(start, settled.0, frame);
+        assert!(
+            (inner_width - on_time).abs() < 0.01,
+            "frame {frame} of one transition from {start} has it at {on_time}, not \
+             {inner_width}: {frames:?}"
+        );
+    }
+    assert_eq!(inner.last(), Some(&settled), "and it arrives: {frames:?}");
+}
+
+#[test]
+fn a_box_in_a_growing_box_grows_with_it() {
+    assert_nested_boxes_move_as_one(60.0, 150.0, (100.0, 2.0 * LINE));
+}
+
+#[test]
+fn a_box_in_a_shrinking_box_shrinks_with_it() {
+    assert_nested_boxes_move_as_one(150.0, 60.0, (60.0, LINE));
+}
+
+/// A box that nothing around it measures heads where its own layout finds its
+/// content, as it always has: the transition starts on the frame the content
+/// changes, and runs at its own pace to the end.
+#[test]
+fn a_box_measured_by_nothing_starts_on_the_frame_its_content_changes() {
+    let Some(mut shape) = TwoAxes::new(20.0) else {
+        return;
+    };
+    let frames = shape.transition_to(90.0);
+    for (frame, &(width, height)) in frames.iter().enumerate() {
+        assert!(
+            (width - linear_at(20.0, 90.0, frame)).abs() < 0.01 && height == LINE,
+            "frame {frame} is one transition's: {frames:?}"
+        );
+    }
+}
+
+/// Content that changes again halfway through turns both boxes on that same
+/// frame: one new transition each, from where they were, and nothing late or
+/// left behind.
+#[test]
+fn nested_boxes_turn_together_when_the_content_changes_halfway() {
+    let Some(mut shape) = TwoAxes::nested(60.0) else {
+        return;
+    };
+    shape.words.set(150.0);
+    shape.both_for(12);
+    let turned_at = shape.inner.layout_rect().get_untracked().width;
+    assert!(
+        turned_at > 70.0 && turned_at < 90.0,
+        "halfway, at {turned_at}"
+    );
+    shape.words.set(60.0);
+    let frames = shape.both_for(32);
+    // The frame the change lands on shows the old transition's next step, as
+    // the first frame of any transition shows where it starts from.
+    let from = frames[0].1.0;
+    assert!(
+        (from - (turned_at + 40.0 / 25.0)).abs() < 0.01,
+        "the change lands on a frame of the old transition: {turned_at}, then {from}"
+    );
+    assert_one_transition(&frames, from, (60.0, LINE));
 }
