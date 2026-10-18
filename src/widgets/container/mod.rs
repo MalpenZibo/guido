@@ -613,18 +613,17 @@ impl Container {
         let extent = shadow_extent.max(Outsets::all(self.max_outline_reach())) + Outsets::all(blur);
         // A slide carries the whole box by its offset, after everything else,
         // and only toward where it is drawn: a box drawn above its place
-        // reaches further up and no further either side.
+        // reaches further up and no further either side. The transform and
+        // the slide draw the children with the box, so both carry their
+        // overhang too, blurred first, as the layer is composited.
         let (dx, dy) = self.position_offset(tree, id);
         let toward = bounds.offset(dx, dy).outset_beyond(bounds);
-        let reach = self.max_transform_reach(bounds, extent) + toward;
-        tree.set_own_paint_reach_and_carry(
-            id,
-            reach,
-            crate::tree::Carry {
-                spread: blur,
-                ..crate::tree::Carry::NONE
-            },
-        );
+        let reach = self.max_transform_reach(bounds, extent).slid(toward);
+        let carry = crate::tree::Carry {
+            spread: blur,
+            ..reach.carry
+        };
+        tree.set_own_paint_reach_and_carry(id, reach.painted, carry);
         // A merged shape changes within five quarters of the distance of a
         // member that moves — the smooth minimum acts only where the two
         // distances are within its reach of each other, and takes a quarter of

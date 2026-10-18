@@ -20,7 +20,7 @@
 
 use super::*;
 use crate::finite::{AllFinite, FiniteOr};
-use crate::tree::LayoutCtx;
+use crate::tree::{Carry, LayoutCtx};
 use crate::widgets::BackgroundOverride;
 
 impl Container {
@@ -362,6 +362,12 @@ impl Container {
     /// logical pixels — its shadow, and then whatever its transform can do to
     /// the box that shadow surrounds.
     ///
+    /// Beside it, what the same transforms can do to whatever the children
+    /// draw outside `bounds`: the gain, the turn and the bare box's reach of
+    /// a [`Carry`], folded over the same candidates so the two cannot
+    /// disagree about which transforms this container can be in. The spread
+    /// and the slide are the publisher's to add.
+    ///
     /// The largest it can reach *from what is declared* — the value, the state
     /// layers, and whatever an animation is holding as this is asked. A
     /// `timeline` is not bounded here: its keyframes are the animation's, not a
@@ -416,10 +422,13 @@ impl Container {
     /// buy nothing the schedule does not already cover — and would put every
     /// container that declares `when_hovered` on its own hover signal from
     /// the reach path, which is a wider fan-out than the case needs.
-    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: Outsets) -> Outsets {
+    pub(super) fn max_transform_reach(&self, bounds: Rect, shadow_extent: Outsets) -> Reach {
         let moves = self.moving_components();
         if !moves.any() {
-            return shadow_extent;
+            return Reach {
+                painted: shadow_extent,
+                carry: Carry::NONE,
+            };
         }
 
         // The box the transform actually carries: the container plus the
@@ -437,7 +446,7 @@ impl Container {
         let base_rotate = self.rotate_prop().get_finite_or_quietly(0.0);
         let base_scale = self.scale_prop().get_finite_or_quietly(Scale::NONE);
         let base = Transform::compose(base_translate.resolve(bounds), base_rotate, base_scale);
-        let mut reach = outset_of(base, painted, bounds, pivot);
+        let mut reach = Reach::new(base, painted, bounds, pivot);
 
         // A rotation's outset is not monotone in its angle: a box turned 0 or
         // 180 degrees sits back where it started and somewhere between stands
@@ -456,16 +465,23 @@ impl Container {
             // centre of the swept circle somewhere the content never turns
             // about, and the bound comes out looser than the widest angle.
             let (px, py) = pivot.resolve(bounds);
-            let far = [
-                (painted.x, painted.y),
-                (painted.x + painted.width, painted.y),
-                (painted.x, painted.y + painted.height),
-                (painted.x + painted.width, painted.y + painted.height),
-            ]
-            .into_iter()
-            .fold(0.0f32, |most, (x, y)| most.max((x - px).hypot(y - py)));
-            let swept = Rect::new(px - far, py - far, far * 2.0, far * 2.0);
-            reach = reach.max(swept.outset_beyond(bounds));
+            let swept = |drawn: Rect| {
+                let far = [
+                    (drawn.x, drawn.y),
+                    (drawn.x + drawn.width, drawn.y),
+                    (drawn.x, drawn.y + drawn.height),
+                    (drawn.x + drawn.width, drawn.y + drawn.height),
+                ]
+                .into_iter()
+                .fold(0.0f32, |most, (x, y)| most.max((x - px).hypot(y - py)));
+                Rect::new(px - far, py - far, far * 2.0, far * 2.0).outset_beyond(bounds)
+            };
+            reach.painted = reach.painted.max(swept(painted));
+            // An overhang moves a corner by at most √2 of its widest side,
+            // and the circle through the furthest corner grows by as much.
+            reach.carry.reach = reach.carry.reach.max(swept(bounds));
+            reach.carry.gain = reach.carry.gain.max(std::f32::consts::SQRT_2);
+            reach.carry.turns = true;
         }
 
         // Each layer is a transform this container can be in, whether or not it
@@ -484,7 +500,7 @@ impl Container {
                     state.rotate.get_or_untracked(base_rotate),
                     state.scale.get_or_untracked(base_scale),
                 );
-                reach = reach.max(outset_of(candidate, painted, bounds, pivot));
+                reach.take(candidate, painted, bounds, pivot);
             }
         }
 
@@ -502,7 +518,7 @@ impl Container {
             .into_iter()
             .flatten()
             .fold(0.0f32, f32::max);
-            reach = reach * (1.0 + overshoot);
+            reach.grow(1.0 + overshoot);
 
             let flying = Transform::compose(
                 anims
@@ -512,7 +528,7 @@ impl Container {
                 anims.rotate().map_or(base_rotate, |a| *a.current()),
                 anims.scale().map_or(base_scale, |a| *a.current()),
             );
-            reach = reach.max(outset_of(flying, painted, bounds, pivot));
+            reach.take(flying, painted, bounds, pivot);
         }
 
         reach
@@ -1054,6 +1070,66 @@ fn border_shows(width: f32, color: Color) -> bool {
 /// shadow animation is leaving transparent.
 pub(super) const SHADOW_ALPHA_FLOOR: f32 = 0.004;
 
+/// What [`Container::max_transform_reach`] folds its candidate transforms
+/// into.
+pub(super) struct Reach {
+    /// How far what the container draws can land outside its box.
+    pub(super) painted: Outsets,
+    /// What the same transforms can do to an overhang.
+    pub(super) carry: Carry,
+}
+
+impl Reach {
+    /// What one transform does, the first the fold takes.
+    fn new(transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) -> Self {
+        let mut reach = Self {
+            painted: Outsets::ZERO,
+            carry: Carry {
+                gain: 0.0,
+                ..Carry::NONE
+            },
+        };
+        reach.take(transform, painted, bounds, pivot);
+        reach
+    }
+
+    /// Everything the fold has, stretched by `factor` — a spring's overshoot.
+    fn grow(&mut self, factor: f32) {
+        self.painted = self.painted * factor;
+        self.carry.reach = self.carry.reach * factor;
+        self.carry.gain *= factor;
+    }
+
+    /// Both halves moved by a slide, which carries the box and its children
+    /// alike after every transform.
+    pub(super) fn slid(mut self, toward: Outsets) -> Self {
+        self.painted = self.painted + toward;
+        self.carry.reach = self.carry.reach + toward;
+        self
+    }
+
+    /// Fold in one transform the container can be in.
+    ///
+    /// An overhang moves each corner of the box by the overhang, and the
+    /// transform's linear half stretches that by at most the larger sum of a
+    /// row's coefficients. Only a scale that neither turns nor flips keeps
+    /// each side's overhang on its own side.
+    fn take(&mut self, transform: Transform, painted: Rect, bounds: Rect, pivot: Pivot) {
+        let drawn = outset_of(transform, painted, bounds, pivot);
+        let bare = if painted == bounds {
+            drawn
+        } else {
+            outset_of(transform, bounds, bounds, pivot)
+        };
+        self.painted = self.painted.max(drawn);
+        let carry = &mut self.carry;
+        carry.reach = carry.reach.max(bare);
+        let (a, b, c, d) = (transform.a(), transform.b(), transform.c(), transform.d());
+        carry.gain = carry.gain.max((a.abs() + b.abs()).max(c.abs() + d.abs()));
+        carry.turns |= !transform.keeps_axes();
+    }
+}
+
 /// How far `painted`, once `transform` has carried it, stands outside `bounds`.
 ///
 /// Two rects because they are two questions: `painted` is everything the widget
@@ -1230,7 +1306,9 @@ mod reach_tests {
             // that reads it is indistinguishable from arithmetic that does not.
             let shadow = 6.0;
             let painted = BOX.outset(shadow);
-            let bound = turning.max_transform_reach(BOX, Outsets::all(shadow));
+            let bound = turning
+                .max_transform_reach(BOX, Outsets::all(shadow))
+                .painted;
 
             let worst = (0..360)
                 .map(|deg| {
@@ -1262,9 +1340,12 @@ mod reach_tests {
     #[test]
     fn a_box_that_cannot_rotate_is_not_given_a_rotation_s_reach() {
         let still = container().width(100.0).height(100.0);
-        assert_eq!(still.max_transform_reach(BOX, Outsets::ZERO), Outsets::ZERO);
         assert_eq!(
-            still.max_transform_reach(BOX, Outsets::all(6.0)),
+            still.max_transform_reach(BOX, Outsets::ZERO).painted,
+            Outsets::ZERO
+        );
+        assert_eq!(
+            still.max_transform_reach(BOX, Outsets::all(6.0)).painted,
             Outsets::all(6.0),
             "only its shadow"
         );
@@ -1282,7 +1363,7 @@ mod reach_tests {
             Translate::new(0.0, -100.0).transition(Transition::spring(SpringConfig::BOUNCY)),
         );
 
-        let reach = sprung.max_transform_reach(BOX, Outsets::ZERO);
+        let reach = sprung.max_transform_reach(BOX, Outsets::ZERO).painted;
         assert!(
             reach.top > 100.0,
             "a spring to -100 was given a reach of {reach:?}, so it is culled at \
@@ -1294,7 +1375,7 @@ mod reach_tests {
             .height(100.0)
             .translate(Translate::new(0.0, -100.0).transition(200.0));
         assert_eq!(
-            eased.max_transform_reach(BOX, Outsets::ZERO),
+            eased.max_transform_reach(BOX, Outsets::ZERO).painted,
             Outsets {
                 top: 100.0,
                 ..Outsets::ZERO
@@ -1314,7 +1395,7 @@ mod reach_tests {
             .height(100.0)
             .translate(Translate::relative(-1.0, 0.0));
         assert_eq!(
-            declared.max_transform_reach(BOX, Outsets::ZERO),
+            declared.max_transform_reach(BOX, Outsets::ZERO).painted,
             Outsets {
                 left: BOX.width,
                 ..Outsets::ZERO
@@ -1326,7 +1407,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.translate(Translate::relative(0.0, 0.5)));
         assert_eq!(
-            layered.max_transform_reach(BOX, Outsets::ZERO),
+            layered.max_transform_reach(BOX, Outsets::ZERO).painted,
             Outsets {
                 bottom: BOX.height / 2.0,
                 ..Outsets::ZERO
@@ -1348,7 +1429,7 @@ mod reach_tests {
             .height(100.0)
             .when_pressed(|s| s.scale(Scale::uniform(2.0)));
         assert_eq!(
-            scaled.max_transform_reach(BOX, Outsets::ZERO),
+            scaled.max_transform_reach(BOX, Outsets::ZERO).painted,
             Outsets::all(50.0),
             "a layer that doubles this box on press was not counted, so it is \
              culled at its resting size while it is pressed"
@@ -1361,7 +1442,7 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.translate(Translate::new(0.0, -25.0)));
         assert_eq!(
-            lifted.max_transform_reach(BOX, Outsets::ZERO),
+            lifted.max_transform_reach(BOX, Outsets::ZERO).painted,
             Outsets {
                 top: 25.0,
                 ..Outsets::ZERO
@@ -1374,7 +1455,11 @@ mod reach_tests {
             .height(100.0)
             .when_hovered(|s| s.rotate(45.0));
         assert!(
-            turned.max_transform_reach(BOX, Outsets::ZERO).widest() > 0.0,
+            turned
+                .max_transform_reach(BOX, Outsets::ZERO)
+                .painted
+                .widest()
+                > 0.0,
             "a layer that turns this box on hover was not counted"
         );
     }

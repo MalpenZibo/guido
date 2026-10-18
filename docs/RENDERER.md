@@ -342,14 +342,17 @@ blur at any scale of one or more exceeds, added past everything the texture
 holds: the container's own shadow and outline, and whatever its children draw
 outside it. The tree keeps that last half apart
 (`Tree::set_own_paint_reach_and_carry`), because the children's overhang is
-gathered into it on a schedule of its own.
+gathered into it on a schedule of its own. The composite is drawn through the
+container's transform and slide, so the spread overhang is carried by them
+too.
 What a child inside it repaints is spread as far, so the damage a child
 names — a mark, the ring a shrinking reach vacates, a move — is widened by the
 blur of every blurring ancestor between it and the surface, summed on the walk
 to the surface root that every damaged rect is measured on. A box that clips its
 children is no exception: the clip cuts them inside the layer, and the blur
-spreads what is left past it. A tree with no blur pays one emptiness check per
-ancestor.
+spreads what is left past it. The blurs are read from the same map as the
+carries, so a tree where nothing blurs, transforms or slides pays one emptiness
+check per ancestor, and any other one lookup.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
