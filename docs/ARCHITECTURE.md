@@ -943,9 +943,13 @@ The paint system tracks which widgets need repainting:
   and the compositor is never told to re-composite the pixels the widget has left, so the
   old position survives on screen as a fringe.
 - **Paint reach**: how far a widget paints past its box is an `Outsets`, one distance per
-  side, and its children's overhang is gathered into its own the same way. A shadow cast
+  side, and its children's overhang is gathered into its own the same way — spread
+  further by a blur, whose layer holds what the children draw. A shadow cast
   downward, a card lifted by a translate and a box sliding up with `animate_position` each
   widen damage, the cull and the pointer's test only on the sides they reach.
+- **Damage under a blur**: a blurring ancestor spreads whatever a widget inside it draws,
+  so every rect the tree damages for a widget is grown by the blur of each blurring
+  ancestor above it, added up on the walk to the surface root.
 - **Incremental flatten**: `RenderNode` caches its flattened commands. Clean subtrees
   (with `repainted == false`) reuse cached commands with a translation offset, skipping
   the full recursive flatten.

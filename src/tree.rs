@@ -307,6 +307,13 @@ pub(crate) fn refresh_paint_reach(widget: &dyn Widget, tree: &mut Tree, id: Widg
     });
 }
 
+/// How far a widget paints past its box: its own reach or what its children
+/// add, whichever is further — the latter spread by the layer that holds it,
+/// which holds what they draw as well as what the widget does.
+fn reach_of(own: Outsets, children_outset: Outsets, layer_spread: f32) -> Outsets {
+    own.max(children_outset + Outsets::all(layer_spread))
+}
+
 /// Whether a child that reached `old` and now reaches `new` can have moved a
 /// maximum that stood at `had`: only by having led it, and by having got
 /// smaller. What lets a shrinking reach stop its walk without folding over the
@@ -634,6 +641,10 @@ pub struct Tree {
     /// [`Tree::set_merge_reach`]. A map rather than a slot field, for the
     /// reason `positions` is one.
     merge_reaches: rustc_hash::FxHashMap<WidgetId, f32>,
+    /// How far each widget whose layer blurs spreads what it and its children
+    /// draw — see [`Tree::set_own_paint_reach_and_spread`]. A map rather than
+    /// a slot field, for the reason `positions` is one.
+    layer_spreads: rustc_hash::FxHashMap<WidgetId, f32>,
     /// Which surface has the keyboard, as `FocusIn` and `FocusOut` said. A
     /// surface without it keeps its focus, and a field holding that focus
     /// draws no caret until the keyboard is back (#726).
@@ -677,6 +688,7 @@ impl Tree {
             tab_stops: rustc_hash::FxHashMap::default(),
             positions: rustc_hash::FxHashMap::default(),
             merge_reaches: rustc_hash::FxHashMap::default(),
+            layer_spreads: rustc_hash::FxHashMap::default(),
             tab_stop_turn: 0,
             declared_visible: rustc_hash::FxHashMap::default(),
             keyboard: KeyboardAt::Unknown,
@@ -917,6 +929,7 @@ impl Tree {
         self.declared_visible.remove(&id);
         self.positions.remove(&id);
         self.merge_reaches.remove(&id);
+        self.layer_spreads.remove(&id);
 
         // A surface root leaving takes its pointer record with it: a surface
         // closed under the pointer is never sent the leave that would.
@@ -1293,19 +1306,37 @@ impl Tree {
     /// from the reach the widget has *now*, so nothing else would ever name
     /// the pixels it painted a frame ago.
     pub fn set_own_paint_reach(&mut self, id: WidgetId, reach: impl Into<Outsets>) {
+        let spread = self.layer_spread(id);
+        self.set_own_paint_reach_and_spread(id, reach, spread);
+    }
+
+    /// The same, and how far past everything this widget and its children
+    /// draw its layer spreads it — what a blur reaches. `reach` already
+    /// carries the spread of the widget's own drawing; `spread` is what the
+    /// tree adds to the children's overhang.
+    ///
+    /// One write for both, so a blur in flight compares and walks once a
+    /// frame rather than once for each half.
+    pub(crate) fn set_own_paint_reach_and_spread(
+        &mut self,
+        id: WidgetId,
+        reach: impl Into<Outsets>,
+        spread: f32,
+    ) {
         let Some(idx) = self.get_dense_index(id) else {
             return;
         };
         let reach = reach.into().map(|side| side.max(0.0));
-        if self.dense[idx].own_paint_reach == reach {
+        let (spread, had_spread) = (spread.max(0.0), self.layer_spread(id));
+        if self.dense[idx].own_paint_reach == reach && had_spread == spread {
             return;
         }
         // Against the union, not against the half being written: an ancestor
         // reads `paint_overflow`, so a widget whose children already reach
         // further has moved nothing anyone can see, and the walk above it —
         // whose shrink path re-measures siblings — is pure cost.
-        let before = self.paint_overflow_from(self.dense[idx].own_paint_reach, idx);
-        let after = self.paint_overflow_from(reach, idx);
+        let before = self.slot_reach(id, idx);
+        let after = reach_of(reach, self.dense[idx].children_outset, spread);
         // A reach that shrinks vacates the ring between the two, and the rect
         // built from the new one stops short of it. Damaged before the write,
         // while the old reach is still what this widget answers — the same
@@ -1320,6 +1351,13 @@ impl Tree {
             self.expand_damage_rect(root, vacated);
         }
         self.dense[idx].own_paint_reach = reach;
+        if spread != had_spread {
+            if spread > 0.0 {
+                self.layer_spreads.insert(id, spread);
+            } else {
+                self.layer_spreads.remove(&id);
+            }
+        }
         if before == after {
             return;
         }
@@ -1345,10 +1383,12 @@ impl Tree {
             return;
         }
         let wider = was.unwrap_or(0.0).max(reach.unwrap_or(0.0));
-        if let Some((root, laid_out)) = self.surface_relative_layout_and_root(id) {
+        if let Some((root, laid_out, spread)) = self.surface_relative_layout_and_spread(id) {
             self.expand_damage_rect(
                 root,
-                laid_out.outset_by(self.paint_overflow(id)).outset(wider),
+                laid_out
+                    .outset_by(self.paint_overflow(id))
+                    .outset(wider + spread),
             );
         }
         match reach {
@@ -1423,7 +1463,7 @@ impl Tree {
             // not the maximum over its siblings. The two differ wherever a
             // node's children reach less far than they stand outside its box,
             // which is every scroller.
-            was = self.dense[parent_idx].own_paint_reach.max(had_outset);
+            was = self.slot_reach(parent, parent_idx);
             self.dense[parent_idx].children_outset = outset;
             self.dense[parent_idx].children_reach = widest;
             child = parent;
@@ -1468,14 +1508,14 @@ impl Tree {
         };
         self.get_children(id)
             .iter()
-            .filter_map(|&child| self.get_dense_index(child))
-            .fold((Outsets::ZERO, 0.0f32), |(outset, widest), idx| {
+            .filter_map(|&child| Some((child, self.get_dense_index(child)?)))
+            .fold((Outsets::ZERO, 0.0f32), |(outset, widest), (child, idx)| {
                 let slot = &self.dense[idx];
                 // The reach counts whether or not the child has been laid out
                 // — the grow path in `gather_reach_upward` folds it
                 // unconditionally, and the two have to answer the same. Only
                 // the outset needs a box to be measured against.
-                let reach = slot.own_paint_reach.max(slot.children_outset);
+                let reach = self.slot_reach(child, idx);
                 let widest = widest.max(reach.widest());
                 let Some(size) = slot.cached_size else {
                     return (outset, widest);
@@ -2159,9 +2199,27 @@ impl Tree {
     /// narrowings in `paint_children`, so neither drops a widget that draws
     /// somewhere other than where it was laid out.
     pub(crate) fn paint_overflow(&self, id: WidgetId) -> Outsets {
-        self.get_dense_index(id).map_or(Outsets::ZERO, |idx| {
-            self.paint_overflow_from(self.dense[idx].own_paint_reach, idx)
-        })
+        self.get_dense_index(id)
+            .map_or(Outsets::ZERO, |idx| self.slot_reach(id, idx))
+    }
+
+    /// `paint_overflow`, for a widget already resolved to its slot.
+    fn slot_reach(&self, id: WidgetId, idx: usize) -> Outsets {
+        let slot = &self.dense[idx];
+        reach_of(
+            slot.own_paint_reach,
+            slot.children_outset,
+            self.layer_spread(id),
+        )
+    }
+
+    /// How far this widget's layer spreads what it holds; zero for one that
+    /// does not blur, which is nearly all of them.
+    fn layer_spread(&self, id: WidgetId) -> f32 {
+        if self.layer_spreads.is_empty() {
+            return 0.0;
+        }
+        self.layer_spreads.get(&id).copied().unwrap_or(0.0)
     }
 
     /// A widget's bounds grown by its paint reach, side by side: where it can
@@ -2170,14 +2228,10 @@ impl Tree {
         let idx = self.get_dense_index(id)?;
         let slot = &self.dense[idx];
         let size = slot.cached_size?;
-        let reach = self.paint_overflow_from(slot.own_paint_reach, idx);
-        Some(Rect::new(slot.origin.0, slot.origin.1, size.width, size.height).outset_by(reach))
-    }
-
-    /// The same, for a reach the caller names — which is how a write asks what
-    /// its own answer is about to become while the old one is still standing.
-    fn paint_overflow_from(&self, reach: Outsets, idx: usize) -> Outsets {
-        reach.max(self.dense[idx].children_outset)
+        Some(
+            Rect::new(slot.origin.0, slot.origin.1, size.width, size.height)
+                .outset_by(self.slot_reach(id, idx)),
+        )
     }
 
     /// Get the children of a widget (returns a slice to avoid heap allocation).
@@ -2464,21 +2518,34 @@ impl Tree {
     /// laid-out box relative to the surface: origins summed along the chain,
     /// with no scroll and no transform. What damage is measured from.
     fn surface_relative_layout_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
+        let (root, laid_out, _) = self.surface_relative_layout_and_spread(id)?;
+        Some((root, laid_out))
+    }
+
+    /// The same, and how far the layers of the widget's ancestors spread what
+    /// it draws: each blurring one spreads what the one inside it already
+    /// spread, so their reaches add up on the walk the origins are summed on.
+    /// Not the widget's own, which its paint reach already carries.
+    fn surface_relative_layout_and_spread(&self, id: WidgetId) -> Option<(WidgetId, Rect, f32)> {
         let idx = self.get_dense_index(id)?;
         let size = self.dense[idx].cached_size?;
         let mut x = 0.0f32;
         let mut y = 0.0f32;
+        let mut spread = 0.0f32;
         let mut current = id;
         loop {
             let dense_idx = self.get_dense_index(current)?;
             x += self.dense[dense_idx].origin.0;
             y += self.dense[dense_idx].origin.1;
             match self.dense[dense_idx].parent {
-                Some(parent) => current = parent,
+                Some(parent) => {
+                    spread += self.layer_spread(parent);
+                    current = parent;
+                }
                 None => break,
             }
         }
-        Some((current, Rect::new(x, y, size.width, size.height)))
+        Some((current, Rect::new(x, y, size.width, size.height), spread))
     }
 
     // -------------------------------------------------------------------------
@@ -2487,15 +2554,18 @@ impl Tree {
 
     /// The same, widened by whatever the widget paints outside itself, so a
     /// shadow is re-composited along with the thing that cast it — and so is a
-    /// widget its own transform has carried off its laid-out box, and the
-    /// shape a container merging its children draws past them. What damage
-    /// is measured from, and not what the widget's bounds are.
+    /// widget its own transform has carried off its laid-out box, the shape a
+    /// container merging its children draws past them, and the fringe a
+    /// blurring ancestor spreads all of it into. What damage is measured from,
+    /// and not what the widget's bounds are.
     fn surface_relative_damage_and_root(&self, id: WidgetId) -> Option<(WidgetId, Rect)> {
-        let (root, laid_out) = self.surface_relative_layout_and_root(id)?;
+        let (root, laid_out, spread) = self.surface_relative_layout_and_spread(id)?;
         let merged = self.merge_reaches.get(&id).copied().unwrap_or(0.0);
         Some((
             root,
-            laid_out.outset_by(self.paint_overflow(id)).outset(merged),
+            laid_out
+                .outset_by(self.paint_overflow(id))
+                .outset(merged + spread),
         ))
     }
 
@@ -4073,6 +4143,215 @@ mod tests {
             Outsets::ZERO,
             "the frame that drops the shadow damages {without:?}, so the ring \
              it cast at {with_shadow:?} stays on screen"
+        );
+    }
+
+    /// A 40 square box blurred by 4, through a signal, holding a 40 square
+    /// child whose shadow spreads 20 past it — padded, laid out and clean, as
+    /// `padded_card` leaves it. Returns the tree, the root, the box, the child
+    /// and the blur.
+    fn blurred_box_over_a_shadow(
+        overflow: crate::widgets::Overflow,
+    ) -> (
+        Tree,
+        WidgetId,
+        WidgetId,
+        WidgetId,
+        crate::reactive::RwSignal<f32>,
+    ) {
+        let blur = crate::reactive::create_signal(4.0f32);
+        use crate::renderer::Shadow;
+        let (tree, root, card) =
+            padded_card(
+                crate::widgets::container()
+                    .width(40.0)
+                    .height(40.0)
+                    .blur(blur)
+                    .overflow(overflow)
+                    .child(crate::widgets::container().width(40.0).height(40.0).shadow(
+                        Shadow::new((0.0, 0.0), 0.0, 20.0, crate::widgets::Color::WHITE),
+                    )),
+            );
+        let child = tree.get_children(card)[0];
+        (tree, root, card, child, blur)
+    }
+
+    /// The layer a blur draws holds what the children draw, their shadows
+    /// included, and spreads all of it by the blur's reach. So the box
+    /// reaches past its child's overhang by that reach — not merely as far as
+    /// whichever of the two is further.
+    #[test]
+    fn a_blur_spreads_past_what_its_children_overhang() {
+        let (tree, _, card, child, _) =
+            blurred_box_over_a_shadow(crate::widgets::Overflow::Visible);
+        let overhang = tree.paint_overflow(child).left;
+        assert!(overhang >= 20.0, "the setup: the shadow reaches {overhang}");
+        let reach = tree.paint_overflow(card).left;
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert!(
+            reach >= overhang + spread,
+            "the box reaches {reach} to the left, short of the overhang \
+             {overhang} that its blur of 4 spreads a further {spread}"
+        );
+    }
+
+    /// A blur easing back to nothing narrows that spread, and the frame it
+    /// narrows on has to name the ring past the child's overhang it leaves.
+    #[test]
+    fn damage_covers_the_ring_a_shrinking_blur_leaves_past_the_overhang() {
+        let (mut tree, root, card, _, blur) =
+            blurred_box_over_a_shadow(crate::widgets::Overflow::Visible);
+        tree.mark_needs_paint(card);
+        let blurred = partial_damage(&mut tree, root);
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert!(
+            blurred.x <= 50.0 - 20.0 - spread,
+            "the setup: the blurred frame damages {blurred:?}"
+        );
+        tree.clear_needs_paint(card);
+        tree.clear_needs_paint(root);
+
+        blur.set(0.0);
+        tree.with_widget_mut(card, |widget, id, tree| {
+            refresh_paint_reach(&*widget, tree, id)
+        });
+        tree.mark_needs_paint(card);
+        let sharp = partial_damage(&mut tree, root);
+        assert_eq!(
+            blurred.outset_beyond(sharp),
+            Outsets::ZERO,
+            "the frame that drops the blur damages {sharp:?}, so the blurred \
+             ring at {blurred:?} stays on screen"
+        );
+    }
+
+    /// The spread rides on the overhang, so a child whose shadow grows
+    /// carries the box's reach with it, blur and all.
+    #[test]
+    fn a_blur_follows_the_overhang_it_spreads() {
+        let (mut tree, _, card, child, _) =
+            blurred_box_over_a_shadow(crate::widgets::Overflow::Visible);
+        tree.set_own_paint_reach(child, 60.0);
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert!(
+            tree.paint_overflow(card).left >= 60.0 + spread,
+            "the box reaches {:?}, short of the child's 60 spread by {spread}",
+            tree.paint_overflow(card)
+        );
+    }
+
+    /// A box that clips its children cuts their overhang off before the blur
+    /// sees it: what reaches past is the box's own blur, and no shadow.
+    #[test]
+    fn a_clipping_blur_spreads_its_own_box_alone() {
+        let (tree, _, card, _, _) = blurred_box_over_a_shadow(crate::widgets::Overflow::Hidden);
+        assert_eq!(
+            tree.paint_overflow(card),
+            Outsets::all(crate::renderer::layer_blur::blur_reach_bound(4.0)),
+            "the clip stops the child's shadow, and the blur spreads the box"
+        );
+    }
+
+    /// A 20 square child inside one box per blur, outermost first, each
+    /// padded 30 around what it holds and cut by `overflow` — laid out and
+    /// clean, as `padded_card` leaves it. Returns the tree, the root, the
+    /// child and where the child stands on the surface.
+    fn a_child_under_blurs(
+        blurs: &[f32],
+        overflow: crate::widgets::Overflow,
+    ) -> (Tree, WidgetId, WidgetId, Rect) {
+        let mut held = crate::widgets::container().width(20.0).height(20.0);
+        for &blur in blurs.iter().rev() {
+            held = crate::widgets::container()
+                .padding(30.0)
+                .blur(blur)
+                .overflow(overflow)
+                .child(held);
+        }
+        let (tree, root, outermost) = padded_card(held);
+        let child = (0..blurs.len()).fold(outermost, |held, _| tree.get_children(held)[0]);
+        let at = 50.0 + 30.0 * blurs.len() as f32;
+        (tree, root, child, Rect::new(at, at, 20.0, 20.0))
+    }
+
+    /// A blur spreads what a child draws inside it as far past the child as
+    /// it spreads the box past its edges, so a child that repaints changes
+    /// pixels that far off — and no further: the child's own reach, which
+    /// has no blur, is not spread again. A box that clips is no different: the clip cuts
+    /// what the child draws before the blur, and the blur still spreads it.
+    #[test]
+    fn a_mark_under_a_blur_damages_as_far_as_the_blur_spreads_it() {
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        for overflow in [
+            crate::widgets::Overflow::Visible,
+            crate::widgets::Overflow::Hidden,
+        ] {
+            let (mut tree, root, child, at) = a_child_under_blurs(&[4.0], overflow);
+            tree.mark_needs_paint(child);
+            let damage = partial_damage(&mut tree, root);
+            assert_eq!(
+                damage,
+                at.outset(spread),
+                "under a blur of 4 with {overflow:?}, the child at {at:?} \
+                 damages {damage:?}, not the {spread} the blur spreads it"
+            );
+        }
+    }
+
+    /// Each blur spreads what the one inside it has already spread, so the
+    /// reaches add up the way down.
+    #[test]
+    fn a_mark_under_nested_blurs_damages_their_spreads_summed() {
+        let (mut tree, root, child, at) =
+            a_child_under_blurs(&[4.0, 2.0], crate::widgets::Overflow::Visible);
+        tree.mark_needs_paint(child);
+        let damage = partial_damage(&mut tree, root);
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0)
+            + crate::renderer::layer_blur::blur_reach_bound(2.0);
+        assert_eq!(
+            damage,
+            at.outset(spread),
+            "under blurs of 4 and 2, the child at {at:?} damages {damage:?}, \
+             not the {spread} the two spread it"
+        );
+    }
+
+    /// A child's shadow that shrinks under a blur vacates its ring, and the
+    /// blur had spread that ring further still: the frame it shrinks on names
+    /// the spread ring, not only the shadow's.
+    #[test]
+    fn damage_covers_the_blurred_ring_a_shrinking_shadow_leaves() {
+        let (mut tree, root, child, at) =
+            a_child_under_blurs(&[4.0], crate::widgets::Overflow::Visible);
+        tree.set_own_paint_reach(child, 10.0);
+        let _ = tree.take_damage(root);
+
+        tree.set_own_paint_reach(child, 0.0);
+        tree.mark_needs_paint(child);
+        let damage = partial_damage(&mut tree, root);
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert_eq!(
+            at.outset(10.0 + spread).outset_beyond(damage),
+            Outsets::ZERO,
+            "the shadow 10 past {at:?} shrinks under a blur of 4, and the \
+             frame damages {damage:?}, short of the {spread} the blur spread it"
+        );
+    }
+
+    /// A merge reach that changes under a blur damages the merged area the
+    /// blur spread, for the same reason a mark does.
+    #[test]
+    fn a_merge_reach_under_a_blur_damages_as_far_as_the_blur_spreads_it() {
+        let (mut tree, root, child, at) =
+            a_child_under_blurs(&[4.0], crate::widgets::Overflow::Visible);
+        tree.set_merge_reach(child, Some(5.0));
+        let damage = partial_damage(&mut tree, root);
+        let spread = crate::renderer::layer_blur::blur_reach_bound(4.0);
+        assert_eq!(
+            at.outset(5.0 + spread).outset_beyond(damage),
+            Outsets::ZERO,
+            "a merge reaching 5 past {at:?} under a blur of 4 damages \
+             {damage:?}, short of the {spread} the blur spreads it"
         );
     }
 

@@ -338,7 +338,18 @@ is not drawn blocky, up to the backdrop's quarter and beyond only where the
 kernel would not fit its taps. A blurred texture is kept with the content and
 the radius it was blurred by, so a radius that animates blurs again without
 drawing again. The container's damage is sized by `blur_reach_bound`, which no
-blur at any scale of one or more exceeds.
+blur at any scale of one or more exceeds, added past everything the texture
+holds: the container's own shadow and outline, and whatever its children draw
+outside it. The tree keeps that last half apart
+(`Tree::set_own_paint_reach_and_spread`), because the children's overhang is
+gathered into it on a schedule of its own.
+What a child inside it repaints is spread as far, so the damage a child
+names — a mark, the ring a shrinking reach vacates, a move — is widened by the
+blur of every blurring ancestor between it and the surface, summed on the walk
+to the surface root that every damaged rect is measured on. A box that clips its
+children is no exception: the clip cuts them inside the layer, and the blur
+spreads what is left past it. A tree with no blur pays one emptiness check per
+ancestor.
 
 **A backdrop inside a layer filters the layer**, CSS's Backdrop Root: the
 effect's scene is the layer's texture rather than the surface's. Only a
@@ -357,7 +368,10 @@ drops what nobody took after as many again. Its own surface's frames, because
 the renderer is shared: a still panel beside a surface animating at full rate
 would otherwise lose its texture in two seconds. One no surface has named for
 thirty times as long is let go regardless, which is what releases the texture
-of a surface that has gone.
+of a surface that has gone. A blur's two working textures are taken as a pair
+of one size (`take_pair`): the blur reads both through the first one's size,
+and a pool holding a larger layer's texture once handed it two of different
+sizes, which drew the layer stretched (#808).
 
 `group_opacity_fades_an_overlap_as_one_picture`,
 `an_opacity_over_nothing_that_overlaps_is_drawn_without_a_layer`,
