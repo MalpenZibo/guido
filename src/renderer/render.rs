@@ -12,7 +12,7 @@ use wgpu::{
 
 use super::backdrop_pass::{BackdropRegion, BackdropRenderer, CoverageMask, Frost, Scene};
 use super::clip_records::ClipRecords;
-use super::commands::{CornerRadii, DrawCommand};
+use super::commands::{BlurShape, CornerRadii, DrawCommand};
 use super::constants::TEXT_SUPERSAMPLE;
 use super::flatten::{FlatFrame, FlattenedCommand};
 use super::gpu::{QUAD_INDICES, QUAD_VERTICES, QuadVertex, ShaderUniforms, ShapeInstance};
@@ -1172,9 +1172,7 @@ fn command_to_backdrop_region(
         rect,
         sources,
         radius,
-        corner_radii,
-        curvature,
-        merged: outline,
+        shape,
     } = &*cmd.command
     else {
         return None;
@@ -1188,15 +1186,20 @@ fn command_to_backdrop_region(
     // The corners are the container's own, so the mask is cut where they are
     // circles and its sides are its sides. A merged outline's box is only the
     // viewport: the members' records are the mask.
+    let (corner_radii, curvature, merged) = match shape {
+        BlurShape::Rounded {
+            corner_radii,
+            curvature,
+        } => (*corner_radii, *curvature, None),
+        BlurShape::Merged(_) => (CornerRadii::uniform(0.0), 1.0, Some(merged?)),
+    };
     let mut region = backdrop_region(
-        PlacedShape::placed(*rect, *corner_radii, *curvature, cmd.world_transform),
+        PlacedShape::placed(*rect, corner_radii, curvature, cmd.world_transform),
         *radius,
         cmd,
         scale,
     );
-    if outline.is_some() {
-        region.merged = Some(merged?);
-    }
+    region.merged = merged;
     Some(region)
 }
 
@@ -1209,7 +1212,7 @@ fn push_backdrop_records(
     merges: &mut Vec<MergeRecord>,
 ) -> Option<u32> {
     let DrawCommand::BackdropBlur {
-        merged: Some(outline),
+        shape: BlurShape::Merged(outline),
         ..
     } = &*cmd.command
     else {

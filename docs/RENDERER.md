@@ -571,7 +571,7 @@ A `text_stroke` over frost is dilated from the same mask, so its width is in
 mask texels too.
 
 The other replacement is a merged outline. A `DrawCommand::BackdropBlur` whose
-`merged` holds a `MergedOutline` is the blur of a merging container's members
+`shape` is `BlurShape::Merged` is the blur of a merging container's members
 (see [Merged shapes](#merged-shapes)): its `rect` is the box around them, which
 is all the viewport needs, and the mask is their smooth union. The members go
 into the frame's `MergeRecord`s beside the merged shapes' own while the group

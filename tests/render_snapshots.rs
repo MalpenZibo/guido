@@ -37,7 +37,7 @@ mod common;
 
 use guido::layout::Constraints;
 use guido::prelude::*;
-use guido::renderer::{DrawCommand, FlattenScratch, RenderNode, flatten_root_into};
+use guido::renderer::{BlurShape, DrawCommand, FlattenScratch, RenderNode, flatten_root_into};
 use guido::tree::Tree;
 use guido::widgets::Widget;
 
@@ -201,15 +201,21 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
         // Written by flatten in place of a subtree it composites; no widget
         // paints one, so a render tree never holds it.
         DrawCommand::Layer { .. } => unreachable!("a layer's composite in a render tree"),
+        // Merged by flatten, out of the blurs its members painted; a render
+        // tree holds only those.
+        DrawCommand::BackdropBlur {
+            shape: BlurShape::Merged(_),
+            ..
+        } => unreachable!("a merged blur in a render tree"),
         DrawCommand::BackdropBlur {
             rect: r,
             sources,
             radius,
-            corner_radii,
-            curvature,
-            // Merged by flatten, out of the blurs its members painted; a
-            // render tree holds only those.
-            merged: _,
+            shape:
+                BlurShape::Rounded {
+                    corner_radii,
+                    curvature,
+                },
         } => {
             out.push_str(&format!(
                 "{pad}{kind} backdrop-blur {} sources={:?} radius={} corners={}/{}/{}/{} k={}\n",

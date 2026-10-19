@@ -375,15 +375,8 @@ pub enum DrawCommand {
         sources: crate::backdrop::BackdropSources,
         /// Blur radius in logical pixels.
         radius: f32,
-        /// Corner radii of the region, so the result is masked to the
-        /// container's shape rather than its bounding box.
-        corner_radii: CornerRadii,
-        /// Superellipse curvature of those corners.
-        curvature: f32,
-        /// The outline the blur is cut to instead, when it is the blur of a
-        /// merging container's members: their smooth union, neck included.
-        /// `rect` is then the box around it, and the corners are none.
-        merged: Option<std::rc::Rc<MergedOutline>>,
+        /// What the result is masked to inside `rect`.
+        shape: BlurShape,
     },
 
     /// Filter what has already been drawn beneath the glyphs of `text`.
@@ -467,6 +460,21 @@ pub enum DrawCommand {
         /// draws the image's own colours.
         tint: Option<Color>,
     },
+}
+
+/// What a [`DrawCommand::BackdropBlur`] is masked to inside its `rect`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlurShape {
+    /// The rect with these corners: the container's own shape rather than
+    /// its bounding box.
+    Rounded {
+        corner_radii: CornerRadii,
+        /// Superellipse curvature of those corners.
+        curvature: f32,
+    },
+    /// The smooth union of a merging container's members, neck included —
+    /// their blurs merged into one. `rect` is the box around it.
+    Merged(std::rc::Rc<MergedOutline>),
 }
 
 impl DrawCommand {

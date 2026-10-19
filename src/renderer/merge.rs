@@ -17,7 +17,7 @@
 
 use std::rc::Rc;
 
-use super::commands::{Border, CornerRadii, DrawCommand};
+use super::commands::{BlurShape, Border, CornerRadii, DrawCommand};
 use super::flatten::union_of;
 use super::tree::RenderNode;
 use super::types::Shadows;
@@ -239,7 +239,7 @@ pub(crate) fn gather(
             if let DrawCommand::BackdropBlur {
                 sources,
                 radius,
-                merged: None,
+                shape: BlurShape::Rounded { .. },
                 ..
             } = &**command
             {
@@ -413,9 +413,7 @@ fn merged_blur(
         rect,
         sources: blur.sources,
         radius: blur.radius,
-        corner_radii: CornerRadii::uniform(0.0),
-        curvature: 1.0,
-        merged: Some(Rc::new(MergedOutline {
+        shape: BlurShape::Merged(Rc::new(MergedOutline {
             members,
             distance: merge.distance,
         })),
@@ -711,9 +709,10 @@ mod tests {
                     rect,
                     sources: crate::backdrop::BackdropSources::all(),
                     radius,
-                    corner_radii: CornerRadii::uniform(4.0),
-                    curvature: 1.0,
-                    merged: None,
+                    shape: BlurShape::Rounded {
+                        corner_radii: CornerRadii::uniform(4.0),
+                        curvature: 1.0,
+                    },
                 }),
                 background(rect, Color::rgba(0.1, 0.1, 0.1, 0.5), None),
             ],
@@ -722,7 +721,7 @@ mod tests {
 
     fn outline(blur: &DrawCommand) -> (&MergedOutline, f32) {
         let DrawCommand::BackdropBlur {
-            merged: Some(outline),
+            shape: BlurShape::Merged(outline),
             radius,
             ..
         } = blur

@@ -2001,9 +2001,10 @@ mod tests {
                 rect,
                 sources,
                 radius: 24.0,
-                corner_radii: CornerRadii::from(0.0),
-                curvature: 1.0,
-                merged: None,
+                shape: crate::renderer::BlurShape::Rounded {
+                    corner_radii: CornerRadii::from(0.0),
+                    curvature: 1.0,
+                },
             }));
 
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
@@ -3515,9 +3516,10 @@ mod layer_tests {
                 rect: Rect::new(0.0, 0.0, 40.0, 40.0),
                 sources: BackdropSources::SURFACE | BackdropSources::COMPOSITOR,
                 radius: 6.0,
-                corner_radii: CornerRadii::uniform(4.0),
-                curvature: 1.0,
-                merged: None,
+                shape: crate::renderer::BlurShape::Rounded {
+                    corner_radii: CornerRadii::uniform(4.0),
+                    curvature: 1.0,
+                },
             }));
         }
         let mut card = rect_node(2, Rect::new(30.0, 20.0, 100.0, 60.0), CARD);
