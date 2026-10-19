@@ -827,3 +827,91 @@ fn a_box_in_a_springing_box_grows_at_its_own_pace() {
 fn a_box_in_a_springing_box_shrinks_at_its_own_pace() {
     assert_inner_keeps_its_own_pace(150.0, 60.0, (60.0, LINE));
 }
+
+/// A bar in a view that arrived while the box around it was in flight is laid
+/// out in its track when its value changes. The box measures the arriving view
+/// before laying it out, and the layout keeps what the measure answered; the
+/// track is a relayout boundary that only that measure had placed, and its
+/// value restarted it under the whole surface — the fill came out half of 400
+/// rather than half of 180, and ran out of the track and the view (#839).
+#[test]
+fn a_bar_in_a_view_that_arrived_in_flight_stays_in_its_track() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let arrived = create_signal(false);
+    let wide = create_signal(false);
+    let value = create_signal(0.25_f32);
+    let (track, bar) = (create_widget_ref(), create_widget_ref());
+    let spring = || Transition::spring(SpringConfig::SNAPPY);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(120)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(fill())
+                .layout(ZStack::new().align(Alignment::TOP_CENTER))
+                .child(
+                    container()
+                        .width(at_least(0.0).transition(spring()))
+                        .height(at_least(0.0).transition(spring()))
+                        .overflow(Overflow::Hidden)
+                        .layout(ZStack::new().align(Alignment::TOP_CENTER))
+                        .children(keyed(
+                            move || vec![arrived.get()],
+                            |which| *which,
+                            move |which| {
+                                if !which {
+                                    return container()
+                                        .width(
+                                            (move || if wide.get() { 150.0 } else { 100.0 })
+                                                .transition(spring()),
+                                        )
+                                        .height(30.0);
+                                }
+                                container().width(natural()).height(natural()).child(
+                                    container().width(200.0).padding(10.0).child(
+                                        container()
+                                            .width(fill())
+                                            .height(6.0)
+                                            .overflow(Overflow::Hidden)
+                                            .widget_ref(track)
+                                            .child(
+                                                container()
+                                                    .width(move || fraction(value.get()))
+                                                    .height(fill())
+                                                    .widget_ref(bar),
+                                            ),
+                                    ),
+                                )
+                            },
+                        )),
+                )
+        },
+    );
+    app.configure(surface, 400, 120, 1.0);
+    let mut at = Instant::now();
+    let mut frames = |app: &mut guido::testing::Headless, count: usize| {
+        for _ in 0..count {
+            at += FRAME;
+            app.step_at(at);
+        }
+    };
+    frames(&mut app, 1);
+    // The box is still springing to its first view's new width when the
+    // second one arrives.
+    wide.set(true);
+    frames(&mut app, 3);
+    arrived.set(true);
+    frames(&mut app, 4);
+    value.set(0.5);
+    frames(&mut app, 1);
+
+    assert_eq!(track.layout_rect().get_untracked().width, 180.0);
+    assert_eq!(
+        bar.layout_rect().get_untracked().width,
+        90.0,
+        "the bar is half of its track"
+    );
+}

@@ -4784,11 +4784,7 @@ fn a_measure_after_a_real_layout_reports_the_target_not_the_frame() {
         let mut layout_roots = Vec::new();
         jobs::process_jobs(&drained, &mut h.tree, &mut layout_roots);
         jobs::recycle_job_buffer(drained);
-        let fallback = Constraints::new(400.0, 0.0, 400.0, 1000.0);
-        for root in layout_roots {
-            let c = h.tree.last_layout_constraints(root).unwrap_or(fallback);
-            h.tree.layout_widget(root, c);
-        }
+        h.tree.lay_out_from_boundaries(layout_roots);
         h.tree.set_frame_instant(None);
     };
     h.layout(Constraints::new(400.0, 0.0, 400.0, 1000.0));

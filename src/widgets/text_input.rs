@@ -2880,12 +2880,7 @@ mod tests {
             let mut layout_roots = Vec::new();
             crate::jobs::process_jobs(&drained, tree, &mut layout_roots);
             crate::jobs::recycle_job_buffer(drained);
-            for boundary in layout_roots {
-                let c = tree
-                    .last_layout_constraints(boundary)
-                    .unwrap_or(constraints);
-                tree.layout_widget(boundary, c);
-            }
+            tree.lay_out_from_boundaries(layout_roots);
             tree.layout_widget(root, constraints);
             let node = paint_once(tree, field);
             tree.set_frame_instant(None);

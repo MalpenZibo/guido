@@ -3783,10 +3783,10 @@ fn a_layout_move_writes_a_widget_ref_layout_rect_once() {
 /// A layout root is restarted under its own constraints, not the surface's.
 ///
 /// Partial layout re-enters the tree at a relayout boundary, which has no
-/// parent above it to say what room it has. `Tree::last_layout_constraints`
-/// is that memory: the constraints the boundary was last really laid out
-/// under. Without them the boundary is handed the whole surface, and one
-/// inside a padded parent grows to a width its parent never offered.
+/// parent above it to say what room it has. `Tree::placed_under` is that
+/// memory: the constraints the boundary was last placed under, by whichever
+/// pass placed it. Handed the whole surface instead, one inside a padded
+/// parent grows to a width its parent never offered.
 ///
 /// The boundary here declares 150 inside a parent that offers 100, so the two
 /// answers differ: its own constraints clamp it to 100, the surface's leave it

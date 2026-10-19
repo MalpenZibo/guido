@@ -130,13 +130,17 @@ struct Slot {
     /// which is not — and one entry for the two meant each evicted the other.
     /// Taffy keeps a node's final layout apart from its measures, and
     /// Chromium's LayoutNG its measure results apart from its layout results,
-    /// for the same reason. Dropped when the widget is marked, since what a
+    /// for the same reason. Withdrawn when the widget is marked, since what a
     /// measure answers can change with what changed it.
     measured: Option<CachedLayout>,
     /// Which pass last ran this widget's layout, and so placed what is below
     /// it where it is now. A layout's answer stands only with its placement:
     /// a measure that runs after it moves the children, and a layout at the
     /// same constraints must not then hand back the old answer.
+    ///
+    /// Its entry is also what a boundary is restarted under, and it need not
+    /// be the layout's: a layout may keep what a measure answered, and then
+    /// nothing below the widget it skipped is run by a layout at all (#839).
     placed_by: Option<LayoutPass>,
     /// Which of the two entries it last answered from, run or skipped: what
     /// its parent reads the least it can be from.
@@ -207,18 +211,27 @@ struct Slot {
 }
 
 impl Slot {
-    /// Say this widget has to be laid out again, and forget what its last
-    /// measure answered, which what marked it may have changed. The layout's
-    /// answer is kept, for the constraints a boundary is restarted under; the
-    /// flag is what keeps it from being read.
+    /// Say this widget has to be laid out again, and withdraw what its last
+    /// measure answered, which what marked it may have changed. Both entries
+    /// keep the constraints they ran under, which the one that placed the
+    /// widget restarts a boundary under; the layout's answer is guarded by the
+    /// flag, and the measure's by being withdrawn, since a layout clears the
+    /// flag without asking the measure again.
     fn mark_needs_layout(&mut self) {
         self.needs_layout = true;
-        self.measured = None;
+        if let Some(measured) = &mut self.measured {
+            measured.withdrawn = true;
+        }
         self.measured_in = 0;
     }
 
-    /// The answer `pass` last gave.
+    /// The answer `pass` last gave, unless a mark has withdrawn it.
     fn entry(&self, pass: LayoutPass) -> Option<CachedLayout> {
+        self.ran(pass).filter(|entry| !entry.withdrawn)
+    }
+
+    /// What `pass` last ran this widget under and answered, withdrawn or not.
+    fn ran(&self, pass: LayoutPass) -> Option<CachedLayout> {
         match pass {
             LayoutPass::Layout => self.laid_out,
             LayoutPass::Measure => self.measured,
@@ -292,6 +305,10 @@ struct CachedLayout {
     /// below was in flight, or a measure placed a value without spending its
     /// appearance. A settled subtree is neither, and either pass may read it.
     pass_dependent: bool,
+    /// Whether a mark has taken the answer back: what changed may change it.
+    /// Kept for the constraints it ran under, which still say where the
+    /// widget stands — the answer itself is never read again.
+    withdrawn: bool,
 }
 
 /// Publish how far `widget` paints outside its own box, inside *its* own
@@ -2773,6 +2790,7 @@ impl Tree {
             minimum,
             baseline: slot.baseline,
             pass_dependent: self.pass_dependent,
+            withdrawn: false,
         };
         *match self.pass {
             LayoutPass::Layout => &mut slot.laid_out,
@@ -2798,7 +2816,7 @@ impl Tree {
     /// was the last to run — because a skip leaves what is below the widget
     /// where the last run put it. A measure's is read whatever ran since:
     /// nothing reads where a measure placed anything, and what it answers
-    /// changes only with what marks the widget, which drops it.
+    /// changes only with what marks the widget, which withdraws it.
     fn cached_for_pass(
         &self,
         id: WidgetId,
@@ -2830,16 +2848,29 @@ impl Tree {
         }
     }
 
-    /// The constraints a real layout last ran this widget under, whichever
-    /// pass is asking.
+    /// The constraints this widget was last placed under, by whichever pass
+    /// placed it — `None` for one no pass has laid out. See `Slot::placed_by`.
+    pub(crate) fn placed_under(&self, id: WidgetId) -> Option<Constraints> {
+        let slot = &self.dense[self.get_dense_index(id)?];
+        slot.ran(slot.placed_by?).map(|entry| entry.constraints)
+    }
+
+    /// Lay the tree out again from each of `boundaries`, under the
+    /// constraints it was placed under: what the loop does with the
+    /// boundaries a frame's writes marked, after the root.
     ///
-    /// For the loop, which restarts a layout at a boundary and needs the
-    /// constraints that boundary was placed under — a question about the tree
-    /// on screen rather than about the pass asking.
-    pub(crate) fn last_layout_constraints(&self, id: WidgetId) -> Option<Constraints> {
-        self.dense[self.get_dense_index(id)?]
-            .laid_out
-            .map(|entry| entry.constraints)
+    /// A boundary nothing has placed yet is left to the parent that will: it
+    /// is on no frame, and no constraints here are its own. Its flag
+    /// stays set, so that first layout runs it.
+    pub(crate) fn lay_out_from_boundaries(
+        &mut self,
+        boundaries: impl IntoIterator<Item = WidgetId>,
+    ) {
+        for boundary in boundaries {
+            if let Some(placed) = self.placed_under(boundary) {
+                self.layout_widget(boundary, placed);
+            }
+        }
     }
 
     /// Whether the last layout that ran `id` said its answer depended on the
