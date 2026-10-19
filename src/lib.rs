@@ -1691,10 +1691,7 @@ fn layout_pass<P: Platform>(
     // a subtree for paint: `cache_layout` marked whatever ran, and
     // `paint_and_present` repaints the lot when the buffer or scale changed.
     tree.layout_widget(surface.widget_id, constraints);
-    for root_id in std::mem::take(layout_roots) {
-        let cached = tree.last_layout_constraints(root_id).unwrap_or(constraints);
-        tree.layout_widget(root_id, cached);
-    }
+    tree.lay_out_from_boundaries(std::mem::take(layout_roots));
 
     // Auto-height popups follow their content: when this surface had
     // layout activity, re-measure the natural height and ask the
