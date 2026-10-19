@@ -74,6 +74,7 @@ mod tests {
                 radius: 0.0,
                 corner_radii: CornerRadii::uniform(0.0),
                 curvature: 1.0,
+                merged: None,
             }),
             world_transform: Default::default(),
             layer: Default::default(),

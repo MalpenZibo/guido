@@ -64,6 +64,12 @@ pub struct Renderer {
     merge_buffer: Buffer,
     merge_buffer_capacity: usize,
     merge_records: Vec<MergeRecord>,
+    /// Per backdrop command of the frame's groups, in order, where its merged
+    /// outline's members begin in `merge_records` — `None` for a blur cut by
+    /// its own corners, or one whose members all collapsed.
+    backdrop_merges: Vec<Option<u32>>,
+    /// The merge records, as the backdrop pass binds them.
+    backdrop_merge_group: wgpu::BindGroup,
 
     /// The frame's clip chains, bound at group 1 by every pipeline that cuts
     /// by a clip.
@@ -229,6 +235,7 @@ impl Renderer {
         let image_quad_renderer = ImageQuadRenderer::new(&device, format, clip_records.layout());
 
         let backdrop = BackdropRenderer::new(&device, &queue, format, clip_records.layout());
+        let backdrop_merge_group = backdrop.merge_group(&device, &merge_buffer);
 
         let path_renderer = PathRenderer::new(&device, format, clip_records.layout());
 
@@ -248,6 +255,8 @@ impl Renderer {
             merge_buffer,
             merge_buffer_capacity: initial_merges,
             merge_records: Vec::new(),
+            backdrop_merges: Vec::new(),
+            backdrop_merge_group,
             clip_records,
             text_state,
             text_quad_renderer,
@@ -391,6 +400,7 @@ impl Renderer {
             grown = true;
         }
         if grown {
+            self.backdrop_merge_group = self.backdrop.merge_group(&self.device, &self.merge_buffer);
             self.uniform_bind_group = Self::make_bind_group(
                 &self.device,
                 &self.bind_group_layout,
@@ -763,8 +773,11 @@ impl Renderer {
                 // and its contents be stored before they can run.
                 drop(render_pass);
                 self.backdrop.begin_group();
-                for command in &commands[layers[index].backdrop.clone()] {
-                    if let Some(region) = command_to_backdrop_region(command, scale) {
+                let merged =
+                    &self.backdrop_merges[self.prepared_layers[index].backdrop_merges.clone()];
+                for (command, first) in commands[layers[index].backdrop.clone()].iter().zip(merged)
+                {
+                    if let Some(region) = command_to_backdrop_region(command, scale, *first) {
                         self.backdrop.push(
                             scene,
                             Frost {
@@ -798,7 +811,7 @@ impl Renderer {
                     &self.device,
                     encoder,
                     scene,
-                    self.clip_records.bind_group(),
+                    [self.clip_records.bind_group(), &self.backdrop_merge_group],
                 );
             }
 
@@ -865,6 +878,7 @@ impl Renderer {
         self.shape_instance_buf.clear();
         self.path_renderer.begin_frame();
         self.merge_records.clear();
+        self.backdrop_merges.clear();
         self.image_quads.clear();
         self.text_quads.clear();
         self.prepared_layers.clear();
@@ -966,6 +980,13 @@ impl Renderer {
         let shapes = shapes_start..self.shape_instance_buf.len() as u32;
         let merges = self.merge_records.len() > merges_start;
 
+        let backdrop_start = self.backdrop_merges.len();
+        for command in &commands[layer.backdrop.clone()] {
+            let first = push_backdrop_records(command, scale, &mut self.merge_records);
+            self.backdrop_merges.push(first);
+        }
+        let backdrop_merges = backdrop_start..self.backdrop_merges.len();
+
         let paths_start = self.path_renderer.index_count();
         for command in &commands[layer.paths.clone()] {
             self.path_renderer.push(command, scale);
@@ -1037,6 +1058,7 @@ impl Renderer {
 
         PreparedLayer {
             target,
+            backdrop_merges,
             shapes,
             merges,
             paths,
@@ -1054,6 +1076,8 @@ struct PreparedLayer {
     /// What its shapes are projected against: `0` for the surface, a pass's
     /// index plus one for that layer's texture.
     target: usize,
+    /// Its backdrop commands' entries in `backdrop_merges`, one each.
+    backdrop_merges: std::ops::Range<usize>,
     shapes: std::ops::Range<u32>,
     /// Whether a merged shape is among them, which draws them in runs.
     merges: bool,
@@ -1071,6 +1095,7 @@ impl PreparedLayer {
     fn empty(target: usize) -> Self {
         Self {
             target,
+            backdrop_merges: 0..0,
             shapes: 0..0,
             merges: false,
             paths: 0..0,
@@ -1129,17 +1154,27 @@ fn backdrop_region(
         // same two steps it already takes for the shape.
         clip: cmd.clip(),
         opacity: cmd.opacity,
+        merged: None,
     }
 }
 
 /// Resolve a backdrop command to the physical-pixel region it filters.
-fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<BackdropRegion> {
+///
+/// `merged` is where the records of its merged outline's members begin; a
+/// blur that has an outline and no records is skipped, as a collapsed
+/// placement is.
+fn command_to_backdrop_region(
+    cmd: &FlattenedCommand,
+    scale: f32,
+    merged: Option<u32>,
+) -> Option<BackdropRegion> {
     let DrawCommand::BackdropBlur {
         rect,
         sources,
         radius,
         corner_radii,
         curvature,
+        merged: outline,
     } = &*cmd.command
     else {
         return None;
@@ -1151,13 +1186,46 @@ fn command_to_backdrop_region(cmd: &FlattenedCommand, scale: f32) -> Option<Back
     }
 
     // The corners are the container's own, so the mask is cut where they are
-    // circles and its sides are its sides.
-    Some(backdrop_region(
+    // circles and its sides are its sides. A merged outline's box is only the
+    // viewport: the members' records are the mask.
+    let mut region = backdrop_region(
         PlacedShape::placed(*rect, *corner_radii, *curvature, cmd.world_transform),
         *radius,
         cmd,
         scale,
-    ))
+    );
+    if outline.is_some() {
+        region.merged = Some(merged?);
+    }
+    Some(region)
+}
+
+/// Where the records of a backdrop command's merged outline begin, when it
+/// has one — written beside the merged shapes' own, so one upload and one
+/// buffer serve both.
+fn push_backdrop_records(
+    cmd: &FlattenedCommand,
+    scale: f32,
+    merges: &mut Vec<MergeRecord>,
+) -> Option<u32> {
+    let DrawCommand::BackdropBlur {
+        merged: Some(outline),
+        ..
+    } = &*cmd.command
+    else {
+        return None;
+    };
+    // At the opacity the members were gathered at: the command's own is the
+    // region's, laid over all of it.
+    push_merge_records(
+        &outline.members,
+        &cmd.world_transform,
+        None,
+        1.0,
+        outline.distance,
+        scale,
+        merges,
+    )
 }
 
 /// A frosted text resolved to the region it filters and the mask that cuts it.
@@ -1328,25 +1396,17 @@ fn merged_instances(
     else {
         return;
     };
-    let first = merges.len();
-    merges.extend(members.iter().filter_map(|member| {
-        MergeRecord::new(
-            member,
-            &cmd.world_transform,
-            *border,
-            cmd.opacity,
-            *distance,
-            scale,
-        )
-    }));
-    if merges.len() == first {
+    let Some(first) = push_merge_records(
+        members,
+        &cmd.world_transform,
+        *border,
+        cmd.opacity,
+        *distance,
+        scale,
+        merges,
+    ) else {
         return;
-    }
-    // Each to the one after it; the last keeps `NO_MERGE`.
-    let last = merges.len() - 1;
-    for (index, record) in merges[first..last].iter_mut().enumerate() {
-        record.next = (first + index + 1) as u32;
-    }
+    };
     // Drawn in world space: the members carry their own placements, so the
     // quad is the box around them and nothing transforms it.
     let world = cmd.world_transform.map_rect(*bounds);
@@ -1357,7 +1417,7 @@ fn merged_instances(
             world.width * scale,
             world.height * scale,
         ],
-        first as u32,
+        first,
     );
     if let Some(clip) = cmd.clip() {
         instance = instance.with_clip(&clip, scale);
@@ -1372,6 +1432,35 @@ fn merged_instances(
         instance = instance.with_shadow(shadow, scale);
     }
     out.push(instance.faded(cmd.opacity));
+}
+
+/// The records of `members`, placed by `world`, onto `merges`, each chained
+/// to the next — or `None` when every member's placement collapsed. Answers
+/// where the first is.
+fn push_merge_records(
+    members: &[super::merge::MergeMember],
+    world: &crate::transform::Transform,
+    border: Option<super::commands::Border>,
+    opacity: f32,
+    distance: f32,
+    scale: f32,
+    merges: &mut Vec<MergeRecord>,
+) -> Option<u32> {
+    let first = merges.len();
+    merges.extend(
+        members
+            .iter()
+            .filter_map(|member| MergeRecord::new(member, world, border, opacity, distance, scale)),
+    );
+    if merges.len() == first {
+        return None;
+    }
+    // Each to the one after it; the last keeps `NO_MERGE`.
+    let last = merges.len() - 1;
+    for (index, record) in merges[first..last].iter_mut().enumerate() {
+        record.next = (first + index + 1) as u32;
+    }
+    Some(first as u32)
 }
 
 /// Convert a single flattened command to a shape instance.

@@ -1,6 +1,6 @@
 //! Draw command definitions for the render tree.
 
-use super::merge::MergeMember;
+use super::merge::{MergeMember, MergedOutline};
 use super::path::{Cap, Fill, Path, Stroke};
 use super::text_measurer::LineFit;
 use super::types::{Gradient, Shadow};
@@ -380,6 +380,10 @@ pub enum DrawCommand {
         corner_radii: CornerRadii,
         /// Superellipse curvature of those corners.
         curvature: f32,
+        /// The outline the blur is cut to instead, when it is the blur of a
+        /// merging container's members: their smooth union, neck included.
+        /// `rect` is then the box around it, and the corners are none.
+        merged: Option<std::rc::Rc<MergedOutline>>,
     },
 
     /// Filter what has already been drawn beneath the glyphs of `text`.

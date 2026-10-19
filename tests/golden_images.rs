@@ -5382,6 +5382,58 @@ fn a_layer_member_draws_as_it_does_unmerged() {
     }
 }
 
+/// Two translucent pills that blur what the surface drew beneath them, close
+/// enough to join, the round one carried there by a translation. Thin
+/// stripes, so a pixel that is not blurred shows an edge a row away.
+fn frosted_pills() -> Container {
+    let frost = Color::rgba(0.10, 0.10, 0.12, 0.45);
+    let frosted = || {
+        container()
+            .background(frost)
+            .backdrop_blur(BackdropBlur::new(8.0).sources(BackdropSources::SURFACE))
+    };
+    container()
+        .width(fill())
+        .height(fill())
+        .layout(ZStack::new())
+        .children([
+            stripes(200.0, 13, 6.0).into_any(),
+            container()
+                .padding([21.0, 20.0])
+                .child(pills(frosted(), frosted(), 6.0).merge_children(MERGE_DISTANCE))
+                .into_any(),
+        ])
+}
+
+/// The frost of two merged pills follows the merged outline, neck included,
+/// so the fill lands on the same blur along the whole of it. It used to
+/// follow each pill's own box: the neck showed the stripes sharp through the
+/// fill, and the merged fill was blurred along with what was behind it (#847).
+///
+/// Before the golden, the neck's own middle column says it: blurred by 8, no
+/// two rows beside each other there are as far apart as two stripes are.
+#[test]
+fn merged_pills_blur_their_neck() {
+    const NAME: &str = "merged_pills_blur_their_neck";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let pixels = render_with_own_renderer(ctx, frosted_pills(), (180.0, 78.0), 1.0, BACKDROP);
+    // The pills stand at y 21 to 57, and the gap between them at x 100 to 106.
+    let (x, centre) = (103, 39);
+    let red = |y: u32| pixels.data[((y * pixels.width + x) * 4) as usize];
+    let step = (centre - 6..centre + 6)
+        .map(|y| red(y).abs_diff(red(y + 1)))
+        .max()
+        .unwrap();
+    assert!(
+        step < 24,
+        "the neck at x = {x} steps by {step} of 255 from one row to the next: \
+         the stripes behind it are sharp, not blurred"
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
 /// The merging container's shadow is the merged shape's: cast around the
 /// neck as well as the members, once, rather than around the container's box
 /// or around each member. The round member is turned, which it shows nothing

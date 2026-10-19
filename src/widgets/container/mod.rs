@@ -946,6 +946,9 @@ impl Container {
     /// source. A blur restricted to the compositor has no radius of its own to
     /// say it with, and asks for its region on its sources alone; switch that
     /// one off with [`BackdropSources::empty`](crate::backdrop::BackdropSources::empty).
+    ///
+    /// Children of a container that [merges](Self::merge_children) them, all
+    /// blurring alike, are blurred as one shape, neck included.
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
         self.backdrop_blur = blur.into_prop();
         self
@@ -1532,13 +1535,21 @@ impl Container {
     /// cast by it. Its inset shadows, and its own background, stay on its own
     /// box, drawn underneath as usual.
     ///
-    /// Four things do not merge, and are drawn on their own: a child whose
-    /// fill is a [`gradient`](Self::gradient), a child drawn as a layer —
+    /// Children that each [blur their backdrop](Self::backdrop_blur) alike
+    /// blur it as one: through the merged outline, neck included, so the
+    /// merged fill lands on frost all along it. The compositor is asked to
+    /// blur behind each child's shape and a box over each neck, since a
+    /// region cannot follow the neck's curve. When only some children blur,
+    /// each blurs its own box.
+    ///
+    /// Five things do not merge, and are drawn on their own: a child whose
+    /// fill is a [`gradient`](Self::gradient), a child whose backdrop blur
+    /// differs from the first child's, a child drawn as a layer —
     /// one that [blurs](Self::blur), or fades under [`opacity`](Self::opacity)
     /// with something drawn over its background, which is then drawn in its
     /// layer, blurred or faded with the rest of it — every child after the first
     /// [`MAX_MEMBERS`](crate::renderer::MAX_MEMBERS), and anything below the
-    /// direct children. A debug build says so for the first three. The neck
+    /// direct children. A debug build says so for the first four. The neck
     /// takes no input — each child answers clicks in its own box. A container
     /// that also [scrolls](Self::scroll) merges its scrollbar track too, since
     /// the track is one of its children.

@@ -535,6 +535,7 @@ impl<'a> PaintContext<'a> {
             radius,
             corner_radii: corner_radii.into(),
             curvature,
+            merged: None,
         }));
     }
 

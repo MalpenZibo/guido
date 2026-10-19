@@ -56,7 +56,7 @@ pub(crate) use gpu_context::GpuSlot;
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
-pub use merge::{MAX_MEMBERS, MergeChildren, MergeMember};
+pub use merge::{MAX_MEMBERS, MergeChildren, MergeMember, MergedOutline};
 pub use paint_context::PaintContext;
 pub use path::{Cap, Dashes, Fill, FillRule, Join, Path, PathElement, Stroke};
 pub use render::Renderer;

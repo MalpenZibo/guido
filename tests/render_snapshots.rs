@@ -207,6 +207,9 @@ fn dump_command(cmd: &DrawCommand, depth: usize, kind: &str, out: &mut String) {
             radius,
             corner_radii,
             curvature,
+            // Merged by flatten, out of the blurs its members painted; a
+            // render tree holds only those.
+            merged: _,
         } => {
             out.push_str(&format!(
                 "{pad}{kind} backdrop-blur {} sources={:?} radius={} corners={}/{}/{}/{} k={}\n",
