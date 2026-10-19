@@ -410,6 +410,15 @@ pub(crate) struct ScrollState {
     /// Samples in the current gesture, so the first timed one seeds the
     /// estimate instead of being smoothed against a velocity from before it.
     pub gesture_samples: u32,
+    /// Whether the gesture's samples have made its end this scroller's: set by
+    /// a sample that moved it, cleared by one that moved nothing though it ran
+    /// this scroller's way, and left alone by one that ran mostly across it. A
+    /// scroller the samples went past, because it cannot scroll that way or
+    /// has run out of room, leaves the end to the one they moved (#841).
+    /// Cleared when this scroller's gesture begins or ends; the recency
+    /// `owns_gesture_end` also asks for covers a gesture whose end never
+    /// reached it.
+    pub claims_gesture_end: bool,
 }
 
 /// The unit a momentum's velocity is in: pixels per frame at sixty a second.
@@ -530,6 +539,7 @@ impl ScrollState {
     pub fn begin_gesture(&mut self) {
         self.last_scroll_time = None;
         self.gesture_samples = 0;
+        self.claims_gesture_end = false;
     }
 
     /// The gesture ended — the finger lifted.
@@ -543,25 +553,54 @@ impl ScrollState {
     /// it with a second clock is how the sample path and the end path came to
     /// disagree about what time it was inside one gesture.
     pub fn end_gesture(&mut self, at: EventInstant) {
-        let since_last_sample_ms = self
-            .last_scroll_time
-            .map(|t| at.duration_since(t).as_secs_f32() * 1000.0);
-        /// Longer than this between the last movement and the lift, and the
-        /// gesture had already stopped.
-        const GESTURE_STALE_MS: f32 = 100.0;
-
-        if since_last_sample_ms.is_none_or(|ms| ms > GESTURE_STALE_MS) {
+        if !self.sampled_recently(at) {
             self.velocity_x = 0.0;
             self.velocity_y = 0.0;
         }
         self.gesture_ended = true;
         self.gesture_samples = 0;
+        self.claims_gesture_end = false;
         // The glide begins when the finger leaves, so the first frame decays
         // it by however long it took to arrive. Crossing the clocks here is
         // sound for the reason it was not before: this is where a timeline
         // starts and the gap is decayed continuously, rather than a deadline
         // whose crossing cancelled the motion (#265, #340).
         self.momentum_since = Some(at.as_frame_start());
+    }
+
+    /// Whether this scroller's last sample came close enough before `at` to
+    /// be part of the gesture `at` ends. Longer than this between the last
+    /// sample and the lift, and the gesture had already stopped.
+    pub fn sampled_recently(&self, at: EventInstant) -> bool {
+        const GESTURE_STALE_MS: f32 = 100.0;
+        self.last_scroll_time
+            .is_some_and(|t| at.duration_since(t).as_secs_f32() * 1000.0 <= GESTURE_STALE_MS)
+    }
+
+    /// Who the gesture's end belongs to, after a sample of `delta` that
+    /// `moved` this scroller or not. A sample that moved it makes the end its;
+    /// one that moved nothing takes it away only if it ran this scroller's
+    /// way, mostly along a direction it scrolls and has room in. One that ran
+    /// mostly across it, as fingers drifting while they lift do, leaves the
+    /// matter as it was (#841).
+    pub fn note_sample(&mut self, axis: ScrollAxis, delta_x: f32, delta_y: f32, moved: bool) {
+        let mostly_horizontal = delta_x.abs() >= delta_y.abs();
+        let its_way = if mostly_horizontal {
+            axis.allows_horizontal() && self.max_scroll_x() > 0.0
+        } else {
+            axis.allows_vertical() && self.max_scroll_y() > 0.0
+        };
+        if moved {
+            self.claims_gesture_end = true;
+        } else if its_way {
+            self.claims_gesture_end = false;
+        }
+    }
+
+    /// Whether the end of a gesture at `at` is this scroller's: the gesture's
+    /// samples claim it (`claims_gesture_end`), and the last came recently.
+    pub fn owns_gesture_end(&self, at: EventInstant) -> bool {
+        self.claims_gesture_end && self.sampled_recently(at)
     }
 
     /// Whether the momentum may run: the gesture is over and it left a speed.
@@ -905,6 +944,123 @@ mod tests {
         state.end_gesture(at.into());
     }
     use super::*;
+
+    /// A scroller with `x` and `y` of room, and whether a sample of `delta`
+    /// that `moved` it or not leaves it claiming the gesture's end, from a
+    /// claim of `claimed`.
+    fn claims_after(
+        (x, y): (f32, f32),
+        axis: ScrollAxis,
+        claimed: bool,
+        delta: (f32, f32),
+        moved: bool,
+    ) -> bool {
+        let mut state = ScrollState {
+            content_width: 200.0 + x,
+            viewport_width: 200.0,
+            content_height: 200.0 + y,
+            viewport_height: 200.0,
+            claims_gesture_end: claimed,
+            ..Default::default()
+        };
+        state.note_sample(axis, delta.0, delta.1, moved);
+        state.claims_gesture_end
+    }
+
+    /// A sample that moved a scroller makes the gesture's end its, whichever
+    /// way it ran (#841).
+    #[test]
+    fn a_sample_that_moved_a_scroller_claims_the_end() {
+        use ScrollAxis::*;
+        assert!(claims_after(
+            (0.0, 50.0),
+            Vertical,
+            false,
+            (0.0, 10.0),
+            true
+        ));
+        assert!(claims_after(
+            (50.0, 0.0),
+            Horizontal,
+            false,
+            (5.0, 10.0),
+            true
+        ));
+    }
+
+    /// One that moved nothing, though it ran the scroller's way with room to
+    /// go, gives the end up: the scroller has run out of room for the gesture.
+    #[test]
+    fn a_still_sample_that_ran_a_scrollers_way_gives_the_end_up() {
+        use ScrollAxis::*;
+        assert!(!claims_after(
+            (0.0, 50.0),
+            Vertical,
+            true,
+            (0.0, 10.0),
+            false
+        ));
+        assert!(!claims_after(
+            (50.0, 0.0),
+            Horizontal,
+            true,
+            (10.0, 0.0),
+            false
+        ));
+        // Mostly horizontal, ties included.
+        assert!(!claims_after(
+            (50.0, 0.0),
+            Horizontal,
+            true,
+            (5.0, 5.0),
+            false
+        ));
+    }
+
+    /// One that ran mostly across the scroller, or along a direction it has no
+    /// room in or does not scroll, leaves the claim as it was: fingers drifting
+    /// as they lift are no sample of its.
+    #[test]
+    fn a_still_sample_across_a_scroller_leaves_its_claim() {
+        use ScrollAxis::*;
+        // Across a vertical list, ties counting as across.
+        assert!(claims_after((0.0, 50.0), Vertical, true, (3.0, 0.0), false));
+        assert!(claims_after((0.0, 50.0), Vertical, true, (5.0, 5.0), false));
+        // Along a way a both-ways scroller has no room in, on either axis.
+        assert!(claims_after((0.0, 50.0), Both, true, (3.0, 0.0), false));
+        assert!(claims_after((50.0, 0.0), Both, true, (0.0, 3.0), false));
+        // Along a way the scroller does not scroll, room or not.
+        assert!(claims_after(
+            (50.0, 50.0),
+            Vertical,
+            true,
+            (3.0, 0.0),
+            false
+        ));
+        assert!(claims_after(
+            (50.0, 50.0),
+            Horizontal,
+            true,
+            (0.0, 3.0),
+            false
+        ));
+    }
+
+    /// The end of a gesture is a scroller's only while its samples claim it
+    /// and the last of them is recent: claimed and recent, it owns the end;
+    /// claimed but long ago, or recent but unclaimed, it does not (#841).
+    #[test]
+    fn a_scroller_owns_a_gesture_end_its_recent_samples_claim() {
+        let now = std::time::Instant::now();
+        let state = |claimed: bool, ago_ms: u64| ScrollState {
+            claims_gesture_end: claimed,
+            last_scroll_time: Some((now - Duration::from_millis(ago_ms)).into()),
+            ..Default::default()
+        };
+        assert!(state(true, 10).owns_gesture_end(now.into()));
+        assert!(!state(true, 300).owns_gesture_end(now.into()));
+        assert!(!state(false, 10).owns_gesture_end(now.into()));
+    }
 
     /// A scroller with room to fling in.
     fn scroller() -> ScrollState {
