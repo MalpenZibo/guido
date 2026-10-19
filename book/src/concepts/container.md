@@ -317,11 +317,13 @@ widget somewhere inside it:
 | Page Up / Page Down | one viewport height |
 | Home / End | to the start or the end of the vertical axis, or of the horizontal one on a `Scroll::horizontal()` scroller |
 
-The key goes to the focus first, as every key does: the focused widget, then
-the scroller's own `on_key_down`, and only what both let through scrolls. A
-focused text input keeps Left, Right, Home and End for its caret and lets Up
-and Down through, and a list that moves a selection with the arrows takes
-them in its own `on_key_down`. A scroller that cannot move that way — at its
+The key goes to the focus first, as every key does once the capture listeners
+around it have let it through: the focused widget, then the scroller's own
+`on_key_down`, and only what both let through scrolls. A focused text input
+keeps Left, Right, Home and End for its caret and lets Up and Down through, and
+a list that moves a selection with the arrows takes them in its own
+`on_key_down` — or in `on_key_down_capture`, to have Left and Right before the
+field does. A scroller that cannot move that way — at its
 end, or with no axis for the key, as a page on a `Scroll::horizontal()`
 scroller — lets the key go on, so the next scroller out moves instead, as a
 browser's do. With Ctrl, Alt or Super held, the key is left for whoever binds
