@@ -533,8 +533,10 @@ impl<'a> PaintContext<'a> {
             rect,
             sources,
             radius,
-            corner_radii: corner_radii.into(),
-            curvature,
+            shape: super::commands::BlurShape::Rounded {
+                corner_radii: corner_radii.into(),
+                curvature,
+            },
         }));
     }
 

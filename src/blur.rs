@@ -12,8 +12,9 @@
 //! protocol or its blur capability.
 
 use crate::backdrop::BackdropSources;
-use crate::region::{RegionRect, shape_of};
-use crate::renderer::{ClipChains, DrawCommand, FlattenedCommand};
+use crate::region::{RegionRect, clips_of, placed_shape_to_rects, shape_of};
+use crate::renderer::{BlurShape, ClipChains, CornerRadii, DrawCommand, FlattenedCommand};
+use crate::shape::PlacedShape;
 
 /// The region to hand `ext-background-effect-v1`, read off the frame that was
 /// just drawn.
@@ -37,8 +38,7 @@ pub(crate) fn regions_from_commands(
         let DrawCommand::BackdropBlur {
             rect,
             sources,
-            corner_radii,
-            curvature,
+            shape,
             ..
         } = &*cmd.command
         else {
@@ -53,7 +53,33 @@ pub(crate) fn regions_from_commands(
         // describe different shapes. A card half out of a viewport is filtered
         // only where it is on show, and a region published for the whole card
         // blurs the desktop beside a panel that is not there.
-        out.extend(shape_of(cmd, chains, *rect, *corner_radii, *curvature));
+        let outline = match shape {
+            BlurShape::Rounded {
+                corner_radii,
+                curvature,
+            } => {
+                out.extend(shape_of(cmd, chains, *rect, *corner_radii, *curvature));
+                continue;
+            }
+            BlurShape::Merged(outline) => outline,
+        };
+        // A merged outline is no rounded rect, and a region cannot follow its
+        // curve: each member's own shape, and a box over each neck that joins
+        // two of them.
+        let clips = clips_of(cmd, chains);
+        for member in &outline.members {
+            let placement = cmd.world_transform.then(&member.placement);
+            out.extend(placed_shape_to_rects(
+                PlacedShape::placed(member.rect, member.radius, member.curvature, placement),
+                &clips,
+            ));
+        }
+        for neck in outline.necks() {
+            out.extend(placed_shape_to_rects(
+                PlacedShape::placed(neck, CornerRadii::uniform(0.0), 1.0, cmd.world_transform),
+                &clips,
+            ));
+        }
     }
     out.sort_unstable_by_key(|r| (r.y, r.x, r.width, r.height));
     out
@@ -62,7 +88,6 @@ pub(crate) fn regions_from_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::CornerRadii;
     use crate::widgets::Rect;
 
     #[test]
@@ -72,8 +97,10 @@ mod tests {
                 rect: Rect::new(0.0, 0.0, 100.0, 50.0),
                 sources: BackdropSources::COMPOSITOR,
                 radius: 0.0,
-                corner_radii: CornerRadii::uniform(0.0),
-                curvature: 1.0,
+                shape: BlurShape::Rounded {
+                    corner_radii: CornerRadii::uniform(0.0),
+                    curvature: 1.0,
+                },
             }),
             world_transform: Default::default(),
             layer: Default::default(),

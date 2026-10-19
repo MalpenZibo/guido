@@ -1458,36 +1458,10 @@ fn flatten_contents(
 
     // Add main commands with appropriate layers and clip
     for cmd in &node.commands {
-        let layer = match &**cmd {
-            DrawCommand::Text { .. } => RenderLayer::Text,
-            DrawCommand::Image { .. } | DrawCommand::Layer { .. } => RenderLayer::Images,
-            DrawCommand::Path { .. } => RenderLayer::Paths,
-            // Only the half the renderer draws opens a backdrop group. A blur
-            // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
-            // by nobody here, and `Backdrop` is not a free label: it is the
-            // lowest layer, so it splits the draw group, and a non-empty
-            // backdrop bucket ends the render pass to store the target the
-            // effect would sample. That is a pass break and a group per
-            // container per frame, to filter nothing. It still travels with the
-            // frame — the region is read off this list — it just travels with
-            // the shapes, where it produces no instance.
-            DrawCommand::BackdropBlur { sources, .. }
-                if !sources.contains(BackdropSources::SURFACE) =>
-            {
-                RenderLayer::Shapes
-            }
-            // Draws nothing, for the same reason and by the same route: it
-            // travels with the shapes, where it produces no instance.
-            DrawCommand::InputRegion { .. } => RenderLayer::Shapes,
-            DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
-                RenderLayer::Backdrop
-            }
-            _ => RenderLayer::Shapes,
-        };
         out.push(FlattenedCommand {
             command: Rc::clone(cmd),
             world_transform,
-            layer,
+            layer: layer_of(cmd),
             opacity,
             clip: effective_clip.clone(),
         });
@@ -1502,6 +1476,17 @@ fn flatten_contents(
     });
     let merge_mark = merged.as_ref().map(|_| out.mark());
     if let Some(merged) = &merged {
+        // The members' blur first, as a lone container's is: the merged shape
+        // and its shadows land on the frost, not under it.
+        if let Some(blur) = &merged.blur {
+            out.push(FlattenedCommand {
+                command: Rc::clone(blur),
+                world_transform,
+                layer: layer_of(blur),
+                opacity,
+                clip: children_clip.clone(),
+            });
+        }
         for (index, shadow) in &merged.shadows {
             let child = &node.children[*index];
             out.push(FlattenedCommand {
@@ -1560,9 +1545,14 @@ fn flatten_contents(
             .filter(|(child, _)| layers.contains(child))
             .map(|(_, shadow)| Rc::as_ptr(shadow))
             .collect();
-        match merged.without(&layers) {
-            Some(rest) => out.replace_since(mark, Rc::as_ptr(&merged.command), &rest),
-            None => gone.push(Rc::as_ptr(&merged.command)),
+        let (shape, blur) = merged.without(&layers);
+        let mut swap = |was: &Rc<DrawCommand>, now: Option<Rc<DrawCommand>>| match now {
+            Some(now) => out.replace_since(mark, Rc::as_ptr(was), &now),
+            None => gone.push(Rc::as_ptr(was)),
+        };
+        swap(&merged.command, shape);
+        if let Some(was) = &merged.blur {
+            swap(was, blur);
         }
         out.take_out_since(mark, &gone);
     }
@@ -1611,6 +1601,36 @@ fn flatten_contents(
     }
 
     subtree_partial
+}
+
+/// The bucket a command a node drew is drawn in.
+fn layer_of(command: &DrawCommand) -> RenderLayer {
+    match command {
+        DrawCommand::Text { .. } => RenderLayer::Text,
+        DrawCommand::Image { .. } | DrawCommand::Layer { .. } => RenderLayer::Images,
+        DrawCommand::Path { .. } => RenderLayer::Paths,
+        // Only the half the renderer draws opens a backdrop group. A blur
+        // restricted to `COMPOSITOR` is published as a `wl_region` and drawn
+        // by nobody here, and `Backdrop` is not a free label: it is the
+        // lowest layer, so it splits the draw group, and a non-empty
+        // backdrop bucket ends the render pass to store the target the
+        // effect would sample. That is a pass break and a group per
+        // container per frame, to filter nothing. It still travels with the
+        // frame — the region is read off this list — it just travels with
+        // the shapes, where it produces no instance.
+        DrawCommand::BackdropBlur { sources, .. }
+            if !sources.contains(BackdropSources::SURFACE) =>
+        {
+            RenderLayer::Shapes
+        }
+        // Draws nothing, for the same reason and by the same route: it
+        // travels with the shapes, where it produces no instance.
+        DrawCommand::InputRegion { .. } => RenderLayer::Shapes,
+        DrawCommand::BackdropBlur { .. } | DrawCommand::TextBackdropBlur { .. } => {
+            RenderLayer::Backdrop
+        }
+        _ => RenderLayer::Shapes,
+    }
 }
 
 /// What [`flatten_as_layer`] made of a node.
@@ -1981,8 +2001,10 @@ mod tests {
                 rect,
                 sources,
                 radius: 24.0,
-                corner_radii: CornerRadii::from(0.0),
-                curvature: 1.0,
+                shape: crate::renderer::BlurShape::Rounded {
+                    corner_radii: CornerRadii::from(0.0),
+                    curvature: 1.0,
+                },
             }));
 
             let (mut commands, mut layers) = (Vec::new(), Vec::new());
@@ -3494,8 +3516,10 @@ mod layer_tests {
                 rect: Rect::new(0.0, 0.0, 40.0, 40.0),
                 sources: BackdropSources::SURFACE | BackdropSources::COMPOSITOR,
                 radius: 6.0,
-                corner_radii: CornerRadii::uniform(4.0),
-                curvature: 1.0,
+                shape: crate::renderer::BlurShape::Rounded {
+                    corner_radii: CornerRadii::uniform(4.0),
+                    curvature: 1.0,
+                },
             }));
         }
         let mut card = rect_node(2, Rect::new(30.0, 20.0, 100.0, 60.0), CARD);

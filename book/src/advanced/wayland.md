@@ -794,7 +794,9 @@ Frames with no backdrop blur skip all of it and draw straight to the
 swapchain. A text can ask for the same thing with the shape of its
 glyphs as the mask — see [Frosted glass](../building-ui/text.md#frosted-glass)
 — and that one is surface-side only, since a `wl_region` cannot hold a
-letter.
+letter. Children merged by `merge_children` that blur alike are blurred
+through their merged outline, and ask the compositor for their shapes and a
+box over each neck — see [Merged Shapes](../building-ui/merged-shapes.md#frosted-children).
 
 Two skips keep that honest, and both are unobservable — they drop work
 that could not have changed a pixel, so they may switch on and off
