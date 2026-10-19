@@ -118,6 +118,25 @@ impl SpringConfig {
     }
 }
 
+/// The longest step the simulation takes, whatever the spring: short enough
+/// that the presets follow the same path at any frame rate.
+const MAX_SUBSTEP: f32 = 1.0 / 240.0;
+
+/// The most steps one frame takes, so a spring stiffer or more damped than any
+/// sensible one costs a bounded amount: past it the steps grow, as they did.
+const MAX_SUBSTEPS: f32 = 256.0;
+
+/// The step `h` at which `(2·damping·h + stiffness·h²) / mass` is 1: a quarter
+/// of the bound past which a semi-implicit Euler step grows, and short enough
+/// that damping alone never turns the velocity round (`damping·h / mass` stays
+/// under one half). Written as the root of `stiffness·h² + 2·damping·h = mass`
+/// that does not cancel when `damping` dwarfs `stiffness`.
+fn stable_step(config: &SpringConfig) -> f32 {
+    config.mass
+        / (config.damping
+            + (config.damping * config.damping + config.stiffness * config.mass).sqrt())
+}
+
 /// State for spring physics simulation
 #[derive(Clone, Debug)]
 pub struct SpringState {
@@ -167,26 +186,38 @@ impl SpringState {
         // Target is always 1.0 (we're animating from 0 to 1)
         let target = 1.0;
 
-        // Cap individual timestep for numerical stability (~30fps minimum)
-        let max_dt = 0.033;
+        // A slow frame's worth of time at most, past the 33 ms of a frame at
+        // 30 a second so that rate loses nothing: after a stall the spring
+        // takes up where it was rather than leaping the whole way.
+        let max_dt = 0.05;
         let capped_dt = dt.min(max_dt);
 
-        // Spring force: F = -k * x
-        let displacement = self.position - target;
-        let spring_force = -config.stiffness * displacement;
+        // In substeps, each short enough for this spring that damping alone
+        // never reverses the velocity and a step never grows the motion: one
+        // step a frame made a stiff spring swing across its target at 30
+        // frames a second and a stiff, critically damped one run away (#809).
+        // A config with no such step gets the 1/240 s step if the bound is
+        // NaN, one substep if it is negative, and at most `MAX_SUBSTEPS` if it
+        // is next to nothing.
+        let longest = stable_step(config).min(MAX_SUBSTEP);
+        let substeps = (capped_dt / longest).ceil().clamp(1.0, MAX_SUBSTEPS);
+        let h = capped_dt / substeps;
 
-        // Damping force: F = -c * v
-        let damping_force = -config.damping * self.velocity;
+        for _ in 0..substeps as usize {
+            // Spring force: F = -k * x
+            let displacement = self.position - target;
+            let spring_force = -config.stiffness * displacement;
 
-        // Total force
-        let force = spring_force + damping_force;
+            // Damping force: F = -c * v
+            let damping_force = -config.damping * self.velocity;
 
-        // Acceleration: a = F / m
-        let acceleration = force / config.mass;
+            // Acceleration: a = F / m
+            let acceleration = (spring_force + damping_force) / config.mass;
 
-        // Update velocity and position (using semi-implicit Euler)
-        self.velocity += acceleration * capped_dt;
-        self.position += self.velocity * capped_dt;
+            // Update velocity and position (using semi-implicit Euler)
+            self.velocity += acceleration * h;
+            self.position += self.velocity * h;
+        }
 
         // Return current position
         self.position
@@ -372,6 +403,131 @@ mod overshoot_tests {
             damping: 40.0,
         };
         assert_eq!(overdamped.peak_overshoot(), 0.0);
+    }
+
+    /// Where a spring is at `elapsed` seconds, sampled `rate` times a second
+    /// from rest.
+    fn path(config: SpringConfig, rate: f32, seconds: f32) -> Vec<(f32, f32)> {
+        let mut state = SpringState::new();
+        (1..=(seconds * rate) as usize)
+            .map(|i| {
+                let elapsed = i as f32 / rate;
+                (elapsed, state.step(elapsed, &config))
+            })
+            .collect()
+    }
+
+    /// A spring follows the same path whatever the frame rate: sampled at 30
+    /// frames a second it is where it is at 240 at the same instants. One step
+    /// a frame made `SNAPPY` swing from side to side of its target at 30
+    /// (#809).
+    #[test]
+    fn a_spring_follows_its_path_at_any_frame_rate() {
+        for config in [
+            SpringConfig::DEFAULT,
+            SpringConfig::BOUNCY,
+            SpringConfig::SNAPPY,
+            SpringConfig::GENTLE,
+        ] {
+            let fine = path(config, 240.0, 1.0);
+            for (elapsed, at) in path(config, 30.0, 1.0) {
+                let (_, there) = fine[(elapsed * 240.0).round() as usize - 1];
+                assert!(
+                    (at - there).abs() < 0.02,
+                    "{config:?} at {elapsed}s: {at} at 30 frames a second, {there} at 240"
+                );
+            }
+        }
+    }
+
+    /// The step every substep stays within is the one at which
+    /// `(2·damping·h + stiffness·h²) / mass` is 1, for springs soft and stiff,
+    /// light and heavy, barely and heavily damped.
+    #[test]
+    fn the_stable_step_is_where_the_bound_is_one() {
+        for config in [
+            SpringConfig::DEFAULT,
+            SpringConfig::SNAPPY,
+            SpringConfig {
+                mass: 2.0,
+                stiffness: 100_000.0,
+                damping: 30.0,
+            },
+            SpringConfig {
+                mass: 0.5,
+                stiffness: 400.0,
+                damping: 1000.0,
+            },
+        ] {
+            let h = stable_step(&config);
+            let bound = (2.0 * config.damping * h + config.stiffness * h * h) / config.mass;
+            assert!(
+                (bound - 1.0).abs() < 1e-4,
+                "{config:?}: a step of {h} puts the bound at {bound}"
+            );
+        }
+    }
+
+    /// Only stiffness and damping over mass move a spring: one with all three
+    /// doubled follows the same path, here at 30 frames a second.
+    #[test]
+    fn a_spring_is_moved_by_its_ratios_to_its_mass() {
+        let snappy = SpringConfig::SNAPPY;
+        let doubled = SpringConfig {
+            mass: snappy.mass * 2.0,
+            stiffness: snappy.stiffness * 2.0,
+            damping: snappy.damping * 2.0,
+        };
+        for ((elapsed, at), (_, there)) in path(snappy, 30.0, 1.0)
+            .into_iter()
+            .zip(path(doubled, 30.0, 1.0))
+        {
+            assert!(
+                (at - there).abs() < 1e-4,
+                "at {elapsed}s: {at}, and {there} with everything doubled"
+            );
+        }
+    }
+
+    /// `SNAPPY` at 30 frames a second settles within twice the ~185 ms its doc
+    /// gives, where one step a frame took two seconds (#809).
+    #[test]
+    fn snappy_settles_promptly_at_30_frames() {
+        let mut state = SpringState::new();
+        let settled = (1..=90).map(|i| i as f32 / 30.0).find(|&elapsed| {
+            state.step(elapsed, &SpringConfig::SNAPPY);
+            state.is_settled(0.01)
+        });
+        assert!(
+            settled.is_some_and(|at| at <= 0.37),
+            "settled at {settled:?}"
+        );
+    }
+
+    /// A spring damped at or past critical never passes its target, and never
+    /// runs away, at 30 frames a second either. One step a frame sent a stiff
+    /// critically damped spring to infinity (#809).
+    #[test]
+    fn a_spring_that_cannot_bounce_stays_short_of_its_target_at_30_frames() {
+        for config in [
+            SpringConfig {
+                mass: 1.0,
+                stiffness: 900.0,
+                damping: 60.0,
+            },
+            SpringConfig {
+                mass: 1.0,
+                stiffness: 400.0,
+                damping: 1000.0,
+            },
+        ] {
+            for (elapsed, at) in path(config, 30.0, 3.0) {
+                assert!(
+                    at.is_finite() && at <= 1.0 + 1e-4,
+                    "{config:?} at {elapsed}s is at {at}"
+                );
+            }
+        }
     }
 
     /// A spring really does go past its target by about what it reports — the
