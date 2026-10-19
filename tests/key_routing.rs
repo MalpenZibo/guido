@@ -16,6 +16,10 @@
 //!
 //! And a listener says whether it took the key (#634): one answering `Ignored`
 //! lets it go on along the route, and is not asked again.
+//!
+//! And a container can hear a key before the focused widget inside it does
+//! (#848): its capture listeners run down the focus path from the outermost,
+//! and one answering `Handled` keeps the key from everything after it.
 
 #![cfg(feature = "testing")]
 
@@ -32,6 +36,9 @@ mod common;
 use common::headless;
 
 const ROWS: usize = 1000;
+
+/// The keys each named listener heard, in the order it heard them.
+type Log = Rc<RefCell<Vec<(&'static str, Key)>>>;
 
 fn surface(app: &mut Headless, view: impl Fn() -> Container + 'static) -> (SurfaceId, Instant) {
     let id = app.surface(
@@ -91,17 +98,13 @@ impl Widget for Counted {
 }
 
 /// A container that records the keys it is given under `name`, and takes them.
-fn listener(name: &'static str, heard: Rc<RefCell<Vec<(&'static str, Key)>>>) -> Container {
+fn listener(name: &'static str, heard: Log) -> Container {
     answering(name, heard, EventResponse::Handled)
 }
 
 /// A container that records the keys it is given under `name`, and answers
 /// `answer` to each.
-fn answering(
-    name: &'static str,
-    heard: Rc<RefCell<Vec<(&'static str, Key)>>>,
-    answer: EventResponse,
-) -> Container {
+fn answering(name: &'static str, heard: Log, answer: EventResponse) -> Container {
     container().width(fill()).on_key_down(move |key, _, _| {
         heard.borrow_mut().push((name, key));
         answer
@@ -255,7 +258,7 @@ fn the_innermost_listener_hears_a_key_first() {
 
 /// A container that records the keys it is given under `name`, and lets them
 /// all through.
-fn passer(name: &'static str, heard: Rc<RefCell<Vec<(&'static str, Key)>>>) -> Container {
+fn passer(name: &'static str, heard: Log) -> Container {
     answering(name, heard, EventResponse::Ignored)
 }
 
@@ -604,5 +607,321 @@ fn a_listener_hears_the_release_of_a_key_the_field_took() {
     assert_eq!(
         *heard.borrow(),
         [Heard::Up("beside", Key::Char('a'), Modifiers::default())]
+    );
+}
+
+/// A container that hears presses and releases before what is inside it,
+/// records them under `name`, and answers `answer` to the presses and
+/// releases of `takes`.
+fn capturing(name: &'static str, log: Log, takes: &'static [Key]) -> Container {
+    let up = log.clone();
+    let answer = move |key: Key| {
+        if takes.contains(&key) {
+            EventResponse::Handled
+        } else {
+            EventResponse::Ignored
+        }
+    };
+    container()
+        .width(fill())
+        .on_key_down_capture(move |key, _, _| {
+            log.borrow_mut().push((name, key));
+            answer(key)
+        })
+        .on_key_up_capture(move |key, _| {
+            up.borrow_mut().push((name, key));
+            answer(key)
+        })
+}
+
+/// The launcher in #848: a search field keeps the focus while the arrows move
+/// a selection. The container takes Left and Right before the field can move
+/// its caret with them, and hears Up and Down as before, once the field has
+/// let them through.
+#[test]
+fn a_container_takes_the_arrows_before_the_focused_field_under_it() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (captured, bubbled) = (heard.clone(), heard.clone());
+    let query = create_signal(String::new());
+    let (id, mut at) = surface(&mut app, move || {
+        let bubbled = bubbled.clone();
+        capturing("capture", captured.clone(), &[Key::Left, Key::Right])
+            .height(30.0)
+            .on_key_down(move |key, _, _| {
+                bubbled.borrow_mut().push(("bubble", key));
+                EventResponse::Handled
+            })
+            .child(text_input(query).autofocus())
+    });
+
+    assert!(focused_widget().is_some(), "the field took the focus");
+    for k in [
+        Key::Char('a'),
+        Key::Char('b'),
+        Key::Left,
+        Key::Left,
+        Key::Right,
+        Key::Char('c'),
+        Key::Up,
+        Key::Down,
+    ] {
+        key(&mut app, id, &mut at, k);
+    }
+
+    assert_eq!(
+        query.get_untracked(),
+        "abc",
+        "the caret stayed at the end: the field never saw Left or Right"
+    );
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("capture", Key::Char('a')),
+            ("capture", Key::Char('b')),
+            ("capture", Key::Left),
+            ("capture", Key::Left),
+            ("capture", Key::Right),
+            ("capture", Key::Char('c')),
+            ("capture", Key::Up),
+            ("bubble", Key::Up),
+            ("capture", Key::Down),
+            ("bubble", Key::Down),
+        ],
+        "the capture heard every key first and let the characters through to \
+         the field; Up and Down, which the field lets through, bubbled up to \
+         the same container"
+    );
+}
+
+/// An [`Inert`] row that records the keys it is given.
+struct Recorder(Log);
+
+impl Widget for Recorder {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        Inert.layout(ctx, constraints)
+    }
+
+    fn event(&mut self, tree: &mut Tree, id: WidgetId, event: &Event) -> EventResponse {
+        if let Event::KeyDown { key, .. } | Event::KeyUp { key, .. } = event {
+            self.0.borrow_mut().push(("focused", *key));
+        }
+        Inert.event(tree, id, event)
+    }
+
+    fn paint(&self, _ctx: &mut PaintContext) {}
+}
+
+/// Two capturing containers around a focused widget, each also listening the
+/// usual way.
+fn nested_captures(app: &mut Headless, heard: &Log) -> (SurfaceId, Instant) {
+    let log = heard.clone();
+    let (id, mut at) = surface(app, move || {
+        let bubble = |name: &'static str, container: Container| {
+            let (down, up) = (log.clone(), log.clone());
+            container
+                .on_key_down(move |key, _, _| {
+                    down.borrow_mut().push((name, key));
+                    EventResponse::Ignored
+                })
+                .on_key_up(move |key, _| {
+                    up.borrow_mut().push((name, key));
+                    EventResponse::Ignored
+                })
+        };
+        // A field after them, so a Tab nobody took has somewhere to go.
+        container()
+            .layout(Flex::column())
+            .child(bubble(
+                "outer",
+                capturing("outer capture", log.clone(), &[Key::Escape])
+                    .height(100.0)
+                    .child(bubble(
+                        "inner",
+                        capturing("inner capture", log.clone(), &[Key::Tab])
+                            .height(50.0)
+                            .child(Recorder(log.clone())),
+                    )),
+            ))
+            .child(text_input(create_signal(String::new())))
+    });
+    click(app, id, &mut at, 10.0, 10.0);
+    assert!(focused_widget().is_some(), "the click focused the recorder");
+    (id, at)
+}
+
+#[test]
+fn captures_run_outside_in_before_the_focused_widget_and_bubbling_after() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (id, mut at) = nested_captures(&mut app, &heard);
+
+    send(&mut app, id, &mut at, key_down(Key::Enter, false));
+    send(
+        &mut app,
+        id,
+        &mut at,
+        key_up(Key::Enter, Modifiers::default()),
+    );
+
+    let route = [
+        ("outer capture", Key::Enter),
+        ("inner capture", Key::Enter),
+        ("focused", Key::Enter),
+        ("inner", Key::Enter),
+        ("outer", Key::Enter),
+    ];
+    assert_eq!(
+        *heard.borrow(),
+        [route, route].concat(),
+        "the press went down through both captures to the focused widget and \
+         bubbled back up; its release went the same way"
+    );
+}
+
+#[test]
+fn a_capture_that_takes_a_key_keeps_it_from_everything_after_it() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (id, mut at) = nested_captures(&mut app, &heard);
+    let focused = focused_widget();
+
+    key(&mut app, id, &mut at, Key::Escape);
+    send(
+        &mut app,
+        id,
+        &mut at,
+        key_up(Key::Escape, Modifiers::default()),
+    );
+    key(&mut app, id, &mut at, Key::Tab);
+
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("outer capture", Key::Escape),
+            ("outer capture", Key::Escape),
+            ("outer capture", Key::Tab),
+            ("inner capture", Key::Tab),
+        ],
+        "the outer capture took Escape, so neither the inner capture, the \
+         focused widget nor a bubbling listener heard it go down or up; the \
+         inner capture took Tab"
+    );
+    assert_eq!(
+        focused_widget(),
+        focused,
+        "a Tab a capture took does not move the focus"
+    );
+}
+
+/// With nothing focused, a key goes down to the containers listening for it,
+/// and a capture listener hears it on the way, before the listeners inside it.
+#[test]
+fn a_capture_hears_a_key_with_nothing_focused_before_the_listeners_inside_it() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (outer, inner) = (heard.clone(), heard.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        container().child(
+            capturing("capture", outer.clone(), &[Key::Escape])
+                .height(100.0)
+                .child(passer("inside", inner.clone()).height(50.0)),
+        )
+    });
+
+    key(&mut app, id, &mut at, Key::Enter);
+    key(&mut app, id, &mut at, Key::Escape);
+
+    assert_eq!(focused_widget(), None);
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("capture", Key::Enter),
+            ("inside", Key::Enter),
+            ("capture", Key::Escape),
+        ],
+        "the capture heard each key before the listener inside it, and took Escape"
+    );
+}
+
+/// A capture on the focus path that let a key through is not asked again when
+/// the way down to a listener beside the focus passes it.
+#[test]
+fn a_capture_on_the_focus_path_hears_a_key_once() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (around, beside) = (heard.clone(), heard.clone());
+    let typed = create_signal(String::new());
+    let (id, mut at) = surface(&mut app, move || {
+        container().child(
+            capturing("capture", around.clone(), &[])
+                .height(100.0)
+                .layout(Flex::column())
+                .child(
+                    container()
+                        .height(30.0)
+                        .width(fill())
+                        .child(text_input(typed)),
+                )
+                .child(passer("beside", beside.clone()).height(30.0)),
+        )
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    key(&mut app, id, &mut at, Key::Escape);
+    send(
+        &mut app,
+        id,
+        &mut at,
+        key_up(Key::Escape, Modifiers::default()),
+    );
+
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("capture", Key::Escape),
+            ("beside", Key::Escape),
+            ("capture", Key::Escape)
+        ],
+        "the press and its release, each heard once by the capture; the \
+         listener beside the field hears presses alone"
+    );
+}
+
+/// A focused container is on its own focus path, so it hears its own capture
+/// first, as a capture listener on the web's target does.
+#[test]
+fn a_focused_container_hears_its_own_capture_before_its_own_listener() {
+    let Some(mut app) = headless() else { return };
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (captured, bubbled) = (heard.clone(), heard.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        let bubbled = bubbled.clone();
+        container().child(
+            capturing("capture", captured.clone(), &[Key::Escape])
+                .height(30.0)
+                .focusable(true)
+                .on_key_down(move |key, _, _| {
+                    bubbled.borrow_mut().push(("own", key));
+                    EventResponse::Handled
+                }),
+        )
+    });
+
+    click(&mut app, id, &mut at, 10.0, 10.0);
+    assert!(
+        focused_widget().is_some(),
+        "the click focused the container"
+    );
+    key(&mut app, id, &mut at, Key::Enter);
+    key(&mut app, id, &mut at, Key::Escape);
+
+    assert_eq!(
+        *heard.borrow(),
+        [
+            ("capture", Key::Enter),
+            ("own", Key::Enter),
+            ("capture", Key::Escape),
+        ]
     );
 }

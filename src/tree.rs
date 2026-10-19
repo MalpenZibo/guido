@@ -711,9 +711,9 @@ pub struct Tree {
     /// The `on_hover` calls the event being dispatched owes. Empty outside a
     /// dispatch.
     hover_changes: Vec<HoverChange>,
-    /// The containers that declared `on_key_down` or `on_key_up`: a key nobody
-    /// on the focus path took goes to them, without the tree being walked to
-    /// find them.
+    /// The containers that declared `on_key_down` or `on_key_up`, or their
+    /// capture counterparts: a key nobody on the focus path took goes to
+    /// them, without the tree being walked to find them.
     key_listeners: Vec<WidgetId>,
     /// The widgets a key or a focus change is being routed through: the focus
     /// path, or the way down to the listeners. Empty outside such a dispatch.
@@ -1896,6 +1896,10 @@ impl Tree {
     /// which is what lets a menu close on Escape with nothing focused. Nothing
     /// else is asked. A Tab neither route took then moves the focus — see
     /// [`Self::next_tab_stop`].
+    ///
+    /// Each route runs from the root down, so a container that declared
+    /// `on_key_down_capture` hears the key before anything inside it, and can
+    /// take it there (#848).
     ///
     /// Down from the root rather than to each widget directly, so a hidden or
     /// disabled container still stops what is routed through it.
