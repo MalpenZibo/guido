@@ -54,10 +54,51 @@ the container's own box, and so does its background, if it has one, drawn
 underneath as usual. A child's own shadows are drawn beneath the merged shape,
 and its inset ones over it, inside the child's box.
 
+## Frosted children
+
+Children that each blur their backdrop with the same `backdrop_blur` blur it
+as one shape: the frost follows the merged outline, neck included, so a
+translucent fill reads the same along the whole of it.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let glass = Color::rgba(0.10, 0.10, 0.12, 0.7);
+let frosted = |width: f32| {
+    container()
+        .width(width)
+        .height(34.0)
+        .corners(17.0)
+        .background(glass)
+        .backdrop_blur(24.0)
+};
+
+container()
+    .layout(Flex::row())
+    .merge_children(18.0)
+    .child(frosted(400.0))
+    .child(frosted(100.0).translate((8.0, 0.0)))
+# ;
+# }
+```
+
+The children declare the blur, and the container only says how close they
+merge. Behind the surface, the compositor is asked to blur each child's shape
+and a box over each neck: a region is made of rectangles and cannot follow the
+neck's curve, so the box also covers the corners of the gap the neck pinches
+away from.
+
+When only some of the children blur, each blurs its own box, as it would
+without `merge_children`.
+
 ## What does not
 
 - A child whose fill is a gradient. It is drawn on its own, as it would be
   without `merge_children`, and a debug build says so once.
+- A child whose `backdrop_blur` differs from the first child's — another
+  radius, or other sources. The merged outline is blurred at one radius, so
+  that child is drawn on its own, blur and all, with the same warning.
 - A child drawn as a layer: one with `blur`, or one that fades with something
   drawn over its background — a disabled tab with a label, faded by
   `when_disabled`, say. Its background is drawn with the rest of it, blurred or
