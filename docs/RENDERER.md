@@ -924,7 +924,10 @@ rectangles and cannot follow the neck's curve. A member whose blur differs from
 the first member's is left out (`LeftOut::BlurRadius`); when some members do not
 blur at all, every member keeps its own blur. The merged blur writes nothing
 past the merged outline, so the merge reach below already damages all of it.
-`merged_pills_blur_their_neck` is the golden and
+Before it, each member's blur ran after the merged shape and read the merged
+fill: on a transparent surface it laid the fill over itself, and a fill at 0.86
+came out at 0.98. `merged_pills_blur_their_neck` is the golden,
+`a_merged_frosted_member_stays_translucent` holds the alpha, and
 `merged_pills_publish_a_box_over_their_neck` in `tests/headless_app.rs` the
 region. Taken out afterwards rather than left out:
 the child's own flatten entry is made inside that call, and it has to hold the

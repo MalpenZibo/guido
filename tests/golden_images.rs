@@ -5434,6 +5434,49 @@ fn merged_pills_blur_their_neck() {
     assert_golden(NAME, adapter, pixels);
 }
 
+/// A frosted member stays as translucent merged as it is alone: its blur reads
+/// what lies behind the merged shape, never the merged fill (#847).
+///
+/// The blurs used to run after the merged shape had been drawn, so each one
+/// read the merged fill. Over an opaque backdrop that hardly shows — a uniform
+/// fill blurred is the same fill — but a bar's surface is transparent, and the
+/// compositor shows what is behind it through what the surface leaves
+/// uncovered. There the blurred fill was laid over the fill a second time, and
+/// a fill at 0.86 came out at 0.98: an island nearly opaque, with only the
+/// neck, which had no blur, still translucent.
+///
+/// So the surface here is transparent, and the alpha it is left with is read
+/// at the middle of each member and of the neck: the fill's own, everywhere.
+#[test]
+fn a_merged_frosted_member_stays_translucent() {
+    const NAME: &str = "a_merged_frosted_member_stays_translucent";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    let frosted = || {
+        container()
+            .background(Color::rgba(0.10, 0.10, 0.12, 0.86))
+            .backdrop_blur(8.0)
+    };
+    let island = container()
+        .padding([21.0, 20.0])
+        .child(pills(frosted(), frosted(), 6.0).merge_children(MERGE_DISTANCE));
+    let pixels = render_with_own_renderer(ctx, island, (180.0, 78.0), 1.0, Color::TRANSPARENT);
+    let fill = (0.86f32 * 255.0).round() as u8;
+    for (x, what) in [
+        (60u32, "the long member"),
+        (103, "the neck"),
+        (124, "the round member"),
+    ] {
+        let alpha = pixels.data[((39 * pixels.width + x) * 4 + 3) as usize];
+        assert!(
+            alpha.abs_diff(fill) <= 2,
+            "{what} at x = {x} is left at alpha {alpha} of 255 where its fill is {fill}: \
+             its blur read the merged fill and laid it over itself"
+        );
+    }
+}
+
 /// The merging container's shadow is the merged shape's: cast around the
 /// neck as well as the members, once, rather than around the container's box
 /// or around each member. The round member is turned, which it shows nothing
