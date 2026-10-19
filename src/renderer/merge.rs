@@ -25,6 +25,7 @@ use crate::backdrop::BackdropBlur;
 use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
+use smallvec::SmallVec;
 
 /// The most members one merged shape takes. Children past it are drawn on
 /// their own: a fragment walks every member, so the cost of a merged shape
@@ -169,7 +170,7 @@ impl Gathered {
 }
 
 /// One child's fill, its border frame and its backdrop blur, at most.
-pub(crate) type Taken = smallvec::SmallVec<[*const DrawCommand; 3]>;
+pub(crate) type Taken = SmallVec<[*const DrawCommand; 3]>;
 
 /// Why a child with a background was drawn on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,9 +224,7 @@ pub(crate) fn gather(
     let mut members_of = Vec::new();
     let mut shadows = Vec::new();
     let mut taken = Vec::with_capacity(node.children.len());
-    // The first member's blur, once there is a first member, and the child
-    // and command of each member's own.
-    let mut first_blur: Option<Option<BackdropBlur>> = None;
+    // Each member's own blur: its child, its command and what it asks for.
     let mut own_blurs = Vec::new();
 
     for (index, child) in node.children.iter().enumerate() {
@@ -304,10 +303,6 @@ pub(crate) fn gather(
             Some(LeftOut::Gradient)
         } else if members.len() == MAX_MEMBERS {
             Some(LeftOut::TooMany)
-        } else if let (Some(Some(first)), Some((own, _))) = (first_blur, blur)
-            && own != first
-        {
-            Some(LeftOut::BlurRadius)
         } else {
             None
         };
@@ -335,19 +330,35 @@ pub(crate) fn gather(
         }
         members.push(member);
         members_of.push(index);
-        first_blur.get_or_insert(blur.map(|(blur, _)| blur));
-        own_blurs.extend(blur.map(|(_, command)| (index, command)));
+        own_blurs.extend(blur.map(|(blur, command)| (index, command, blur)));
     }
 
-    // Every member blurs alike, or the blurs stay where they are.
-    let blur = first_blur
-        .flatten()
-        .filter(|_| own_blurs.len() == members.len())
-        .and_then(|blur| merged_blur(&members, merge, blur));
-    if blur.is_some() {
-        for (child, command) in own_blurs {
-            taken[child].push(command);
+    // Every member blurs, or the blurs stay where they are. Only then is one
+    // that blurs otherwise than the first left out — it would have kept its
+    // merge had the blurs not been merged.
+    let mut blur = None;
+    if let Some(&(_, _, first)) = own_blurs.first()
+        && own_blurs.len() == members.len()
+    {
+        let odd: SmallVec<[usize; 2]> = own_blurs
+            .iter()
+            .filter(|(_, _, own)| *own != first)
+            .map(|(child, _, _)| *child)
+            .collect();
+        for child in &odd {
+            left_out(LeftOut::BlurRadius);
+            taken[*child].clear();
         }
+        if !odd.is_empty() {
+            shadows.retain(|(child, _)| !odd.contains(child));
+            let mut kept = members_of.iter().map(|child| !odd.contains(child));
+            members.retain(|_| kept.next().unwrap_or(true));
+            members_of.retain(|child| !odd.contains(child));
+        }
+        for (child, command, _) in own_blurs.iter().filter(|(_, _, own)| *own == first) {
+            taken[*child].push(*command);
+        }
+        blur = merged_blur(&members, merge, first);
     }
 
     Some(Gathered {
@@ -769,6 +780,28 @@ mod tests {
         );
         let (outline, radius) = outline(gathered.blur.as_deref().unwrap());
         assert_eq!((outline.members.len(), radius), (1, 24.0));
+    }
+
+    /// A member is left out for its radius only when the blurs are merged: with
+    /// one that does not blur at all, nothing is, and every member keeps its
+    /// place in the merged shape whatever order they come in.
+    #[test]
+    fn a_member_is_left_out_for_its_radius_only_when_the_blurs_merge() {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let plain = || child((52.0, 0.0), &[background(rect, Color::GREEN, None)]);
+        for order in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+            let mut group = RenderNode::new(0);
+            for at in order {
+                group.children.push(match at {
+                    0 => frosted((0.0, 0.0), 24.0),
+                    1 => frosted((26.0, 0.0), 12.0),
+                    _ => plain(),
+                });
+            }
+            let gathered = gather(&group, &MERGE, |why| panic!("{why:?} in {order:?}")).unwrap();
+            assert!(gathered.blur.is_none());
+            assert_eq!(members(&gathered).len(), 3, "in {order:?}");
+        }
     }
 
     /// When a member does not blur at all, the blurs are not merged: each
