@@ -1241,6 +1241,46 @@ fn abutting_squares_on_the_pixel_grid_do_not_mix() {
     }
 }
 
+/// A square's corner off the pixel grid covers its pixel by the share of the
+/// pixel it covers: a white square whose corners fall on pixel centres, over
+/// black, at scale one and two, reads a quarter white at each corner pixel,
+/// half along each side, and white inside.
+///
+/// The corner is its two sides faded apart and multiplied. Faded as the one
+/// distance the shape has there — the larger of the two sides' — it read half
+/// white, the share of its nearer side alone.
+#[test]
+fn a_square_corner_off_the_grid_covers_its_pixel_by_its_area() {
+    const NAME: &str = "a_square_corner_off_the_grid_covers_its_pixel_by_its_area";
+    let Some((ctx, _)) = rasterizer(NAME) else {
+        return;
+    };
+    for scale in [1.0f32, 2.0] {
+        // Half a device pixel off the grid on both axes, at either scale.
+        let off = 10.0 + 0.5 / scale;
+        let view = container()
+            .padding(Padding::all(10.0).with_left(off).with_top(off))
+            .child(swatch(20.0, 20.0, Color::WHITE));
+        let pixels = render_with_own_renderer(ctx, view, (40.0, 40.0), scale, Color::BLACK);
+        // The pixel the top left corner's centre sits on, the one beside it
+        // along the top side, and one inside.
+        let corner = (10.0 * scale) as u32;
+        for ((x, y), share) in [
+            ((corner, corner), 0.25),
+            ((corner + 3, corner), 0.5),
+            ((corner + 3, corner + 3), 1.0),
+        ] {
+            let got = rgba(&pixels, x, y)[0];
+            let want = (share * 255.0f32).round() as u8;
+            assert!(
+                got.abs_diff(want) <= 2,
+                "at {scale}x the pixel ({x}, {y}) reads {got}, where a square covering \
+                 {share} of it over black reads {want}"
+            );
+        }
+    }
+}
+
 /// A shadow draws nothing past the reach it reports.
 ///
 /// `Shadow::extent` is what a damage rect and a cull rect grow by. The shader

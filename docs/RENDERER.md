@@ -1068,19 +1068,24 @@ the shape covers, as the backdrop composite feathers its shape. A whole
 `fwidth` either side ramped over two pixels, so a square on the pixel grid
 lost a sixth of its edge row and put a sixth of itself into the pixel beside
 it, and two squares that met mixed at the seam. A square corner is faded as
-its two sides, each on its own and the two multiplied (`shape_coverage`):
-faded as one distance, which bends along the corner's diagonal, `fwidth`
-across the bend sums both sides' slopes and the pixel off the corner came out
-a sixth covered. `abutting_squares_on_the_pixel_grid_do_not_mix` in
+its two sides, each on its own and the two multiplied, which is the share of
+a pixel its box covers (`shape_coverage`). Faded as one distance it is not:
+that distance bends along the corner's diagonal, `fwidth` across the bend
+sums both sides' slopes, and the pixel just off the corner of a square on the
+grid came out a sixth covered. A side's fade is the position's, which the
+vertex stage works out once per instance from the transform, and only an
+instance with a square corner looks for one. `abutting_squares_on_the_pixel_grid_do_not_mix` in
 `tests/golden_images.rs` watches both.
 
 **The quad an instance is drawn on reaches past its box** by that fade:
 `vs_main` outsets it by `antialiasing_reach`, measured in the instance's own
 space from the inverse of its transform, along each axis — half a device pixel
-upright and unscaled, more under a turn or a shrink. A shadow's reach is taken
-where it goes further. A quad that was the box alone drew only the inner half
-of the fade, and the same shape gained a fringe the moment it gained a shadow,
-even an invisible one (#836). The pixels past the box are the ones a repaint
+upright and unscaled, more under a turn or a shrink — a hair short of it, so a
+box on the pixel grid, whose next pixel's centre lies exactly that far out
+where the fade reaches nothing, is drawn over its own pixels alone. A
+shadow's reach is taken where it goes further. A quad that was the box alone
+drew only the inner half of the fade, and the same shape gained a fringe the
+moment it gained a shadow, even an invisible one (#836). The pixels past the box are the ones a repaint
 has to damage and a layer's texture has to hold, so both grow by
 `ANTIALIASING_REACH`, that reach's bound in device pixels under a turn or a
 uniform scale — a shape turned and then stretched unevenly is sheared, and its

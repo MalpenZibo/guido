@@ -86,8 +86,10 @@ struct VertexOutput {
     @location(3) shape_rect: vec4<f32>,
     // corner radii: [top_left, top_right, bottom_right, bottom_left]
     @location(4) shape_radii: vec4<f32>,
-    // border_width, shape_curvature
-    @location(5) border_params: vec2<f32>,
+    // border_width, shape_curvature, and the fade across a vertical side and
+    // across a horizontal one — `antialiasing_reach`, which is half of
+    // `fwidth(frag_pos)` exactly, since the instance's transform is affine
+    @location(5) @interpolate(flat) border_params: vec4<f32>,
     // shadow_offset.xy, shadow_blur, shadow_spread
     @location(6) shadow_params: vec4<f32>,
     // shadow_color
@@ -199,7 +201,12 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
     // the quad reaches as far past the box as that fade can, or its outer
     // half is never drawn (#836). A shadow reaching less far on a side, or a
     // negative spread, leaves this.
-    expand = max(expand, antialiasing_reach(a, b, c, d).xyxy);
+    // A hair short of the reach: the rasterizer draws a pixel whose centre
+    // lies on the quad's left or top edge, and on the pixel grid that pixel is
+    // half a pixel out, where the fade has just reached nothing. Short of it, a
+    // box on the grid is drawn over its own pixels and no more.
+    let reach = antialiasing_reach(a, b, c, d);
+    expand = max(expand, reach.xyxy * 0.99);
 
     // Compute expanded quad bounds
     let quad_min = vec2<f32>(
@@ -240,7 +247,7 @@ fn vs_main(vertex: VertexInput, @builtin(instance_index) index: u32) -> VertexOu
     out.border_color = instance.border_color;
     out.shape_rect = instance.rect;
     out.shape_radii = instance.corner_radii;
-    out.border_params = vec2<f32>(instance.border_width, instance.shape_curvature);
+    out.border_params = vec4<f32>(instance.border_width, instance.shape_curvature, reach);
     out.shadow_params = vec4<f32>(instance.shadow_offset, instance.shadow_blur, instance.shadow_spread);
     out.shadow_color = instance.shadow_color;
 
@@ -535,7 +542,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         dist = arc_sdf(pos, in.shape_rect, radii, shape_kind);
     }
 
-    let covered = shape_coverage(pos, in.shape_rect, radii, shape_kind, dist, border_width);
+    let covered = shape_coverage(
+        pos,
+        in.shape_rect,
+        radii,
+        shape_kind,
+        dist,
+        border_width,
+        max(in.border_params.zw, vec2<f32>(1e-4)),
+    );
 
     // Compute local UV coordinates (0..1 within the shape rect)
     let local_uv = (pos - in.shape_rect.xy) / in.shape_rect.zw;
@@ -627,12 +642,14 @@ fn edge_coverage(dist: f32, aa: f32) -> f32 {
 // the border `border_width` in from the shape's edge.
 //
 // A square corner is the two sides that meet there, each faded on its own and
-// the two multiplied, which is what a pixel's box covers of a corner. Faded
-// as one distance it would not be: the distance there is the larger of the
-// two sides', so it bends along the diagonal, and `fwidth` across the bend
-// sums both sides' slopes — the corner pixel of a square on the pixel grid
-// came out a sixth covered rather than not at all. Every derivative is taken
-// before anything is chosen, as WGSL requires of them.
+// the two multiplied, which is what a pixel's box covers of a corner: a
+// quarter, for a corner on the pixel's centre. Faded as one distance it would
+// not be: the distance there is the larger of the two sides', so it bends
+// along the corner's diagonal, and `fwidth` across the bend sums both sides'
+// slopes — the pixel off the corner of a square on the pixel grid came out a
+// sixth covered rather than not at all. A side's distance moves as the
+// position does, so its fade is `side_fade`, worked out once per instance by
+// the vertex stage, and only an instance with a square corner looks for one.
 fn shape_coverage(
     pos: vec2<f32>,
     rect: vec4<f32>,
@@ -640,25 +657,31 @@ fn shape_coverage(
     shape_kind: u32,
     dist: f32,
     border_width: f32,
+    side_fade: vec2<f32>,
 ) -> vec2<f32> {
-    let half_size = rect.zw * 0.5;
-    let rel = pos - (rect.xy + half_size);
-    let sides = abs(rel) - half_size;
-    // Each side's distance moves with the position as the position does, so
-    // its fade is the position's: one derivative for both, and none of the
-    // fold `abs` puts down the middle.
-    let side_fade = max(fwidth(pos) * 0.5, vec2<f32>(1e-4));
     let aa = edge_fade(dist);
-    let top = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
-    let radius = select(top.y, top.x, rel.y < 0.0);
-    if (shape_kind == SHAPE_ROUNDED_RECT && radius <= 0.0) {
-        return vec2<f32>(
-            edge_coverage(sides.x, side_fade.x) * edge_coverage(sides.y, side_fade.y),
-            edge_coverage(sides.x + border_width, side_fade.x)
-                * edge_coverage(sides.y + border_width, side_fade.y),
-        );
+    if (shape_kind == SHAPE_ROUNDED_RECT && any(radii <= vec4<f32>(0.0))) {
+        let half_size = rect.zw * 0.5;
+        let rel = pos - (rect.xy + half_size);
+        let top = select(vec2<f32>(radii.y, radii.z), vec2<f32>(radii.x, radii.w), rel.x < 0.0);
+        if (select(top.y, top.x, rel.y < 0.0) <= 0.0) {
+            let sides = abs(rel) - half_size;
+            let outer = edge_coverage(sides.x, side_fade.x) * edge_coverage(sides.y, side_fade.y);
+            if (border_width <= 0.0) {
+                return vec2<f32>(outer);
+            }
+            return vec2<f32>(
+                outer,
+                edge_coverage(sides.x + border_width, side_fade.x)
+                    * edge_coverage(sides.y + border_width, side_fade.y),
+            );
+        }
     }
-    return vec2<f32>(edge_coverage(dist, aa), edge_coverage(dist + border_width, aa));
+    let outer = edge_coverage(dist, aa);
+    if (border_width <= 0.0) {
+        return vec2<f32>(outer);
+    }
+    return vec2<f32>(outer, edge_coverage(dist + border_width, aa));
 }
 
 // The shadow at a fragment whose shadow distance is `shadow_dist`: the colour,
