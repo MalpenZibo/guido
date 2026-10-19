@@ -227,6 +227,50 @@ lets its release through, so a container around it or listening beside it can
 hear a key go up that it never heard go down — which is why the sample above
 remembers the press itself.
 
+## Hearing a Key Before the Focused Widget
+
+The field has the key first, so a key it uses never reaches the containers
+around it: a text input takes Left and Right to move its caret. A launcher
+whose search field keeps the focus while the arrows move a selection needs
+those keys before the field sees them. `on_key_down_capture` hears a key on its
+way down to the focused widget instead of on its way back up:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let query = create_signal(String::new());
+let selected = create_signal(0usize);
+container()
+    .on_key_down_capture(move |key, _mods, _repeat| match key {
+        Key::Left => {
+            selected.update(|s| *s = s.saturating_sub(1));
+            EventResponse::Handled
+        }
+        Key::Right => {
+            selected.update(|s| *s += 1);
+            EventResponse::Handled
+        }
+        _ => EventResponse::Ignored,
+    })
+    .child(text_input(query).autofocus())
+# ;
+# }
+```
+
+Capture listeners hear the key from the outermost container in. `Handled`
+stops it there: the field never sees it, no `on_key_down` hears it, and a Tab
+taken this way does not move the focus. `Ignored` lets it go on to the next
+capture listener inside, then the focused widget, then the `on_key_down`
+listeners on the way back up — so the characters above still type, and Up and
+Down, which the field lets through, still reach an `on_key_down` on the same
+container. A focused container hears its own capture before its own
+`on_key_down`.
+
+With nothing focused, a key goes to the containers listening for it as
+before, and a capture listener hears it on the way to them, before the
+listeners inside it. `on_key_up_capture` does the same for releases.
+
 ## Moving the Focus with Tab
 
 Tab moves the keyboard focus to the next text input on the surface, and
@@ -541,6 +585,16 @@ impl Container {
         handler: impl Fn(Key, Modifiers, bool) -> EventResponse + 'static
     ) -> Self;
     pub fn on_key_up(
+        self,
+        handler: impl Fn(Key, Modifiers) -> EventResponse + 'static
+    ) -> Self;
+
+    /// The same, heard before the focused widget inside
+    pub fn on_key_down_capture(
+        self,
+        handler: impl Fn(Key, Modifiers, bool) -> EventResponse + 'static
+    ) -> Self;
+    pub fn on_key_up_capture(
         self,
         handler: impl Fn(Key, Modifiers) -> EventResponse + 'static
     ) -> Self;
