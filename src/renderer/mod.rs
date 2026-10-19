@@ -49,6 +49,7 @@ pub use flatten::{
     CommandLayer, FlatFrame, FlattenScratch, FlattenedCommand, LayerPass, RegionsCarried,
     RenderLayer, ScratchCapacity, flatten_root_into,
 };
+pub(crate) use gpu::ANTIALIASING_REACH;
 #[cfg(test)]
 pub(crate) use gpu_context::GPU_GRACE;
 pub(crate) use gpu_context::GpuSlot;

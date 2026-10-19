@@ -780,8 +780,10 @@ fn the_backdrop_uniforms_grow_only_past_what_they_have_held() {
 
         for index in 0..cells {
             let [r, g, b, _] = app.read_pixel(surface, index as u32 * 16 + 8, 8);
+            // Unblurred, the middle of the stripe is white; blurred, it reads
+            // 228 — a 6 pixel stripe whose edges are drawn as their pixels.
             assert!(
-                (32..224).contains(&g),
+                (32..240).contains(&g),
                 "cell {index} reads [{r}, {g}, {b}] in the middle: the stripe was not blurred"
             );
             let white = f32::from(g) / 255.0;

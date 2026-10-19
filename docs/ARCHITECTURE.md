@@ -935,6 +935,11 @@ The paint system tracks which widgets need repainting:
   per-surface `DamageRegion` (None/Partial/Full), keyed by the surface's root widget so
   multi-surface apps can't consume each other's damage. Damage is set as pending state
   BEFORE presenting, so it rides the commit that `present()` performs internally.
+- **Damage in buffer pixels**: the rect is rounded out to every buffer pixel it touches
+  and grown by `ANTIALIASING_REACH`, the fringe a shape's antialiased edge is drawn in
+  past its box, which no widget's box or reach holds, then cut to the buffer
+  (`buffer_damage` in `src/lib.rs`). Short of it a box that changed colour kept a ring of
+  the old one.
 - **Vacated rects**: that rect always describes the widget as it is *now*, so anything
   that makes a widget cover *less* has to name what it is leaving before it changes —
   `set_origin` and `cache_layout` damage the old rect and then the new one, and
