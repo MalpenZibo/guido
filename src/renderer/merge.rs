@@ -76,6 +76,44 @@ pub struct MergedOutline {
     pub distance: f32,
 }
 
+impl MergedOutline {
+    /// The boxes the compositor's region adds over the necks: one between each
+    /// two members whose boxes come within half the distance of each other,
+    /// which is where a neck joins them, spanning the gap and as wide as what
+    /// the two have side by side. Members whose boxes already meet are left to
+    /// their own shapes.
+    ///
+    /// In the merged command's own space. A box cannot follow the neck's
+    /// curve, so it claims the corners of the gap the neck pinches away from.
+    pub(crate) fn necks(&self) -> Vec<Rect> {
+        let boxes: Vec<Rect> = self
+            .members
+            .iter()
+            .map(|member| member.placement.map_rect(member.rect))
+            .collect();
+        let reach = self.distance.max(0.0) * 0.5;
+        let mut necks = Vec::new();
+        for (i, a) in boxes.iter().enumerate() {
+            necks.extend(boxes[i + 1..].iter().filter_map(|b| between(*a, *b, reach)));
+        }
+        necks
+    }
+}
+
+/// The box between `a` and `b` when they are apart and no further than
+/// `reach`: on each axis, the gap where they are apart there and the span they
+/// share where they are not.
+fn between(a: Rect, b: Rect, reach: f32) -> Option<Rect> {
+    let axis = |a0: f32, a1: f32, b0: f32, b1: f32| {
+        let (low, high) = (a0.max(b0), a1.min(b1));
+        (low.min(high), low.max(high), (low - high).max(0.0))
+    };
+    let (x0, x1, gap_x) = axis(a.x, a.x + a.width, b.x, b.x + b.width);
+    let (y0, y1, gap_y) = axis(a.y, a.y + a.height, b.y, b.y + b.height);
+    let gap = gap_x.hypot(gap_y);
+    (gap > 0.0 && gap <= reach).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 /// What collecting a container's members produced: the merged command, the
 /// blur cut to the same outline, the shadows the members cast on their own,
 /// and which of each child's commands the merged shape stands in for.
@@ -762,6 +800,43 @@ mod tests {
         let (outline, _) = outline(blur.as_deref().expect("one member is left"));
         assert_eq!(outline.members[0].placement, Transform::IDENTITY);
         assert!(gathered.without(&[0, 1]).1.is_none());
+    }
+
+    /// A neck's box spans the gap between two members close enough to join,
+    /// as wide as what they have side by side — and two members further
+    /// apart, or already meeting, have none.
+    #[test]
+    fn a_neck_is_boxed_between_the_members_it_joins() {
+        let member = |x: f32, y: f32, height: f32| MergeMember {
+            rect: Rect::new(0.0, 0.0, 20.0, height),
+            radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+            color: Color::WHITE,
+            border: None,
+            placement: Transform::translate(x, y),
+            opacity: 1.0,
+        };
+        let necks = |members: Vec<MergeMember>| {
+            MergedOutline {
+                members,
+                distance: 8.0,
+            }
+            .necks()
+        };
+        // 4 apart, which is half the distance: joined.
+        assert_eq!(
+            necks(vec![member(0.0, 0.0, 20.0), member(24.0, 6.0, 20.0)]),
+            [Rect::new(20.0, 6.0, 4.0, 14.0)]
+        );
+        // 5 apart: two shapes.
+        assert!(necks(vec![member(0.0, 0.0, 20.0), member(25.0, 0.0, 20.0)]).is_empty());
+        // Overlapping: one shape with no neck to box.
+        assert!(necks(vec![member(0.0, 0.0, 20.0), member(10.0, 0.0, 20.0)]).is_empty());
+        // Apart on both axes: the box between their corners.
+        assert_eq!(
+            necks(vec![member(0.0, 0.0, 20.0), member(22.0, 22.0, 20.0)]),
+            [Rect::new(20.0, 20.0, 2.0, 2.0)]
+        );
     }
 
     /// Sixteen members merge and the seventeenth is drawn on its own.

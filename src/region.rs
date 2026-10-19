@@ -341,14 +341,18 @@ pub(crate) fn shape_of(
     corner_radii: CornerRadii,
     curvature: f32,
 ) -> Vec<RegionRect> {
-    let clips: SmallVec<[PlacedShape; 2]> = match cmd.clip() {
-        Some(clip) => chains.shapes(&clip).copied().collect(),
-        None => SmallVec::new(),
-    };
     placed_shape_to_rects(
         PlacedShape::placed(rect, corner_radii, curvature, cmd.world_transform),
-        &clips,
+        &clips_of(cmd, chains),
     )
+}
+
+/// Every clip `cmd` is cut by, as shapes: the first and each down its chain.
+pub(crate) fn clips_of(cmd: &FlattenedCommand, chains: &ClipChains) -> SmallVec<[PlacedShape; 2]> {
+    match cmd.clip() {
+        Some(clip) => chains.shapes(&clip).copied().collect(),
+        None => SmallVec::new(),
+    }
 }
 
 /// The area a surface takes input in before any container has spoken: the

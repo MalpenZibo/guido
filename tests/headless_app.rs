@@ -3236,6 +3236,67 @@ fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
     );
 }
 
+/// Two merged pills that ask the compositor to blur behind them publish
+/// their shapes and a box over the neck that joins them (#847).
+///
+/// The region used to be each pill's shape alone, so the desktop behind the
+/// neck stayed sharp under the merged fill. A region cannot follow the neck's
+/// curve; the box spans the gap, as tall as the two pills side by side, and
+/// nothing past them.
+#[test]
+fn merged_pills_publish_a_box_over_their_neck() {
+    let Some(mut app) = headless() else { return };
+    let pill = Color::rgba(0.1, 0.1, 0.12, 0.7);
+    let surface = app.surface(fixed_bar(), move || {
+        container().width(fill()).height(fill()).padding(8.0).child(
+            container()
+                .layout(Flex::row())
+                .merge_children(18.0)
+                .child(
+                    container()
+                        .width(120.0)
+                        .height(34.0)
+                        .corners(17.0)
+                        .background(pill)
+                        .backdrop_blur(24.0),
+                )
+                .child(
+                    container()
+                        .width(34.0)
+                        .height(34.0)
+                        .corners(17.0)
+                        .background(pill)
+                        .backdrop_blur(24.0)
+                        .translate((8.0, 0.0)),
+                ),
+        )
+    });
+    app.configure(surface, 220, 50, 1.0);
+    app.step();
+
+    let published = app
+        .blur_regions_asked(surface)
+        .last()
+        .expect("the frame that blurs publishes a region")
+        .clone();
+    let covers = |x: f32, y: f32| {
+        published
+            .iter()
+            .any(|r| x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height)
+    };
+    // The long pill runs from 8 to 128, the round one from 136 to 170.
+    assert!(covers(60.0, 25.0), "the long pill is blurred");
+    assert!(covers(150.0, 25.0), "and the round one");
+    assert!(
+        covers(132.0, 25.0),
+        "the neck between them is blurred too: {published:?}"
+    );
+    assert!(
+        !covers(132.0, 4.0) && !covers(175.0, 25.0),
+        "nothing past the pills and their neck is: {published:?}"
+    );
+}
+
 /// A content-sized surface follows its content when the content grows.
 ///
 /// The measure that sizes such a surface is asked the same constraints every
