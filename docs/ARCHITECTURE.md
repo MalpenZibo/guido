@@ -764,6 +764,19 @@ lets it on to the next. A listener on the focus path that let a key through is
 not asked again when the way down to another listener passes it — `Tree`
 keeps the path the key already went up for that (#634).
 
+Both routes run from the root down, and a container that declared
+`on_key_down_capture` or `on_key_up_capture` hears the key there, on its way
+down, before anything inside it: the web's capture phase, WPF's tunnelling
+`PreviewKeyDown`, GTK4's capture-phase controllers, a Qt event filter.
+So along the focus path the capture listeners hear a key outermost first, then
+the focused widget, then the `on_key_down` listeners innermost first; a focused
+container hears its own capture before its own `on_key_down`. A capture
+answering `Handled` stops the key there, Tab's default included — which is how
+a launcher takes Left and Right from the search field holding the focus
+(#848). A capture listener is a key listener as well, so with nothing focused
+it hears the key on the way down to the others, and one on the focus path that
+let the key through is passed over the second time, as `on_key_down` is.
+
 A scroller on the focus path scrolls with the keys, after its own
 `on_key_down` lets the key through: Page Up and Page Down by one viewport
 height (#747), the arrows by `SCROLL_PIXELS_PER_LINE`, the wheel notch's 40, and
