@@ -11,7 +11,8 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 /// # Attributes on parameters
 /// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
 /// - `#[prop(default = <expr>)]` — standard prop with custom default
-/// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params
+/// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params.
+///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`)
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
 ///
@@ -247,10 +248,13 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let ty = &field.ty;
 
         if field.is_callback {
-            let params = &field.callback_params;
+            let args = callback_args_tuple(&field.callback_params);
             quote! {
-                #vis fn #name<F: Fn(#(#params),*) + 'static>(mut self, f: F) -> Self {
-                    self.#name = Some(::guido::reactive::Callback::new(f));
+                #vis fn #name<__M>(
+                    mut self,
+                    handler: impl ::guido::reactive::IntoHandler<#args, __M>,
+                ) -> Self {
+                    self.#name = handler.into_callback_prop();
                     self
                 }
             }

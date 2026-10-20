@@ -185,6 +185,36 @@ pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
 # fn main() {}
 ```
 
+A callback builder takes the same three shapes `on_click` does: a closure, a
+`Callback`, or an `Option<Callback>`. So a component hands its own prop to the
+component it wraps as it reads, and a prop nobody set arrives unset:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[component]
+# pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
+#     container()
+# }
+#[component]
+pub fn labelled_stepper(
+    label: String,
+    #[prop(callback)] on_change: fn(i32),
+) -> impl Widget {
+    container()
+        .layout(Flex::row().spacing(8))
+        .child(text(label))
+        .child(stepper().on_change(on_change))
+}
+# fn main() {}
+```
+
+A closure's parameter types come from the prop, so `.on_change(|step| ...)`
+needs no annotation — unless its body calls a method on `step` before anything
+else has said what it is. That one has to name the type, `|step: i32|`,
+because the prop's type reaches the closure through a trait rather than an
+`Fn` bound.
+
 ## Accessing Props
 
 In the function body, each prop is a read-only `Signal<T>` (which is `Copy`). Pass the signal directly to widget methods — this preserves reactivity so props update automatically when the caller provides reactive values (both `RwSignal<T>` and `Signal<T>` work as prop values via `IntoSignal`):

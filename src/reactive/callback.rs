@@ -64,7 +64,7 @@ impl<Args: 'static> Callback<Args> {
     /// `Callback::new(|| …)`, `Callback::new(|v: i32| …)`,
     /// `Callback::new(|x: f32, y: f32| …)`.
     pub fn new<F: IntoCallback<Args>>(f: F) -> Self {
-        f.into_callback()
+        Self::from_rc(f.into_packed())
     }
 }
 
@@ -73,30 +73,85 @@ impl<Args: 'static> Callback<Args> {
 /// Same shape as [`IntoSignal`](super::IntoSignal): the trait parameter is
 /// what lets one constructor accept closures of different arities.
 pub trait IntoCallback<Args> {
-    fn into_callback(self) -> Callback<Args>;
+    /// The closure, taking its arguments as one tuple.
+    fn into_packed(self) -> Rc<dyn Fn(Args)>;
 }
 
 impl<F: Fn() + 'static> IntoCallback<()> for F {
-    fn into_callback(self) -> Callback<()> {
-        Callback::from_rc(Rc::new(move |()| self()))
+    fn into_packed(self) -> Rc<dyn Fn(())> {
+        Rc::new(move |()| self())
     }
 }
 
 impl<A: 'static, F: Fn(A) + 'static> IntoCallback<(A,)> for F {
-    fn into_callback(self) -> Callback<(A,)> {
-        Callback::from_rc(Rc::new(move |(a,)| self(a)))
+    fn into_packed(self) -> Rc<dyn Fn((A,))> {
+        Rc::new(move |(a,)| self(a))
     }
 }
 
 impl<A: 'static, B: 'static, F: Fn(A, B) + 'static> IntoCallback<(A, B)> for F {
-    fn into_callback(self) -> Callback<(A, B)> {
-        Callback::from_rc(Rc::new(move |(a, b)| self(a, b)))
+    fn into_packed(self) -> Rc<dyn Fn((A, B))> {
+        Rc::new(move |(a, b)| self(a, b))
     }
 }
 
 impl<A: 'static, B: 'static, C: 'static, F: Fn(A, B, C) + 'static> IntoCallback<(A, B, C)> for F {
-    fn into_callback(self) -> Callback<(A, B, C)> {
-        Callback::from_rc(Rc::new(move |(a, b, c)| self(a, b, c)))
+    fn into_packed(self) -> Rc<dyn Fn((A, B, C))> {
+        Rc::new(move |(a, b, c)| self(a, b, c))
+    }
+}
+
+#[doc(hidden)]
+pub struct FnHandler;
+#[doc(hidden)]
+pub struct CallbackHandler;
+#[doc(hidden)]
+pub struct OptionHandler;
+
+/// What an event handler can be written as: a closure, a [`Callback`], or an
+/// `Option<Callback>`.
+///
+/// A closure is the ordinary case. The other two are the shapes a
+/// `#[component]` callback prop arrives in, so a component forwards its own
+/// prop, to a container's `on_click` or to another component's builder, as it
+/// reads: `.on_change(on_change)`. A `None` leaves the handler unset.
+///
+/// The marker parameter is the same trick [`IntoSignal`](super::IntoSignal)
+/// uses: it keeps the three impls from overlapping.
+pub trait IntoHandler<Args, Marker = FnHandler> {
+    /// As a closure the widget keeps for itself.
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>>;
+    /// As a handle, which is what a `#[component]` callback prop holds.
+    fn into_callback_prop(self) -> Option<Callback<Args>>;
+}
+
+impl<Args: 'static, F: IntoCallback<Args>> IntoHandler<Args, FnHandler> for F {
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+        Some(self.into_packed())
+    }
+
+    fn into_callback_prop(self) -> Option<Callback<Args>> {
+        Some(Callback::new(self))
+    }
+}
+
+impl<Args: 'static> IntoHandler<Args, CallbackHandler> for Callback<Args> {
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+        Some(Rc::new(move |args| self.run_packed(args)))
+    }
+
+    fn into_callback_prop(self) -> Option<Callback<Args>> {
+        Some(self)
+    }
+}
+
+impl<Args: 'static> IntoHandler<Args, OptionHandler> for Option<Callback<Args>> {
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+        self.and_then(IntoHandler::into_handler)
+    }
+
+    fn into_callback_prop(self) -> Option<Callback<Args>> {
+        self
     }
 }
 

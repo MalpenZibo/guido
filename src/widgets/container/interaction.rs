@@ -373,7 +373,7 @@ impl Container {
                         MouseButton::Left => None,
                     };
                     if let Some(callback) = callback {
-                        callback();
+                        callback(());
                         return EventResponse::Handled;
                     }
                 }
@@ -470,13 +470,13 @@ impl Container {
                         && hit.contains(*at)
                     {
                         if let Some(ref callback) = ix.on_click {
-                            callback();
+                            callback(());
                             handled = true;
                         }
                         if ix.press_count == 2
                             && let Some(ref callback) = ix.on_double_click
                         {
-                            callback();
+                            callback(());
                             handled = true;
                         }
                     }

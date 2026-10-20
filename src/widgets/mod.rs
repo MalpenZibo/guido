@@ -20,9 +20,7 @@ pub mod widget;
 pub use crate::renderer::CornerRadii;
 pub use arc::{Arc, arc};
 pub use children::ChildrenSource;
-pub use container::{
-    Border, Container, GradientDirection, IntoClickHandler, LinearGradient, Overflow, container,
-};
+pub use container::{Border, Container, GradientDirection, LinearGradient, Overflow, container};
 pub use control::Control;
 pub use corners::Corners;
 pub use font::{FamilyId, FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
