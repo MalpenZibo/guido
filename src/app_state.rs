@@ -33,7 +33,8 @@ use std::sync::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
-use crate::deferred::{DeferredQueue, DeferredSlot};
+use crate::activation::TokenCallback;
+use crate::deferred::{DeferredQueue, DeferredSlot, Pending};
 use crate::image_decode::{DecodeEntry, DecodeKey, Decoder, ImageEvent};
 use crate::jobs::{JobQueues, ScheduledJob};
 use crate::reactive::clipboard::{PasteTarget, PastedText, SelectionKind};
@@ -99,6 +100,11 @@ pub(crate) struct AppState {
     pub(crate) paste_requests: DeferredQueue<(SelectionKind, PasteTarget)>,
     /// Pastes whose text has arrived, waiting for the loop to hand them over.
     pub(crate) pastes: DeferredQueue<(PasteTarget, PastedText)>,
+    /// Activation tokens asked for, waiting for the loop to ask the compositor.
+    pub(crate) activation_requests: DeferredQueue<(SurfaceId, u64)>,
+    /// Activation tokens that have arrived, waiting for the loop to hand them
+    /// over.
+    pub(crate) activation_answers: DeferredQueue<(TokenCallback, Option<String>)>,
     /// A lock or unlock asked for by application code, waiting for the loop.
     pub(crate) lock_request: DeferredSlot<LockRequest>,
 
@@ -116,11 +122,10 @@ pub(crate) struct AppState {
     /// Whether the compositor offers a clipboard to paste: only that an offer
     /// exists, because nothing is read until a paste asks for it.
     pub(crate) clipboard_offered: Cell<bool>,
-    /// The reads started for pastes, each with the token its answer comes back
-    /// under and everyone waiting on it.
-    pub(crate) paste_reads: RefCell<Vec<(u64, Vec<PasteTarget>)>>,
-    /// The token the next read is given.
-    pub(crate) next_paste_read: Cell<u64>,
+    /// The reads started for pastes, each with everyone waiting on it.
+    pub(crate) paste_reads: Pending<Vec<PasteTarget>>,
+    /// The activation tokens asked for, each with the callback it answers.
+    pub(crate) activation_waits: Pending<TokenCallback>,
     /// The lock-screen factory and each output's lock surface while locked.
     pub(crate) lock: RefCell<LockData>,
     /// The popups that are still open. A `PopupHandle` is `Copy` and outlives
@@ -191,13 +196,15 @@ pub(crate) fn reset() {
             kept_focus,
             paste_requests,
             pastes,
+            activation_requests,
+            activation_answers,
             lock_request,
             current_cursor,
             pointed_cursor,
             cursor_watch,
             clipboard_offered,
             paste_reads,
-            next_paste_read,
+            activation_waits,
             lock,
             live_popups,
             widget_refs,
@@ -220,7 +227,8 @@ pub(crate) fn reset() {
         //
         // What holds an application closure goes first. A queued surface
         // command carries a widget factory, a lock request carries a
-        // lock-screen one, a timer and a paste their callbacks, and dropping any drops what it captured — a
+        // lock-screen one, a timer, a paste and an activation token their
+        // callbacks, and dropping any drops what it captured — a
         // `ChildrenSource` among them, whose own `Drop` queues a job. So the
         // queues those land in are emptied below, after everything that can
         // still push into them.
@@ -229,8 +237,11 @@ pub(crate) fn reset() {
         drop(timers.replace(successor));
         lock_request.clear();
         paste_requests.clear();
-        paste_reads.take();
+        paste_reads.clear();
         pastes.clear();
+        activation_requests.clear();
+        activation_waits.clear();
+        activation_answers.clear();
         lock.take();
         widget_refs.take();
         text_measurer.take();
@@ -248,7 +259,6 @@ pub(crate) fn reset() {
         pointed_cursor.take();
         cursor_watch.take();
         clipboard_offered.take();
-        next_paste_read.take();
         live_popups.take();
 
         default_font_family.take();

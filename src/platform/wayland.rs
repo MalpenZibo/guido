@@ -239,6 +239,10 @@ pub struct WaylandState {
 
     /// Clipboard and primary selection — see [`super::selections`].
     pub(super) selections: Selections,
+
+    /// Activation tokens, where the compositor offers them — see
+    /// [`super::activation`].
+    pub(super) activation: Option<super::activation::Activation>,
 }
 
 /// Why the platform layer could not start or continue.
@@ -358,6 +362,7 @@ pub fn create_wayland_app(
         scaling: Scaling::bind(&globals, &qh),
         input: InputState::new(cursor_shape_manager, loop_handle),
         selections: Selections::new(data_device_manager, primary_selection_manager),
+        activation: super::activation::Activation::bind(&globals, &qh),
     };
 
     Ok((connection, event_queue, state))

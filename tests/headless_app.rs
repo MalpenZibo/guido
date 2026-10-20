@@ -6030,3 +6030,58 @@ fn a_repainting_shape_damages_the_fringe_of_its_edge() {
         );
     }
 }
+
+/// A bar whose button asks for an activation token, keeping every answer.
+fn bar_asking_for_a_token(answers: Rc<RefCell<Vec<Option<String>>>>) -> Container {
+    let surface = expect_context::<SurfaceHandle>();
+    container()
+        .width(fill())
+        .height(fill())
+        .child(container().width(80.0).height(20.0).on_click(move || {
+            let answers = answers.clone();
+            surface.request_activation_token(move |token| answers.borrow_mut().push(token));
+        }))
+}
+
+/// A click asks the compositor for a token for the surface it landed on, and
+/// what the compositor answers reaches the handler that asked, on a later pass.
+#[test]
+fn a_click_asks_for_an_activation_token_and_hears_the_answer() {
+    let Some(mut app) = headless() else { return };
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    let kept = answers.clone();
+    let surface = app.surface(fixed_bar(), move || bar_asking_for_a_token(kept.clone()));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    assert_eq!(app.activation_requests(), [surface]);
+    assert!(
+        answers.borrow().is_empty(),
+        "the compositor has not answered"
+    );
+
+    app.answer_activation(Some("from niri"));
+    app.step();
+    assert_eq!(*answers.borrow(), [Some("from niri".to_owned())]);
+}
+
+/// An answer without a token — what the platform gives where the compositor
+/// lacks `xdg_activation_v1` — still reaches the handler, as `None` rather than
+/// as nothing.
+#[test]
+fn an_answer_without_a_token_reaches_the_handler_as_none() {
+    let Some(mut app) = headless() else { return };
+    let answers = Rc::new(RefCell::new(Vec::new()));
+    let kept = answers.clone();
+    let surface = app.surface(fixed_bar(), move || bar_asking_for_a_token(kept.clone()));
+    app.configure(surface, 200, 50, 1.0);
+    app.step();
+
+    app.click(surface, 10.0, 10.0);
+    app.step();
+    app.answer_activation(None);
+    app.step();
+    assert_eq!(*answers.borrow(), [None]);
+}

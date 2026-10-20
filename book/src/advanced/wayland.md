@@ -397,6 +397,10 @@ impl SurfaceHandle {
 
     /// Change margins — CSS shorthands, as `padding` takes
     pub fn set_margin(&self, margin: impl Into<Margin>);
+
+    /// Ask for an xdg-activation token tied to the last input, answered
+    /// on a later loop iteration — see Handing the Focus On, below
+    pub fn request_activation_token(&self, done: impl FnOnce(Option<String>) + 'static);
 }
 ```
 
@@ -439,6 +443,36 @@ The same holds for a surface from `spawn_surface()`, a popup from
 own: a tree inside a popup reads the popup's id, not its parent's. A factory that needs the parent's id — to
 hang a popup from it — reads the parent's handle where the parent's tree is
 built and captures it.
+
+### Handing the Focus On
+
+On Wayland an application takes the focus only with an activation token tied
+to a real input, and only the client that received that input can ask for one.
+A tray entry that raises another application's window, or a launcher that
+starts one, asks from the handler of the click and hands the token on:
+
+```rust,no_run
+# extern crate guido;
+# use guido::prelude::*;
+# fn send_to_the_tray(_token: Option<String>) {}
+# fn main() {
+App::new().run(|app| {
+    app.add_surface(SurfaceConfig::new().width(240).height(32), || {
+        let surface = expect_context::<SurfaceHandle>();
+        container()
+            .on_click(move || surface.request_activation_token(send_to_the_tray))
+            .child(text("Slack"))
+    });
+});
+# ;
+# }
+```
+
+The token comes back on a later loop iteration, once the compositor has
+answered, and is `None` only where the compositor lacks `xdg_activation_v1`.
+A launcher passes it to the process it starts as `XDG_ACTIVATION_TOKEN`; a
+StatusNotifierItem takes it through `ProvideXdgActivationToken` before the
+click is sent.
 
 ### Getting a Handle for Existing Surfaces
 
@@ -1123,5 +1157,6 @@ impl SurfaceHandle {
     pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>);
     pub fn set_margin(&self, margin: impl Into<Margin>);
     pub fn set_input_region(&self, rects: Option<Vec<Rect>>);
+    pub fn request_activation_token(&self, done: impl FnOnce(Option<String>) + 'static);
 }
 ```

@@ -945,6 +945,23 @@ impl SurfaceHandle {
         self.id
     }
 
+    /// Ask the compositor for an `xdg_activation_v1` token tied to the last
+    /// input this application received: what another application needs to
+    /// take the focus when this one's click or key started it.
+    ///
+    /// Ask from the handler of that input — a click on a tray menu entry, a
+    /// launcher's Enter — and hand the token on: to the application through
+    /// its own means, such as StatusNotifierItem's `ProvideXdgActivationToken`,
+    /// or to a process this one starts as `XDG_ACTIVATION_TOKEN`.
+    ///
+    /// `done` runs on the UI thread on a later loop iteration, once the
+    /// compositor has answered. It is given `None` only when the compositor
+    /// does not offer the protocol. A compositor that judges the input too old
+    /// still answers with a token; it is the activation that it then refuses.
+    pub fn request_activation_token(&self, done: impl FnOnce(Option<String>) + 'static) {
+        crate::activation::request(self.id, Box::new(done));
+    }
+
     /// Set the layer shell layer for this surface.
     ///
     /// Changes take effect immediately. Use `Layer::Overlay` to appear above

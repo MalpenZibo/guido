@@ -1,3 +1,4 @@
+mod activation;
 pub mod animation;
 mod app_state;
 pub mod backdrop;
@@ -773,6 +774,9 @@ fn sync_platform_state<P: Platform>(wayland_state: &mut P) {
     for (kind, token) in reactive::clipboard::take_paste_requests() {
         wayland_state.read_selection(kind, token);
     }
+    for (surface, request) in activation::take_requests() {
+        wayland_state.request_activation_token(surface, request);
+    }
 }
 
 /// Run every job this surface owns, in the one order that works.
@@ -1319,6 +1323,11 @@ pub(crate) trait Platform {
     /// unanswered.
     fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64);
 
+    /// Ask for an activation token for `surface`, against the latest input
+    /// serial, and answer `request` with `activation::answer` — now or when
+    /// the token lands. Required for the same reason `read_selection` is.
+    fn request_activation_token(&mut self, surface: SurfaceId, request: u64);
+
     /// Send everything this iteration queued. `false` means the connection is
     /// gone and the application is over.
     fn flush(&self) -> bool {
@@ -1541,6 +1550,10 @@ impl Platform for platform::WaylandState {
 
     fn read_selection(&mut self, kind: reactive::SelectionKind, token: u64) {
         self.read_selection(kind, token)
+    }
+
+    fn request_activation_token(&mut self, surface: SurfaceId, request: u64) {
+        self.request_activation_token(surface, request)
     }
 
     fn flush(&self) -> bool {
@@ -2722,6 +2735,9 @@ fn iterate<P: Platform>(
     // surfaces draw, so a field shows what it was given in this frame.
     reactive::clipboard::deliver_pastes(tree);
 
+    // Activation tokens that have arrived, handed over for the same reason.
+    activation::deliver();
+
     // Flush background-thread signal writes once per frame (queued via WriteSignal).
     // Must run before take_wake_request() so that signal changes from bg writes
     // are processed into jobs before we check the wake request.
@@ -3114,6 +3130,7 @@ mod restart_tests {
         });
         clipboard_copy("a secret");
         clipboard_paste(|_| {});
+        crate::surface::surface_handle(SurfaceId::next()).request_activation_token(|_| {});
         create_widget_ref().focus();
         crate::session_lock::unlock_session();
 
@@ -3134,6 +3151,10 @@ mod restart_tests {
         assert!(
             take_paste_requests().is_empty(),
             "the next App would read for a paste the last one asked for"
+        );
+        assert!(
+            activation::take_requests().is_empty(),
+            "the next App would ask for a token the last one asked for"
         );
         with_app_state(|app| {
             assert!(
@@ -4372,6 +4393,10 @@ mod a_frame_lands_where_the_surface_points {
 
         fn read_selection(&mut self, _kind: reactive::SelectionKind, token: u64) {
             reactive::clipboard::answer_paste(token, None);
+        }
+
+        fn request_activation_token(&mut self, _surface: SurfaceId, request: u64) {
+            activation::answer(request, None);
         }
     }
 
