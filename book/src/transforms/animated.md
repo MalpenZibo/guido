@@ -102,11 +102,15 @@ it, the focus it held is released, and a signal it read no longer relays out or
 repaints it — its item may already be gone. An effect created while building it
 is paused with it — a memo too, which keeps the value it had at removal: a
 write to what the effect read does not run it, and it is
-disposed with the child when the exit settles. In a `keyed(..)` list, a key that
+disposed with the child when the exit settles. So is a timer: a `set_timeout` or
+`set_interval` started while building it does not fire while it leaves, and goes
+with the child. In a `keyed(..)` list, a key that
 comes back while its row is leaving gets that row back: the exit is cancelled
 and it travels home from wherever it had got to. The row itself is not rebuilt;
 a `.child(move || ..)` inside it is re-run, as it would be for any change it
-read, and an effect that missed a write while the row was leaving runs once.
+read, and an effect that missed a write while the row was leaving runs once. Its
+timers carry on with what was left of their delay or period when it was removed,
+without a catch-up run for the time it was away.
 
 In a [`ZStack`](../concepts/layout.md#leaders-and-followers) a leaving child
 no longer leads the stack's size while anything staying does, so a shape that
