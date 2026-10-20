@@ -820,6 +820,80 @@ fn a_popup_s_dynamic_child_reads_what_the_popup_declared() {
     assert_eq!(*seen.borrow(), [(Some(Marker(9)), Some(popup.id()))]);
 }
 
+/// What each `probe` body read, under the tag it was given: the `Marker` and
+/// the id of the surface whose handle it found. A thread's own, so the tests
+/// running beside one another each see only theirs.
+type ProbeReads = Vec<(String, Option<Marker>, Option<SurfaceId>)>;
+
+thread_local!(static PROBED: RefCell<ProbeReads> = RefCell::default());
+
+#[component]
+fn probe(tag: String) -> impl Widget {
+    PROBED.with(|seen| {
+        seen.borrow_mut().push((
+            tag.get_untracked(),
+            use_context::<Marker>(),
+            use_context::<SurfaceHandle>().map(|me| me.id()),
+        ))
+    });
+    container().width(10.0).height(10.0)
+}
+
+#[component]
+fn declaring(marker: u32) -> impl Widget {
+    provide_context(Marker(marker.get_untracked()));
+    container().child(probe().tag("in a component"))
+}
+
+/// #860: a component's body runs when the tree first asks it for something,
+/// after the factory that made it returned. It reads from the scope that was
+/// current where it was made, as a dynamic child's closure does (#786) —
+/// whether it was placed as a plain child, in a dynamic one or in a keyed row.
+#[test]
+fn a_component_reads_what_the_scope_it_was_made_in_declared() {
+    let Some(mut app) = headless() else { return };
+    let shown = create_signal(false);
+    let surface = app.surface(SurfaceConfig::new().width(200).height(100), move || {
+        provide_context(Marker(7));
+        container()
+            .child(probe().tag("static"))
+            .child(move || shown.get().then(|| probe().tag("dynamic")))
+            .children(keyed(
+                move || if shown.get() { vec![1u32] } else { vec![] },
+                |k| *k,
+                |_| probe().tag("keyed"),
+            ))
+    });
+    app.configure(surface, 200, 100, 1.0);
+    app.step();
+    shown.set(true);
+    app.step();
+
+    let mut seen = PROBED.take();
+    seen.sort_by(|a, b| a.0.cmp(&b.0));
+    let read = |tag: &str| (tag.to_string(), Some(Marker(7)), Some(surface));
+    assert_eq!(seen, [read("dynamic"), read("keyed"), read("static")]);
+}
+
+/// A component placed as a plain child of another component reads what the
+/// outer one declared in its body: the outer body is the scope the inner one
+/// was made in.
+#[test]
+fn a_component_inside_a_component_reads_what_the_outer_one_declared() {
+    let Some(mut app) = headless() else { return };
+    let surface = app.surface(SurfaceConfig::new().width(200).height(100), || {
+        provide_context(Marker(7));
+        container().child(declaring().marker(3u32))
+    });
+    app.configure(surface, 200, 100, 1.0);
+    app.step();
+
+    assert_eq!(
+        PROBED.take(),
+        [("in a component".to_string(), Some(Marker(3)), Some(surface))]
+    );
+}
+
 #[test]
 fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
     let Some(mut app) = headless() else { return };

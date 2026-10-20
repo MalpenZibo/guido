@@ -344,6 +344,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             #(#field_defs,)*
             __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
             __owner_id: std::cell::Cell<Option<::guido::reactive::__internal::OwnerId>>,
+            __made_in: Option<::guido::reactive::__internal::OwnerId>,
         }
 
         impl #struct_name {
@@ -352,6 +353,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                     #(#field_inits,)*
                     __inner: std::cell::RefCell::new(None),
                     __owner_id: std::cell::Cell::new(None),
+                    __made_in: ::guido::reactive::current_owner(),
                 }
             }
 
@@ -370,10 +372,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 if self.__inner.borrow().is_some() {
                     return;
                 }
-                // Wrap render() in an owner scope for automatic cleanup
-                let (widget, owner_id) = ::guido::reactive::__internal::with_owner(|| {
-                    self.render()
-                });
+                // The body runs when the tree first asks for something, which
+                // is after the code that made the component returned. Its scope
+                // hangs from the one current where it was made, so it reads
+                // what that scope declared and goes when that scope goes.
+                let (widget, owner_id) = ::guido::reactive::__internal::under_scope(
+                    self.__made_in,
+                    || ::guido::reactive::__internal::with_owner(|| self.render()),
+                );
                 self.__owner_id.set(Some(owner_id));
                 *self.__inner.borrow_mut() = Some(Box::new(widget));
             }
@@ -381,7 +387,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         impl Drop for #struct_name {
             fn drop(&mut self) {
-                // Dispose the owner and all its signals/effects/cleanups
+                // Dispose the owner and all its signals/effects/cleanups. If
+                // the scope it was made in went first, this one went with it
+                // and the id no longer names anything: disposing it is nothing.
                 if let Some(owner_id) = self.__owner_id.get() {
                     ::guido::reactive::__internal::dispose_owner(owner_id);
                 }
