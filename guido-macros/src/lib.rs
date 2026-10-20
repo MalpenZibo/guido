@@ -1,6 +1,8 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input};
+use syn::{
+    Attribute, DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input,
+};
 
 /// Attribute macro to create a reusable component from a function.
 ///
@@ -15,6 +17,11 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 ///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`)
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
+///
+/// A `///` on a parameter documents the method a caller sets that prop with —
+/// `child` and `children` for the children prop. Rust refuses a doc comment on
+/// a parameter only after expansion, and the macro never emits the parameters
+/// again. The function's own `///` documents the struct and the constructor.
 ///
 /// The function's type and const parameters, their bounds and its `where`
 /// clause are carried onto the struct, its impls and the constructor, so a
@@ -63,6 +70,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
     let fn_name = &input.sig.ident;
     let vis = &input.vis;
+    let fn_docs = doc_attrs(&input.attrs);
     let body = &input.block;
     let struct_name = format_ident!("{}", to_pascal_case(&fn_name.to_string()));
 
@@ -86,7 +94,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
     // Extract props from function parameters
     let mut prop_fields = Vec::new();
-    let mut has_children = false;
 
     for arg in &input.sig.inputs {
         let syn::FnArg::Typed(pat_type) = arg else {
@@ -140,7 +147,6 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                     is_callback = true;
                 } else if meta.path().is_ident("children") {
                     is_children = true;
-                    has_children = true;
                 } else if meta.path().is_ident("slot") {
                     is_slot = true;
                 } else if meta.path().is_ident("default") {
@@ -205,6 +211,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         prop_fields.push(PropField {
             name: field_name.clone(),
+            docs: doc_attrs(&pat_type.attrs),
             ty: field_type.clone(),
             default_value,
             is_callback,
@@ -270,10 +277,12 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let builder_methods = prop_fields.iter().map(|field| {
         let name = &field.name;
         let ty = &field.ty;
+        let docs = &field.docs;
 
         if field.is_callback {
             let args = callback_args_tuple(&field.callback_params);
             quote! {
+                #(#docs)*
                 #vis fn #name<__M>(
                     mut self,
                     handler: impl ::guido::reactive::IntoHandler<#args, __M>,
@@ -287,6 +296,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             quote! {}
         } else if field.is_slot {
             quote! {
+                #(#docs)*
                 #vis fn #name(self, widget: impl ::guido::widgets::Widget + 'static) -> Self {
                     *self.#name.borrow_mut() = Some(Box::new(widget));
                     self
@@ -294,6 +304,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else {
             quote! {
+                #(#docs)*
                 #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoSignal<#ty, __M>) -> Self {
                     self.#name = value.into_signal();
                     self
@@ -303,13 +314,19 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     });
 
     // Generate children methods if needed
-    let children_methods = if has_children {
+    let children_docs = prop_fields
+        .iter()
+        .find(|f| f.is_children)
+        .map(|f| f.docs.as_slice());
+    let children_methods = if let Some(docs) = children_docs {
         quote! {
+            #(#docs)*
             #vis fn child<__M>(self, child: impl ::guido::widgets::IntoChild<__M>) -> Self {
                 child.add_to_container(&mut *self.__children.borrow_mut());
                 self
             }
 
+            #(#docs)*
             #vis fn children<__M, __I>(self, children: __I) -> Self
             where
                 __I: ::guido::widgets::IntoChildren<__M>,
@@ -368,6 +385,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     });
 
     let expanded = quote! {
+        #(#fn_docs)*
         #vis struct #struct_name #impl_generics #where_clause {
             #(#field_defs,)*
             __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
@@ -379,6 +397,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl #impl_generics #struct_name #ty_generics #where_clause {
+            /// Makes the component with every prop at its default.
             #vis fn new() -> Self {
                 Self {
                     #(#field_inits,)*
@@ -500,6 +519,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         }
 
+        #(#fn_docs)*
         #vis fn #fn_name #impl_generics () -> #struct_name #ty_generics #where_clause {
             #struct_name::new()
         }
@@ -510,6 +530,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
 struct PropField {
     name: syn::Ident,
+    /// The parameter's `///`, for the method that sets it.
+    docs: Vec<Attribute>,
     ty: Type,
     default_value: Option<Expr>,
     is_callback: bool,
@@ -518,6 +540,14 @@ struct PropField {
     callback_params: Vec<Type>,
     is_children: bool,
     is_slot: bool,
+}
+
+fn doc_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .cloned()
+        .collect()
 }
 
 fn to_pascal_case(s: &str) -> String {
