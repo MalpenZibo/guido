@@ -144,9 +144,9 @@ impl Held {
 struct OwnerSlot {
     owner: Option<Owner>,
     generation: NonZeroU32,
-    /// Whether the scope's effects are held back: set by [`pause_owner`] on a
-    /// scope and every scope below it, cleared by [`resume_owner`]. A scope
-    /// opened under a paused one starts paused.
+    /// Whether the scope's effects and timers are held back: set by
+    /// [`pause_owner`] on a scope and every scope below it, cleared by
+    /// [`resume_owner`]. A scope opened under a paused one starts paused.
     ///
     /// Here rather than on `Owner`, where it would cost the arena eight bytes a
     /// slot; beside the generation it fits in the padding.
@@ -215,9 +215,10 @@ impl OwnerArena {
     }
 
     /// Set `paused` on `id` and every scope below it, and hand back the effects
-    /// they own.
-    fn set_paused(&mut self, id: OwnerId, paused: bool) -> Vec<EffectId> {
+    /// they own and the scopes themselves, whose timers go with them.
+    fn set_paused(&mut self, id: OwnerId, paused: bool) -> (Vec<EffectId>, Vec<OwnerId>) {
         let mut effects = Vec::new();
+        let mut scopes = Vec::new();
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
             let Some(slot) = self
@@ -231,12 +232,13 @@ impl OwnerArena {
                 continue;
             };
             slot.paused = paused;
+            scopes.push(id);
             if let Some(held) = &owner.held {
                 effects.extend_from_slice(&held.effects);
                 stack.extend_from_slice(&held.children);
             }
         }
-        effects
+        (effects, scopes)
     }
 
     fn take(&mut self, id: OwnerId) -> Option<Owner> {
@@ -542,8 +544,8 @@ fn release(held: &mut Held) {
     held.contexts.clear();
 }
 
-/// Hold back every effect owned by `id` and the scopes below it, until
-/// [`resume_owner`] or disposal.
+/// Hold back every effect and timer owned by `id` and the scopes below it,
+/// until [`resume_owner`] or disposal.
 ///
 /// For a subtree that is leaving but not yet disposed: its effects must not run
 /// on what they read — the item a row was built for may already be gone — but
@@ -551,18 +553,25 @@ fn release(held: &mut Held) {
 /// paused effect read does not run it; it is remembered, and the effect runs
 /// once on resume. Svelte 5 does the same for an outroing block: `pause_effect`
 /// marks its effects `INERT`, and `resume_effect` runs the ones that went dirty.
+/// Its timers are paused with it: see [`super::timer`].
 pub(crate) fn pause_owner(id: OwnerId) {
-    let effects = with_reactive(|reactive| reactive.owners.borrow_mut().set_paused(id, true));
-    with_runtime(|rt| rt.set_effects_paused(&effects, true));
+    set_owner_paused(id, true);
 }
 
 /// Undo [`pause_owner`]: the effects of `id` and the scopes below it run on
 /// what they read again, and each one a write reached while it was paused runs
-/// now, once.
+/// now, once. Their timers carry on with what was left of their delay or
+/// period.
 pub(crate) fn resume_owner(id: OwnerId) {
-    let effects = with_reactive(|reactive| reactive.owners.borrow_mut().set_paused(id, false));
-    with_runtime(|rt| rt.set_effects_paused(&effects, false));
+    set_owner_paused(id, false);
     flush_unless_batching();
+}
+
+fn set_owner_paused(id: OwnerId, paused: bool) {
+    let (effects, scopes) =
+        with_reactive(|reactive| reactive.owners.borrow_mut().set_paused(id, paused));
+    with_runtime(|rt| rt.set_effects_paused(&effects, paused));
+    super::timer::set_scopes_paused(&scopes, paused);
 }
 
 /// Whether the current scope is paused, so an effect made in it starts paused.

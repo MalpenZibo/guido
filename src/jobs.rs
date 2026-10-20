@@ -367,11 +367,11 @@ pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: Widget
 ///
 /// Every widget in it is detached — its subscriptions cleared, and what it
 /// reads while its exit paints subscribing nothing — its deadlines are
-/// cancelled, the effects in the scopes it owns are paused, and the focus is
-/// released if it was inside. Its owner scope lives on with the widget:
-/// disposing it here would leave paint reading state that no longer exists,
-/// and nothing in the subtree can reach that state any more except by being
-/// painted. The second half is [`teardown_widget_subtree`], when the exit
+/// cancelled, the effects and timers in the scopes it owns are paused, and
+/// the focus is released if it was inside. Its owner scope lives on with the
+/// widget: disposing it here would leave paint reading state that no longer
+/// exists, and nothing in the subtree can reach that state any more except by
+/// being painted. The second half is [`teardown_widget_subtree`], when the exit
 /// settles.
 pub(crate) fn detach_widget_subtree(tree: &crate::tree::Tree, root: WidgetId) {
     for id in tree.collect_subtree_post_order(root) {

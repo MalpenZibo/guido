@@ -523,7 +523,8 @@ pub trait Widget {
     /// Its key came back mid-exit: stay, and go home from where it is.
     fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {}
     /// The reactive scope it owns, if any: a leaving subtree pauses the
-    /// effects in it, and a reclaimed one resumes them. Hidden from the docs.
+    /// effects and timers in it, and a reclaimed one resumes them. Hidden
+    /// from the docs.
     fn owned_scope(&self) -> Option<OwnerId> { None }
 
     /// Publish how far this widget's paint lands outside its bounds, before

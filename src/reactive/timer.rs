@@ -29,6 +29,16 @@
 //! stop a timer the moment it is made; here only [`TimerHandle::cancel`] and the
 //! scope do.
 //!
+//! **A paused scope pauses its timers.** A child playing its exit has its scope
+//! paused (`pause_owner`), and its timers with its effects: none fires until the
+//! scope is resumed or disposed. A pause keeps what was left of the period, on
+//! the pass's clock — the moment of the pass the pause happened in — and a
+//! resume arms the timer that much after the pass it happens in, so a keyed row
+//! asked for again carries on its beat rather than firing for the time it was
+//! paused. Svelte 5 pauses an outroing block's effects but not its
+//! `setInterval`, which it does not own; Flutter's `TickerMode` mutes the
+//! tickers of an inactive route and keeps their state, as this does.
+//!
 //! The callback is an event, not an effect: what it reads is read untracked, and
 //! nothing re-runs it when that changes. It is main-thread API, like the other
 //! queues in `deferred`: called from another thread it lands in that thread's
@@ -39,7 +49,9 @@ use std::time::{Duration, Instant};
 use rustc_hash::FxHashSet;
 
 use crate::app_state::with_app_state;
-use crate::reactive::owner::{OwnerId, current_owner, on_cleanup, under_scope};
+use crate::reactive::owner::{
+    OwnerId, current_owner, current_owner_is_paused, on_cleanup, under_scope,
+};
 
 /// The shortest period an interval runs at. A period of zero would be due again
 /// the moment it ran, and the loop would never sleep.
@@ -121,6 +133,9 @@ pub(crate) struct Timers {
     /// The scopes that own a timer and have been given the cleanup that
     /// cancels theirs.
     scopes: FxHashSet<OwnerId>,
+    /// The moment of the last pass, which a pause or a resume during a pass
+    /// counts from.
+    last_pass: Option<Instant>,
 }
 
 impl Timers {
@@ -138,11 +153,21 @@ struct Timer {
     owner: Option<OwnerId>,
     /// The delay, or the period of an interval.
     after: Duration,
-    /// `None` until a pass arms it.
-    deadline: Option<Instant>,
+    clock: Clock,
     /// Taken while it runs, so the callback is not borrowed from the table it
     /// may itself schedule into or cancel from.
     run: Option<Run>,
+}
+
+/// Where a timer stands against the pass's clock.
+#[derive(Clone, Copy)]
+enum Clock {
+    /// Waiting for a pass to arm it this long after that pass's moment.
+    Unarmed(Duration),
+    /// Due at this moment.
+    Armed(Instant),
+    /// Its scope is paused, with this long left until it is due.
+    Paused(Duration),
 }
 
 enum Run {
@@ -152,6 +177,12 @@ enum Run {
 
 fn schedule(after: Duration, run: Run) -> TimerHandle {
     let owner = current_owner();
+    // Made under a paused scope, it waits for the resume like an effect would.
+    let clock = if current_owner_is_paused() {
+        Clock::Paused(after)
+    } else {
+        Clock::Unarmed(after)
+    };
     let (id, first_of_its_scope) = with_app_state(|app| {
         let mut timers = app.timers.borrow_mut();
         timers.next_id += 1;
@@ -160,7 +191,7 @@ fn schedule(after: Duration, run: Run) -> TimerHandle {
             id,
             owner,
             after,
-            deadline: None,
+            clock,
             run: Some(run),
         });
         let first = owner.is_some_and(|owner| timers.scopes.insert(owner));
@@ -200,20 +231,27 @@ fn schedule(after: Duration, run: Run) -> TimerHandle {
 pub(crate) fn next_deadline() -> Option<Instant> {
     with_app_state(|app| {
         let timers = app.timers.borrow();
-        let unarmed = timers.entries.iter().any(|timer| timer.deadline.is_none());
+        let unarmed = timers
+            .entries
+            .iter()
+            .any(|timer| matches!(timer.clock, Clock::Unarmed(_)));
         if unarmed {
             return Some(Instant::now());
         }
         timers
             .entries
             .iter()
-            .filter_map(|timer| timer.deadline)
+            .filter_map(|timer| match timer.clock {
+                Clock::Armed(at) => Some(at),
+                _ => None,
+            })
             .min()
     })
 }
 
 /// Arm the timers no pass has seen, at `now`, then run every timer due by
-/// `now`, earliest first and ties in the order they were created.
+/// `now`, earliest first and ties in the order they were created. A paused
+/// timer is neither armed nor run.
 ///
 /// Called once per pass, by the loop, with the pass's own moment. A timer a
 /// callback creates is armed by the next pass, so a timeout of zero scheduled
@@ -221,17 +259,18 @@ pub(crate) fn next_deadline() -> Option<Instant> {
 pub(crate) fn run_due_timers(now: Instant) {
     let due: Vec<u64> = with_app_state(|app| {
         let mut timers = app.timers.borrow_mut();
+        timers.last_pass = Some(now);
         for timer in &mut timers.entries {
-            timer.deadline.get_or_insert(now + timer.after);
+            if let Clock::Unarmed(after) = timer.clock {
+                timer.clock = Clock::Armed(now + after);
+            }
         }
         let mut due: Vec<(Instant, u64)> = timers
             .entries
             .iter()
-            .filter_map(|timer| {
-                timer
-                    .deadline
-                    .filter(|at| *at <= now)
-                    .map(|at| (at, timer.id))
+            .filter_map(|timer| match timer.clock {
+                Clock::Armed(at) if at <= now => Some((at, timer.id)),
+                _ => None,
             })
             .collect();
         due.sort_unstable();
@@ -242,16 +281,20 @@ pub(crate) fn run_due_timers(now: Instant) {
         // Taken out under the borrow and run outside it: a callback may
         // schedule, cancel, or be cancelled by what it does. A timeout leaves
         // the table as it runs; an interval keeps its entry, empty, so a
-        // cancel from inside its own callback is seen when it comes back.
-        let Some((owner, run)) = with_app_state(|app| {
+        // cancel from inside its own callback is seen when it comes back. One
+        // an earlier callback paused is left for its resume.
+        let Some((owner, last, run)) = with_app_state(|app| {
             let mut timers = app.timers.borrow_mut();
             let at = timers.entries.iter().position(|timer| timer.id == id)?;
+            let Clock::Armed(last) = timers.entries[at].clock else {
+                return None;
+            };
             let owner = timers.entries[at].owner;
             let run = timers.entries[at].run.take()?;
             if matches!(run, Run::Once(_)) {
                 timers.entries.remove(at);
             }
-            Some((owner, run))
+            Some((owner, last, run))
         }) else {
             continue;
         };
@@ -260,14 +303,18 @@ pub(crate) fn run_due_timers(now: Instant) {
             Run::Once(f) => under_scope(owner, f),
             Run::Every(mut f) => {
                 under_scope(owner, &mut f);
-                // Back on its next beat, unless it was cancelled while it ran.
+                // Back on its next beat, unless it was cancelled while it ran;
+                // paused while it ran, it keeps what is left until that beat.
                 with_app_state(|app| {
                     let mut timers = app.timers.borrow_mut();
                     if let Some(timer) = timers.entries.iter_mut().find(|timer| timer.id == id) {
-                        let last = timer.deadline.expect("a timer that ran was armed");
                         let missed = (now - last).as_nanos() / timer.after.as_nanos();
                         let beats = u32::try_from(missed + 1).unwrap_or(u32::MAX);
-                        timer.deadline = Some(last + timer.after * beats);
+                        let next = last + timer.after * beats;
+                        timer.clock = match timer.clock {
+                            Clock::Paused(_) => Clock::Paused(next - now),
+                            _ => Clock::Armed(next),
+                        };
                         timer.run = Some(Run::Every(f));
                     }
                 });
@@ -276,11 +323,44 @@ pub(crate) fn run_due_timers(now: Instant) {
     }
 }
 
+/// Pause, or resume, the timers the scopes in `scopes` own: what
+/// [`pause_owner`](crate::reactive::owner::pause_owner) and
+/// [`resume_owner`](crate::reactive::owner::resume_owner) do to timers.
+///
+/// A pause keeps how long was left until the timer was due, counted from the
+/// last pass; a resume arms it that long after the last pass. Both happen
+/// during a pass, so the last pass is the one they happen in.
+pub(crate) fn set_scopes_paused(scopes: &[OwnerId], paused: bool) {
+    with_app_state(|app| {
+        let mut timers = app.timers.borrow_mut();
+        if !scopes.iter().any(|scope| timers.scopes.contains(scope)) {
+            return;
+        }
+        let last_pass = timers.last_pass;
+        for timer in &mut timers.entries {
+            if !timer.owner.is_some_and(|owner| scopes.contains(&owner)) {
+                continue;
+            }
+            timer.clock = match (timer.clock, paused) {
+                (Clock::Unarmed(left), true) => Clock::Paused(left),
+                (Clock::Armed(at), true) => Clock::Paused(
+                    at.saturating_duration_since(last_pass.expect("an armed timer saw a pass")),
+                ),
+                (Clock::Paused(left), false) => match last_pass {
+                    Some(now) => Clock::Armed(now + left),
+                    None => Clock::Unarmed(left),
+                },
+                (clock, _) => clock,
+            };
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::reactive::guard::defer;
-    use crate::reactive::owner::{dispose_owner_now, with_owner};
+    use crate::reactive::owner::{dispose_owner_now, pause_owner, resume_owner, with_owner};
     use crate::reactive::{create_effect, create_signal};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -410,6 +490,101 @@ mod tests {
         assert!(!handles.borrow()[2].is_pending());
         run_due_timers(now + Duration::from_secs(1));
         assert_eq!(*runs.borrow(), [1]);
+    }
+
+    /// An interval under a paused scope does not fire, however late the pass,
+    /// and is no deadline to the loop; resumed, it is due what was left of its
+    /// period after the pass it was resumed in, and keeps that beat (#845).
+    #[test]
+    fn a_paused_scope_holds_its_interval_and_resumes_it_with_what_was_left() {
+        let runs = Rc::new(Cell::new(0));
+        let counted = runs.clone();
+        let (_, scope) = with_owner(|| {
+            set_interval(Duration::from_millis(50), move || {
+                counted.set(counted.get() + 1);
+            })
+        });
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        run_due_timers(t0);
+        run_due_timers(ms(20));
+        pause_owner(scope);
+
+        run_due_timers(ms(500));
+        assert_eq!(runs.get(), 0, "paused, it does not fire");
+        assert_eq!(next_deadline(), None, "and is no reason to wake");
+
+        resume_owner(scope);
+        assert_eq!(next_deadline(), Some(ms(530)), "30 ms were left at 20");
+        run_due_timers(ms(529));
+        assert_eq!(runs.get(), 0, "no catch-up fire");
+        run_due_timers(ms(530));
+        assert_eq!(runs.get(), 1);
+        assert_eq!(next_deadline(), Some(ms(580)), "on its own beat from there");
+        dispose_owner_now(scope);
+    }
+
+    /// A timeout made under a paused scope is not armed until the resume, and
+    /// then waits its whole delay.
+    #[test]
+    fn a_timeout_made_under_a_paused_scope_waits_for_the_resume() {
+        let ran = Rc::new(Cell::new(false));
+        let ((), scope) = with_owner(|| {});
+        pause_owner(scope);
+        let flag = ran.clone();
+        scope.run(|| set_timeout(Duration::from_millis(10), move || flag.set(true)));
+
+        let t0 = Instant::now();
+        run_due_timers(t0);
+        run_due_timers(t0 + Duration::from_secs(1));
+        assert!(!ran.get(), "it waited for the resume");
+        assert_eq!(next_deadline(), None);
+
+        resume_owner(scope);
+        run_due_timers(t0 + Duration::from_millis(1009));
+        assert!(!ran.get());
+        run_due_timers(t0 + Duration::from_millis(1010));
+        assert!(ran.get(), "its whole delay after the resume");
+        dispose_owner_now(scope);
+    }
+
+    /// Two timers due in one pass: the first pauses the scope of the second,
+    /// which does not run in that pass; and an interval that pauses its own
+    /// scope keeps what is left until its next beat.
+    #[test]
+    fn a_timer_paused_during_a_pass_is_left_for_its_resume() {
+        let runs = Rc::new(Cell::new(0));
+        let ((), scope) = with_owner(|| {});
+        let counted = runs.clone();
+        scope.run(|| {
+            set_interval(Duration::from_millis(50), move || {
+                pause_owner(scope);
+                counted.set(counted.get() + 1);
+            })
+        });
+        let counted = runs.clone();
+        scope.run(|| {
+            set_timeout(Duration::from_millis(50), move || {
+                counted.set(counted.get() + 10);
+            })
+        });
+
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        run_due_timers(t0);
+        run_due_timers(ms(60));
+        assert_eq!(runs.get(), 1, "the interval ran and paused the timeout");
+
+        run_due_timers(ms(200));
+        resume_owner(scope);
+        run_due_timers(ms(200));
+        assert_eq!(runs.get(), 11, "the timeout was left due, and runs");
+        assert_eq!(
+            next_deadline(),
+            Some(ms(240)),
+            "the interval had 40 ms left of its beat at 60"
+        );
+        dispose_owner_now(scope);
     }
 
     /// The loop sleeps until the next armed timer, and a cancelled one stops
