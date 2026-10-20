@@ -103,6 +103,6 @@ fn an_owned_widget_forwards_every_method() {
 fn a_component_forwards_every_method() {
     assert_forwards(
         "guido-macros/src/lib.rs",
-        "impl ::guido::widgets::Widget for #struct_name",
+        "impl #impl_generics ::guido::widgets::Widget for #struct_name",
     );
 }
