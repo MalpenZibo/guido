@@ -332,6 +332,8 @@ impl Platform for Recorder {
     /// compositor's answer, so it arrives configured, and at the scale of 1
     /// with it — a real one would wait a round trip, and nothing here is
     /// waiting for anything.
+    ///
+    /// Refused, as the Wayland platform refuses it, when the parent is gone.
     fn create_popup(
         &mut self,
         id: SurfaceId,
@@ -339,6 +341,9 @@ impl Platform for Recorder {
         config: &crate::surface::PopupConfig,
         size: (u32, u32),
     ) -> bool {
+        if !self.surfaces.contains_key(&parent) {
+            return false;
+        }
         self.created.push(id);
         self.surfaces.insert(
             id,

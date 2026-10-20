@@ -1204,6 +1204,71 @@ fn a_branching_popup_tree_comes_down_newest_first() {
     );
 }
 
+/// Sets its flag when it is dropped, so a test can tell whether the widget that
+/// holds it is gone.
+struct DropFlag(Rc<Cell<bool>>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
+/// A popup the platform refuses, spawned on a bar closed in the same turn: its
+/// dynamic child reads `poke` from outside and a signal of its own. Once `poke`
+/// is written, the child must not have run again and the content must be gone.
+fn a_refused_popup_is_taken_down(config: PopupConfig) {
+    let Some(mut app) = headless() else { return };
+    let parent = app.surface(content_bar(), measuring_24);
+    app.configure(parent, 200, 30, 1.0);
+    app.step();
+
+    let poke = create_signal(0u32);
+    let runs = Rc::new(Cell::new(0u32));
+    let dropped = Rc::new(Cell::new(false));
+    let count = runs.clone();
+    let flag = DropFlag(dropped.clone());
+    surface_handle(parent).close();
+    let popup = spawn_popup(parent, config, move || {
+        let own = create_signal(0u32);
+        container().child(move || {
+            let _ = &flag; // moved into the child, so it drops with the widget
+            count.set(count.get() + 1);
+            poke.get();
+            own.get();
+            container().height(24.0)
+        })
+    });
+    app.step();
+    assert!(popup.dismissed(), "the platform refused the popup");
+
+    let before = runs.get();
+    poke.set(1);
+    app.step();
+    assert_eq!(runs.get(), before, "the refused popup's child ran again");
+    assert!(
+        dropped.get(),
+        "the refused popup's content was never dropped"
+    );
+}
+
+/// A popup the platform refuses is taken down as a closed one is (#856). An
+/// auto-height popup was measured, so its dynamic child had run and subscribed
+/// to `poke`; dropping the surface without unregistering the widgets left it
+/// subscribed, and the next write reran it against a signal its owner had
+/// already disposed.
+#[test]
+fn a_refused_popup_measured_for_its_height_runs_nothing_again() {
+    a_refused_popup_is_taken_down(PopupConfig::new(80));
+}
+
+/// The same with a fixed height: nothing was measured, so nothing ran, but the
+/// widgets stayed in the tree all the same.
+#[test]
+fn a_refused_popup_of_a_fixed_height_leaves_the_tree() {
+    a_refused_popup_is_taken_down(PopupConfig::new(80).height(40));
+}
+
 /// A new grab closes the grab chain it cannot nest under, deepest first.
 ///
 /// xdg-shell lets one grab chain exist at a time and a new grab must nest under
