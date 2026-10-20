@@ -583,6 +583,14 @@ impl ScrollState {
     /// way, mostly along a direction it scrolls and has room in. One that ran
     /// mostly across it, as fingers drifting while they lift do, leaves the
     /// matter as it was (#841).
+    ///
+    /// What it gives up: a both-ways scroller at its left end, with room
+    /// across, loses the end to a last sample that runs purely leftwards,
+    /// which moved nothing and ran its way. Counting only room in the
+    /// direction pushed would keep it, but a list pushed past its end would
+    /// then keep the end it ran out of, which is #841 again. A purely
+    /// sideways last sample is rare, because libinput locks a touchpad scroll
+    /// to one axis.
     pub fn note_sample(&mut self, axis: ScrollAxis, delta_x: f32, delta_y: f32, moved: bool) {
         let mostly_horizontal = delta_x.abs() >= delta_y.abs();
         let its_way = if mostly_horizontal {
@@ -599,6 +607,12 @@ impl ScrollState {
 
     /// Whether the end of a gesture at `at` is this scroller's: the gesture's
     /// samples claim it (`claims_gesture_end`), and the last came recently.
+    ///
+    /// The recency is for a gesture whose end this scroller never heard: the
+    /// pointer moved off it between the last sample and the touchpad's stop,
+    /// so the end went elsewhere and the claim was never cleared. A later
+    /// flick that slides it under the pointer for its end must not find it
+    /// claimed (#854).
     pub fn owns_gesture_end(&self, at: EventInstant) -> bool {
         self.claims_gesture_end && self.sampled_recently(at)
     }

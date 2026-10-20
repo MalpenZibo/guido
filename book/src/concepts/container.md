@@ -355,6 +355,14 @@ mid-drag keeps the gesture rather than passing what is left of it outward, as
 Flutter's nested scrollables do; CSS calls the other behaviour scroll chaining,
 and there is no `overscroll-behavior` here to ask for it.
 
+A touchpad flick goes sample by sample instead, as the wheel does: each one
+moves the innermost scroller under the pointer that can take it, so a list at
+its end passes the rest of the flick to the page around it. When the fingers
+lift, the glide belongs to the scroller the last samples moved, even if a
+scroller that could not take them is under the pointer by then: a flick that
+scrolled a page over a carousel, which cannot scroll that way, carries the page
+on.
+
 ### Filling the Viewport
 
 A scrolled axis has no end, so a `fill()` child of the content has nothing to
