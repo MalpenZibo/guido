@@ -113,3 +113,58 @@ fn an_erased_render_prop_is_forwarded_as_it_is() {
     };
     assert!(is_red(pixel), "the outer caller's page, got {pixel:?}");
 }
+
+/// A closure whose branches build different widgets erases each one itself,
+/// so it returns exactly `AnyWidget` — and that is still one closure the
+/// setter takes, not two it cannot choose between.
+#[test]
+fn an_erased_render_prop_takes_a_closure_that_erases_its_branches() {
+    let Some(pixel) = painted(|| {
+        erased().render(|v: u32| match v {
+            7 => page(RED).into_any(),
+            _ => swatch().color(BLUE).into_any(),
+        })
+    }) else {
+        return;
+    };
+    assert!(
+        is_red(pixel),
+        "the branch the closure took for 7, got {pixel:?}"
+    );
+}
+
+#[test]
+fn an_erased_render_prop_takes_a_callback() {
+    let Some(pixel) =
+        painted(|| erased().render(Callback::new(|v: u32| page(by_argument(v)).into_any())))
+    else {
+        return;
+    };
+    assert!(is_red(pixel), "the callback's page for 7, got {pixel:?}");
+}
+
+/// A required render prop is a constructor argument, and takes what its
+/// setter would.
+#[component]
+fn required(#[prop(required, callback)] render: fn(u32) -> impl Widget) -> impl Widget {
+    container()
+        .width(fill())
+        .height(fill())
+        .child(render.map(|render| render.run(7)))
+}
+
+#[test]
+fn a_required_render_prop_takes_a_closure_that_erases_its_branches() {
+    let Some(pixel) = painted(|| {
+        required(|v: u32| match v {
+            7 => page(RED).into_any(),
+            _ => swatch().color(BLUE).into_any(),
+        })
+    }) else {
+        return;
+    };
+    assert!(
+        is_red(pixel),
+        "the branch the closure took for 7, got {pixel:?}"
+    );
+}

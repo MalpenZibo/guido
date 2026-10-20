@@ -1,7 +1,6 @@
-use std::rc::Rc;
-
 use crate::layout::{Axis, Constraints, Size};
-use crate::reactive::{Callback, IntoHandler};
+use crate::reactive::Callback;
+use crate::reactive::callback::{CallbackHandler, FnHandler, OptionHandler};
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -1411,31 +1410,47 @@ impl Widget for Box<dyn Widget> {
     }
 }
 
-#[doc(hidden)]
-pub struct WidgetHandler;
+/// What a `fn(..) -> impl Widget` render prop's setter takes: a closure
+/// returning any widget, a [`Callback`] returning an [`AnyWidget`], or an
+/// `Option` of one, which is how a component forwards its own render prop.
+///
+/// The closure's widget is erased by the setter, as Leptos erases to
+/// `AnyView` and Dioxus to `Element`. A closure that erases its branches
+/// itself returns an `AnyWidget`, which is a widget too, and is not boxed
+/// again. It is a trait of its own rather than one more
+/// [`IntoHandler`](crate::reactive::IntoHandler) impl because there such a
+/// closure matches both the plain closure and the widget-returning one.
+pub trait IntoRenderProp<Args, Marker> {
+    /// As the handle the prop holds.
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>>;
+}
 
-/// A closure returning any widget is a render prop's handler too: the setter
-/// boxes what it returns, so `fn(P) -> impl Widget` takes a closure that
-/// builds a `Container` as readily as one that builds a component — as
-/// Leptos erases to `AnyView` and Dioxus to `Element`.
 macro_rules! erases_to_any_widget {
     ($(($($arg:ident),*)),* $(,)?) => {$(
         impl<$($arg: 'static,)* W: Widget + 'static, F: Fn($($arg),*) -> W + 'static>
-            IntoHandler<($($arg,)*), WidgetHandler, AnyWidget> for F
+            IntoRenderProp<($($arg,)*), FnHandler> for F
         {
             #[allow(non_snake_case)]
-            fn into_handler(self) -> Option<Rc<dyn Fn(($($arg,)*)) -> AnyWidget>> {
-                Some(Rc::new(move |($($arg,)*)| self($($arg),*).into_any()))
-            }
-
-            fn into_callback_prop(self) -> Option<Callback<($($arg,)*), AnyWidget>> {
-                self.into_handler().map(Callback::from_rc)
+            fn into_render_prop(self) -> Option<Callback<($($arg,)*), AnyWidget>> {
+                Some(Callback::new(move |$($arg: $arg),*| self($($arg),*).into_any()))
             }
         }
     )*};
 }
 
 erases_to_any_widget!((), (A), (A, B), (A, B, C));
+
+impl<Args: 'static> IntoRenderProp<Args, CallbackHandler> for Callback<Args, AnyWidget> {
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
+        Some(self)
+    }
+}
+
+impl<Args: 'static> IntoRenderProp<Args, OptionHandler> for Option<Callback<Args, AnyWidget>> {
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
+        self
+    }
+}
 
 #[cfg(test)]
 mod tests {
