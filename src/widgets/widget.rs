@@ -1,4 +1,7 @@
+use std::rc::Rc;
+
 use crate::layout::{Axis, Constraints, Size};
+use crate::reactive::{Callback, IntoHandler};
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -1407,6 +1410,32 @@ impl Widget for Box<dyn Widget> {
         (**self).register_children(tree, id)
     }
 }
+
+#[doc(hidden)]
+pub struct WidgetHandler;
+
+/// A closure returning any widget is a render prop's handler too: the setter
+/// boxes what it returns, so `fn(P) -> impl Widget` takes a closure that
+/// builds a `Container` as readily as one that builds a component — as
+/// Leptos erases to `AnyView` and Dioxus to `Element`.
+macro_rules! erases_to_any_widget {
+    ($(($($arg:ident),*)),* $(,)?) => {$(
+        impl<$($arg: 'static,)* W: Widget + 'static, F: Fn($($arg),*) -> W + 'static>
+            IntoHandler<($($arg,)*), WidgetHandler, AnyWidget> for F
+        {
+            #[allow(non_snake_case)]
+            fn into_handler(self) -> Option<Rc<dyn Fn(($($arg,)*)) -> AnyWidget>> {
+                Some(Rc::new(move |($($arg,)*)| self($($arg),*).into_any()))
+            }
+
+            fn into_callback_prop(self) -> Option<Callback<($($arg,)*), AnyWidget>> {
+                self.into_handler().map(Callback::from_rc)
+            }
+        }
+    )*};
+}
+
+erases_to_any_widget!((), (A), (A, B), (A, B, C));
 
 #[cfg(test)]
 mod tests {

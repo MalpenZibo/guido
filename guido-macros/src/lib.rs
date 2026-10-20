@@ -14,7 +14,9 @@ use syn::{
 /// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
 /// - `#[prop(default = <expr>)]` — standard prop with custom default
 /// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params.
-///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`)
+///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`).
+///   A return type makes it a render prop: `fn(T) -> Container` returns what the
+///   closure does, and `fn(T) -> impl Widget` boxes it into an `AnyWidget`
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
 /// - `#[prop(required)]` — an argument of the constructor rather than a setter,
@@ -69,6 +71,30 @@ fn callback_args_tuple(params: &[Type]) -> proc_macro2::TokenStream {
     }
 }
 
+/// What a callback prop's closure returns: `()` when `fn(..)` names nothing,
+/// the type it names, or `Box<dyn Widget>` for `impl Widget`, which is what the
+/// setter boxes the closure's widget into.
+fn callback_ret(output: &syn::ReturnType) -> syn::Result<proc_macro2::TokenStream> {
+    let syn::ReturnType::Type(_, ty) = output else {
+        return Ok(quote! { () });
+    };
+    let Type::ImplTrait(impl_trait) = &**ty else {
+        return Ok(quote! { #ty });
+    };
+    let names_widget = |bound: &syn::TypeParamBound| {
+        matches!(bound, syn::TypeParamBound::Trait(t)
+            if t.path.segments.last().is_some_and(|s| s.ident == "Widget"))
+    };
+    if impl_trait.bounds.iter().any(names_widget) {
+        Ok(quote! { ::guido::widgets::AnyWidget })
+    } else {
+        Err(syn::Error::new_spanned(
+            impl_trait,
+            "a render prop can return `impl Widget` or a concrete type, not another `impl Trait`",
+        ))
+    }
+}
+
 #[proc_macro_attribute]
 pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as ItemFn);
@@ -90,7 +116,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     let type_params: Vec<_> = generics.type_params().map(|p| &p.ident).collect();
-    // `render`'s `impl Widget` has to name every type and const parameter in
+    // `__render`'s `impl Widget` has to name every type and const parameter in
     // its `use<..>`; a lifetime is the only thing it may leave out.
     let captured = type_params
         .iter()
@@ -226,15 +252,17 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        // For callback fields, extract parameter types from `fn(T1, T2, ...)` syntax
-        let callback_params = if is_callback {
-            if let Type::BareFn(TypeBareFn { inputs, .. }) = field_type {
-                inputs.iter().map(|arg| arg.ty.clone()).collect()
-            } else {
-                Vec::new()
+        // For callback fields, read the parameter and return types from
+        // `fn(T1, T2, ...) -> R`.
+        let (callback_params, callback_ret) = match field_type {
+            Type::BareFn(TypeBareFn { inputs, output, .. }) if is_callback => {
+                let ret = match callback_ret(output) {
+                    Ok(ret) => ret,
+                    Err(err) => return err.to_compile_error().into(),
+                };
+                (inputs.iter().map(|arg| arg.ty.clone()).collect(), ret)
             }
-        } else {
-            Vec::new()
+            _ => (Vec::new(), quote! { () }),
         };
 
         prop_fields.push(PropField {
@@ -244,6 +272,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             default_value,
             is_callback,
             callback_params,
+            callback_ret,
             is_children,
             is_slot,
             is_required,
@@ -257,8 +286,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         if field.is_callback {
             let args = callback_args_tuple(&field.callback_params);
+            let ret = &field.callback_ret;
             quote! {
-                #name: Option<::guido::reactive::Callback<#args>>
+                #name: Option<::guido::reactive::Callback<#args, #ret>>
             }
         } else if field.is_children {
             quote! {
@@ -465,7 +495,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#slot_methods)*
 
-            fn render(&self) -> impl ::guido::widgets::Widget + use<#(#captured),*> {
+            // Underscored, as the struct's own fields are, so a prop may be
+            // called `render`.
+            fn __render(&self) -> impl ::guido::widgets::Widget + use<#(#captured),*> {
                 #(#prop_bindings)*
                 #body
             }
@@ -480,7 +512,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 // what that scope declared and goes when that scope goes.
                 let (widget, owner_id) = ::guido::reactive::__internal::under_scope(
                     self.__made_in,
-                    || ::guido::reactive::__internal::with_owner(|| self.render()),
+                    || ::guido::reactive::__internal::with_owner(|| self.__render()),
                 );
                 self.__owner_id.set(Some(owner_id));
                 *self.__inner.borrow_mut() = Some(Box::new(widget));
@@ -589,6 +621,8 @@ struct PropField {
     /// For callbacks: parameter types extracted from `fn(T1, T2, ...)` field type.
     /// Empty vec means `Fn()` (unit type or no params).
     callback_params: Vec<Type>,
+    /// For callbacks: what the closure returns, `()` when the type names nothing.
+    callback_ret: proc_macro2::TokenStream,
     is_children: bool,
     is_slot: bool,
     /// Taken by the constructor rather than by a setter.
@@ -601,7 +635,8 @@ impl PropField {
     fn input(&self, marker: &syn::Ident) -> proc_macro2::TokenStream {
         if self.is_callback {
             let args = callback_args_tuple(&self.callback_params);
-            quote! { impl ::guido::reactive::IntoHandler<#args, #marker> }
+            let ret = &self.callback_ret;
+            quote! { impl ::guido::reactive::IntoHandler<#args, #marker, #ret> }
         } else {
             let ty = &self.ty;
             quote! { impl ::guido::reactive::IntoSignal<#ty, #marker> }
