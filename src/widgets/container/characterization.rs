@@ -8705,3 +8705,54 @@ fn the_damage_reach_covers_a_blur_and_scales_with_it() {
         20.0 + 2.0 * bound
     );
 }
+
+/// The end of a touchpad gesture reaches the scroller its samples moved: a
+/// flick that scrolled a page over a carousel, which cannot scroll that way,
+/// carries the page on past the lift (#841). Here, in the crate, so that a
+/// change to who claims the end fails the first suite that runs.
+#[test]
+fn a_flick_over_a_carousel_carries_the_page_on() {
+    use crate::widgets::scroll::Scroll;
+    use crate::widgets::widget::ScrollSource;
+    let mut h = H::new(
+        box_of(200.0, 200.0).scroll(Scroll::vertical()).child(
+            container()
+                .layout(Flex::column())
+                .child(box_of(200.0, 40.0))
+                .child(
+                    box_of(200.0, 200.0)
+                        .scroll(Scroll::horizontal())
+                        .child(box_of(400.0, 200.0)),
+                )
+                .child(box_of(200.0, 600.0)),
+        ),
+    );
+    h.fit(200.0, 200.0);
+    let page = |h: &mut H| -h.paint().children[0].local_transform.ty();
+    let send_at = |h: &mut H, event: Event, at: std::time::Instant| {
+        h.tree.set_event_instant(Some(at));
+        h.send(event);
+        h.tree.set_event_instant(None);
+    };
+    let mut at = std::time::Instant::now();
+    for _ in 0..6 {
+        send_at(
+            &mut h,
+            Event::scroll(100.0, 150.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += std::time::Duration::from_millis(8);
+    }
+    let lifted = page(&mut h);
+    assert!(
+        (lifted - 60.0).abs() < 0.01,
+        "the flick scrolled the page {lifted}"
+    );
+    send_at(&mut h, Event::scroll_end(100.0, 150.0), at);
+    for _ in 0..60 {
+        at += std::time::Duration::from_millis(16);
+        h.advance_at(at);
+    }
+    let coasted = page(&mut h) - lifted;
+    assert!(coasted > 10.0, "the page coasted {coasted} past the lift");
+}

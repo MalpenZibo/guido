@@ -1086,7 +1086,9 @@ impl Container {
     /// One place, because a touchpad's `ScrollEnd` and a finger's release are
     /// the same moment told by two devices — and a change to what a lift does
     /// that reached only one of them would leave a flick coasting and a drag
-    /// stopping dead.
+    /// stopping dead. A touchpad's end comes here only from the scroller that
+    /// owns it (`ScrollState::owns_gesture_end`); a finger's drag is owned by
+    /// the scroller that claimed it, so its release needs no such test.
     pub(super) fn hand_off_to_momentum(
         &mut self,
         id: WidgetId,
@@ -1202,7 +1204,11 @@ impl Container {
             sd.scroll_state.last_scroll_time = Some(at);
         }
 
-        old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y
+        let moved = old_x != sd.scroll_state.offset_x || old_y != sd.scroll_state.offset_y;
+        if source.is_continuous() {
+            sd.scroll_state.note_sample(axis, delta_x, delta_y, moved);
+        }
+        moved
     }
 }
 
