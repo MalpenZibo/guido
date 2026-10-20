@@ -15,7 +15,9 @@ struct Params {
     // Destination rect size in physical pixels, for the mask SDF.
     dst_size: vec2<f32>,
     curvature: f32,
-    _pad: f32,
+    // Where a merged outline's members begin in `merge_records`, or NO_MERGE
+    // for a region cut by its own corners.
+    merged: u32,
     // Corner radii in physical pixels: top-left, top-right, bottom-right,
     // bottom-left.
     radii: vec4<f32>,
@@ -57,6 +59,10 @@ struct Params {
 
 // The frame's clip chains — see the shared clip-chain block below.
 @group(1) @binding(0) var<storage, read> clip_records: array<ClipRecord>;
+
+// The frame's merged shapes, for a blur cut to one — see the shared
+// merged-shape block below. Bound only by the composites by a shape.
+@group(2) @binding(0) var<storage, read> merge_records: array<MergeRecord>;
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
@@ -336,6 +342,78 @@ fn chain_distance(at: vec2<f32>, nearest: f32, link: u32) -> f32 {
 }
 // === END SHARED CLIP CHAIN ===
 
+// === SHARED MERGED SHAPE — two copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// The members of a merged shape, and the fold that makes one outline of
+// them. The shape shader fills that outline; the backdrop composite cuts a
+// merged blur to it, so the frost and the fill over it meet at one edge. Each
+// declares `merge_records` for itself, at its own binding.
+//
+// Mirrors `MergeRecord` in `src/renderer/merge.rs`, checked field for field by
+// the test beside it.
+struct MergeRecord {
+    rect: vec4<f32>,
+    radii: vec4<f32>,
+    // physical world pixels to the member's own space, row-major 2x3
+    inverse: array<f32, 6>,
+    curvature: f32,
+    // one unit of the member's own space, in physical pixels
+    to_pixels: f32,
+    // premultiplied
+    fill: vec4<f32>,
+    // premultiplied
+    border_color: vec4<f32>,
+    // physical pixels
+    border_width: f32,
+    // the smooth minimum's reach, physical pixels; 0 is a plain union
+    smoothing: f32,
+    next: u32,
+}
+
+const NO_MERGE: u32 = 0xffffffffu;
+
+// No container merges more; a broken chain cannot hang the GPU either.
+const MAX_MERGED: u32 = 16u;
+
+struct Merged {
+    dist: f32,
+    fill: vec4<f32>,
+    border_color: vec4<f32>,
+    border_width: f32,
+}
+
+// The merged distance at `at`, in physical pixels, and what the members give
+// the fragment there — colours still premultiplied.
+fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
+    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0);
+    var i = first;
+    for (var n = 0u; n < MAX_MERGED && i != NO_MERGE; n = n + 1u) {
+        let r = merge_records[i];
+        let p = vec2<f32>(
+            r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
+            r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
+        );
+        let d = rounded_rect_sdf(p, r.rect, r.radii, r.curvature) * r.to_pixels;
+        // The quadratic smooth minimum (Inigo Quilez, "smooth minimum"): `h`
+        // is how far inside each other's reach the two distances are, and
+        // `q` the share the further one keeps.
+        var h = 0.0;
+        if (r.smoothing > 0.0) {
+            h = max(r.smoothing - abs(m.dist - d), 0.0) / r.smoothing;
+        }
+        let q = h * h * 0.5;
+        let share = select(1.0 - q, q, m.dist < d);
+        m.dist = min(m.dist, d) - q * r.smoothing * 0.5;
+        m.fill = mix(m.fill, r.fill, share);
+        m.border_color = mix(m.border_color, r.border_color, share);
+        m.border_width = mix(m.border_width, r.border_width, share);
+        i = r.next;
+    }
+    return m;
+}
+// === END SHARED MERGED SHAPE ===
+
 // Write the blurred region back over the target, shaped by the container's
 // own corners so the effect stops where the container does.
 @fragment
@@ -347,8 +425,17 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
 // How much of the blur the region lays down at this fragment: its shape, cut
 // by its clip and faded by its opacity.
 fn shape_coverage(uv: vec2<f32>) -> f32 {
-    let p = in_shape_space(uv);
-    let distance = rounded_rect_sdf(p, params.shape_rect, params.radii, params.curvature);
+    // A merged outline is measured on the target, in physical pixels, and
+    // its members' share of it carries their opacity in `fill`'s alpha.
+    var distance: f32;
+    var share = 1.0;
+    if (params.merged != NO_MERGE) {
+        let merged = merged_shape(params.viewport_origin + uv * params.dst_size, params.merged);
+        distance = merged.dist;
+        share = merged.fill.a;
+    } else {
+        distance = rounded_rect_sdf(in_shape_space(uv), params.shape_rect, params.radii, params.curvature);
+    }
     // One pixel of feathering, however the shape is placed. The distance is in
     // shape space now, so the fixed half-pixel threshold this used to carry
     // would widen under a scale and shear under a rotation; the derivative is
@@ -362,7 +449,7 @@ fn shape_coverage(uv: vec2<f32>) -> f32 {
     // perimeter, none of them off by more than 8 of 255.
     let aa = max(fwidth(distance) * 0.5, 0.0001);
     let mask = 1.0 - smoothstep(-aa, aa, distance);
-    return mask * clip_coverage(uv) * params.opacity;
+    return mask * share * clip_coverage(uv) * params.opacity;
 }
 
 // The same blur laid into a layer's texture, in two steps.

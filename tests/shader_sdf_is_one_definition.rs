@@ -1,5 +1,8 @@
 //! The corner geometry is written four times, and the four have to agree.
-//! So is the walk down a clip chain that cuts with it.
+//! So is the walk down a clip chain that cuts with it. And the merged shape —
+//! its members' records and the smooth minimum that folds them — is written
+//! twice, in the shape shader that fills it and the backdrop composite that
+//! cuts a merged blur to it.
 //!
 //! WGSL has no include. A clip is one shape and a corner is one curve, but the
 //! pipelines that cut them are four — the shape shader, the textured quad
@@ -59,6 +62,19 @@ const BLOCKS: [(&str, &str); 2] = [
     ),
 ];
 
+/// The merged shape, and the two shaders that carry it: the one that fills
+/// it and the one that blurs what is behind it. A blur cut to one fold and a
+/// fill drawn by another would part along the neck, which is the one place
+/// the two exist to agree.
+const MERGED_SHADERS: [&str; 2] = [
+    "src/renderer/shader.wgsl",
+    "src/renderer/backdrop_shader.wgsl",
+];
+const MERGED_BLOCK: (&str, &str) = (
+    "// === SHARED MERGED SHAPE",
+    "// === END SHARED MERGED SHAPE ===",
+);
+
 fn block(path: &str, (open, close): (&str, &str)) -> String {
     let source = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
         .unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -81,14 +97,30 @@ fn block(path: &str, (open, close): (&str, &str)) -> String {
 #[test]
 fn every_shader_that_cuts_a_corner_cuts_the_same_one() {
     for markers in BLOCKS {
-        every_shader_carries_the_same(markers);
+        every_shader_carries_the_same(&SHADERS, markers);
     }
 }
 
-fn every_shader_carries_the_same(markers: (&str, &str)) {
+/// The fill and the frost of a merged shape fold its members the same way.
+#[test]
+fn a_merged_shape_is_folded_the_same_where_it_is_filled_and_where_it_is_blurred() {
+    every_shader_carries_the_same(&MERGED_SHADERS, MERGED_BLOCK);
+    for path in &MERGED_SHADERS {
+        let source =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        // The definition and the shader's own call.
+        assert!(
+            source.matches("merged_shape(").count() >= 2,
+            "{path} carries the merged shape and never folds it — \
+             the shared block is carried but some other outline is being cut"
+        );
+    }
+}
+
+fn every_shader_carries_the_same(shaders: &[&str], markers: (&str, &str)) {
     let (open, close) = markers;
-    let reference = block(SHADERS[0], markers);
-    for path in &SHADERS[1..] {
+    let reference = block(shaders[0], markers);
+    for path in &shaders[1..] {
         let other = block(path, markers);
         if other != reference {
             let mismatch = reference
@@ -103,7 +135,7 @@ fn every_shader_carries_the_same(markers: (&str, &str)) {
                  every shader cuts the same corner, and #403 is what happens when they do not. \
                  `Rect::shape_distance` in src/widgets/widget.rs is a fifth copy in Rust; \
                  if the curve itself is changing, it changes too.",
-                SHADERS[0]
+                shaders[0]
             );
         }
     }

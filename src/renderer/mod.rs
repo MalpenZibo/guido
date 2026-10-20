@@ -39,7 +39,7 @@ mod types;
 
 pub use crate::image_decode::DecodedImage;
 pub use clip::{ClipChains, ClipRef, NO_CHAIN, ResolvedClip};
-pub use commands::{Border, CornerRadii, DrawCommand};
+pub use commands::{BlurShape, Border, CornerRadii, DrawCommand};
 // `RenderLayer` is exported because `FlattenScratch`'s documentation links to
 // it and rustdoc runs with warnings denied, a link the type has carried since
 // before it was public. It is not a new hole: `FlattenedCommand::layer` has
@@ -56,7 +56,7 @@ pub(crate) use gpu_context::GpuSlot;
 #[cfg(any(test, feature = "testing"))]
 pub use gpu_context::OffscreenTarget;
 pub use gpu_context::{GpuContext, RenderTarget, SurfaceState};
-pub use merge::{MAX_MEMBERS, MergeChildren, MergeMember};
+pub use merge::{MAX_MEMBERS, MergeChildren, MergeMember, MergedOutline};
 pub use paint_context::PaintContext;
 pub use path::{Cap, Dashes, Fill, FillRule, Join, Path, PathElement, Stroke};
 pub use render::Renderer;

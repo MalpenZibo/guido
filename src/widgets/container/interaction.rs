@@ -517,15 +517,10 @@ impl Container {
                 }
             }
 
-            Event::KeyDown {
-                key,
-                modifiers,
-                repeat,
-            } => {
+            Event::KeyDown { key, modifiers, .. } => {
                 if let Some(ref ix) = self.interaction
-                    && let Some(ref callback) = ix.on_key_down
-                    && !tree.heard_this_key(id)
-                    && callback(*key, *modifiers, *repeat) == EventResponse::Handled
+                    && offer_key(tree, id, event, &ix.on_key_down, &ix.on_key_up)
+                        == EventResponse::Handled
                 {
                     return EventResponse::Handled;
                 }
@@ -535,11 +530,10 @@ impl Container {
                 }
             }
 
-            Event::KeyUp { key, modifiers } => {
+            Event::KeyUp { .. } => {
                 if let Some(ref ix) = self.interaction
-                    && let Some(ref callback) = ix.on_key_up
-                    && !tree.heard_this_key(id)
-                    && callback(*key, *modifiers) == EventResponse::Handled
+                    && offer_key(tree, id, event, &ix.on_key_down, &ix.on_key_up)
+                        == EventResponse::Handled
                 {
                     return EventResponse::Handled;
                 }
@@ -584,6 +578,23 @@ impl Container {
         EventResponse::Ignored
     }
 
+    /// Offer a key to this container's capture listeners, as it goes down
+    /// the key route to the widgets inside: the web's capture phase. The
+    /// listeners outside have heard it already, and nothing inside has.
+    pub(super) fn capture_key(&self, tree: &Tree, id: WidgetId, event: &Event) -> EventResponse {
+        self.interaction
+            .as_ref()
+            .map_or(EventResponse::Ignored, |ix| {
+                offer_key(
+                    tree,
+                    id,
+                    event,
+                    &ix.on_key_down_capture,
+                    &ix.on_key_up_capture,
+                )
+            })
+    }
+
     /// Whether this container declares `when_focused` and the focus is
     /// currently inside it.
     fn holds_the_focus_it_draws(&self, id: WidgetId) -> bool {
@@ -592,4 +603,32 @@ impl Container {
             .is_some_and(|ix| ix.declares(|w| matches!(w, StateWhen::Focused)))
             && focus_within(id)
     }
+}
+
+/// Hand a key to one phase's pair of listeners: the press to `down`, the
+/// release to `up`. A container on the focus path that already heard the key
+/// is not asked again on the way down to another listener (#634).
+fn offer_key(
+    tree: &Tree,
+    id: WidgetId,
+    event: &Event,
+    down: &Option<KeyCallback>,
+    up: &Option<KeyUpCallback>,
+) -> EventResponse {
+    let response = match event {
+        Event::KeyDown {
+            key,
+            modifiers,
+            repeat,
+        } => down
+            .as_ref()
+            .filter(|_| !tree.heard_this_key(id))
+            .map(|callback| callback(*key, *modifiers, *repeat)),
+        Event::KeyUp { key, modifiers } => up
+            .as_ref()
+            .filter(|_| !tree.heard_this_key(id))
+            .map(|callback| callback(*key, *modifiers)),
+        _ => None,
+    };
+    response.unwrap_or(EventResponse::Ignored)
 }

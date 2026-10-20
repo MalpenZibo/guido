@@ -820,6 +820,17 @@ fn clipped(in: VertexOutput, color: vec4<f32>) -> vec4<f32> {
 // The vertex stage is `vs_main`, unchanged: a merged instance has no gradient,
 // so its `gradient_type` names its first member.
 
+// The members of the frame's merged shapes — see the shared block below.
+@group(0) @binding(2) var<storage, read> merge_records: array<MergeRecord>;
+
+// === SHARED MERGED SHAPE — two copies, kept identical by
+// `tests/shader_sdf_is_one_definition.rs` ===
+//
+// The members of a merged shape, and the fold that makes one outline of
+// them. The shape shader fills that outline; the backdrop composite cuts a
+// merged blur to it, so the frost and the fill over it meet at one edge. Each
+// declares `merge_records` for itself, at its own binding.
+//
 // Mirrors `MergeRecord` in `src/renderer/merge.rs`, checked field for field by
 // the test beside it.
 struct MergeRecord {
@@ -840,8 +851,6 @@ struct MergeRecord {
     smoothing: f32,
     next: u32,
 }
-
-@group(0) @binding(2) var<storage, read> merge_records: array<MergeRecord>;
 
 const NO_MERGE: u32 = 0xffffffffu;
 
@@ -884,6 +893,7 @@ fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
     }
     return m;
 }
+// === END SHARED MERGED SHAPE ===
 
 fn premultiplied(c: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(c.rgb * c.a, c.a);

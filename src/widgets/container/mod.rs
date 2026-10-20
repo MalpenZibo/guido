@@ -259,6 +259,8 @@ pub(super) struct InteractionState {
     pub(super) on_middle_click: Option<ClickCallback>,
     pub(super) on_key_down: Option<KeyCallback>,
     pub(super) on_key_up: Option<KeyUpCallback>,
+    pub(super) on_key_down_capture: Option<KeyCallback>,
+    pub(super) on_key_up_capture: Option<KeyUpCallback>,
     pub(super) on_hover: Option<HoverCallback>,
     pub(super) on_scroll: Option<ScrollCallback>,
     pub(super) on_pointer_move: Option<PointerMoveCallback>,
@@ -330,6 +332,8 @@ impl Default for InteractionState {
             on_middle_click: None,
             on_key_down: None,
             on_key_up: None,
+            on_key_down_capture: None,
+            on_key_up_capture: None,
             on_hover: None,
             on_scroll: None,
             on_pointer_move: None,
@@ -349,6 +353,14 @@ impl Default for InteractionState {
 }
 
 impl InteractionState {
+    /// Whether any key listener is declared, in either phase.
+    fn listens_for_keys(&self) -> bool {
+        self.on_key_down.is_some()
+            || self.on_key_up.is_some()
+            || self.on_key_down_capture.is_some()
+            || self.on_key_up_capture.is_some()
+    }
+
     /// The raw flag, untracked and **ungated by `enabled`** — unlike
     /// [`Control::is_hovered`], which is what a style asks. Event handling can
     /// use it because it never reaches a disabled container: the gate at the
@@ -946,6 +958,9 @@ impl Container {
     /// source. A blur restricted to the compositor has no radius of its own to
     /// say it with, and asks for its region on its sources alone; switch that
     /// one off with [`BackdropSources::empty`](crate::backdrop::BackdropSources::empty).
+    ///
+    /// Children of a container that [merges](Self::merge_children) them, all
+    /// blurring alike, are blurred as one shape, neck included.
     pub fn backdrop_blur<M>(mut self, blur: impl IntoSignal<BackdropBlur, M>) -> Self {
         self.backdrop_blur = blur.into_prop();
         self
@@ -1341,6 +1356,8 @@ impl Container {
     /// Called for a key press nothing with the focus took: one typed while a
     /// focused widget inside lets it through, or with nothing focused at all.
     /// Where two containers both declare it, the inner one hears the key.
+    /// A key one of them takes in
+    /// [`on_key_down_capture`](Self::on_key_down_capture) never reaches it.
     ///
     /// It answers whether it took the key, in the words of
     /// [`Widget::event`]: `Handled` stops it there, and `Ignored` lets it go
@@ -1365,7 +1382,8 @@ impl Container {
     /// Called for a key release nothing with the focus took, along the same
     /// route as [`on_key_down`](Self::on_key_down): where the press went, the
     /// release goes after it. It answers whether it took the key, as
-    /// `on_key_down` does.
+    /// `on_key_down` does, and hears nothing
+    /// [`on_key_up_capture`](Self::on_key_up_capture) took.
     ///
     /// A release is not paired with its press. A focused field that takes a
     /// key's press lets its release through, so a control that must not act on
@@ -1375,6 +1393,50 @@ impl Container {
         callback: F,
     ) -> Self {
         self.interact_mut().on_key_up = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called for a key press before the focused widget inside hears it, so
+    /// a container can take a key the widget would otherwise use: a launcher
+    /// moving its selection with Left and Right while its search field keeps
+    /// the focus. The web's capture phase, React's `onKeyDownCapture`, WPF's
+    /// `PreviewKeyDown`.
+    ///
+    /// The key goes down the focus path from the outermost container, and
+    /// each capture listener on it hears the key before the ones inside it.
+    /// `Handled` stops the key there: nothing inside hears it, neither does
+    /// any [`on_key_down`](Self::on_key_down), and Tab does not move the
+    /// focus. `Ignored` lets it go on to the next capture listener inward,
+    /// then to the focused widget, then up through
+    /// [`on_key_down`](Self::on_key_down) as usual. A focused container hears
+    /// its own capture before its own `on_key_down`.
+    ///
+    /// A key the focus path left goes on to the containers listening for it,
+    /// as `on_key_down` has it, and a capture listener hears it on the way
+    /// down to them, before the listeners inside it. So with nothing focused,
+    /// a capture listener hears every key, outermost first, before any
+    /// `on_key_down`. A capture on the focus path that let a key through is
+    /// not asked a second time.
+    ///
+    /// The arguments are `on_key_down`'s.
+    pub fn on_key_down_capture<F: Fn(Key, Modifiers, bool) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
+        self.interact_mut().on_key_down_capture = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called for a key release before the focused widget inside hears it,
+    /// along the route [`on_key_down_capture`](Self::on_key_down_capture)
+    /// takes, and answering as it does: `Handled` keeps the release from
+    /// everything after it. A release is not paired with its press, as with
+    /// [`on_key_up`](Self::on_key_up).
+    pub fn on_key_up_capture<F: Fn(Key, Modifiers) -> EventResponse + 'static>(
+        mut self,
+        callback: F,
+    ) -> Self {
+        self.interact_mut().on_key_up_capture = Some(Rc::new(callback));
         self
     }
 
@@ -1532,13 +1594,21 @@ impl Container {
     /// cast by it. Its inset shadows, and its own background, stay on its own
     /// box, drawn underneath as usual.
     ///
-    /// Four things do not merge, and are drawn on their own: a child whose
-    /// fill is a [`gradient`](Self::gradient), a child drawn as a layer —
+    /// Children that each [blur their backdrop](Self::backdrop_blur) alike
+    /// blur it as one: through the merged outline, neck included, so the
+    /// merged fill lands on frost all along it. The compositor is asked to
+    /// blur behind each child's shape and a box over each neck, since a
+    /// region cannot follow the neck's curve. When only some children blur,
+    /// each blurs its own box.
+    ///
+    /// Five things do not merge, and are drawn on their own: a child whose
+    /// fill is a [`gradient`](Self::gradient), a child whose backdrop blur
+    /// differs from the first child's, a child drawn as a layer —
     /// one that [blurs](Self::blur), or fades under [`opacity`](Self::opacity)
     /// with something drawn over its background, which is then drawn in its
     /// layer, blurred or faded with the rest of it — every child after the first
     /// [`MAX_MEMBERS`](crate::renderer::MAX_MEMBERS), and anything below the
-    /// direct children. A debug build says so for the first three. The neck
+    /// direct children. A debug build says so for the first four. The neck
     /// takes no input — each child answers clicks in its own box. A container
     /// that also [scrolls](Self::scroll) merges its scrollbar track too, since
     /// the track is one of its children.
@@ -2041,7 +2111,7 @@ impl Widget for Container {
         if self
             .interaction
             .as_ref()
-            .is_some_and(|ix| ix.on_key_down.is_some() || ix.on_key_up.is_some())
+            .is_some_and(|ix| ix.listens_for_keys())
         {
             tree.listen_for_keys(id);
         }
@@ -2247,6 +2317,11 @@ impl Widget for Container {
                 return EventResponse::Hit;
             }
             return EventResponse::Ignored;
+        }
+
+        // On its way down, before anything inside has it (#848).
+        if self.capture_key(tree, id, event) == EventResponse::Handled {
+            return EventResponse::Handled;
         }
 
         // Before anything below can return: a point over this container's

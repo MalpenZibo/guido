@@ -9,16 +9,23 @@
 //! own place in paint order. The renderer turns that into one instance whose
 //! members are records in a storage buffer, and the fragment shader folds
 //! their distances with a polynomial smooth minimum.
+//!
+//! Members that blur their backdrop alike have their blurs merged the same
+//! way: one [`DrawCommand::BackdropBlur`] cut to the same smooth union, neck
+//! included, ahead of the merged shape — so the fill lands on the frost, as a
+//! lone container's does.
 
 use std::rc::Rc;
 
-use super::commands::{Border, CornerRadii, DrawCommand};
+use super::commands::{BlurShape, Border, CornerRadii, DrawCommand};
 use super::flatten::union_of;
 use super::tree::RenderNode;
 use super::types::Shadows;
+use crate::backdrop::BackdropBlur;
 use crate::shape::PlacedShape;
 use crate::transform::Transform;
 use crate::widgets::{Color, Rect};
+use smallvec::SmallVec;
 
 /// The most members one merged shape takes. Children past it are drawn on
 /// their own: a fragment walks every member, so the cost of a merged shape
@@ -58,11 +65,65 @@ pub struct MergeMember {
     pub opacity: f32,
 }
 
+/// The outline a backdrop blur is cut to when it is the blur of a merging
+/// container's members: their smooth union, as the merged shape draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MergedOutline {
+    /// Each member's colour is white at the member's own opacity: a member
+    /// fading out takes its share of the frost with it, blended along the
+    /// neck as a fill is.
+    pub members: Vec<MergeMember>,
+    /// The merge distance, as [`MergeChildren::distance`].
+    pub distance: f32,
+}
+
+impl MergedOutline {
+    /// The boxes the compositor's region adds over the necks: one between each
+    /// two members whose boxes come within half the distance of each other,
+    /// which is where a neck joins them, spanning the gap and as wide as what
+    /// the two have side by side. Members whose boxes already meet are left to
+    /// their own shapes.
+    ///
+    /// In the merged command's own space. A box cannot follow the neck's
+    /// curve, so it claims the corners of the gap the neck pinches away from.
+    pub(crate) fn necks(&self) -> Vec<Rect> {
+        let boxes: Vec<Rect> = self
+            .members
+            .iter()
+            .map(|member| member.placement.map_rect(member.rect))
+            .collect();
+        let reach = self.distance.max(0.0) * 0.5;
+        let mut necks = Vec::new();
+        for (i, a) in boxes.iter().enumerate() {
+            necks.extend(boxes[i + 1..].iter().filter_map(|b| between(*a, *b, reach)));
+        }
+        necks
+    }
+}
+
+/// The box between `a` and `b` when they are apart and no further than
+/// `reach`: on each axis, the gap where they are apart there and the span they
+/// share where they are not.
+fn between(a: Rect, b: Rect, reach: f32) -> Option<Rect> {
+    let axis = |a0: f32, a1: f32, b0: f32, b1: f32| {
+        let (low, high) = (a0.max(b0), a1.min(b1));
+        (low.min(high), low.max(high), (low - high).max(0.0))
+    };
+    let (x0, x1, gap_x) = axis(a.x, a.x + a.width, b.x, b.x + b.width);
+    let (y0, y1, gap_y) = axis(a.y, a.y + a.height, b.y, b.y + b.height);
+    let gap = gap_x.hypot(gap_y);
+    (gap > 0.0 && gap <= reach).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 /// What collecting a container's members produced: the merged command, the
-/// shadows the members cast on their own, and which of each child's commands
-/// the merged shape stands in for.
+/// blur cut to the same outline, the shadows the members cast on their own,
+/// and which of each child's commands the merged shape stands in for.
 pub(crate) struct Gathered {
     pub(crate) command: Rc<DrawCommand>,
+    /// The members' backdrop blur, merged: drawn before the merged shape, as
+    /// a lone container's blur is drawn before its fill. `None` unless every
+    /// member blurs, and alike.
+    pub(crate) blur: Option<Rc<DrawCommand>>,
     /// A member's own shadow, which is not the merged shape's: drawn beneath
     /// it as the member would have drawn it, as `(child, shadow command)`.
     pub(crate) shadows: Vec<(usize, Rc<DrawCommand>)>,
@@ -76,23 +137,40 @@ pub(crate) struct Gathered {
 }
 
 impl Gathered {
-    /// The merged command once `children` are no longer members, or `None`
-    /// when no member is left.
-    pub(crate) fn without(&self, children: &[usize]) -> Option<Rc<DrawCommand>> {
+    /// The merged command and the merged blur once `children` are no longer
+    /// members, each `None` when no member is left.
+    pub(crate) fn without(
+        &self,
+        children: &[usize],
+    ) -> (Option<Rc<DrawCommand>>, Option<Rc<DrawCommand>>) {
         let DrawCommand::MergedShape { members, .. } = &*self.command else {
             unreachable!("gather builds a merged shape")
         };
-        let kept = members
+        let kept: Vec<MergeMember> = members
             .iter()
             .zip(&self.members_of)
             .filter(|(_, child)| !children.contains(child))
-            .map(|(member, _)| *member);
-        merged_shape(kept.collect(), &self.merge)
+            .map(|(member, _)| *member)
+            .collect();
+        let blur = self.blur.as_deref().and_then(|blur| {
+            let DrawCommand::BackdropBlur {
+                radius, sources, ..
+            } = blur
+            else {
+                unreachable!("gather builds a backdrop blur")
+            };
+            merged_blur(
+                &kept,
+                &self.merge,
+                BackdropBlur::new(*radius).sources(*sources),
+            )
+        });
+        (merged_shape(kept, &self.merge), blur)
     }
 }
 
-/// One child's fill and border frame, at most.
-pub(crate) type Taken = smallvec::SmallVec<[*const DrawCommand; 2]>;
+/// One child's fill, its border frame and its backdrop blur, at most.
+pub(crate) type Taken = SmallVec<[*const DrawCommand; 3]>;
 
 /// Why a child with a background was drawn on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +182,9 @@ pub(crate) enum LeftOut {
     /// It was composited as a layer, which holds its background, blurred or
     /// faded with the rest of it.
     Layer,
+    /// Its backdrop blur is not the first member's, and one outline is
+    /// blurred at one radius.
+    BlurRadius,
 }
 
 impl LeftOut {
@@ -112,6 +193,10 @@ impl LeftOut {
             Self::Gradient => "its fill is a gradient, which a merged shape does not blend",
             Self::TooMany => "a merged shape takes no more members than `MAX_MEMBERS`",
             Self::Layer => "it is drawn as a layer, which holds its background",
+            Self::BlurRadius => {
+                "its backdrop blur differs from the first member's, and a merged \
+                 shape blurs its whole outline at one radius"
+            }
         }
     }
 }
@@ -122,9 +207,14 @@ impl LeftOut {
 /// A child's background is every `RoundedRect` it marked as one — its fill,
 /// and the border frame a container draws as a second command. A child whose
 /// fill is a gradient keeps its background, as does every child past
-/// [`MAX_MEMBERS`]; `left_out` hears about each. A child that turns out to be
-/// drawn as a layer is only known once it is flattened, and is left out then
-/// — see [`Gathered::without`].
+/// [`MAX_MEMBERS`], and one whose backdrop blur differs from the first
+/// member's; `left_out` hears about each. A child that turns out to be drawn
+/// as a layer is only known once it is flattened, and is left out then — see
+/// [`Gathered::without`].
+///
+/// When every member blurs its backdrop alike, their blurs are taken too and
+/// merged into one, cut to the merged outline. When only some do, each keeps
+/// its own.
 pub(crate) fn gather(
     node: &RenderNode,
     merge: &MergeChildren,
@@ -134,6 +224,8 @@ pub(crate) fn gather(
     let mut members_of = Vec::new();
     let mut shadows = Vec::new();
     let mut taken = Vec::with_capacity(node.children.len());
+    // Each member's own blur: its child, its command and what it asks for.
+    let mut own_blurs = Vec::new();
 
     for (index, child) in node.children.iter().enumerate() {
         taken.push(Taken::new());
@@ -142,7 +234,21 @@ pub(crate) fn gather(
         let mut own_shadows = Vec::new();
         let mut gradient = false;
         let mut replaced = Taken::new();
+        let mut blur = None;
         for command in &child.commands {
+            if let DrawCommand::BackdropBlur {
+                sources,
+                radius,
+                shape: BlurShape::Rounded { .. },
+                ..
+            } = &**command
+            {
+                blur = Some((
+                    BackdropBlur::new(*radius).sources(*sources),
+                    Rc::as_ptr(command),
+                ));
+                continue;
+            }
             let DrawCommand::RoundedRect {
                 rect,
                 color,
@@ -224,9 +330,39 @@ pub(crate) fn gather(
         }
         members.push(member);
         members_of.push(index);
+        own_blurs.extend(blur.map(|(blur, command)| (index, command, blur)));
+    }
+
+    // Every member blurs, or the blurs stay where they are. Only then is one
+    // that blurs otherwise than the first left out — it would have kept its
+    // merge had the blurs not been merged.
+    let mut blur = None;
+    if let Some(&(_, _, first)) = own_blurs.first()
+        && own_blurs.len() == members.len()
+    {
+        let odd: SmallVec<[usize; 2]> = own_blurs
+            .iter()
+            .filter(|(_, _, own)| *own != first)
+            .map(|(child, _, _)| *child)
+            .collect();
+        for child in &odd {
+            left_out(LeftOut::BlurRadius);
+            taken[*child].clear();
+        }
+        if !odd.is_empty() {
+            shadows.retain(|(child, _)| !odd.contains(child));
+            let mut kept = members_of.iter().map(|child| !odd.contains(child));
+            members.retain(|_| kept.next().unwrap_or(true));
+            members_of.retain(|child| !odd.contains(child));
+        }
+        for (child, command, _) in own_blurs.iter().filter(|(_, _, own)| *own == first) {
+            taken[*child].push(*command);
+        }
+        blur = merged_blur(&members, merge, first);
     }
 
     Some(Gathered {
+        blur,
         command: merged_shape(members, merge)?,
         shadows,
         taken,
@@ -235,20 +371,52 @@ pub(crate) fn gather(
     })
 }
 
-/// One merged command of `members`, or `None` for none.
-fn merged_shape(members: Vec<MergeMember>, merge: &MergeChildren) -> Option<Rc<DrawCommand>> {
+/// The box a merged shape of `members` is drawn over, or `None` for none.
+fn merged_bounds(members: &[MergeMember], distance: f32) -> Option<Rect> {
     let reach = |member: &MergeMember| member.placement.map_rect(member.rect);
     let bounds = members.iter().map(reach).reduce(union_of)?;
     // Where a smooth minimum of `k` lies at or below zero, `min(a, b)` is at
     // most `k / 4` — the most it ever takes off — so the neck never reaches
     // further than a quarter of the distance past the members' boxes.
-    let bounds = bounds.outset(merge.distance * 0.25);
+    Some(bounds.outset(distance * 0.25))
+}
+
+/// One merged command of `members`, or `None` for none.
+fn merged_shape(members: Vec<MergeMember>, merge: &MergeChildren) -> Option<Rc<DrawCommand>> {
+    let bounds = merged_bounds(&members, merge.distance)?;
     Some(Rc::new(DrawCommand::MergedShape {
         members,
         distance: merge.distance,
         border: merge.border,
         shadows: merge.shadows,
         bounds,
+    }))
+}
+
+/// `blur` cut to the merged outline of `members`, over the box the merged
+/// shape is drawn over, or `None` for no member.
+fn merged_blur(
+    members: &[MergeMember],
+    merge: &MergeChildren,
+    blur: BackdropBlur,
+) -> Option<Rc<DrawCommand>> {
+    let rect = merged_bounds(members, merge.distance)?;
+    let members = members
+        .iter()
+        .map(|member| MergeMember {
+            color: Color::WHITE,
+            border: None,
+            ..*member
+        })
+        .collect();
+    Some(Rc::new(DrawCommand::BackdropBlur {
+        rect,
+        sources: blur.sources,
+        radius: blur.radius,
+        shape: BlurShape::Merged(Rc::new(MergedOutline {
+            members,
+            distance: merge.distance,
+        })),
     }))
 }
 
@@ -519,7 +687,7 @@ mod tests {
         }
         let gathered = gather(&group, &MERGE, |_| panic!("nothing is left out")).unwrap();
 
-        let rest = gathered.without(&[2]).expect("two members are left");
+        let rest = gathered.without(&[2]).0.expect("two members are left");
         let DrawCommand::MergedShape {
             members, bounds, ..
         } = &*rest
@@ -529,7 +697,178 @@ mod tests {
         let at: Vec<_> = members.iter().map(|m| m.placement.tx()).collect();
         assert_eq!(at, [0.0, 60.0]);
         assert_eq!(*bounds, Rect::new(-2.0, -2.0, 84.0, 24.0));
-        assert!(gathered.without(&[1, 2, 3]).is_none());
+        assert!(gathered.without(&[1, 2, 3]).0.is_none());
+    }
+
+    fn frosted(at: (f32, f32), radius: f32) -> Rc<RenderNode> {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        child(
+            at,
+            &[
+                Rc::new(DrawCommand::BackdropBlur {
+                    rect,
+                    sources: crate::backdrop::BackdropSources::all(),
+                    radius,
+                    shape: BlurShape::Rounded {
+                        corner_radii: CornerRadii::uniform(4.0),
+                        curvature: 1.0,
+                    },
+                }),
+                background(rect, Color::rgba(0.1, 0.1, 0.1, 0.5), None),
+            ],
+        )
+    }
+
+    fn outline(blur: &DrawCommand) -> (&MergedOutline, f32) {
+        let DrawCommand::BackdropBlur {
+            shape: BlurShape::Merged(outline),
+            radius,
+            ..
+        } = blur
+        else {
+            panic!("a blur cut to the merged outline");
+        };
+        (outline, *radius)
+    }
+
+    /// Members that blur alike have one blur, cut to their merged outline over
+    /// the box the merged shape is drawn over, and the merged commands stand
+    /// in for each member's own blur as well as its fill.
+    #[test]
+    fn members_that_blur_alike_blur_as_one() {
+        let mut group = RenderNode::new(0);
+        group.children.push(frosted((0.0, 0.0), 24.0));
+        group.children.push(frosted((26.0, 0.0), 24.0));
+
+        let gathered = gather(&group, &MERGE, |_| panic!("nothing is left out")).unwrap();
+        let blur = gathered.blur.as_deref().expect("the blurs are merged");
+        let (outline, radius) = outline(blur);
+        assert_eq!(radius, 24.0);
+        assert_eq!(outline.members.len(), 2);
+        assert_eq!(outline.distance, MERGE.distance);
+        let DrawCommand::MergedShape { bounds, .. } = &*gathered.command else {
+            unreachable!()
+        };
+        let DrawCommand::BackdropBlur { rect, .. } = blur else {
+            unreachable!()
+        };
+        assert_eq!(rect, bounds);
+        for (index, child) in group.children.iter().enumerate() {
+            assert!(
+                gathered.taken[index].contains(&Rc::as_ptr(&child.commands[0])),
+                "member {index}'s own blur is still drawn"
+            );
+        }
+    }
+
+    /// A member whose blur differs from the first member's is drawn on its
+    /// own, blur and all, and is said so; the rest blur as one.
+    #[test]
+    fn a_member_blurring_at_another_radius_is_left_out_and_reported() {
+        let mut group = RenderNode::new(0);
+        group.children.push(frosted((0.0, 0.0), 24.0));
+        group.children.push(frosted((26.0, 0.0), 12.0));
+
+        let mut told = Vec::new();
+        let gathered = gather(&group, &MERGE, |why| told.push(why)).unwrap();
+        assert_eq!(told, [LeftOut::BlurRadius]);
+        assert_eq!(members(&gathered).len(), 1);
+        assert!(
+            gathered.taken[1].is_empty(),
+            "it keeps its fill and its blur"
+        );
+        let (outline, radius) = outline(gathered.blur.as_deref().unwrap());
+        assert_eq!((outline.members.len(), radius), (1, 24.0));
+    }
+
+    /// A member is left out for its radius only when the blurs are merged: with
+    /// one that does not blur at all, nothing is, and every member keeps its
+    /// place in the merged shape whatever order they come in.
+    #[test]
+    fn a_member_is_left_out_for_its_radius_only_when_the_blurs_merge() {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let plain = || child((52.0, 0.0), &[background(rect, Color::GREEN, None)]);
+        for order in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+            let mut group = RenderNode::new(0);
+            for at in order {
+                group.children.push(match at {
+                    0 => frosted((0.0, 0.0), 24.0),
+                    1 => frosted((26.0, 0.0), 12.0),
+                    _ => plain(),
+                });
+            }
+            let gathered = gather(&group, &MERGE, |why| panic!("{why:?} in {order:?}")).unwrap();
+            assert!(gathered.blur.is_none());
+            assert_eq!(members(&gathered).len(), 3, "in {order:?}");
+        }
+    }
+
+    /// When a member does not blur at all, the blurs are not merged: each
+    /// stays its member's own.
+    #[test]
+    fn a_member_without_a_blur_leaves_the_blurs_unmerged() {
+        let rect = Rect::new(0.0, 0.0, 20.0, 20.0);
+        let mut group = RenderNode::new(0);
+        group.children.push(frosted((0.0, 0.0), 24.0));
+        group
+            .children
+            .push(child((26.0, 0.0), &[background(rect, Color::GREEN, None)]));
+
+        let gathered = gather(&group, &MERGE, |_| panic!("nothing is left out")).unwrap();
+        assert!(gathered.blur.is_none());
+        assert_eq!(members(&gathered).len(), 2);
+        assert!(!gathered.taken[0].contains(&Rc::as_ptr(&group.children[0].commands[0])));
+    }
+
+    /// A member that lets go takes its part of the merged blur with it.
+    #[test]
+    fn a_merged_blur_lets_members_go() {
+        let mut group = RenderNode::new(0);
+        group.children.push(frosted((0.0, 0.0), 24.0));
+        group.children.push(frosted((26.0, 0.0), 24.0));
+        let gathered = gather(&group, &MERGE, |_| {}).unwrap();
+
+        let (_, blur) = gathered.without(&[1]);
+        let (outline, _) = outline(blur.as_deref().expect("one member is left"));
+        assert_eq!(outline.members[0].placement, Transform::IDENTITY);
+        assert!(gathered.without(&[0, 1]).1.is_none());
+    }
+
+    /// A neck's box spans the gap between two members close enough to join,
+    /// as wide as what they have side by side — and two members further
+    /// apart, or already meeting, have none.
+    #[test]
+    fn a_neck_is_boxed_between_the_members_it_joins() {
+        let member = |x: f32, y: f32, height: f32| MergeMember {
+            rect: Rect::new(0.0, 0.0, 20.0, height),
+            radius: CornerRadii::uniform(0.0),
+            curvature: 1.0,
+            color: Color::WHITE,
+            border: None,
+            placement: Transform::translate(x, y),
+            opacity: 1.0,
+        };
+        let necks = |members: Vec<MergeMember>| {
+            MergedOutline {
+                members,
+                distance: 8.0,
+            }
+            .necks()
+        };
+        // 4 apart, which is half the distance: joined.
+        assert_eq!(
+            necks(vec![member(0.0, 0.0, 20.0), member(24.0, 6.0, 20.0)]),
+            [Rect::new(20.0, 6.0, 4.0, 14.0)]
+        );
+        // 5 apart: two shapes.
+        assert!(necks(vec![member(0.0, 0.0, 20.0), member(25.0, 0.0, 20.0)]).is_empty());
+        // Overlapping: one shape with no neck to box.
+        assert!(necks(vec![member(0.0, 0.0, 20.0), member(10.0, 0.0, 20.0)]).is_empty());
+        // Apart on both axes: the box between their corners.
+        assert_eq!(
+            necks(vec![member(0.0, 0.0, 20.0), member(22.0, 22.0, 20.0)]),
+            [Rect::new(20.0, 20.0, 2.0, 2.0)]
+        );
     }
 
     /// Sixteen members merge and the seventeenth is drawn on its own.

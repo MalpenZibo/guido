@@ -570,6 +570,17 @@ cent, which is half a pixel of frost beside its letters at the edges.
 A `text_stroke` over frost is dilated from the same mask, so its width is in
 mask texels too.
 
+The other replacement is a merged outline. A `DrawCommand::BackdropBlur` whose
+`shape` is `BlurShape::Merged` is the blur of a merging container's members
+(see [Merged shapes](#merged-shapes)): its `rect` is the box around them, which
+is all the viewport needs, and the mask is their smooth union. The members go
+into the frame's `MergeRecord`s beside the merged shapes' own while the group
+is prepared, and `Params::merged` names the first; the composites by a shape
+bind those records at group 2 and fold them with the same `merged_shape` the
+shape shader fills the outline with, measured on the target in physical
+pixels. A coverage mask is never a merged outline, so its pipelines bind no
+group 2.
+
 One corner, five copies. WGSL has no include, so the signed distance function
 for a superellipse corner is written out in `shader.wgsl`, in
 `textured_quad_shader.wgsl`, in `backdrop_shader.wgsl` and in
@@ -579,7 +590,8 @@ hit-testing runs — so it decides where a *click* lands the way the other four
 decide where a pixel lands.
 
 The four shaders are kept character-for-character identical between the
-`=== SHARED SDF` markers, and `tests/shader_sdf_is_one_definition.rs` fails if
+`=== SHARED SDF` markers, as `shader.wgsl` and `backdrop_shader.wgsl` are
+between the `=== SHARED MERGED SHAPE` ones, and `tests/shader_sdf_is_one_definition.rs` fails if
 any two drift — which they had: the backdrop read the curvature as
 `max(k, 0.05) * 2` against the others' `pow(2, k)`, and those agree at exactly
 k = 1 and k = 2, which is every curvature any golden drew *with a backdrop
@@ -900,7 +912,24 @@ same transform flatten composes onto the parent's world transform — and emits
 one `DrawCommand::MergedShape` after the container's own commands and before its
 children's. Each child is then flattened as usual, and the commands the merged
 shape stands in for are taken back out of what it emitted, by address
-(`FlattenScratch::take_out_since`). Taken out afterwards rather than left out:
+(`FlattenScratch::take_out_since`).
+
+**A frosted member.** When every member blurs its backdrop, and alike, `gather`
+takes each member's own `BackdropBlur` as well and emits one in their place,
+cut to the merged outline — before the merged shape, as a lone container's blur
+is before its fill, so the fill lands on the frost along the neck too (#847).
+Its compositor half is published as each member's shape plus a box over each
+neck that joins two of them (`MergedOutline::necks`), since a `wl_region` is
+rectangles and cannot follow the neck's curve. A member whose blur differs from
+the first member's is left out (`LeftOut::BlurRadius`); when some members do not
+blur at all, every member keeps its own blur. The merged blur writes nothing
+past the merged outline, so the merge reach below already damages all of it.
+Before it, each member's blur ran after the merged shape and read the merged
+fill: on a transparent surface it laid the fill over itself, and a fill at 0.86
+came out at 0.98. `merged_pills_blur_their_neck` is the golden,
+`a_merged_frosted_member_stays_translucent` holds the alpha, and
+`merged_pills_publish_a_box_over_their_neck` in `tests/headless_app.rs` the
+region. Taken out afterwards rather than left out:
 the child's own flatten entry is made inside that call, and it has to hold the
 background, because a later frame may replay the child under a parent that no
 longer merges it.
@@ -984,6 +1013,7 @@ input: hit testing still asks each child's own box. The goldens are
 `merged_pills_at_three_gaps`, `merged_pills_apart_are_the_pills_alone`,
 `merged_borders_blend_along_the_neck` (and at 2x),
 `a_gradient_member_is_drawn_unmerged`, `a_layer_member_draws_as_it_does_unmerged`,
+`merged_pills_blur_their_neck`,
 `a_merged_shape_casts_one_shadow`,
 `a_merge_at_distance_zero_is_a_plain_union` and
 `a_merged_shape_is_cut_by_its_clip`. A child at no opacity is not a member: it

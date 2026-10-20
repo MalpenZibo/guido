@@ -62,13 +62,17 @@ fn no_event_visits_a_row_outside_its_route() {
                             .on_key_down(|_, _, _| EventResponse::Handled)
                             .child(text_input(typed)),
                     )
-                    .child(container().scroll(Scroll::vertical()).height(570.0).child(
-                        container().layout(Flex::column()).children(
-                            (0..ROWS).map(move |_| {
-                                Box::new(Counted(counter.clone())) as Box<dyn Widget>
-                            }),
-                        ),
-                    ))
+                    // And one hearing keys before what is inside it: the
+                    // way down to it stops at it.
+                    .child(
+                        container()
+                            .scroll(Scroll::vertical())
+                            .height(570.0)
+                            .on_key_down_capture(|_, _, _| EventResponse::Ignored)
+                            .child(container().layout(Flex::column()).children((0..ROWS).map(
+                                move |_| Box::new(Counted(counter.clone())) as Box<dyn Widget>,
+                            ))),
+                    )
             },
         );
     app.configure(id, 200, 600, 1.0);

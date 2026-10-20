@@ -44,6 +44,7 @@ use crate::widgets::{Color, Rect};
 
 use super::clip::ResolvedClip;
 use super::clip_records::ClipRecord;
+use super::merge::{MergeRecord, NO_MERGE};
 
 /// How much the working texture is shrunk before blurring.
 ///
@@ -69,7 +70,9 @@ struct Params {
     taps: f32,
     dst_size: [f32; 2],
     curvature: f32,
-    _pad1: f32,
+    /// Where the members of a merged outline begin in the frame's merge
+    /// records, or [`NO_MERGE`] for a region cut by its own corners.
+    merged: u32,
     radii: [f32; 4],
     /// The shape the mask cuts, `[x, y, width, height]`, in its own space.
     shape_rect: [f32; 4],
@@ -149,6 +152,11 @@ pub struct BackdropRegion {
     /// container's own opacity and every ancestor's multiply to. A frosted
     /// panel fading out takes its frost with it.
     pub opacity: f32,
+    /// Where the members of the outline that cuts the effect begin in the
+    /// frame's merge records, when it is a merged shape's rather than
+    /// `shape`'s. `shape` is then the box around them, which is all the
+    /// viewport needs.
+    pub merged: Option<u32>,
 }
 
 impl BackdropRegion {
@@ -235,6 +243,7 @@ impl BackdropRegion {
             to_clip: clip.inverse,
             clip_chain: clip.next,
             opacity: self.opacity,
+            merged: self.merged.unwrap_or(NO_MERGE),
             ..Params::zeroed()
         })
     }
@@ -283,6 +292,9 @@ pub struct BackdropRenderer {
     /// The same three bindings plus the coverage texture the masked composite
     /// reads. Kept apart so the three shape passes bind nothing they never use.
     mask_bind_group_layout: wgpu::BindGroupLayout,
+    /// The frame's merge records, which the composites cut a merged outline
+    /// by — see [`merge_group`](Self::merge_group).
+    merge_layout: wgpu::BindGroupLayout,
     downsample: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     composite: wgpu::RenderPipeline,
@@ -497,8 +509,27 @@ impl BackdropRenderer {
                 ],
             });
 
+        // The members of the frame's merged shapes, the same records the
+        // shape pipeline reads. Sized, for the reason the renderer's binding of
+        // them is.
+        let merge_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Backdrop Merge Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<MergeRecord>() as u64),
+                },
+                count: None,
+            }],
+        });
+
         // Group 1 is the frame's clip chains, which only the composites walk:
         // the downsample, the blur and the blit read no clip and bind none.
+        // Group 2 is the merge records, which only the composites by a shape
+        // read: a coverage mask is never a merged outline.
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Pipeline Layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
@@ -506,7 +537,11 @@ impl BackdropRenderer {
         });
         let clipped_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Backdrop Clipped Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout), Some(clip_records)],
+            bind_group_layouts: &[
+                Some(&bind_group_layout),
+                Some(clip_records),
+                Some(&merge_layout),
+            ],
             immediate_size: 0,
         });
         let mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -625,11 +660,25 @@ impl BackdropRenderer {
             blit: pipeline("Backdrop Blit", "fs_downsample", None),
             bind_group_layout,
             mask_bind_group_layout,
+            merge_layout,
             targets: None,
             idle_frames: 0,
             bindings: RefCell::new(Bindings::new(device, queue)),
             group: Vec::new(),
         }
+    }
+
+    /// The bind group the composites read `merges` through: the renderer's
+    /// merge records, made again whenever that buffer is.
+    pub fn merge_group(&self, device: &wgpu::Device, merges: &wgpu::Buffer) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Backdrop Merge Bind Group"),
+            layout: &self.merge_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: merges.as_entire_binding(),
+            }],
+        })
     }
 
     /// Allocate the offscreen target, or reallocate it after a resize.
@@ -812,19 +861,21 @@ impl BackdropRenderer {
         super::render::begin_pass(encoder, target, load, label)
     }
 
-    /// Draw one full-screen triangle over `viewport` of `pass`'s target.
+    /// Draw one full-screen triangle over `viewport` of `pass`'s target,
+    /// with `frame` — the frame's clip chains, and its merge records for a
+    /// composite by a shape — bound from group 1.
     fn draw(
         pass: &mut wgpu::RenderPass<'_>,
         pipeline: &wgpu::RenderPipeline,
         bind: &Bound,
-        clip_records: Option<&wgpu::BindGroup>,
+        frame: &[&wgpu::BindGroup],
         (x, y, w, h): Viewport,
     ) {
         pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind.group, &[bind.offset]);
-        if let Some(clip_records) = clip_records {
-            pass.set_bind_group(1, clip_records, &[]);
+        for (index, group) in frame.iter().enumerate() {
+            pass.set_bind_group(index as u32 + 1, *group, &[]);
         }
         pass.draw(0..3, 0..1);
         render_stats::record_draw_calls(Pipeline::Backdrop, 1);
@@ -889,12 +940,14 @@ impl BackdropRenderer {
     /// in the scene's pass as it resumes, cut out by each one's shape or
     /// mask, with the contour round a frosted text after its frost. The last
     /// batch's pass is the one returned.
+    ///
+    /// `frame` is the frame's clip chains and its merge records.
     pub fn filter_group<'e>(
         &self,
         device: &wgpu::Device,
         encoder: &'e mut wgpu::CommandEncoder,
         scene: &'e Scene,
-        clip_records: &wgpu::BindGroup,
+        frame: [&wgpu::BindGroup; 2],
     ) -> wgpu::RenderPass<'e> {
         let Some(targets) = self.targets.as_ref().filter(|_| !self.group.is_empty()) else {
             return resume(encoder, scene);
@@ -913,18 +966,11 @@ impl BackdropRenderer {
                 break;
             }
             let mut pass = resume(encoder, scene);
-            self.lay_back(
-                device,
-                &mut pass,
-                scene,
-                working,
-                batch.clone(),
-                clip_records,
-            );
+            self.lay_back(device, &mut pass, scene, working, batch.clone(), frame);
             batch = batch.end..self.batch_end(batch.end);
         }
         let mut pass = resume(encoder, scene);
-        self.lay_back(device, &mut pass, scene, working, batch, clip_records);
+        self.lay_back(device, &mut pass, scene, working, batch, frame);
         pass
     }
 
@@ -938,10 +984,10 @@ impl BackdropRenderer {
         scene: &Scene,
         working: Working<'_>,
         batch: std::ops::Range<usize>,
-        clip_records: &wgpu::BindGroup,
+        frame: [&wgpu::BindGroup; 2],
     ) {
         for planned in &self.group[batch] {
-            self.composite(device, pass, scene, working, planned, clip_records);
+            self.composite(device, pass, scene, working, planned, frame);
         }
         pass.set_viewport(0.0, 0.0, scene.width as f32, scene.height as f32, 0.0, 1.0);
     }
@@ -975,8 +1021,9 @@ impl BackdropRenderer {
         scene: &Scene,
         working: Working<'_>,
         planned: &Planned,
-        clip_records: &wgpu::BindGroup,
+        frame: [&wgpu::BindGroup; 2],
     ) {
+        let [clip_records, _] = frame;
         let blurred = working.views[0];
         let params = Params {
             src_rect: normalised(planned.slot.at, working.size),
@@ -990,8 +1037,10 @@ impl BackdropRenderer {
             (false, false) => std::slice::from_ref(&self.composite),
         };
         let bind = self.bind(device, blurred, mask, params);
+        // A coverage mask's pipelines are laid out without the merge records.
+        let groups: &[&wgpu::BindGroup] = if mask.is_some() { &frame[..1] } else { &frame };
         for pipeline in pipelines {
-            Self::draw(pass, pipeline, &bind, Some(clip_records), planned.viewport);
+            Self::draw(pass, pipeline, &bind, groups, planned.viewport);
         }
 
         // After the frost and before the glyphs: a contour on the glass, not
@@ -1011,7 +1060,7 @@ impl BackdropRenderer {
                 pass,
                 &self.outline,
                 &bind,
-                Some(clip_records),
+                &[clip_records],
                 planned.viewport,
             );
         }
@@ -1045,7 +1094,7 @@ impl BackdropRenderer {
                 ..slot.params
             };
             let bind = self.bind(device, source, None, params);
-            Self::draw(&mut pass, &self.downsample, &bind, None, slot.at);
+            Self::draw(&mut pass, &self.downsample, &bind, &[], slot.at);
         }
         drop(pass);
 
@@ -1070,7 +1119,7 @@ impl BackdropRenderer {
                     ..slot.params
                 };
                 let bind = self.bind(device, working.views[index], None, params);
-                Self::draw(&mut pass, &self.blur, &bind, None, slot.at);
+                Self::draw(&mut pass, &self.blur, &bind, &[], slot.at);
             }
         }
     }
@@ -1148,7 +1197,7 @@ impl BackdropRenderer {
             &mut pass,
             &self.blit,
             &bind,
-            None,
+            &[],
             (0, 0, scene.width, scene.height),
         );
     }
@@ -1315,6 +1364,7 @@ mod tests {
         assert_eq!(at("clip_chain"), offset_of!(Params, clip_chain));
         assert_eq!(at("clip_rect"), offset_of!(Params, clip_rect));
         assert_eq!(at("opacity"), offset_of!(Params, opacity));
+        assert_eq!(at("merged"), offset_of!(Params, merged));
         assert_eq!(size, size_of::<Params>());
     }
 }
