@@ -134,7 +134,6 @@ pub(crate) fn take_paste_requests() -> Vec<(SelectionKind, u64)> {
         .into_iter()
         .partition(|(kind, _)| *kind == SelectionKind::Clipboard);
     with_app_state(|app| {
-        let mut reads = app.paste_reads.borrow_mut();
         [
             (SelectionKind::Clipboard, clipboard),
             (SelectionKind::Primary, primary),
@@ -142,10 +141,8 @@ pub(crate) fn take_paste_requests() -> Vec<(SelectionKind, u64)> {
         .into_iter()
         .filter(|(_, asked)| !asked.is_empty())
         .map(|(kind, asked)| {
-            let token = app.next_paste_read.get();
-            app.next_paste_read.set(token + 1);
-            reads.push((token, asked.into_iter().map(|(_, target)| target).collect()));
-            (kind, token)
+            let targets = asked.into_iter().map(|(_, target)| target).collect();
+            (kind, app.paste_reads.issue(targets))
         })
         .collect()
     })
@@ -158,11 +155,9 @@ pub(crate) fn answer_paste(token: u64, text: Option<String>) {
     // Into a `Secret` first, so a read nobody waits for any more is wiped too.
     let text = text.map(Secret::from);
     with_app_state(|app| {
-        let mut reads = app.paste_reads.borrow_mut();
-        let Some(at) = reads.iter().position(|(t, _)| *t == token) else {
+        let Some(targets) = app.paste_reads.resolve(token) else {
             return;
         };
-        let targets = reads.swap_remove(at).1;
         let Some(text) = text.filter(|text| !text.is_empty()) else {
             return;
         };

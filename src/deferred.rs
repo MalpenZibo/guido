@@ -25,6 +25,10 @@
 //! - [`DeferredSlot`] is last-one-wins — two cursor shapes in one frame are
 //!   two answers to the same question, and the second is the answer.
 //!
+//! Beside them, [`Pending`] keeps what a request handed to the platform is
+//! waiting for — a paste's readers, an activation token's callback — under the
+//! id its answer comes back with. It owns no wakeup: the answer is the event.
+//!
 //! What is *not* here is as deliberate. Scheduled jobs (`jobs::request_job_at`)
 //! own no wakeup on purpose: the loop is not late for them, it sleeps exactly
 //! until the deadline. Widget jobs have their own machinery — dedup, ownership
@@ -37,7 +41,7 @@
 //!
 //! The loop drains everything here unconditionally, once per iteration.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// Deferred work that accumulates, drained by the loop once per iteration.
 pub(crate) struct DeferredQueue<T> {
@@ -130,6 +134,46 @@ impl<T> DeferredSlot<T> {
     }
 }
 
+/// Requests handed to the platform and not yet answered, each under the id
+/// its answer comes back with. No wakeup: the answer arriving is the event
+/// that wakes the loop.
+pub(crate) struct Pending<T> {
+    next: Cell<u64>,
+    waiting: RefCell<Vec<(u64, T)>>,
+}
+
+impl<T> Default for Pending<T> {
+    fn default() -> Self {
+        Self {
+            next: Cell::new(0),
+            waiting: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl<T> Pending<T> {
+    /// Keep `item` until its answer arrives, and say which id that will be.
+    pub(crate) fn issue(&self, item: T) -> u64 {
+        let id = self.next.get();
+        self.next.set(id + 1);
+        self.waiting.borrow_mut().push((id, item));
+        id
+    }
+
+    /// Take what was kept for `id`, or `None` if nothing waits on it any more.
+    pub(crate) fn resolve(&self, id: u64) -> Option<T> {
+        let mut waiting = self.waiting.borrow_mut();
+        let at = waiting.iter().position(|(i, _)| *i == id)?;
+        Some(waiting.swap_remove(at).1)
+    }
+
+    /// Forget every request and start the ids again, for `App::drop`.
+    pub(crate) fn clear(&self) {
+        self.next.set(0);
+        self.waiting.take();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +202,22 @@ mod tests {
             "a slot owes the answer, not the history"
         );
         assert!(slot.is_empty());
+    }
+
+    /// Each request is answered once, under its own id, and an answer for one
+    /// nobody waits on any more finds nothing.
+    #[test]
+    fn a_pending_request_is_resolved_once_under_its_own_id() {
+        let pending: Pending<&str> = Pending::default();
+        let first = pending.issue("first");
+        let second = pending.issue("second");
+        assert_ne!(first, second);
+        assert_eq!(pending.resolve(second), Some("second"));
+        assert_eq!(pending.resolve(second), None, "answered once");
+        assert_eq!(pending.resolve(first), Some("first"));
+
+        pending.issue("forgotten");
+        pending.clear();
+        assert_eq!(pending.resolve(first), None, "nothing survives a clear");
     }
 }
