@@ -1172,8 +1172,8 @@ pub trait Widget {
     }
 
     /// The reactive scope this widget owns, if it owns one — a row of a
-    /// dynamic list does. A leaving subtree pauses the effects in it, and a
-    /// reclaimed one resumes them.
+    /// dynamic list does. A leaving subtree pauses the effects and timers in
+    /// it, and a reclaimed one resumes them.
     #[doc(hidden)]
     fn owned_scope(&self) -> Option<crate::reactive::__internal::OwnerId> {
         None

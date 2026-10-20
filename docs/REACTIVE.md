@@ -308,7 +308,7 @@ A property keeps what it was given, as a `Prop<T>`: `Prop::Const` for a static v
 `set_timeout(delay, FnOnce)` and `set_interval(period, FnMut)` (`src/reactive/timer.rs`) run a closure on the UI thread, inside the loop's pass, at the point where deferred work may write signals — so the callback reads signals as well as writing them, which a `create_task` future, being `Send`, cannot. Its reads are untracked: a timer is an event, not an effect. Both return a `Copy` `TimerHandle` with `cancel()` and `is_pending()`; dropping the handle does nothing.
 
 - **Clock.** A timer is created unarmed and asks the loop for a pass; the first pass that sees it arms it at the pass's moment (`frame_at`) plus its delay, and each pass runs the timers due by its own moment, earliest first. So deadlines are on the pass's clock, and `Headless::step_at` decides which timers fire — `tests/timers.rs` never sleeps. The loop sleeps until the earliest armed timer through `wake_deadline`.
-- **Ownership.** A timer is cancelled when the owner it was created under is disposed (`on_cleanup`), and its callback runs under that owner. Each run of an effect owns what it makes, so an effect that schedules a timer per run cancels the previous one by running again. That is how a debounce is written.
+- **Ownership.** A timer is cancelled when the owner it was created under is disposed (`on_cleanup`), and its callback runs under that owner. Each run of an effect owns what it makes, so an effect that schedules a timer per run cancels the previous one by running again. That is how a debounce is written. A paused owner pauses its timers too — see [Paused Owners](#paused-owners).
 - **Intervals.** Each deadline is the previous plus the period, so the beat does not drift; a pass that arrives several periods late runs it once and moves it to the next beat after the pass. A period under 1 ms is taken as 1 ms.
 
 ## Background Task Updates
@@ -764,6 +764,16 @@ A memo is an effect too, so one in a paused scope holds the value it had when
 the scope was paused. A scope opened under a paused one starts paused. Disposal is unchanged: a
 paused scope disposed takes its effects with it, and what they missed never
 runs. This is Svelte 5's `pause_effect` and `resume_effect` (the `INERT` flag).
+
+The scope's timers are paused with it (#845), which is where guido parts from
+Svelte: its `setInterval` is the browser's and keeps firing through an outro,
+while `set_timeout` and `set_interval` here belong to the scope. A paused timer
+keeps how long was left until it was due, counted from the pass it was paused
+in, and does not fire or wake the loop; `resume_owner` arms it that long after
+the pass it happens in, so a reclaimed row's interval keeps its beat rather than
+firing for the time it was away. A timer made under a paused scope waits for the
+resume, as an effect does. Flutter's `TickerMode` mutes an inactive route's
+tickers the same way.
 
 ### Component Macro Integration
 
