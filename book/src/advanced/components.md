@@ -215,6 +215,33 @@ else has said what it is. That one has to name the type, `|step: i32|`,
 because the prop's type reaches the closure through a trait rather than an
 `Fn` bound.
 
+### Documenting Props
+
+A prop is documented with `///` on its parameter, and the text lands on the
+builder method a caller sets it with — on `child` and `children` for the
+children prop. The function's own `///` documents the generated struct and its
+constructor:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+/// A button with a label on it.
+#[component]
+pub fn button(
+    /// The text on the button.
+    label: String,
+    /// Called when the button is clicked.
+    #[prop(callback)]
+    on_click: (),
+) -> impl Widget {
+    container().on_click(on_click).child(text(label))
+}
+# fn main() {}
+```
+
+Rust refuses a doc comment on an ordinary function's parameter, but
+`#[component]` rewrites the function before the compiler looks.
+
 ## Accessing Props
 
 In the function body, each prop is a read-only `Signal<T>` (which is `Copy`). Pass the signal directly to widget methods — this preserves reactivity so props update automatically when the caller provides reactive values (both `RwSignal<T>` and `Signal<T>` work as prop values via `IntoSignal`):
