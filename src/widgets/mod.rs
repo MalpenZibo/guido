@@ -38,8 +38,8 @@ pub use text::{Text, TextAlign, TextEdge, TextOverflow, text};
 pub use text_input::{PasswordInput, Selection, TextInput, password_input, text_input};
 pub use text_style::{TextShadow, TextStroke, TextStyle};
 pub use widget::{
-    AnyWidget, Color, Event, EventResponse, Key, LayoutHints, Modifiers, MouseButton, Outsets,
-    Padding, Placement, Point, PointerKind, Rect, ScrollSource, Widget,
+    AnyWidget, Color, Event, EventResponse, IntoRenderProp, Key, LayoutHints, Modifiers,
+    MouseButton, Outsets, Padding, Placement, Point, PointerKind, Rect, ScrollSource, Widget,
 };
 
 // Every conversion a corner shape or a padding accepts, declared once. The

@@ -1,4 +1,6 @@
 use crate::layout::{Axis, Constraints, Size};
+use crate::reactive::Callback;
+use crate::reactive::callback::{CallbackHandler, FnHandler, OptionHandler};
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -1361,6 +1363,12 @@ mod rect_tests {
 pub type AnyWidget = Box<dyn Widget>;
 
 impl Widget for Box<dyn Widget> {
+    /// Already erased: boxing it again would put a second pointer between
+    /// the tree and the widget, for every call it ever makes.
+    fn into_any(self) -> AnyWidget {
+        self
+    }
+
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         (**self).advance_animations(tree, id)
     }
@@ -1402,9 +1410,61 @@ impl Widget for Box<dyn Widget> {
     }
 }
 
+/// What a `fn(..) -> impl Widget` render prop's setter takes: a closure
+/// returning any widget, a [`Callback`] returning an [`AnyWidget`], or an
+/// `Option` of one, which is how a component forwards its own render prop.
+///
+/// The closure's widget is erased by the setter, as Leptos erases to
+/// `AnyView` and Dioxus to `Element`. A closure that erases its branches
+/// itself returns an `AnyWidget`, which is a widget too, and is not boxed
+/// again. It is a trait of its own rather than one more
+/// [`IntoHandler`](crate::reactive::IntoHandler) impl because there such a
+/// closure matches both the plain closure and the widget-returning one.
+pub trait IntoRenderProp<Args, Marker> {
+    /// As the handle the prop holds.
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>>;
+}
+
+macro_rules! erases_to_any_widget {
+    ($(($($arg:ident),*)),* $(,)?) => {$(
+        impl<$($arg: 'static,)* W: Widget + 'static, F: Fn($($arg),*) -> W + 'static>
+            IntoRenderProp<($($arg,)*), FnHandler> for F
+        {
+            #[allow(non_snake_case)]
+            fn into_render_prop(self) -> Option<Callback<($($arg,)*), AnyWidget>> {
+                Some(Callback::new(move |$($arg: $arg),*| self($($arg),*).into_any()))
+            }
+        }
+    )*};
+}
+
+erases_to_any_widget!((), (A), (A, B), (A, B, C));
+
+impl<Args: 'static> IntoRenderProp<Args, CallbackHandler> for Callback<Args, AnyWidget> {
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
+        Some(self)
+    }
+}
+
+impl<Args: 'static> IntoRenderProp<Args, OptionHandler> for Option<Callback<Args, AnyWidget>> {
+    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::widgets::Corners;
+
+    /// A widget already erased stays in its one box: a render prop's
+    /// `AnyWidget` handed to `.child` is not boxed again.
+    #[test]
+    fn an_erased_widget_is_not_boxed_twice() {
+        let erased: super::AnyWidget = crate::widgets::container().into_any();
+        let at = &*erased as *const dyn super::Widget as *const ();
+        let again = erased.into_any();
+        assert_eq!(&*again as *const dyn super::Widget as *const (), at);
+    }
 
     /// Two rects share an area only where they overlap on both axes: edges
     /// that touch share none, and neither does an overlap along one axis

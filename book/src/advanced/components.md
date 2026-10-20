@@ -275,6 +275,64 @@ pub fn button(
 Rust refuses a doc comment on an ordinary function's parameter, but
 `#[component]` rewrites the function before the compiler looks.
 
+### Render Props
+
+A callback prop with a return type is a render prop: the caller hands the
+component a closure that builds part of its page, and the component calls it
+with the values it owns. `run` returns what the closure returned:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn picker(
+    selected: u32,
+    #[prop(callback)] render: fn(u32) -> impl Widget,
+) -> impl Widget {
+    container()
+        .padding(8.0)
+        .child(render.map(|render| render.run(selected.get_untracked())))
+}
+# fn main() {
+# let _ =
+picker()
+    .selected(3u32)
+    .render(|index| text(format!("item {index}")))
+# ;
+# }
+```
+
+Declared `-> impl Widget`, the closure may return any widget — a `Container`,
+`text`, another component — and the setter boxes it, so inside the body the
+prop is an `Option<Callback<(u32,), AnyWidget>>`. Declared with a concrete
+type, `-> Container`, the closure has to return that type and the body gets it
+back as it is, to style further before placing it. Either kind is forwarded to
+another component as a callback prop is, `.render(render)`.
+
+A closure whose branches build different widgets ends each one in
+`.into_any()`, and the setter takes it as it is — an `AnyWidget` is a widget
+too, and is not boxed a second time:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# #[component]
+# pub fn picker(
+#     selected: u32,
+#     #[prop(callback)] render: fn(u32) -> impl Widget,
+# ) -> impl Widget {
+#     container().child(render.map(|render| render.run(selected.get_untracked())))
+# }
+# fn main() {
+# let _ =
+picker().render(|index| match index {
+    0 => text("none").into_any(),
+    _ => container().child(text(format!("item {index}"))).into_any(),
+})
+# ;
+# }
+```
+
 ## Accessing Props
 
 In the function body, each prop is a read-only `Signal<T>` (which is `Copy`). Pass the signal directly to widget methods — this preserves reactivity so props update automatically when the caller provides reactive values (both `RwSignal<T>` and `Signal<T>` work as prop values via `IntoSignal`):

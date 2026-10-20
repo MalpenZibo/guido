@@ -18,53 +18,51 @@
 //! greet.run("world".into());
 //! ```
 
-use std::marker::PhantomData;
 use std::rc::Rc;
 
 use super::signal::{Signal, create_stored};
 
-/// A `Copy` handle to a closure, parameterised by its argument tuple.
+/// A `Copy` handle to a closure, parameterised by its argument tuple and what
+/// it returns.
 ///
 /// `Callback<()>` takes no arguments, `Callback<(i32,)>` takes one,
-/// `Callback<(f32, f32)>` takes two. `#[component]` callback props are these.
-pub struct Callback<Args = ()> {
-    inner: Signal<Rc<dyn Fn(Args)>>,
-    _args: PhantomData<Args>,
+/// `Callback<(f32, f32)>` takes two; each returns `()`. `Callback<(u32,),
+/// Container>` takes a `u32` and returns a `Container`, which is what a render
+/// prop is. `#[component]` callback props are these.
+pub struct Callback<Args = (), Ret = ()> {
+    inner: Signal<Rc<dyn Fn(Args) -> Ret>>,
 }
 
-// Manual impls: the derives would demand bounds on `Args`, but the handle is
-// an arena id whatever the arguments are.
-impl<Args> Clone for Callback<Args> {
+// Manual impls: the derives would demand bounds on `Args` and `Ret`, but the
+// handle is an arena id whatever the closure takes and gives.
+impl<Args, Ret> Clone for Callback<Args, Ret> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<Args> Copy for Callback<Args> {}
+impl<Args, Ret> Copy for Callback<Args, Ret> {}
 
-impl<Args: 'static> Callback<Args> {
-    fn from_rc(f: Rc<dyn Fn(Args)>) -> Self {
+impl<Args: 'static, Ret: 'static> Callback<Args, Ret> {
+    pub(crate) fn from_rc(f: Rc<dyn Fn(Args) -> Ret>) -> Self {
         Self {
             inner: create_stored(f),
-            _args: PhantomData,
         }
+    }
+
+    /// Wrap a closure. The arity is inferred from the closure itself:
+    /// `Callback::new(|| …)`, `Callback::new(|v: i32| …)`,
+    /// `Callback::new(|x: f32, y: f32| …)`, and the return type with it.
+    pub fn new<F: IntoCallback<Args, Ret>>(f: F) -> Self {
+        Self::from_rc(f.into_packed())
     }
 
     /// Call with the arguments already packed into their tuple.
     ///
     /// Prefer the flat `run` of the matching arity; this is the escape hatch
     /// for generic code that only knows `Args`.
-    pub fn run_packed(&self, args: Args) {
-        self.inner.with_untracked(|f| f(args));
-    }
-}
-
-impl<Args: 'static> Callback<Args> {
-    /// Wrap a closure. The arity is inferred from the closure itself:
-    /// `Callback::new(|| …)`, `Callback::new(|v: i32| …)`,
-    /// `Callback::new(|x: f32, y: f32| …)`.
-    pub fn new<F: IntoCallback<Args>>(f: F) -> Self {
-        Self::from_rc(f.into_packed())
+    pub fn run_packed(&self, args: Args) -> Ret {
+        self.inner.with_untracked(|f| f(args))
     }
 }
 
@@ -72,31 +70,33 @@ impl<Args: 'static> Callback<Args> {
 ///
 /// Same shape as [`IntoSignal`](super::IntoSignal): the trait parameter is
 /// what lets one constructor accept closures of different arities.
-pub trait IntoCallback<Args> {
+pub trait IntoCallback<Args, Ret = ()> {
     /// The closure, taking its arguments as one tuple.
-    fn into_packed(self) -> Rc<dyn Fn(Args)>;
+    fn into_packed(self) -> Rc<dyn Fn(Args) -> Ret>;
 }
 
-impl<F: Fn() + 'static> IntoCallback<()> for F {
-    fn into_packed(self) -> Rc<dyn Fn(())> {
+impl<R: 'static, F: Fn() -> R + 'static> IntoCallback<(), R> for F {
+    fn into_packed(self) -> Rc<dyn Fn(()) -> R> {
         Rc::new(move |()| self())
     }
 }
 
-impl<A: 'static, F: Fn(A) + 'static> IntoCallback<(A,)> for F {
-    fn into_packed(self) -> Rc<dyn Fn((A,))> {
+impl<A: 'static, R: 'static, F: Fn(A) -> R + 'static> IntoCallback<(A,), R> for F {
+    fn into_packed(self) -> Rc<dyn Fn((A,)) -> R> {
         Rc::new(move |(a,)| self(a))
     }
 }
 
-impl<A: 'static, B: 'static, F: Fn(A, B) + 'static> IntoCallback<(A, B)> for F {
-    fn into_packed(self) -> Rc<dyn Fn((A, B))> {
+impl<A: 'static, B: 'static, R: 'static, F: Fn(A, B) -> R + 'static> IntoCallback<(A, B), R> for F {
+    fn into_packed(self) -> Rc<dyn Fn((A, B)) -> R> {
         Rc::new(move |(a, b)| self(a, b))
     }
 }
 
-impl<A: 'static, B: 'static, C: 'static, F: Fn(A, B, C) + 'static> IntoCallback<(A, B, C)> for F {
-    fn into_packed(self) -> Rc<dyn Fn((A, B, C))> {
+impl<A: 'static, B: 'static, C: 'static, R: 'static, F: Fn(A, B, C) -> R + 'static>
+    IntoCallback<(A, B, C), R> for F
+{
+    fn into_packed(self) -> Rc<dyn Fn((A, B, C)) -> R> {
         Rc::new(move |(a, b, c)| self(a, b, c))
     }
 }
@@ -116,70 +116,77 @@ pub struct OptionHandler;
 /// prop, to a container's `on_click` or to another component's builder, as it
 /// reads: `.on_change(on_change)`. A `None` leaves the handler unset.
 ///
+/// `Ret` is what the closure returns: `()` for a handler, the page for a
+/// render prop.
+///
 /// The marker parameter is the same trick [`IntoSignal`](super::IntoSignal)
-/// uses: it keeps the three impls from overlapping.
-pub trait IntoHandler<Args, Marker = FnHandler> {
+/// uses: it keeps the impls from overlapping.
+pub trait IntoHandler<Args, Marker = FnHandler, Ret = ()> {
     /// As a closure the widget keeps for itself.
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>>;
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>>;
     /// As a handle, which is what a `#[component]` callback prop holds.
-    fn into_callback_prop(self) -> Option<Callback<Args>>;
+    fn into_callback_prop(self) -> Option<Callback<Args, Ret>>;
 }
 
-impl<Args: 'static, F: IntoCallback<Args>> IntoHandler<Args, FnHandler> for F {
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, FnHandler, Ret>
+    for F
+{
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         Some(self.into_packed())
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args>> {
+    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
         Some(Callback::new(self))
     }
 }
 
-impl<Args: 'static> IntoHandler<Args, CallbackHandler> for Callback<Args> {
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+impl<Args: 'static, Ret: 'static> IntoHandler<Args, CallbackHandler, Ret> for Callback<Args, Ret> {
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         Some(Rc::new(move |args| self.run_packed(args)))
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args>> {
+    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
         Some(self)
     }
 }
 
-impl<Args: 'static> IntoHandler<Args, OptionHandler> for Option<Callback<Args>> {
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args)>> {
+impl<Args: 'static, Ret: 'static> IntoHandler<Args, OptionHandler, Ret>
+    for Option<Callback<Args, Ret>>
+{
+    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         self.and_then(IntoHandler::into_handler)
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args>> {
+    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
         self
     }
 }
 
-impl Callback<()> {
+impl<Ret: 'static> Callback<(), Ret> {
     /// Call the closure.
-    pub fn run(&self) {
-        self.run_packed(());
+    pub fn run(&self) -> Ret {
+        self.run_packed(())
     }
 }
 
-impl<A: 'static> Callback<(A,)> {
+impl<A: 'static, Ret: 'static> Callback<(A,), Ret> {
     /// Call the closure.
-    pub fn run(&self, a: A) {
-        self.run_packed((a,));
+    pub fn run(&self, a: A) -> Ret {
+        self.run_packed((a,))
     }
 }
 
-impl<A: 'static, B: 'static> Callback<(A, B)> {
+impl<A: 'static, B: 'static, Ret: 'static> Callback<(A, B), Ret> {
     /// Call the closure.
-    pub fn run(&self, a: A, b: B) {
-        self.run_packed((a, b));
+    pub fn run(&self, a: A, b: B) -> Ret {
+        self.run_packed((a, b))
     }
 }
 
-impl<A: 'static, B: 'static, C: 'static> Callback<(A, B, C)> {
+impl<A: 'static, B: 'static, C: 'static, Ret: 'static> Callback<(A, B, C), Ret> {
     /// Call the closure.
-    pub fn run(&self, a: A, b: B, c: C) {
-        self.run_packed((a, b, c));
+    pub fn run(&self, a: A, b: B, c: C) -> Ret {
+        self.run_packed((a, b, c))
     }
 }
 
@@ -219,5 +226,21 @@ mod tests {
         let two = Callback::new(move |a: i32, b: i32| seen_two.set(a * b));
         two.run(6, 7);
         assert_eq!(seen.get(), 42);
+    }
+
+    /// A callback returns what its closure returns, at every arity, and a
+    /// handle that names only its arguments still means one returning `()`.
+    #[test]
+    fn run_returns_the_closures_value() {
+        assert_eq!(Callback::new(|| 3).run(), 3);
+        assert_eq!(Callback::new(|v: u32| v * 2).run(21), 42);
+        assert_eq!(Callback::new(|a: u32, b: u32| a + b).run(40, 2), 42);
+        assert_eq!(
+            Callback::new(|a: u32, b: u32, c: u32| a * b * c).run(2, 3, 7),
+            42
+        );
+
+        let unit: Callback<(u32,)> = Callback::new(|_: u32| {});
+        let () = unit.run(1);
     }
 }
