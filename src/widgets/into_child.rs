@@ -68,7 +68,7 @@ pub trait IntoChild<Marker = StaticChild> {
 // Implementation for static widgets
 impl<W: Widget + 'static> IntoChild<StaticChild> for W {
     fn add_to_container(self, children_source: &mut ChildrenSource) {
-        children_source.add_static(Box::new(self));
+        children_source.add_static(self.into_any());
     }
 }
 
@@ -96,13 +96,13 @@ pub trait IntoDynChild {
 
 impl<W: Widget + 'static> IntoDynChild for W {
     fn into_dyn_child(self) -> Option<Box<dyn Widget>> {
-        Some(Box::new(self))
+        Some(self.into_any())
     }
 }
 
 impl<W: Widget + 'static> IntoDynChild for Option<W> {
     fn into_dyn_child(self) -> Option<Box<dyn Widget>> {
-        self.map(|w| Box::new(w) as Box<dyn Widget>)
+        self.map(Widget::into_any)
     }
 }
 

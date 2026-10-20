@@ -1361,6 +1361,12 @@ mod rect_tests {
 pub type AnyWidget = Box<dyn Widget>;
 
 impl Widget for Box<dyn Widget> {
+    /// Already erased: boxing it again would put a second pointer between
+    /// the tree and the widget, for every call it ever makes.
+    fn into_any(self) -> AnyWidget {
+        self
+    }
+
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         (**self).advance_animations(tree, id)
     }
@@ -1405,6 +1411,16 @@ impl Widget for Box<dyn Widget> {
 #[cfg(test)]
 mod tests {
     use crate::widgets::Corners;
+
+    /// A widget already erased stays in its one box: a render prop's
+    /// `AnyWidget` handed to `.child` is not boxed again.
+    #[test]
+    fn an_erased_widget_is_not_boxed_twice() {
+        let erased: super::AnyWidget = crate::widgets::container().into_any();
+        let at = &*erased as *const dyn super::Widget as *const ();
+        let again = erased.into_any();
+        assert_eq!(&*again as *const dyn super::Widget as *const (), at);
+    }
 
     /// Two rects share an area only where they overlap on both axes: edges
     /// that touch share none, and neither does an overlap along one axis
