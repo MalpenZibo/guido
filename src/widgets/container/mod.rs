@@ -1296,7 +1296,9 @@ impl Container {
         self
     }
 
-    /// Called on a left-button press inside the bounds.
+    /// Called when the left button, pressed inside the bounds, is released
+    /// inside them. A release that has wandered off only ends the press, so
+    /// letting go away from the container calls a click off.
     ///
     /// Takes a closure, a [`Callback`](crate::reactive::Callback), or an
     /// `Option<Callback>` — the last being what a `#[component]` callback prop
