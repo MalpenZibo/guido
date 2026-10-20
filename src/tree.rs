@@ -690,6 +690,11 @@ pub struct Tree {
     /// Cleared before every event, like the claim above it, so what it means
     /// is *this* move.
     drag_claimed_by_a_scroller: bool,
+    /// A scroller moved its content for the scroll being dispatched. What is
+    /// under the pointer has changed, though the pointer has not (#842).
+    /// Cleared by `dispatch` at the start of each positioned event, not by
+    /// `set_event_instant` as the claims above are.
+    scroll_moved_content: bool,
     /// The cursor the widget under the point of the event being dispatched
     /// declares, if any widget there declares one.
     ///
@@ -782,6 +787,7 @@ impl Tree {
             event_instant: None,
             focus_claimed_the_press: false,
             drag_claimed_by_a_scroller: false,
+            scroll_moved_content: false,
             cursor_under_the_point: Prop::Unset,
             pointer: PointerRecord::default(),
             hover_changes: Vec::new(),
@@ -880,6 +886,12 @@ impl Tree {
     /// spoken for.
     pub(crate) fn a_scroller_is_dragging_its_content(&mut self) {
         self.drag_claimed_by_a_scroller = true;
+    }
+
+    /// Say that the scroll being dispatched moved this scroller's content, so
+    /// that what is under the pointer is worked out again when it is over.
+    pub(crate) fn a_scroller_moved_its_content(&mut self) {
+        self.scroll_moved_content = true;
     }
 
     /// Whether a scroller below the one asking has already taken this move.
@@ -1760,6 +1772,10 @@ impl Tree {
             self.deliver_hover_changes();
             return response;
         }
+        // Whether the pointer was already somewhere on this surface: the record
+        // keeps what the last positioned event on it offered, until it leaves.
+        let pointer_was_here = self.pointer.last.iter().any(|entry| entry.root == root);
+        self.scroll_moved_content = false;
         self.pointer.offering.clear();
         self.pointer.reached.clear();
         self.pointer.withholding = false;
@@ -1812,6 +1828,29 @@ impl Tree {
             record.chord = (after != 0).then_some((root, after));
         }
         self.deliver_hover_changes();
+        // A scroll that moved content moved it under a pointer that stayed
+        // where it was, and hover is worked out on pointer events: the row
+        // that scrolled away kept it, and the one now under the pointer never
+        // got it (#842). A move at the same point works it out again: for a
+        // pointer that was on this surface, since a wheel is not where a
+        // pointer arrives. Not with a button held, which a move would carry
+        // on as a drag; the next real move does it then.
+        if let Event::Scroll { at: Some(at), .. } = event
+            && self.scroll_moved_content
+            && held == 0
+            && pointer_was_here
+        {
+            // The cursor the scroll claimed was the one over what has just
+            // scrolled away; the move says which is over what is there now.
+            self.cursor_under_the_point = Prop::Unset;
+            self.dispatch(
+                root,
+                &Event::MouseMove {
+                    at: Some(*at),
+                    pointer: crate::widgets::PointerKind::Mouse,
+                },
+            );
+        }
         response
     }
 
