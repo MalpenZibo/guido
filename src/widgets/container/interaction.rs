@@ -545,7 +545,14 @@ impl Container {
             // #340).
             Event::ScrollEnd { at } => {
                 if self.scroll_axis != ScrollAxis::None && hit.contains(*at) {
-                    return self.hand_off_to_momentum(id, now);
+                    // The gesture's end belongs to the scroller whose samples
+                    // it was. One that does not own it forgets the gesture and
+                    // lets the end on to the one that does (#841); a glide of
+                    // its own that this gesture never touched goes on.
+                    if self.scroll_data().scroll_state.owns_gesture_end(now) {
+                        return self.hand_off_to_momentum(id, now);
+                    }
+                    self.scroll_mut().scroll_state.begin_gesture();
                 }
             }
 
