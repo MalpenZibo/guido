@@ -73,7 +73,7 @@ pub mod __internal {
         super::owner::under_scope(scope, f)
     }
 }
-pub use callback::Callback;
+pub use callback::{Callback, IntoHandler};
 pub(crate) use runtime::{flush_bg_writes, reset_bg_writes};
 pub use service::{Service, ServiceContext, create_service, create_task};
 pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored};

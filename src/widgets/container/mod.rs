@@ -30,7 +30,8 @@ use crate::layout::{Alignment, Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
-    CursorIcon, IntoSignal, Prop, RwSignal, create_derived, create_signal, with_signal_tracking,
+    CursorIcon, IntoHandler, IntoSignal, Prop, RwSignal, create_derived, create_signal,
+    with_signal_tracking,
 };
 use crate::renderer::{GradientDir, MergeChildren, OpacityMode, PaintContext, Shadow, Shadows};
 use crate::transform::{Scale, Transform, Translate};
@@ -50,46 +51,9 @@ use super::widget::{
     Placement, Point, Rect, ScrollSource, Widget,
 };
 
-/// Callback for click events
-pub type ClickCallback = Rc<dyn Fn()>;
-
-#[doc(hidden)]
-pub struct FnHandler;
-#[doc(hidden)]
-pub struct CallbackHandler;
-#[doc(hidden)]
-pub struct OptionHandler;
-
-/// What a click handler can be written as.
-///
-/// A closure is the ordinary case. A [`Callback`](crate::reactive::Callback)
-/// and an `Option<Callback>` are the shapes a `#[component]` callback prop
-/// arrives in, so a component can forward its own prop straight through
-/// without a second method name for it.
-///
-/// The marker parameter is the same trick [`IntoSignal`] uses: it keeps the
-/// three impls from overlapping.
-pub trait IntoClickHandler<Marker = FnHandler> {
-    fn into_click_handler(self) -> Option<ClickCallback>;
-}
-
-impl<F: Fn() + 'static> IntoClickHandler<FnHandler> for F {
-    fn into_click_handler(self) -> Option<ClickCallback> {
-        Some(Rc::new(self))
-    }
-}
-
-impl IntoClickHandler<CallbackHandler> for crate::reactive::Callback {
-    fn into_click_handler(self) -> Option<ClickCallback> {
-        Some(Rc::new(move || self.run()))
-    }
-}
-
-impl IntoClickHandler<OptionHandler> for Option<crate::reactive::Callback> {
-    fn into_click_handler(self) -> Option<ClickCallback> {
-        self.map(|cb| Rc::new(move || cb.run()) as ClickCallback)
-    }
-}
+/// Callback for click events, taking its (empty) arguments as one tuple, as
+/// [`IntoHandler`] hands every handler over.
+pub type ClickCallback = Rc<dyn Fn(())>;
 
 /// Callback for a key-down: the key, the modifiers held with it, and whether
 /// a held key produced it rather than a press. Answers whether it took the key.
@@ -830,6 +794,20 @@ impl Container {
         self.interaction.get_or_insert_with(Box::default)
     }
 
+    /// A `None` handler leaves the container without interaction state rather
+    /// than allocating some to hold nothing.
+    fn set_click_handler<M>(
+        mut self,
+        callback: impl IntoHandler<(), M>,
+        slot: fn(&mut InteractionState) -> &mut Option<ClickCallback>,
+    ) -> Self {
+        let handler = callback.into_handler();
+        if handler.is_some() || self.interaction.is_some() {
+            *slot(self.interact_mut()) = handler;
+        }
+        self
+    }
+
     /// Set the layout strategy for this container
     pub fn layout(mut self, layout: impl Layout + 'static) -> Self {
         self.layout = Box::new(layout);
@@ -1314,12 +1292,8 @@ impl Container {
     ///
     /// A `None` prop leaves the container without a click handler, but still a
     /// pointer target if anything else made it one.
-    pub fn on_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
-        let handler = callback.into_click_handler();
-        if handler.is_some() || self.interaction.is_some() {
-            self.interact_mut().on_click = handler;
-        }
-        self
+    pub fn on_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
+        self.set_click_handler(callback, |ix| &mut ix.on_click)
     }
 
     /// Called on the release of a double click inside the bounds: the second
@@ -1335,24 +1309,18 @@ impl Container {
     /// # let open = || {};
     /// container().on_click(|| println!("select")).on_double_click(open);
     /// ```
-    pub fn on_double_click<M>(mut self, callback: impl IntoClickHandler<M>) -> Self {
-        let handler = callback.into_click_handler();
-        if handler.is_some() || self.interaction.is_some() {
-            self.interact_mut().on_double_click = handler;
-        }
-        self
+    pub fn on_double_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
+        self.set_click_handler(callback, |ix| &mut ix.on_double_click)
     }
 
     /// Called on a right-button press inside the bounds.
-    pub fn on_right_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.interact_mut().on_right_click = Some(Rc::new(callback));
-        self
+    pub fn on_right_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
+        self.set_click_handler(callback, |ix| &mut ix.on_right_click)
     }
 
     /// Called on a middle-button press inside the bounds.
-    pub fn on_middle_click<F: Fn() + 'static>(mut self, callback: F) -> Self {
-        self.interact_mut().on_middle_click = Some(Rc::new(callback));
-        self
+    pub fn on_middle_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
+        self.set_click_handler(callback, |ix| &mut ix.on_middle_click)
     }
 
     /// Called for a key press nothing with the focus took: one typed while a

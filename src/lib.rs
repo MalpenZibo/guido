@@ -221,8 +221,8 @@ pub mod prelude {
     pub use crate::pivot::{HorizontalAnchor, Pivot, VerticalAnchor};
     pub use crate::platform::{Anchor, KeyboardInteractivity, Layer};
     pub use crate::reactive::{
-        Callback, CursorIcon, IntoSignal, IntoVal, Memo, Password, RwSignal, Service, Signal,
-        TimerHandle, Trigger, WriteSignal, create_derived, create_effect, create_memo,
+        Callback, CursorIcon, IntoHandler, IntoSignal, IntoVal, Memo, Password, RwSignal, Service,
+        Signal, TimerHandle, Trigger, WriteSignal, create_derived, create_effect, create_memo,
         create_password, create_service, create_signal, create_stored, create_task, create_trigger,
         current_owner, expect_context, has_context, on_cleanup, provide_context,
         provide_signal_context, set_interval, set_timeout, use_context, with_context,
@@ -241,11 +241,11 @@ pub mod prelude {
     pub use crate::widgets::{
         AnyWidget, Border, Color, Container, ContentFit, Control, CornerRadii, Corners, Event,
         EventResponse, FontFamily, FontFeatures, FontStyle, FontWeight, GradientDirection, Image,
-        ImageSource, ImageStyle, IntoChildren, IntoClickHandler, Key, LineHeight, LinearGradient,
-        Modifiers, MouseButton, Overflow, Padding, PasswordInput, Point, PointerKind, Rect,
-        RippleConfig, Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful,
-        Text, TextAlign, TextEdge, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle,
-        Widget, arc, container, image, keyed, password_input, text, text_input,
+        ImageSource, ImageStyle, IntoChildren, Key, LineHeight, LinearGradient, Modifiers,
+        MouseButton, Overflow, Padding, PasswordInput, Point, PointerKind, Rect, RippleConfig,
+        Scroll, ScrollSource, ScrollbarVisibility, Selection, StateStyle, Stateful, Text,
+        TextAlign, TextEdge, TextInput, TextOverflow, TextShadow, TextStroke, TextStyle, Widget,
+        arc, container, image, keyed, password_input, text, text_input,
     };
     pub use crate::{
         App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
