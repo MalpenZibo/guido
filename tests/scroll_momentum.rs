@@ -771,3 +771,64 @@ fn a_last_sample_a_both_ways_strip_has_no_room_for_leaves_its_glide() {
         "the strip coasted from {strip_at_lift} to {strip_after:?}"
     );
 }
+
+/// What the recency in `owns_gesture_end` is for. A list's gesture can end
+/// where the list does not hear it: the pointer moves off the list between
+/// the last sample and the touchpad's stop, and the end goes to what is under
+/// it then. The list keeps its claim. A later flick over the row above, which
+/// moves only the page, slides that list under the pointer for its end; the
+/// list's claim is from a gesture long gone, and the page that this flick
+/// moved coasts.
+#[test]
+fn a_list_whose_gesture_ended_elsewhere_does_not_take_a_later_ones_end() {
+    let mut page = page_around(
+        container()
+            .width(200.0)
+            .height(200.0)
+            .scroll(Scroll::vertical())
+            .child(container().width(200.0).height(800.0)),
+    );
+    let mut at = Instant::now();
+    // Over the list, which takes the samples...
+    for _ in 0..2 {
+        page.send_at(
+            Event::scroll(100.0, 150.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    // ...and the stop arriving with the pointer over the row above it.
+    page.send_at(Event::scroll_end(100.0, 25.0), at);
+    for _ in 0..30 {
+        at += Duration::from_millis(16);
+        page.advance(at);
+    }
+    let (page_before, list) = offsets(&mut page);
+    assert!(
+        page_before.abs() < 0.01 && list.is_some_and(|y| y > 0.0),
+        "the first flick moved the list and left the page: {page_before}, {list:?}"
+    );
+
+    // Over the row above the list, a flick that moves the page 20 and brings
+    // the list under the pointer for the lift: the list then starts at 20,
+    // and the pointer is at 25.
+    for _ in 0..2 {
+        page.send_at(
+            Event::scroll(100.0, 25.0, 0.0, 10.0, ScrollSource::Finger),
+            at,
+        );
+        at += Duration::from_millis(8);
+    }
+    let (page_at_lift, _) = offsets(&mut page);
+    assert!(
+        (page_at_lift - 20.0).abs() < 0.01,
+        "the second flick scrolled the page {page_at_lift}, not 20"
+    );
+    page.send_at(Event::scroll_end(100.0, 25.0), at);
+    for _ in 0..60 {
+        at += Duration::from_millis(16);
+        page.advance(at);
+    }
+    let coasted = offsets(&mut page).0 - page_at_lift;
+    assert!(coasted > 10.0, "the page coasted {coasted} past the lift");
+}
