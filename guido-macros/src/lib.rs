@@ -17,6 +17,11 @@ use syn::{
 ///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`)
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
+/// - `#[prop(required)]` — an argument of the constructor rather than a setter,
+///   in declaration order: `icon(source).size(16.0)`. It takes what the setter
+///   would have, a value, a closure or a signal, or a handler for a required
+///   callback.
+///   It cannot have a default, and a children or slot prop cannot be required.
 ///
 /// A `///` on a parameter documents the method a caller sets that prop with —
 /// `child` and `children` for the children prop. Rust refuses a doc comment on
@@ -124,6 +129,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let mut is_callback = false;
         let mut is_children = false;
         let mut is_slot = false;
+        let mut is_required = false;
 
         if let Some(prop_attr) = prop_attr
             && let Meta::List(meta_list) = &prop_attr.meta
@@ -149,6 +155,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                     is_children = true;
                 } else if meta.path().is_ident("slot") {
                     is_slot = true;
+                } else if meta.path().is_ident("required") {
+                    is_required = true;
                 } else if meta.path().is_ident("default") {
                     // The value is an ordinary Rust expression. It used to be
                     // accepted quoted as well, which made a string literal
@@ -196,6 +204,26 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 .to_compile_error()
                 .into();
             }
+
+            if is_required && default_value.is_some() {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "a required prop cannot have a default: the caller always gives it",
+                )
+                .to_compile_error()
+                .into();
+            }
+
+            // A child is added and a slot filled by a method of its own; a
+            // constructor argument for either would be a second spelling.
+            if is_required && (is_children || is_slot) {
+                return syn::Error::new_spanned(
+                    prop_attr,
+                    "children and slot props cannot be required",
+                )
+                .to_compile_error()
+                .into();
+            }
         }
 
         // For callback fields, extract parameter types from `fn(T1, T2, ...)` syntax
@@ -218,6 +246,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             callback_params,
             is_children,
             is_slot,
+            is_required,
         });
     }
 
@@ -250,7 +279,12 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let field_inits = prop_fields.iter().map(|field| {
         let name = &field.name;
 
-        if field.is_callback {
+        if field.is_required {
+            let value = field.convert(name);
+            quote! {
+                #name: #value
+            }
+        } else if field.is_callback {
             quote! {
                 #name: None
             }
@@ -276,23 +310,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // Generate builder methods
     let builder_methods = prop_fields.iter().map(|field| {
         let name = &field.name;
-        let ty = &field.ty;
         let docs = &field.docs;
 
-        if field.is_callback {
-            let args = callback_args_tuple(&field.callback_params);
-            quote! {
-                #(#docs)*
-                #vis fn #name<__M>(
-                    mut self,
-                    handler: impl ::guido::reactive::IntoHandler<#args, __M>,
-                ) -> Self {
-                    self.#name = handler.into_callback_prop();
-                    self
-                }
-            }
-        } else if field.is_children {
-            // Don't generate a builder method for children - use child/children instead
+        if field.is_required || field.is_children {
+            // A required prop is given to the constructor, children to
+            // `child` and `children`.
             quote! {}
         } else if field.is_slot {
             quote! {
@@ -303,10 +325,12 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
         } else {
+            let input = field.input(&format_ident!("__M"));
+            let value = field.convert(&format_ident!("value"));
             quote! {
                 #(#docs)*
-                #vis fn #name<__M>(mut self, value: impl ::guido::reactive::IntoSignal<#ty, __M>) -> Self {
-                    self.#name = value.into_signal();
+                #vis fn #name<__M>(mut self, value: #input) -> Self {
+                    self.#name = #value;
                     self
                 }
             }
@@ -384,6 +408,32 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
     });
 
+    // A required prop is an argument of `new` and of the constructor, in the
+    // order it was declared, each under a marker generic of its own. Those
+    // come after the component's own on the constructor, and are `new`'s alone
+    // on the struct, so `Name::<P>::new(value)` names `P` and nothing else.
+    let required: Vec<_> = prop_fields.iter().filter(|f| f.is_required).collect();
+    let required_names: Vec<_> = required.iter().map(|f| &f.name).collect();
+    let markers: Vec<_> = (0..required.len())
+        .map(|i| format_ident!("__M{}", i))
+        .collect();
+    let required_params: Vec<_> = required
+        .iter()
+        .zip(&markers)
+        .map(|(field, marker)| {
+            let name = &field.name;
+            let input = field.input(marker);
+            quote! { #name: #input }
+        })
+        .collect();
+    let mut fn_generics = generics.clone();
+    fn_generics.params.extend(
+        markers
+            .iter()
+            .map(|m| -> syn::GenericParam { syn::parse_quote!(#m) }),
+    );
+    let (fn_impl_generics, _, _) = fn_generics.split_for_impl();
+
     let expanded = quote! {
         #(#fn_docs)*
         #vis struct #struct_name #impl_generics #where_clause {
@@ -397,8 +447,9 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl #impl_generics #struct_name #ty_generics #where_clause {
-            /// Makes the component with every prop at its default.
-            #vis fn new() -> Self {
+            /// Makes the component from its required props, with every
+            /// other prop at its default.
+            #vis fn new<#(#markers),*>(#(#required_params),*) -> Self {
                 Self {
                     #(#field_inits,)*
                     __inner: std::cell::RefCell::new(None),
@@ -520,8 +571,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #(#fn_docs)*
-        #vis fn #fn_name #impl_generics () -> #struct_name #ty_generics #where_clause {
-            #struct_name::new()
+        #vis fn #fn_name #fn_impl_generics (#(#required_params),*) -> #struct_name #ty_generics #where_clause {
+            #struct_name::new(#(#required_names),*)
         }
     };
 
@@ -540,6 +591,31 @@ struct PropField {
     callback_params: Vec<Type>,
     is_children: bool,
     is_slot: bool,
+    /// Taken by the constructor rather than by a setter.
+    is_required: bool,
+}
+
+impl PropField {
+    /// What a setter or a required argument takes for this prop: a handler
+    /// for a callback, anything that converts into its signal otherwise.
+    fn input(&self, marker: &syn::Ident) -> proc_macro2::TokenStream {
+        if self.is_callback {
+            let args = callback_args_tuple(&self.callback_params);
+            quote! { impl ::guido::reactive::IntoHandler<#args, #marker> }
+        } else {
+            let ty = &self.ty;
+            quote! { impl ::guido::reactive::IntoSignal<#ty, #marker> }
+        }
+    }
+
+    /// What the field holds, made from `value`, an argument of `input`'s type.
+    fn convert(&self, value: &syn::Ident) -> proc_macro2::TokenStream {
+        if self.is_callback {
+            quote! { #value.into_callback_prop() }
+        } else {
+            quote! { #value.into_signal() }
+        }
+    }
 }
 
 fn doc_attrs(attrs: &[Attribute]) -> Vec<Attribute> {

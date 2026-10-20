@@ -72,7 +72,7 @@ pub fn button(label: String) -> impl Widget {
 #     container().child(text(label))
 # }
 # fn main() {
-button().label("Required")
+button().label("Hello")
 # ;
 # }
 ```
@@ -122,6 +122,39 @@ button().label("Custom").background(Color::RED).padding(16.0)
 # ;
 # }
 ```
+
+### Required Props
+
+A prop the component cannot do without is marked `required`, and becomes an
+argument of the constructor rather than a setter — the way `text(content)`
+takes its content:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn icon(
+    #[prop(required)] source: String,
+    #[prop(default = 16.0)] size: f32,
+) -> impl Widget {
+    container().width(size).height(size).child(text(source))
+}
+# fn main() {
+# let _ =
+icon("battery").size(24.0)
+# ;
+# }
+```
+
+Required props are taken in the order they are declared, and each takes what
+its setter would have: a value, a closure or a signal — or, for a required
+`callback`, a handler. Leaving one out is an ordinary "this function takes 1
+argument" error at the call, rather than a component that quietly draws its
+`Default`. Every other prop keeps its setter and its default.
+
+A required prop cannot have a `default`, which the caller would never reach,
+and a `children` or `slot` prop cannot be required, since both are filled by
+methods of their own.
 
 ### Callback Props
 
@@ -479,6 +512,26 @@ container()
 
 Name the type with a turbofish at the call: a prop's setter takes anything that
 converts into a signal of `P`, which is too many candidates to infer `P` from.
+A generic component with a required prop is named on its struct, because the
+constructor carries a generic of its own for each required argument:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn shown<P>(#[prop(required)] value: P) -> impl Widget
+where
+    P: Clone + std::fmt::Display + 'static,
+{
+    text(move || value.get().to_string())
+}
+# fn main() {
+# let _ =
+Shown::<u32>::new(42u32)
+# ;
+# }
+```
+
 A component cannot take a lifetime parameter, because it is kept as a
 `'static` widget.
 

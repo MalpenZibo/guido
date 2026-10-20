@@ -35,7 +35,61 @@ pub mod platform;
 pub mod renderer;
 
 // Re-export macros
-pub use guido_macros::{SignalFields, component};
+pub use guido_macros::SignalFields;
+/// A prop marked `#[prop(required)]` is an argument of the constructor, in
+/// the order it is declared, and every other prop keeps its setter:
+///
+/// ```
+/// # use guido::prelude::*;
+/// #[component]
+/// fn swatch(#[prop(required)] width: f32, #[prop(default = 10.0)] height: f32) -> impl Widget {
+///     container().width(width).height(height)
+/// }
+/// # fn main() {
+/// let _ = swatch(30.0).height(12.0);
+/// # }
+/// ```
+///
+/// Leaving it out does not compile. E0061 is pinned, as everywhere else: a
+/// bare `compile_fail` passes on any error at all, including a typo in the
+/// sample.
+///
+/// ```compile_fail,E0061
+/// # use guido::prelude::*;
+/// #[component]
+/// fn swatch(#[prop(required)] width: f32, #[prop(default = 10.0)] height: f32) -> impl Widget {
+///     container().width(width).height(height)
+/// }
+/// # fn main() {
+/// let _ = swatch().height(12.0);
+/// # }
+/// ```
+///
+/// A required prop is always given, so a default for it is refused, at the
+/// attribute. The macro's error has no code to pin; the sample is the one
+/// above that compiles, with the default added.
+///
+/// ```compile_fail
+/// # use guido::prelude::*;
+/// #[component]
+/// fn swatch(#[prop(required, default = 30.0)] width: f32, #[prop(default = 10.0)] height: f32) -> impl Widget {
+///     container().width(width).height(height)
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Children and slots are filled by methods of their own, so neither can be
+/// required either:
+///
+/// ```compile_fail
+/// # use guido::prelude::*;
+/// #[component]
+/// fn card(#[prop(required, children)] children: ()) -> impl Widget {
+///     container().children(children)
+/// }
+/// # fn main() {}
+/// ```
+pub use guido_macros::component;
 pub use secret::Secret;
 
 use std::sync::Arc;
