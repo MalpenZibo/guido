@@ -428,7 +428,15 @@ from a background task.
 ```rust
 let cb = Callback::new(move |v: i32| println!("{v}"));
 cb.run(7);          // arity stays flat: run(), run(a), run(a, b)
+
+let double = Callback::new(|v: i32| v * 2);   // Callback<(i32,), i32>
+assert_eq!(double.run(21), 42);               // run returns what the closure does
 ```
+
+The second parameter is the return type, `()` unless named, as Leptos, Dioxus
+and Yew carry it. It is what a `#[component]` render prop is:
+`Callback<(P,), Container>`, or `Callback<(P,), AnyWidget>` for one declared
+`-> impl Widget`.
 
 ## Signal Internals
 
