@@ -1,3 +1,4 @@
+mod activation;
 pub mod backdrop;
 pub(crate) mod clicks;
 pub mod input;

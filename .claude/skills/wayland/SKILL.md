@@ -40,6 +40,9 @@ Multiple surfaces share one reactive state and one renderer.
   needs a device is the wire above it
 - **Clipboard** — an offer is read only when something pastes, on a reader
   thread, and the answer goes to whoever asked; plus primary selection
+- **Activation tokens** (`xdg_activation_v1`) — `SurfaceHandle::request_activation_token`
+  asks against the latest input serial, answered through a callback on a later
+  iteration the way a paste is; the recorder leaves the answer to the test
 - **Compositor effects** — `ext-background-effect-v1` for backdrop blur, with
   `compositor_effects()` to ask what is available
 - **Fractional scaling** (`wp_fractional_scale_v1` + `wp_viewporter`) — bound

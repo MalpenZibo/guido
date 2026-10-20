@@ -142,6 +142,10 @@ struct Recorder {
     primary: Option<String>,
     /// Every read the seat was asked for, oldest first.
     selection_reads: Vec<crate::reactive::SelectionKind>,
+    /// The surface every activation token was asked for, oldest first.
+    activation_requests: Vec<SurfaceId>,
+    /// The requests the compositor has not answered yet, oldest first.
+    activation_unanswered: std::collections::VecDeque<u64>,
     /// The physical size of every render target the loop built, per surface,
     /// oldest first. A resize is not a build, so a target built at one scale
     /// and grown to another shows here as the first size only.
@@ -443,6 +447,13 @@ impl Platform for Recorder {
         self.selection_reads.push(kind);
         let offered = self.selection(kind).clone();
         crate::reactive::clipboard::answer_paste(token, offered);
+    }
+
+    /// Left for the test to answer, as a compositor answers a round trip
+    /// later.
+    fn request_activation_token(&mut self, surface: SurfaceId, request: u64) {
+        self.activation_requests.push(surface);
+        self.activation_unanswered.push_back(request);
     }
 
     fn take_lock_events(&mut self) -> Vec<LockEvent> {
@@ -896,6 +907,23 @@ impl Headless {
     /// Every selection read the application asked the seat for, oldest first.
     pub fn selection_reads(&self) -> &[crate::reactive::SelectionKind] {
         &self.host.selection_reads
+    }
+
+    /// The surface every activation token was asked for, oldest first.
+    pub fn activation_requests(&self) -> &[SurfaceId] {
+        &self.host.activation_requests
+    }
+
+    /// Answer the oldest activation token not yet answered: with the token
+    /// `xdg_activation_token_v1.done` carries, or with `None`, which is what a
+    /// compositor without the protocol amounts to.
+    pub fn answer_activation(&mut self, token: Option<&str>) {
+        let request = self
+            .host
+            .activation_unanswered
+            .pop_front()
+            .expect("no activation token is waiting for an answer");
+        crate::activation::answer(request, token.map(str::to_owned));
     }
 
     /// Say the compositor granted the lock the application asked for, which is

@@ -231,6 +231,7 @@ blocks live beside their state rather than all in one file.
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
 | `platform/clicks.rs` | Which press of a run a press is — the double click — shared with the headless recorder |
 | `platform/selections.rs` | Clipboard and primary selection, read on paste |
+| `platform/activation.rs` | `xdg_activation_v1` tokens, asked for against the latest input serial |
 | `platform/outputs.rs` | Stable `OutputId` per `wl_output`, hotplug |
 | `platform/popups.rs` | xdg popups: positioning, grabs, ordered teardown |
 | `platform/lock.rs` | `ext-session-lock-v1` grant and lifecycle events |
