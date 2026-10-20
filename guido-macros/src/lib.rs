@@ -16,6 +16,12 @@ use syn::{DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro
 /// - `#[prop(children)]` — children support via `ChildrenSource`
 /// - `#[prop(slot)]` — named widget slot
 ///
+/// The function's type and const parameters, their bounds and its `where`
+/// clause are carried onto the struct, its impls and the constructor, so a
+/// component can be generic over its props' types. Lifetime parameters are
+/// refused: a component is boxed as a `'static` widget. The generated methods'
+/// own generics start with `__`, so they never shadow a name the caller chose.
+///
 /// # Example
 /// ```ignore
 /// // not compiled: `guido-macros` is a proc-macro crate and does not depend on
@@ -59,6 +65,24 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     let vis = &input.vis;
     let body = &input.block;
     let struct_name = format_ident!("{}", to_pascal_case(&fn_name.to_string()));
+
+    let generics = &input.sig.generics;
+    if let Some(lifetime) = generics.lifetimes().next() {
+        return syn::Error::new_spanned(
+            lifetime,
+            "a component cannot take a lifetime parameter: it is boxed as a `'static` widget",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let type_params: Vec<_> = generics.type_params().map(|p| &p.ident).collect();
+    // `render`'s `impl Widget` has to name every type and const parameter in
+    // its `use<..>`; a lifetime is the only thing it may leave out.
+    let captured = type_params
+        .iter()
+        .copied()
+        .chain(generics.const_params().map(|p| &p.ident));
 
     // Extract props from function parameters
     let mut prop_fields = Vec::new();
@@ -281,14 +305,14 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     // Generate children methods if needed
     let children_methods = if has_children {
         quote! {
-            #vis fn child<M>(self, child: impl ::guido::widgets::IntoChild<M>) -> Self {
+            #vis fn child<__M>(self, child: impl ::guido::widgets::IntoChild<__M>) -> Self {
                 child.add_to_container(&mut *self.__children.borrow_mut());
                 self
             }
 
-            #vis fn children<M, I>(self, children: I) -> Self
+            #vis fn children<__M, __I>(self, children: __I) -> Self
             where
-                I: ::guido::widgets::IntoChildren<M>,
+                __I: ::guido::widgets::IntoChildren<__M>,
             {
                 children.add_to_container(&mut *self.__children.borrow_mut());
                 self
@@ -344,20 +368,24 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
     });
 
     let expanded = quote! {
-        #vis struct #struct_name {
+        #vis struct #struct_name #impl_generics #where_clause {
             #(#field_defs,)*
             __inner: std::cell::RefCell<Option<Box<dyn ::guido::widgets::Widget>>>,
             __owner_id: std::cell::Cell<Option<::guido::reactive::__internal::OwnerId>>,
             __made_in: Option<::guido::reactive::__internal::OwnerId>,
+            // A type parameter only the body, a slot or the children use
+            // appears in no other field, and a struct has to use each of its own.
+            __generics: std::marker::PhantomData<fn() -> (#(#type_params,)*)>,
         }
 
-        impl #struct_name {
+        impl #impl_generics #struct_name #ty_generics #where_clause {
             #vis fn new() -> Self {
                 Self {
                     #(#field_inits,)*
                     __inner: std::cell::RefCell::new(None),
                     __owner_id: std::cell::Cell::new(None),
                     __made_in: ::guido::reactive::current_owner(),
+                    __generics: std::marker::PhantomData,
                 }
             }
 
@@ -367,7 +395,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
             #(#slot_methods)*
 
-            fn render(&self) -> impl ::guido::widgets::Widget + use<> {
+            fn render(&self) -> impl ::guido::widgets::Widget + use<#(#captured),*> {
                 #(#prop_bindings)*
                 #body
             }
@@ -389,7 +417,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        impl Drop for #struct_name {
+        impl #impl_generics Drop for #struct_name #ty_generics #where_clause {
             fn drop(&mut self) {
                 // Dispose the owner and all its signals/effects/cleanups. If
                 // the scope it was made in went first, this one went with it
@@ -400,7 +428,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         }
 
-        impl ::guido::widgets::Widget for #struct_name {
+        impl #impl_generics ::guido::widgets::Widget for #struct_name #ty_generics #where_clause {
             fn advance_animations(&mut self, tree: &mut ::guido::tree::Tree, id: ::guido::tree::WidgetId) -> bool {
                 self.ensure_built();
                 self.__inner.borrow_mut().as_mut().unwrap().advance_animations(tree, id)
@@ -472,7 +500,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
 
         }
 
-        #vis fn #fn_name() -> #struct_name {
+        #vis fn #fn_name #impl_generics () -> #struct_name #ty_generics #where_clause {
             #struct_name::new()
         }
     };

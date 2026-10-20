@@ -423,6 +423,38 @@ button()
 # }
 ```
 
+## Generic Components
+
+A component can be generic over its props' types. The type parameters, their
+bounds and the `where` clause carry over to the generated struct and its
+constructor, and a prop of type `P` is a `Signal<P>` like any other, so `P`
+needs what a signal needs — `Clone` and `'static` — plus `Default` when the prop
+has no default of its own:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn labelled<P>(value: P) -> impl Widget
+where
+    P: Clone + Default + std::fmt::Display + 'static,
+{
+    container().child(text(move || value.get().to_string()))
+}
+# fn main() {
+# let _ =
+container()
+    .child(labelled::<u32>().value(42u32))
+    .child(labelled::<String>().value("forty-two".to_string()))
+# ;
+# }
+```
+
+Name the type with a turbofish at the call: a prop's setter takes anything that
+converts into a signal of `P`, which is too many candidates to infer `P` from.
+A component cannot take a lifetime parameter, because it is kept as a
+`'static` widget.
+
 ## Complete Example
 
 ```rust,no_run
