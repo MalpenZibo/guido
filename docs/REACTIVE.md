@@ -767,7 +767,17 @@ runs. This is Svelte 5's `pause_effect` and `resume_effect` (the `INERT` flag).
 
 ### Component Macro Integration
 
-Components created with `#[component]` automatically wrap their render body in an owner scope. When the component is dropped, all its reactive resources are cleaned up:
+Components created with `#[component]` automatically wrap their render body in an owner scope. When the component is dropped, all its reactive resources are cleaned up.
+
+The body runs lazily, the first time the tree asks the component for anything
+(`ensure_built` in `guido-macros/src/lib.rs`), which is after the code that made
+it has returned. The generated struct records `current_owner()` when it is
+made, and `ensure_built` opens the body's scope under that one, as a dynamic
+segment does with the scope it was written in. So the body's `use_context`
+reads resolve against the scope that made the component — a surface's, a row's,
+another component's body — and the body's scope is disposed with it. When that
+happens first, the component's own `Drop` finds its scope already gone, and
+disposing it again does nothing.
 
 ```rust
 #[component]
