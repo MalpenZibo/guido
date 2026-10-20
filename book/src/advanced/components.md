@@ -212,8 +212,10 @@ pub fn button(
 
 A component's body executes **one time**, when the widget is first built, inside
 its own ownership scope — that is what lets the signals and effects it creates
-die with the component. Reactivity comes from the closures it leaves behind,
-not from re-running the body:
+die with the component. That scope hangs from the one that was current where
+the component was made, so its body reads what that scope declared with
+`use_context` (see [Scopes](./context.md#scopes)). Reactivity comes from the
+closures it leaves behind, not from re-running the body:
 
 ```rust
 # extern crate guido;

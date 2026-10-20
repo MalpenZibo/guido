@@ -66,6 +66,12 @@ pub use trigger::{Trigger, create_trigger};
 pub mod __internal {
     pub use super::owner::{OwnerId, dispose_owner_now as dispose_owner, with_owner};
     pub use super::runtime::batch;
+
+    /// `#[component]` builds its body under the scope it was made in, which is
+    /// what `under_scope` is for; it stays crate-internal everywhere else.
+    pub fn under_scope<T>(scope: Option<OwnerId>, f: impl FnOnce() -> T) -> T {
+        super::owner::under_scope(scope, f)
+    }
 }
 pub use callback::Callback;
 pub(crate) use runtime::{flush_bg_writes, reset_bg_writes};

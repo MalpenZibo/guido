@@ -66,6 +66,40 @@ fn a_component_reports_the_scope_its_body_ran_in() {
     );
 }
 
+/// A component whose body registers a cleanup that counts its runs.
+#[component]
+fn counting_cleanups(runs: std::rc::Rc<std::cell::Cell<u32>>) -> impl Widget {
+    let runs = runs.get_untracked();
+    on_cleanup(move || runs.set(runs.get() + 1));
+    container().width(10.0).height(10.0)
+}
+
+/// A component's scope hangs from the scope it was made in, even though its
+/// body runs later and outside it: when that scope goes, what the body owns
+/// goes with it, and the component dropping afterwards finds its own scope
+/// already gone rather than running the body's cleanups a second time.
+#[test]
+fn a_component_is_disposed_with_the_scope_it_was_made_in_and_only_once() {
+    use guido::reactive::__internal::{dispose_owner, with_owner};
+
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let (component, scope) = with_owner(|| counting_cleanups().runs(runs.clone()));
+    component.layout_hints();
+
+    dispose_owner(scope);
+    assert_eq!(
+        runs.get(),
+        1,
+        "the body's scope went with the one it was made in"
+    );
+    drop(component);
+    assert_eq!(
+        runs.get(),
+        1,
+        "and dropping the component ran nothing twice"
+    );
+}
+
 /// Through a real loop, where removing a row reconciles the list and the
 /// frames that follow play the exit, because that is what a user sees.
 #[cfg(feature = "testing")]

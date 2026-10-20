@@ -58,6 +58,14 @@ from whatever is current when the library gets round to running the factory,
 which is later, while the frame is laid out. So a row reads what its surface
 declared, and a row inside a row reads what either of them did.
 
+A `#[component]` is the same. Its body runs when the frame first asks it for
+something, after the factory that made it returned, and it runs inside a scope
+of its own — which hangs from the one that was current where the component was
+made. So a component placed as a plain
+child of a surface reads the surface's declarations and its `SurfaceHandle`, a
+component inside another component's body reads what that body declared, and
+when the scope it was made in goes, the component's scope goes with it.
+
 ## Where a Read Resolves
 
 In the body of the factory that builds the widgets. That is where the scope the
