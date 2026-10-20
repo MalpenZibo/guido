@@ -557,8 +557,10 @@ fn process_surface_commands<P: Platform>(
                 if wayland_state.create_popup(id, parent, &config, (config.width, height)) {
                     surface_manager.add(managed);
                 } else {
-                    // Creation failed (no xdg_wm_base, parent gone): drop the
-                    // widget tree and report the popup as dismissed.
+                    // Creation failed (no xdg_wm_base, parent gone): taken
+                    // down as a closed popup is, the widgets unregistered
+                    // before the drop disposes their owner.
+                    surface_manager::teardown_widget_subtree(tree, managed.widget_id);
                     drop(managed);
                     surface::mark_popup_dismissed(id);
                 }
