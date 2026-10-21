@@ -77,7 +77,7 @@ smallvec = "1"
 rustc-hash = "2"
 # Fills and strokes a path into triangles; the 1-pixel fringe that anti-aliases
 # them is guido's own, since lyon does none and guido has no MSAA.
-lyon_tessellation = "1.0.22"
+lyon_tessellation = "1.0.23"
 
 [dev-dependencies]
 env_logger = "0.11"
