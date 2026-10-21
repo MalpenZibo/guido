@@ -23,7 +23,8 @@ use syn::{
 /// - `#[prop(required)]` — an argument of the constructor rather than a setter,
 ///   in declaration order: `icon(source).size(16.0)`. It takes what the setter
 ///   would have, a value, a closure or a signal, or a handler for a required
-///   callback.
+///   callback — a closure or a `Callback`, never an `Option`, and the body
+///   holds a `Callback` rather than an `Option` of one.
 ///   It cannot have a default, and a children or slot prop cannot be required.
 ///
 /// A `///` on a parameter documents the method a caller sets that prop with —
@@ -303,10 +304,11 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         let ty = &field.ty;
 
         if field.is_callback {
-            let args = callback_args_tuple(&field.callback_params);
-            let ret = field.callback_ret.ty();
-            quote! {
-                #name: Option<::guido::reactive::Callback<#args, #ret>>
+            let callback = field.callback_ty();
+            if field.is_required {
+                quote! { #name: #callback }
+            } else {
+                quote! { #name: Option<#callback> }
             }
         } else if field.is_children {
             quote! {
@@ -444,7 +446,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
                 let #name = self.#take_name();
             }
         } else if field.is_callback {
-            // Option<Callback<..>> is Copy: bind by value, no clone ceremony
+            // A Callback, or an Option of one, is Copy: bind by value, no clone ceremony
             quote! {
                 let #name = self.#name;
             }
@@ -648,18 +650,36 @@ struct PropField {
 }
 
 impl PropField {
+    /// The `Callback` a callback prop holds, bare when it is required and in
+    /// an `Option` otherwise.
+    fn callback_ty(&self) -> proc_macro2::TokenStream {
+        let args = callback_args_tuple(&self.callback_params);
+        let ret = self.callback_ret.ty();
+        quote! { ::guido::reactive::Callback<#args, #ret> }
+    }
+
     /// What a setter or a required argument takes for this prop: a handler
-    /// for a callback, anything that converts into its signal otherwise.
+    /// for a callback, anything that converts into its signal otherwise. A
+    /// required callback takes only the shapes that make a `Callback`, so a
+    /// `None` is refused where it is passed.
     fn input(&self, marker: &syn::Ident) -> proc_macro2::TokenStream {
         if !self.is_callback {
             let ty = &self.ty;
             return quote! { impl ::guido::reactive::IntoSignal<#ty, #marker> };
         }
         let args = callback_args_tuple(&self.callback_params);
+        let prop = if self.is_required {
+            let callback = self.callback_ty();
+            quote! { Prop = #callback }
+        } else {
+            quote! {}
+        };
         match &self.callback_ret {
-            CallbackRet::Widget => quote! { impl ::guido::widgets::IntoRenderProp<#args, #marker> },
+            CallbackRet::Widget => {
+                quote! { impl ::guido::widgets::IntoRenderProp<#args, #marker, #prop> }
+            }
             CallbackRet::Value(ret) => {
-                quote! { impl ::guido::reactive::IntoHandler<#args, #marker, #ret> }
+                quote! { impl ::guido::reactive::IntoHandler<#args, #marker, #ret, #prop> }
             }
         }
     }
@@ -669,9 +689,14 @@ impl PropField {
         if !self.is_callback {
             return quote! { #value.into_signal() };
         }
-        match self.callback_ret {
-            CallbackRet::Widget => quote! { #value.into_render_prop().into() },
-            CallbackRet::Value(_) => quote! { #value.into_callback_prop().into() },
+        let prop = match self.callback_ret {
+            CallbackRet::Widget => quote! { #value.into_render_prop() },
+            CallbackRet::Value(_) => quote! { #value.into_callback_prop() },
+        };
+        if self.is_required {
+            prop
+        } else {
+            quote! { #prop.into() }
         }
     }
 }

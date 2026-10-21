@@ -44,6 +44,16 @@ fn tap_target(#[prop(required, callback)] on_tap: ()) -> impl Widget {
     container().width(20.0).height(20.0).on_click(on_tap)
 }
 
+/// A required render prop is always given, so the body calls it as it is,
+/// with no `Option` in the way.
+#[component]
+fn titled(
+    #[prop(required)] title: String,
+    #[prop(required, callback)] render: fn(String) -> impl Widget,
+) -> impl Widget {
+    container().child(render.run(title.get_untracked()))
+}
+
 /// A generic component whose required prop is of its type parameter.
 #[component]
 fn shown<P: Clone + std::fmt::Display + 'static>(#[prop(required)] value: P) -> impl Widget {
@@ -82,6 +92,16 @@ fn a_required_callback_is_called() {
     );
     h.click(10.0, 10.0);
     assert_eq!(taps.get(), 1);
+}
+
+#[test]
+fn a_required_render_prop_is_called_as_it_is() {
+    let mut h = Harness::laid_out(
+        titled("home", |title| text(format!("page: {title}"))),
+        200.0,
+        200.0,
+    );
+    assert_eq!(h.painted_texts(), vec!["page: home".to_string()]);
 }
 
 #[test]

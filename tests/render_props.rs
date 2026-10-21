@@ -143,14 +143,14 @@ fn an_erased_render_prop_takes_a_callback() {
     assert!(is_red(pixel), "the callback's page for 7, got {pixel:?}");
 }
 
-/// A required render prop is a constructor argument, and takes what its
-/// setter would.
+/// A required render prop is a constructor argument, takes the closures and
+/// `Callback`s its setter would, and is called as it is.
 #[component]
 fn required(#[prop(required, callback)] render: fn(u32) -> impl Widget) -> impl Widget {
     container()
         .width(fill())
         .height(fill())
-        .child(render.map(|render| render.run(7)))
+        .child(render.run(7))
 }
 
 #[test]
