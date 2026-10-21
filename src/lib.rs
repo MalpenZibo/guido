@@ -159,6 +159,12 @@ pub use guido_macros::SignalFields;
 pub use guido_macros::component;
 pub use secret::Secret;
 
+/// The README's samples, compiled as doc tests so its quick start cannot go
+/// stale. Never built otherwise.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 use std::sync::Arc;
 
 use layout::Constraints;

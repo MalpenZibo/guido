@@ -10,8 +10,12 @@ Guido requires a Wayland compositor with layer shell protocol support. Compatibl
 
 - **Sway** - i3-compatible Wayland compositor
 - **Hyprland** - Dynamic tiling Wayland compositor
+- **niri** - Scrollable-tiling Wayland compositor
+- **KDE Plasma** - KWin supports layer shell
 - **river** - Dynamic tiling Wayland compositor
-- **wayfire** - 3D Wayland compositor
+- **labwc** and **wayfire** - Stacking Wayland compositors
+
+GNOME's Mutter does not implement layer shell.
 
 > **Note:** X11 is not supported. Guido is designed specifically for Wayland layer shell applications.
 
@@ -48,14 +52,7 @@ cargo add guido
 
 ### Existing Project
 
-Add Guido to your `Cargo.toml`:
-
-```toml
-[dependencies]
-guido = "0.1"
-```
-
-Or use cargo:
+From the project's directory, which adds the latest release to `Cargo.toml`:
 
 ```bash
 cargo add guido
