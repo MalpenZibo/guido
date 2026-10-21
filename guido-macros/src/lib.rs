@@ -670,8 +670,8 @@ impl PropField {
             return quote! { #value.into_signal() };
         }
         match self.callback_ret {
-            CallbackRet::Widget => quote! { #value.into_render_prop() },
-            CallbackRet::Value(_) => quote! { #value.into_callback_prop() },
+            CallbackRet::Widget => quote! { #value.into_render_prop().into() },
+            CallbackRet::Value(_) => quote! { #value.into_callback_prop().into() },
         }
     }
 }
