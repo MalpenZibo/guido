@@ -187,6 +187,16 @@ container().children(keyed(
 ))
 ```
 
+## Components
+
+An example, a book sample or a crate doc that builds the same widget in more
+than one place, with named, optional or callback props, writes it as a
+`#[component]` — the rule the book's Components chapter and the crate docs give
+an application's author, and the one an agent copying our examples learns. A
+function returning `Container` is for a piece built once. The macro itself is
+`guido-macros/src/lib.rs`; `tests/required_props.rs` and the samples beside
+`pub use guido_macros::component` in `src/lib.rs` are what pin its spellings.
+
 ## State layers
 
 Hover, press and focus are overrides, not separate widgets, and they come from
