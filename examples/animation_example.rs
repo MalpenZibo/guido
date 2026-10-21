@@ -50,22 +50,23 @@ fn main() {
     });
 }
 
-fn card(title: &str, hint: impl Into<String>, body: Container) -> Container {
+/// One property's card: its `title`, the thing that moves, and a `hint` at
+/// what to do to it.
+#[component]
+fn card(
+    #[prop(required)] title: String,
+    #[prop(required)] hint: String,
+    #[prop(children)] children: (),
+) -> impl Widget {
     container()
         .background(CARD.transition(Transition::new(150.0, TimingFunction::EaseOut)))
         .corners(12.0)
         .padding(12.0)
         .layout(Flex::column().spacing(7.0))
         .when_hovered(|s| s.lighter(0.04))
-        .children([
-            text(title.to_string())
-                .font_size(14.0)
-                .bold()
-                .color(LABEL)
-                .into_any(),
-            body.into_any(),
-            text(hint.into()).font_size(12.0).color(MUTED).into_any(),
-        ])
+        .child(text(title).font_size(14.0).bold().color(LABEL))
+        .children(children)
+        .child(text(hint).font_size(12.0).color(MUTED))
 }
 
 /// A dark strip for something to travel along.
@@ -82,13 +83,15 @@ fn track(height: f32, body: Container) -> Container {
 /// Width, on a spring. The bar carries nothing, so its width *is* the animated
 /// value — with a label inside, the text would set a floor and the narrow end
 /// would never be narrow.
-fn width_card() -> Container {
+fn width_card() -> impl Widget {
     let wide = create_signal(false);
 
     card(
         "Width — spring",
         "Click. The bar carries nothing, so it really reaches 60px — and it \
          passes 620 before settling on it.",
+    )
+    .child(
         track(
             36.0,
             container()
@@ -106,7 +109,7 @@ fn width_card() -> Container {
 
 /// The same colour change under a spring and under a curve, side by side —
 /// which is the only way to see what the spring is actually doing to it.
-fn colour_card() -> Container {
+fn colour_card() -> impl Widget {
     let swatch = |transition: Transition| {
         container()
             .width(280.0)
@@ -120,21 +123,23 @@ fn colour_card() -> Container {
         "Background colour — spring against a curve",
         "Hover both. Left is a bouncy spring — it arrives past the colour and \
          comes back; right is a 220ms curve, which stops on it.",
-        container().layout(Flex::row().spacing(16.0)).children([
-            swatch(Transition::spring(SpringConfig::BOUNCY)),
-            swatch(Transition::new(220.0, TimingFunction::EaseOut)),
-        ]),
     )
+    .child(container().layout(Flex::row().spacing(16.0)).children([
+        swatch(Transition::spring(SpringConfig::BOUNCY)),
+        swatch(Transition::new(220.0, TimingFunction::EaseOut)),
+    ]))
 }
 
 /// Several properties moving at once, each on its own transition.
-fn corner_and_size_card() -> Container {
+fn corner_and_size_card() -> impl Widget {
     let open = create_signal(false);
 
     card(
         "Width, corner radius and colour together",
         "Click. Three properties, three transitions — the corner is on a curve \
          and the width on a spring, so they do not arrive together.",
+    )
+    .child(
         track(
             56.0,
             container()
@@ -163,13 +168,15 @@ fn corner_and_size_card() -> Container {
 }
 
 /// Border width on a bouncy spring, where the overshoot is the whole effect.
-fn border_card() -> Container {
+fn border_card() -> impl Widget {
     let thick = create_signal(false);
 
     card(
         "Border width — bouncy spring",
         "Click. 2px to 14px on a bouncy spring wobbles before it settles; \
          hovering changes the colour on a curve underneath.",
+    )
+    .child(
         container()
             .width(fill())
             .height(56.0)

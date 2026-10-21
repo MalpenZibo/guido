@@ -16,6 +16,7 @@
     - [Widgets](concepts/widgets.md)
     - [Container](concepts/container.md)
     - [Layout](concepts/layout.md)
+    - [Components](concepts/components.md)
 
 # Building UI
 
@@ -59,7 +60,6 @@
 # Advanced Topics
 
 - [Advanced Topics](advanced/README.md)
-    - [Creating Components](advanced/components.md)
     - [Custom Widgets and Layouts](advanced/custom-widgets.md)
     - [Dynamic Children](advanced/dynamic-children.md)
     - [Background Tasks](advanced/background-threads.md)

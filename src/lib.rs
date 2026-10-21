@@ -1,3 +1,54 @@
+//! A reactive GUI library for Wayland layer-shell surfaces: status bars,
+//! panels, popups, lock screens.
+//!
+//! Everything is built from a handful of primitives — [`container`],
+//! [`text`], [`image`] — and every property that reaches the screen takes a
+//! signal as readily as a value, so a view is built once and updates itself.
+//! The book at <https://malpenzibo.github.io/guido> walks through all of it;
+//! `use guido::prelude::*` brings in what an application needs.
+//!
+//! # Writing your own widgets
+//!
+//! A widget made in more than one place, with named, optional or callback
+//! props, is a [`component`]: a function under `#[component]`, whose
+//! parameters become props the caller sets by name, with defaults, taking a
+//! value, a closure or a signal alike.
+//!
+//! ```
+//! use guido::prelude::*;
+//!
+//! /// A button with `label` on it.
+//! #[component]
+//! pub fn button(
+//!     #[prop(required)]
+//!     label: String,
+//!     #[prop(default = Color::rgb(0.3, 0.3, 0.4))]
+//!     background: Color,
+//!     /// Called when the button is clicked.
+//!     #[prop(callback)]
+//!     on_click: (),
+//! ) -> impl Widget {
+//!     container()
+//!         .padding(8.0)
+//!         .background(background)
+//!         .on_click(on_click)
+//!         .child(text(label))
+//! }
+//!
+//! # fn main() {
+//! let count = create_signal(0);
+//! let _ = button("Add").on_click(move || count.update(|c| *c += 1));
+//! # }
+//! ```
+//!
+//! A function returning `Container` is for a piece built once, to give a long
+//! view a name. The book's Components chapter has the rest: children, slots,
+//! render props, generic components.
+//!
+//! [`container`]: widgets::container()
+//! [`text`]: widgets::text()
+//! [`image`]: widgets::image()
+
 pub mod animation;
 mod app_state;
 pub mod backdrop;

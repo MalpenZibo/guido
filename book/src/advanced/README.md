@@ -4,7 +4,6 @@ This section covers advanced patterns for building complex Guido applications.
 
 ## In This Section
 
-- [Creating Components](components.md) - Reusable widgets with the `#[component]` macro
 - [Custom Widgets and Layouts](custom-widgets.md) - Implementing `Widget` and `Layout` from outside the crate
 - [Dynamic Children](dynamic-children.md) - Reactive lists and conditional rendering
 - [Background Tasks](background-threads.md) - Integrating async operations
@@ -17,7 +16,6 @@ This section covers advanced patterns for building complex Guido applications.
 
 These topics become relevant when building:
 
-- **Reusable UI libraries** - Components with props and callbacks
 - **Data-driven UIs** - Lists that update from external sources
 - **Real-time applications** - System monitors, clocks, live data
 - **Desktop widgets** - Status bars, panels, overlays

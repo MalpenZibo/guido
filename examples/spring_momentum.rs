@@ -42,24 +42,26 @@ fn main() {
     });
 }
 
-fn panel(title: &str, what_to_do: &str, body: Container) -> Container {
+/// One panel: its `title`, `what_to_do` to it by hand, and the thing to do it
+/// to.
+#[component]
+fn panel(
+    #[prop(required)] title: String,
+    #[prop(required)] what_to_do: String,
+    #[prop(children)] children: (),
+) -> impl Widget {
     container()
         .background(CARD)
         .corners(10.0)
         .padding(14.0)
         .layout(Flex::column().spacing(8.0))
-        .children([
-            text(title.to_string())
-                .font_size(14.0)
-                .bold()
-                .color(Color::WHITE)
-                .into_any(),
-            text(what_to_do.to_string())
+        .child(text(title).font_size(14.0).bold().color(Color::WHITE))
+        .child(
+            text(what_to_do)
                 .font_size(12.0)
-                .color(Color::rgb(0.62, 0.64, 0.74))
-                .into_any(),
-            body.into_any(),
-        ])
+                .color(Color::rgb(0.62, 0.64, 0.74)),
+        )
+        .children(children)
 }
 
 /// A track with a dot that slides along it.
@@ -83,12 +85,14 @@ fn dot(color: Color) -> Container {
 
 /// The headline: reversed mid-flight, the spring turns around instead of
 /// stopping first.
-fn turn_around() -> Container {
+fn turn_around() -> impl Widget {
     let out = create_signal(false);
     panel(
         "1 — It turns around",
         "Hover the strip, then leave it while the dot is still travelling. It \
          should reverse without pausing at the point you left it.",
+    )
+    .child(
         track(
             dot(INK).translate(
                 (move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
@@ -102,13 +106,15 @@ fn turn_around() -> Container {
 
 /// The case the old code inverted: interrupt *after* the overshoot, while the
 /// dot is already falling back toward its target.
-fn past_the_overshoot() -> Container {
+fn past_the_overshoot() -> impl Widget {
     let out = create_signal(false);
     panel(
         "2 — Interrupted past its overshoot",
         "Same, but this spring overshoots hard. Leave the strip just *after* \
          the dot has shot past the end and is settling back — it should carry \
          on the way it was going, not lurch forward first.",
+    )
+    .child(
         track(
             dot(HOT).translate(
                 (move || (if out.get() { 700.0 } else { 0.0 }, 0.0))
@@ -121,7 +127,7 @@ fn past_the_overshoot() -> Container {
 }
 
 /// Momentum stays in the channel it belonged to.
-fn own_channel() -> Container {
+fn own_channel() -> impl Widget {
     let out = create_signal(false);
     let big = create_signal(false);
     panel(
@@ -129,6 +135,8 @@ fn own_channel() -> Container {
         "Hover to send it sliding, then press while it is still moving. The \
          press only scales it: the slide's speed cannot leak into the size, \
          because the two are separate properties with a spring each.",
+    )
+    .child(
         track(
             dot(INK)
                 .translate(
@@ -148,12 +156,14 @@ fn own_channel() -> Container {
 }
 
 /// A spring that has settled is at rest, so the next leg starts from a stop.
-fn from_rest() -> Container {
+fn from_rest() -> impl Widget {
     let out = create_signal(false);
     panel(
         "4 — A settled spring starts from rest",
         "Hover and wait for the dot to come to a complete stop at the far end, \
          then leave. It should ease away, not start with a kick.",
+    )
+    .child(
         track(
             dot(INK).translate(
                 (move || (if out.get() { 760.0 } else { 0.0 }, 0.0))
@@ -166,13 +176,15 @@ fn from_rest() -> Container {
 }
 
 /// Out and back on two different frames: the return leg overshoots on its own.
-fn shake() -> Container {
+fn shake() -> impl Widget {
     let angle = create_signal(0.0_f32);
     panel(
         "5 — Out and back is a wobble",
         "Press and release the tile. A press and its release are two frames, \
          so the return leg crosses zero and comes back — a shake nobody \
          choreographed.",
+    )
+    .child(
         container()
             .width(140.0)
             .height(46.0)

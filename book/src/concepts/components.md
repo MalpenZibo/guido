@@ -1,8 +1,35 @@
-# Creating Components
+# Components
 
-The `#[component]` macro creates reusable widgets from functions. Function parameters become props, and the function body becomes the render method.
+A component is a widget of your own, written as a function. `#[component]`
+turns the function's parameters into props and its body into what the widget
+draws, and the caller builds it the way it builds a `container()`: a
+constructor, then a setter per prop, in any order, leaving out the ones it is
+happy with.
 
 ![Component Example](../images/component_example.png)
+
+## When to Write One
+
+**A widget made in more than one place, with named, optional or callback
+props, is a component.** A button, a card, a row of a list, a menu entry: each
+is built several times, each time a little differently, and each is what
+`#[component]` is for.
+
+A function returning `Container` builds the same thing and gives up what the
+macro adds:
+
+- a prop is set by name, `.size(24.0)`, where an argument is a position in a
+  list that grows a new one for every option;
+- a prop has a default, so a caller sets only what it changes;
+- a prop takes a value, a closure or a signal alike, and stays reactive inside
+  the body without the caller wrapping anything;
+- a callback prop is optional and forwarded as it is, `.on_click(on_click)`;
+- the body runs in an ownership scope of its own, so the signals and effects
+  it creates go when the component goes;
+- a prop's `///` lands on its setter, where the caller's editor shows it.
+
+A plain function is still the right tool for a piece built once, to give a long
+view a name — a settings page that nobody configures.
 
 ## Basic Component
 
@@ -198,7 +225,7 @@ button()
 
 Inside the body a callback prop is an `Option<Callback<..>>`, and a required
 one is the `Callback` itself. A
-[`Callback`](../concepts/reactive-model.md) is a `Copy` handle to the closure,
+[`Callback`](reactive-model.md) is a `Copy` handle to the closure,
 so it goes into as many closures as needed without being cloned, and is called
 with `run`:
 
@@ -276,6 +303,10 @@ pub fn button(
 
 Rust refuses a doc comment on an ordinary function's parameter, but
 `#[component]` rewrites the function before the compiler looks.
+
+A required prop has no setter for its `///` to land on, so the macro drops it.
+Say what a required prop is in the function's own `///`, which documents the
+constructor the caller passes it to.
 
 ### Render Props
 
@@ -384,7 +415,7 @@ A component's body executes **one time**, when the widget is first built, inside
 its own ownership scope — that is what lets the signals and effects it creates
 die with the component. That scope hangs from the one that was current where
 the component was made, so its body reads what that scope declared with
-`use_context` (see [Scopes](./context.md#scopes)). Reactivity comes from the
+`use_context` (see [Scopes](../advanced/context.md#scopes)). Reactivity comes from the
 closures it leaves behind, not from re-running the body:
 
 ```rust
@@ -427,6 +458,52 @@ container().child(move || {
 Debug builds warn at the exact line when a prop is read this way — unless the
 caller passed a plain value, which cannot change anyway. If the snapshot is
 deliberate, `get_untracked()` says so and silences the warning.
+
+### Props That Pick the Shape
+
+Some props are read once on purpose. A size or a variant decides which widget
+the body builds, and a component that rebuilt itself when it changed would be a
+different component. Read such a prop with `get_untracked()`, which says the
+snapshot is meant:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum Size {
+    #[default]
+    Small,
+    Large,
+}
+
+#[component]
+pub fn badge(#[prop(required)] label: String, size: Size) -> impl Widget {
+    // The size is fixed for the badge's life: read it once
+    let (padding, font_size) = match size.get_untracked() {
+        Size::Small => (4.0, 11.0),
+        Size::Large => (8.0, 14.0),
+    };
+    container()
+        .padding(padding)
+        .corners(padding)
+        .background(Color::rgb(0.3, 0.3, 0.4))
+        .child(text(label).font_size(font_size))
+}
+# fn main() {
+# let _ =
+badge("new").size(Size::Large)
+# ;
+# }
+```
+
+The label is passed on as a signal and keeps updating; only the size is fixed.
+
+### A Prop Named After a Function
+
+Inside the body a prop is a local variable, so a prop named after a function
+hides it: with a prop called `text`, `text(..)` in the body is a call on the
+prop's signal, and does not compile. Name the prop for what it holds — `label`,
+`title`, `caption` — or call the function by its path, `guido::widgets::text`.
 
 ## Components with Children
 
@@ -682,14 +759,3 @@ fn main() {
     });
 }
 ```
-
-## When to Use Components
-
-Components are ideal for:
-
-- **Repeated patterns** - Buttons, cards, list items
-- **Configurable widgets** - Same structure, different props
-- **Encapsulated state** - Self-contained logic
-- **Team collaboration** - Clear interfaces and contracts
-
-For one-off layouts, regular functions returning `impl Widget` may be simpler.
