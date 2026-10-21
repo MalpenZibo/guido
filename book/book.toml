@@ -18,6 +18,10 @@ git-repository-url = "https://github.com/zibo/guido"
 edit-url-template = "https://github.com/zibo/guido/edit/main/book/{path}"
 additional-css = ["theme/css/custom.css"]
 
+# Pages that moved, so a link to where they were still arrives.
+[output.html.redirect]
+"/advanced/components.html" = "../concepts/components.html"
+
 [output.html.playground]
 editable = false
 copy-js = true

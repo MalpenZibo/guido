@@ -38,6 +38,7 @@ When `count` changes, only the text updates - the container doesn't need to re-r
 - [Widgets](widgets.md) - The Widget trait and composition patterns
 - [Container](container.md) - The primary building block
 - [Layout](layout.md) - Flexbox-style layout with Flex
+- [Components](components.md) - Your own widgets, with the `#[component]` macro
 
 ## Key Insight
 

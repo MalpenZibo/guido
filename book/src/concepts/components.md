@@ -198,7 +198,7 @@ button()
 
 Inside the body a callback prop is an `Option<Callback<..>>`, and a required
 one is the `Callback` itself. A
-[`Callback`](../concepts/reactive-model.md) is a `Copy` handle to the closure,
+[`Callback`](reactive-model.md) is a `Copy` handle to the closure,
 so it goes into as many closures as needed without being cloned, and is called
 with `run`:
 
@@ -384,7 +384,7 @@ A component's body executes **one time**, when the widget is first built, inside
 its own ownership scope — that is what lets the signals and effects it creates
 die with the component. That scope hangs from the one that was current where
 the component was made, so its body reads what that scope declared with
-`use_context` (see [Scopes](./context.md#scopes)). Reactivity comes from the
+`use_context` (see [Scopes](../advanced/context.md#scopes)). Reactivity comes from the
 closures it leaves behind, not from re-running the body:
 
 ```rust
