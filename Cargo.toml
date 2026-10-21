@@ -4,9 +4,13 @@ members = [".", "guido-macros"]
 [workspace.package]
 version = "0.12.0"
 edition = "2024"
+# The oldest Rust guido builds on, which its dependencies set rather than its
+# own code. The `msrv` job in `.github/workflows/ci.yml` builds on exactly
+# this, so the number cannot go stale while CI is green.
+rust-version = "1.90"
 authors = ["Simone Camito"]
-categories = ["gui", "reactive", "wayland", "leyershell", "wgpu"]
-keywords = ["gui", "reactive", "wayland", "leyershell", "wgpu", "guido"]
+categories = ["gui", "graphics"]
+keywords = ["gui", "reactive", "wayland", "layer-shell", "wgpu"]
 readme = "README.md"
 documentation = "https://docs.rs/guido"
 repository = "https://github.com/MalpenZibo/guido"
@@ -21,11 +25,14 @@ name = "guido"
 description = "A reactive Rust GUI library using wgpu for Wayland layer shell widgets"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [features]
 default = ["svg", "webp"]

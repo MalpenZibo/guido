@@ -1,9 +1,10 @@
 [package]
 name = "guido-macros"
-description = "Macro for guido"
+description = "The #[component] and SignalFields macros for guido"
 readme = "../README.md"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 documentation.workspace = true
