@@ -1,0 +1,39 @@
+node 0,0 256x202
+  node 0,0 240x52 at 8,8
+    draw rect 0,0 240x52 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 70x24
+      draw rect 0,0 70x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 56x24 at 74,0
+      draw rect 0,0 56x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 104x24 at 134,0
+      draw rect 0,0 104x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 82x24 at 0,28
+      draw rect 0,0 82x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 64x24 at 86,28
+      draw rect 0,0 64x24 fill=#4d4d73ff radius=12/12/12/12
+  node 0,0 240x58 at 8,72
+    draw rect 0,0 240x58 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 70x24 at 1,0
+      draw rect 0,0 70x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 56x24 at 75,0
+      draw rect 0,0 56x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 104x24 at 135,0
+      draw rect 0,0 104x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 82x24 at 45,34
+      draw rect 0,0 82x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 64x24 at 131,34
+      draw rect 0,0 64x24 fill=#4d4d73ff radius=12/12/12/12
+  node 0,0 240x52 at 8,142
+    draw rect 0,0 240x52 fill=#1f1f29ff radius=0/0/0/0
+    node 0,0 70x24
+      draw rect 0,0 70x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 56x24 at 74,0
+      draw rect 0,0 56x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 104x24 at 134,0
+      draw rect 0,0 104x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 82x24 at 0,28
+      draw rect 0,0 82x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 64x24 at 86,28
+      draw rect 0,0 64x24 fill=#4d4d73ff radius=12/12/12/12
+    node 0,0 86x24 at 154,28
+      draw rect 0,0 86x24 fill=#808080ff radius=0/0/0/0

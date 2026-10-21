@@ -553,6 +553,50 @@ fn flex_alignment_matrix() {
     assert_snapshot("flex_alignment_matrix", render(view, 400.0, 500.0));
 }
 
+/// #880: rows of chips that wrap, as a settings page shows its choices. The
+/// widths stand in for "Preset", "Seed", "Wallpaper" and "Custom", which do
+/// not fit four to a line: one row starts its lines, one centres each line on
+/// its own with a wider gap between lines, and one gives what its last line
+/// leaves to a `fill()` child.
+#[test]
+fn a_wrapping_row() {
+    let chips = || {
+        [70.0, 56.0, 104.0, 82.0, 64.0]
+            .map(|w| swatch(w, 24.0, Color::rgb(0.3, 0.3, 0.45)).corners(12.0))
+    };
+    let row = |flex: Flex| {
+        container()
+            .width(240.0)
+            .background(Color::rgb(0.12, 0.12, 0.16))
+            .layout(flex)
+    };
+
+    let view = container()
+        .layout(Flex::column().spacing(12.0))
+        .padding(8.0)
+        .child(row(Flex::row().spacing(4.0).wrap(true)).children(chips()))
+        .child(
+            row(Flex::row()
+                .spacing(4.0)
+                .wrap(true)
+                .line_spacing(10.0)
+                .main_alignment(MainAlignment::Center))
+            .children(chips()),
+        )
+        .child(
+            row(Flex::row().spacing(4.0).wrap(true))
+                .children(chips())
+                .child(
+                    container()
+                        .width(fill())
+                        .height(24.0)
+                        .background(Color::GRAY),
+                ),
+        );
+
+    assert_snapshot("a_wrapping_row", render(view, 400.0, 300.0));
+}
+
 /// After `examples/transform_example.rs` and `transform_origin_test.rs`:
 /// rotation and scale about several origins, and a transform nested inside
 /// another so the composition shows up.
