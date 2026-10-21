@@ -1048,7 +1048,7 @@ fn method(item: &syn::TraitItemFn) -> Method {
     for qualifier in [
         sig.constness.map(|c| c.to_token_stream()),
         sig.asyncness.map(|a| a.to_token_stream()),
-        sig.unsafety.map(|u| u.to_token_stream()),
+        (!matches!(sig.safety, syn::Safety::Default)).then(|| sig.safety.to_token_stream()),
         sig.abi.as_ref().map(|a| a.to_token_stream()),
     ]
     .into_iter()
@@ -1063,7 +1063,13 @@ fn method(item: &syn::TraitItemFn) -> Method {
     // `&mut Self` — so a `mut self`, which only makes the binding mutable,
     // reads as `self`. Anything else is its type, without its pattern.
     let parameters = sig.inputs.iter().map(|input| match input {
-        syn::FnArg::Receiver(receiver) => receiver.ty.to_token_stream(),
+        syn::FnArg::Receiver(receiver) => match &receiver.kind {
+            syn::ReceiverKind::Reference(and, lifetime, mutability) => {
+                quote::quote!(#and #lifetime #mutability Self)
+            }
+            syn::ReceiverKind::Typed(_, ty) => ty.to_token_stream(),
+            _ => quote::quote!(Self),
+        },
         syn::FnArg::Typed(typed) => typed.ty.to_token_stream(),
     });
     signature += &format!("({})", joined(parameters));

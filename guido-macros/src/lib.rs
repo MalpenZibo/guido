@@ -1,8 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{
-    Attribute, DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeBareFn, parse_macro_input,
-};
+use syn::{Attribute, DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeFnPtr, parse_macro_input};
 
 /// Attribute macro to create a reusable component from a function.
 ///
@@ -274,7 +272,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
         // For callback fields, read the parameter and return types from
         // `fn(T1, T2, ...) -> R`.
         let (callback_params, callback_ret) = match field_type {
-            Type::BareFn(TypeBareFn { inputs, output, .. }) if is_callback => {
+            Type::FnPtr(TypeFnPtr { inputs, output, .. }) if is_callback => {
                 let ret = match callback_ret(output) {
                     Ok(ret) => ret,
                     Err(err) => return err.to_compile_error().into(),

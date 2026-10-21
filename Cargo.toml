@@ -86,7 +86,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # `tests/documentation_references.rs` reads the trait listings in the
 # documentation, and the traits they list, as Rust. The same `syn` the macros
 # crate builds, with what visiting and rewriting a signature needs.
-syn = { version = "2.0", features = ["full", "visit", "visit-mut"] }
+syn = { version = "3.0", features = ["full", "visit", "visit-mut"] }
 quote = "1.0"
 
 # The scrolling benchmark. `harness = false` because it is a plain binary that
