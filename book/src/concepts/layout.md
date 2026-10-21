@@ -421,6 +421,39 @@ container()
 `fill()` children are not part of this: they take what is left once the others
 are laid out, and nothing is left when the others overflow.
 
+## Wrapping Onto New Lines
+
+A row that runs out of room can move the children that do not fit to a new
+line instead of squeezing them, as CSS `flex-wrap: wrap` does — what a row of
+chips or tags needs when how many fit depends on their labels, the font and
+the width of the panel:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn chip(label: &'static str) -> Text { text(label) }
+# fn main() {
+container()
+    .width(360.0)
+    .layout(Flex::row().spacing(4.0).wrap(true).line_spacing(8.0))
+    .children(["Preset", "Seed", "Wallpaper", "Custom"].map(chip))
+# ;
+# }
+```
+
+Each line is laid out as a row that does not wrap: a `fill()` child takes what
+its own line leaves, the main alignment places each line on its own, and the
+cross alignment works within a line, which is as tall as its tallest child.
+A row with no width of its own is as wide as its longest line — or as wide as
+it can be, when a line holds a `fill()` child or uses a spacing alignment, as
+for a row that does not wrap. Lines stack from the top, `line_spacing` apart — the `spacing` between
+children, unless set. A child wider than the whole row has a line to itself,
+and gives room up there as described above. A column wraps the same way, into
+new columns.
+
+A scrolled row has no end to wrap at, and stays one line. `wrap` takes a
+signal, so a row can start or stop wrapping while it is shown.
+
 ## Layout Without Explicit Flex
 
 Containers without `.layout()` use `Flex::column()`:
@@ -605,6 +638,8 @@ Flex::column() -> Flex                 // Vertical layout
 .spacing(f32) -> Flex                  // Space between children
 .main_alignment(MainAlignment) -> Flex
 .cross_alignment(CrossAlignment) -> Flex
+.wrap(bool) -> Flex                    // Move what does not fit to a new line
+.line_spacing(f32) -> Flex             // Space between lines; defaults to spacing
 ```
 
 ### MainAlignment

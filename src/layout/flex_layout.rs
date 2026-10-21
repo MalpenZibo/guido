@@ -70,6 +70,8 @@ pub struct Flex {
     spacing: Prop<f32>,
     main_alignment: Prop<MainAlignment>,
     cross_alignment: Prop<CrossAlignment>,
+    wrap: Prop<bool>,
+    line_spacing: Prop<f32>,
 
     child_sizes: Vec<Size>,
     fill_indices: Vec<usize>,
@@ -98,6 +100,8 @@ impl Flex {
             spacing: Prop::Unset,
             main_alignment: Prop::Unset,
             cross_alignment: Prop::Unset,
+            wrap: Prop::Unset,
+            line_spacing: Prop::Unset,
             child_sizes: Vec::with_capacity(8),
             fill_indices: Vec::new(),
         }
@@ -128,6 +132,36 @@ impl Flex {
     /// Set the cross axis alignment
     pub fn cross_alignment<M>(mut self, alignment: impl IntoSignal<CrossAlignment, M>) -> Self {
         self.cross_alignment = alignment.into_prop();
+        self
+    }
+
+    /// Move to a new line the children that do not fit on the current one,
+    /// as CSS `flex-wrap: wrap` does. Each line is laid out as a row that does
+    /// not wrap is: a `fill()` child takes what its own line leaves, the main
+    /// alignment places each line on its own, and the cross alignment works
+    /// within a line, which is as deep as its deepest child. Lines stack from
+    /// the start. A child longer than the whole row has a line to itself.
+    ///
+    /// An axis with no maximum — a scrolled one — has nothing to wrap against,
+    /// and stays one line.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let chip = |label: &'static str| text(label);
+    /// container()
+    ///     .width(360.0)
+    ///     .layout(Flex::row().spacing(4.0).wrap(true))
+    ///     .children(["Preset", "Seed", "Wallpaper", "Custom"].map(chip));
+    /// ```
+    pub fn wrap<M>(mut self, wrap: impl IntoSignal<bool, M>) -> Self {
+        self.wrap = wrap.into_prop();
+        self
+    }
+
+    /// Set the spacing between the lines of a row that [wraps](Self::wrap).
+    /// Unset, it is the [spacing](Self::spacing) between children.
+    pub fn line_spacing<M>(mut self, spacing: impl IntoSignal<f32, M>) -> Self {
+        self.line_spacing = spacing.into_prop();
         self
     }
 
@@ -291,8 +325,8 @@ impl Flex {
             })
     }
 
-    /// Layout children along the given axis
-    fn layout_axis(
+    /// Lay `children` out as one line along `axis`.
+    fn layout_line(
         &mut self,
         ctx: &mut LayoutCtx,
         children: &[WidgetId],
@@ -597,9 +631,163 @@ impl Flex {
             }
         }
 
-        let least = Self::least(ctx.tree_ref(), children, axis, spacing);
+        size
+    }
+
+    /// Lay `children` out along `axis`, in lines if the flex wraps, and record
+    /// the least they can be arranged in.
+    fn layout_axis(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        children: &[WidgetId],
+        constraints: Constraints,
+        origin: (f32, f32),
+        axis: Axis,
+    ) -> Size {
+        let spacing = self.spacing.get_or(0.0);
+        let wraps = self.wrap.get_or(false);
+        let main_max = match axis {
+            Axis::Horizontal => constraints.max_width,
+            Axis::Vertical => constraints.max_height,
+        };
+        let (size, least) = if wraps && main_max.is_finite() {
+            let size = self.layout_lines(ctx, children, constraints, origin, axis);
+            (size, Self::least_wrapped(ctx.tree_ref(), children, axis))
+        } else {
+            let size = self.layout_line(ctx, children, constraints, origin, axis);
+            (size, Self::least(ctx.tree_ref(), children, axis, spacing))
+        };
         ctx.set_minimum(least);
         size
+    }
+
+    /// Break `children` into lines no longer than the main axis and lay each
+    /// out with [`layout_line`](Self::layout_line), one after another across.
+    ///
+    /// Every child is measured first at its natural length: a `fill()` child
+    /// at its content's, as on an axis with no maximum, since what it fills is
+    /// only known once its line is. A child that measures nothing joins the
+    /// line it comes after and takes no gap, as placement gives it none —
+    /// except a `fill()` child, which placement always gives one, so one that
+    /// cannot have its gap starts a line.
+    fn layout_lines(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        children: &[WidgetId],
+        constraints: Constraints,
+        origin: (f32, f32),
+        axis: Axis,
+    ) -> Size {
+        let spacing = self.spacing.get_or(0.0);
+        let line_spacing = self.line_spacing.get_or(spacing);
+        let (main_min, main_max, cross_min, cross_max) = match axis {
+            Axis::Horizontal => (
+                constraints.min_width,
+                constraints.max_width,
+                constraints.min_height,
+                constraints.max_height,
+            ),
+            Axis::Vertical => (
+                constraints.min_height,
+                constraints.max_height,
+                constraints.min_width,
+                constraints.max_width,
+            ),
+        };
+        let natural = match axis {
+            Axis::Horizontal => Constraints::new(0.0, 0.0, f32::INFINITY, cross_max),
+            Axis::Vertical => Constraints::new(0.0, 0.0, cross_max, f32::INFINITY),
+        };
+
+        let mut lines: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut start = 0;
+        let mut length = 0.0f32;
+        let mut longest = 0.0f32;
+        let mut fills = false;
+        // Whether the current line holds a child that keeps a gap yet.
+        let mut opened = false;
+        for (i, &child) in children.iter().enumerate() {
+            let is_fill = ctx
+                .tree_ref()
+                .with_widget(child, |w| match axis {
+                    Axis::Horizontal => w.layout_hints().fill_width,
+                    Axis::Vertical => w.layout_hints().fill_height,
+                })
+                .unwrap_or(false);
+            fills |= is_fill;
+            let main = ctx
+                .layout_child(child, natural)
+                .map_or(0.0, |size| size.main_axis(axis));
+            if !is_fill && !takes_a_gap(main) {
+                continue;
+            }
+            if opened && length + spacing + main > main_max {
+                lines.push(start..i);
+                longest = longest.max(length);
+                start = i;
+                length = main;
+            } else {
+                length += if opened { spacing + main } else { main };
+            }
+            opened = true;
+        }
+        lines.push(start..children.len());
+        longest = longest.max(length);
+
+        // Every line is as long as the row, so an alignment places each one
+        // across the same length. A line with a `fill()` child or a spacing
+        // alignment reaches the end of the room, as a row that does not wrap
+        // does, so then the row does too.
+        let spreads = matches!(
+            self.main_alignment.get_or(MainAlignment::Start),
+            MainAlignment::SpaceBetween | MainAlignment::SpaceAround | MainAlignment::SpaceEvenly
+        );
+        let line_main = if fills || spreads {
+            main_max
+        } else {
+            longest.max(main_min).min(main_max)
+        };
+        let mut across = 0.0f32;
+        for (n, line) in lines.into_iter().enumerate() {
+            if n > 0 {
+                across += line_spacing;
+            }
+            let line_origin = match axis {
+                Axis::Horizontal => (origin.0, origin.1 + across),
+                Axis::Vertical => (origin.0 + across, origin.1),
+            };
+            let line_constraints = match axis {
+                Axis::Horizontal => Constraints::new(line_main, 0.0, main_max, cross_max),
+                Axis::Vertical => Constraints::new(0.0, line_main, cross_max, main_max),
+            };
+            let size = self.layout_line(ctx, &children[line], line_constraints, line_origin, axis);
+            across += size.cross_axis(axis);
+        }
+
+        let cross = across.max(cross_min).min(cross_max);
+        match axis {
+            Axis::Horizontal => Size::new(line_main, cross),
+            Axis::Vertical => Size::new(cross, line_main),
+        }
+    }
+
+    /// The least a wrapping flex can be: as long as its longest child's
+    /// minimum, since every other can go to a line of its own, and as deep as
+    /// its deepest. A lower bound, as [`least`](Self::least) is.
+    fn least_wrapped(tree: &Tree, children: &[WidgetId], axis: Axis) -> Size {
+        let (along, across) = children
+            .iter()
+            .fold((0.0f32, 0.0f32), |(along, across), &child| {
+                let least = tree.minimum(child).unwrap_or_default();
+                (
+                    along.max(least.main_axis(axis)),
+                    across.max(least.cross_axis(axis)),
+                )
+            });
+        match axis {
+            Axis::Horizontal => Size::new(along, across),
+            Axis::Vertical => Size::new(across, along),
+        }
     }
 
     /// The least the children can be arranged in: along the axis, each one's
@@ -1317,5 +1505,296 @@ mod tests {
         fills.set(true);
         frame(&mut tree, root);
         assert_eq!(bounds_of(&tree, fill_child).height, 90.0);
+    }
+
+    /// Four chips, each 100 wide, in a row 360 wide.
+    fn chips(count: usize) -> Vec<Container> {
+        (0..count)
+            .map(|_| container().width(100.0).height(10.0))
+            .collect()
+    }
+
+    fn origins(tree: &Tree, id: WidgetId) -> Vec<(f32, f32)> {
+        tree.get_children(id)
+            .iter()
+            .map(|&child| tree.get_origin(child).expect("laid out"))
+            .collect()
+    }
+
+    /// #880: a wrapping row moves to a new line the child that does not fit,
+    /// and spaces its lines as it spaces its children unless told otherwise.
+    #[test]
+    fn a_wrapping_row_moves_what_does_not_fit_to_a_new_line() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .children(chips(4)),
+        );
+        assert_eq!(
+            origins(&tree, root),
+            [(0.0, 0.0), (104.0, 0.0), (208.0, 0.0), (0.0, 14.0)]
+        );
+        assert_eq!(bounds_of(&tree, root).height, 24.0, "two lines and a gap");
+
+        let spaced = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(true).line_spacing(8.0))
+                .children(chips(4)),
+        );
+        assert_eq!(origins(&tree, spaced)[3], (0.0, 18.0));
+    }
+
+    /// Without `wrap` a row is one line, as it always was: the fourth chip
+    /// squeezes the others rather than leaving.
+    #[test]
+    fn a_row_that_does_not_wrap_keeps_one_line() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0))
+                .children(chips(4)),
+        );
+        assert!(origins(&tree, root).iter().all(|&(_, y)| y == 0.0));
+    }
+
+    /// A child longer than the whole row has a line to itself, and gives the
+    /// overflow up there as it would in a row that does not wrap.
+    #[test]
+    fn a_child_longer_than_the_row_has_a_line_of_its_own() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .child(container().width(100.0).height(10.0))
+                .child(
+                    container()
+                        .overflow(crate::widgets::Overflow::Hidden)
+                        .child(container().width(500.0).height(10.0)),
+                )
+                .child(container().width(100.0).height(10.0)),
+        );
+        assert_eq!(origins(&tree, root), [(0.0, 0.0), (0.0, 14.0), (0.0, 28.0)]);
+        let wide = tree.get_children(root)[1];
+        assert_eq!(bounds_of(&tree, wide).width, 360.0, "squeezed to the row");
+    }
+
+    /// Fill is shared per line: a fill child takes what its own line leaves.
+    /// It breaks the line at its content's length, not at the row's.
+    #[test]
+    fn a_fill_child_takes_what_its_line_leaves() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .children(chips(3))
+                .child(container().width(fill()).height(10.0)),
+        );
+        let filler = tree.get_children(root)[3];
+        assert_eq!(
+            tree.get_origin(filler),
+            Some((312.0, 0.0)),
+            "nothing in it, so it fits beside the chips"
+        );
+        assert_eq!(bounds_of(&tree, filler).width, 48.0);
+
+        let wrapped = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .children(chips(4))
+                .child(container().width(fill()).height(10.0)),
+        );
+        let filler = tree.get_children(wrapped)[4];
+        assert_eq!(tree.get_origin(filler), Some((104.0, 14.0)));
+        assert_eq!(
+            bounds_of(&tree, filler).width,
+            256.0,
+            "the rest of line two"
+        );
+    }
+
+    /// The main alignment places each line on its own: a short last line is
+    /// centred in the row, not under the first.
+    #[test]
+    fn each_line_is_aligned_on_its_own() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(
+                    Flex::row()
+                        .spacing(4.0)
+                        .wrap(true)
+                        .main_alignment(MainAlignment::Center),
+                )
+                .children(chips(4)),
+        );
+        let origins = origins(&tree, root);
+        assert_eq!(origins[0], (26.0, 0.0), "(360 - 308) / 2");
+        assert_eq!(origins[3], (130.0, 14.0), "(360 - 100) / 2");
+    }
+
+    /// The cross alignment works within a line: a short chip is centred on
+    /// the line it is on, whose height is its tallest child's.
+    #[test]
+    fn the_cross_alignment_works_within_a_line() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(220.0)
+                .layout(
+                    Flex::row()
+                        .wrap(true)
+                        .cross_alignment(CrossAlignment::Center),
+                )
+                .child(container().width(100.0).height(10.0))
+                .child(container().width(100.0).height(30.0))
+                .child(container().width(100.0).height(10.0))
+                .child(container().width(100.0).height(20.0)),
+        );
+        assert_eq!(
+            origins(&tree, root),
+            [(0.0, 10.0), (100.0, 0.0), (0.0, 35.0), (100.0, 30.0)]
+        );
+        assert_eq!(bounds_of(&tree, root).height, 50.0);
+    }
+
+    /// A column wraps into new columns, the same way across.
+    #[test]
+    fn a_wrapping_column_starts_a_new_column() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .height(25.0)
+                .layout(Flex::column().wrap(true).spacing(2.0))
+                .children((0..3).map(|_| container().width(10.0).height(10.0))),
+        );
+        assert_eq!(origins(&tree, root), [(0.0, 0.0), (0.0, 12.0), (12.0, 0.0)]);
+    }
+
+    /// A wrapping row can be as narrow as its widest child's minimum, since
+    /// everything else can go to another line. Recording the sum would hold
+    /// it wider than it needs to be.
+    #[test]
+    fn a_wrapping_row_records_its_widest_child_as_its_least() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .child(container().width(30.0).height(10.0))
+                .child(container().width(50.0).height(20.0)),
+        );
+        assert_eq!(tree.minimum(root), Some(Size::new(50.0, 20.0)));
+    }
+
+    /// With no width of its own, a wrapping row is as long as its lines are
+    /// laid out: a line with a `fill()` child or a spacing alignment reaches
+    /// the end of the room, as a row that does not wrap does, so the row
+    /// reaches it too — rather than reporting its longest natural line and
+    /// leaving children drawn past its edge.
+    #[test]
+    fn a_wrapping_row_is_as_long_as_its_lines_are_laid_out() {
+        let mut tree = Tree::new();
+        let filled = laid_out_once(
+            &mut tree,
+            container()
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .children(chips(3))
+                .child(container().width(fill()).height(10.0)),
+        );
+        let filler = tree.get_children(filled)[3];
+        let end = bounds_of(&tree, filler).x + bounds_of(&tree, filler).width;
+        assert_eq!(
+            bounds_of(&tree, filled).width,
+            end,
+            "the filler ends at its row's end"
+        );
+
+        let spaced = laid_out_once(
+            &mut tree,
+            container()
+                .layout(
+                    Flex::row()
+                        .spacing(4.0)
+                        .wrap(true)
+                        .main_alignment(MainAlignment::SpaceBetween),
+                )
+                .children(chips(5)),
+        );
+        let width = bounds_of(&tree, spaced).width;
+        for &chip in tree.get_children(spaced) {
+            let b = bounds_of(&tree, chip);
+            assert!(
+                b.x + b.width <= width,
+                "a chip at {} runs past {width}",
+                b.x
+            );
+        }
+
+        let plain = laid_out_once(
+            &mut tree,
+            container()
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .children(chips(5)),
+        );
+        assert_eq!(
+            bounds_of(&tree, plain).width,
+            308.0,
+            "otherwise its longest line"
+        );
+    }
+
+    /// A `fill()` child keeps its gap when the line is broken, as placement
+    /// gives it one: one with nothing in it goes to a new line rather than
+    /// joining a full one at no length at all.
+    #[test]
+    fn a_fill_child_that_cannot_have_its_gap_starts_a_line() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(304.0)
+                .layout(Flex::row().spacing(4.0).wrap(true))
+                .child(container().width(150.0).height(10.0))
+                .child(container().width(150.0).height(10.0))
+                .child(container().width(fill()).height(10.0)),
+        );
+        let filler = tree.get_children(root)[2];
+        assert_eq!(tree.get_origin(filler), Some((0.0, 14.0)));
+        assert_eq!(bounds_of(&tree, filler).width, 304.0);
+    }
+
+    /// `wrap` is a signal: turning it on lays the row out again in lines.
+    #[test]
+    fn turning_wrap_on_lays_the_row_out_again() {
+        let wraps = create_signal(false);
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(360.0)
+                .layout(Flex::row().spacing(4.0).wrap(wraps))
+                .children(chips(4)),
+        );
+        assert_eq!(origins(&tree, root)[3].1, 0.0);
+        wraps.set(true);
+        frame(&mut tree, root);
+        assert_eq!(origins(&tree, root)[3], (0.0, 14.0));
     }
 }
