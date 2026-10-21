@@ -16,11 +16,18 @@ use std::rc::Rc;
 
 use guido::prelude::*;
 
-fn menu_entry(label: &str) -> Container {
+#[component]
+fn menu_entry(
+    #[prop(required)] label: String,
+    /// What choosing the entry does; an entry without one is inert.
+    #[prop(callback)]
+    on_click: (),
+) -> impl Widget {
     container()
         .padding([8.0, 12.0])
         .corners(6.0)
         .when_hovered(|s| s.lighter(0.12))
+        .on_click(on_click)
         .child(text(label).font_size(13))
 }
 
@@ -164,7 +171,7 @@ fn main() {
                                                 .child(menu_entry("Profile"))
                                                 .child(submenu_entry(submenu_parent, submenu_open))
                                                 .child(menu_entry("About"))
-                                                .child(menu_entry("Quit"))
+                                                .child(menu_entry("Quit").on_click(quit_app))
                                         }
                                     },
                                 );
