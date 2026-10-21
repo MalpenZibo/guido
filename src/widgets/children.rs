@@ -173,7 +173,8 @@ impl ChildrenSource {
     ///
     /// Each dynamic segment re-runs its items_fn only when a signal it read
     /// was written (per-segment dirty marking) or on its first run. Reads
-    /// during the run are tracked to this (container, segment) pair.
+    /// during the run are tracked to this (container, segment) pair, and
+    /// replace the ones the previous run made.
     ///
     /// A segment holding a leaving row whose exit has settled is rebuilt too,
     /// whether or not it re-ran: that is where the row is disposed.
@@ -201,6 +202,7 @@ impl ChildrenSource {
                     });
                 let settled = leaving.values().any(|&id| !is_exiting(tree, id));
                 if needs_run {
+                    crate::reactive::invalidation::forget_segment_reads(parent_id, idx as u32);
                     let items_fn = Rc::clone(items_fn);
                     let new_items = crate::reactive::invalidation::with_segment_tracking(
                         parent_id,

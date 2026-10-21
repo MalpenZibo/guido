@@ -364,6 +364,49 @@ fn mark_segment_dirty(widget_id: WidgetId, segment: u32) {
     });
 }
 
+/// Forget what one dynamic-children segment of a widget read, just before it
+/// runs again: what that run reads is what it depends on, as with an effect.
+/// Without it a branch the closure no longer takes keeps re-running it, and
+/// every run rebuilds what it returned. The widget's other segments, and its
+/// layout and paint reads, are left as they are.
+pub(crate) fn forget_segment_reads(widget_id: WidgetId, segment: u32) {
+    let sub = Subscriber {
+        widget_id,
+        job_type: JobType::Reconcile,
+        segment: Some(segment),
+    };
+    with_reactive(|reactive| {
+        let mut reg = reactive.subscribers.borrow_mut();
+        let SubscriberRegistry {
+            signal_to_widgets,
+            widget_to_signals,
+            active,
+            ..
+        } = &mut *reg;
+        let Some(signals) = widget_to_signals.get_mut(&widget_id) else {
+            return;
+        };
+        signals.retain(|signal_id| {
+            let index = signal_id.index();
+            if !active.remove(&(index, sub)) {
+                return true;
+            }
+            let Some(subs) = signal_to_widgets.get_mut(&index) else {
+                return false;
+            };
+            subs.retain(|s| *s != sub);
+            let still_read = subs.iter().any(|s| s.widget_id == widget_id);
+            if subs.is_empty() {
+                signal_to_widgets.remove(&index);
+            }
+            still_read
+        });
+        if signals.is_empty() {
+            widget_to_signals.remove(&widget_id);
+        }
+    });
+}
+
 /// Remove a widget from all signal subscriber sets.
 /// Called when a widget is unregistered to prevent stale subscribers
 /// from causing wasted job creation — and it forgets a detach too, since a
@@ -450,6 +493,67 @@ mod tests {
 
         assert_eq!(subscribers(70), vec![leaf]);
         assert_eq!(subscribers(71), vec![parent]);
+    }
+
+    /// A segment that runs again forgets what it read last time, and only
+    /// that: the widget's other segment and its layout read of the same
+    /// signal stay, and so does the reverse index entry they need.
+    #[test]
+    fn a_segment_forgets_only_its_own_reads() {
+        let widget = widget_id(700);
+        let (shared, own) = (signal_id(80), signal_id(81));
+        with_segment_tracking(widget, 0, || {
+            record_signal_read(shared);
+            record_signal_read(own);
+        });
+        with_segment_tracking(widget, 1, || record_signal_read(shared));
+        with_signal_tracking(widget, JobType::Layout, || record_signal_read(shared));
+
+        forget_segment_reads(widget, 0);
+
+        let subscribers = |sig: SignalId| {
+            with_reactive(|reactive| {
+                let reg = reactive.subscribers.borrow();
+                reg.signal_to_widgets
+                    .get(&sig.index())
+                    .map(|s| {
+                        s.iter()
+                            .map(|e| (e.job_type, e.segment))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            })
+        };
+        assert_eq!(
+            subscribers(shared),
+            vec![(JobType::Reconcile, Some(1)), (JobType::Layout, None)]
+        );
+        assert_eq!(subscribers(own), vec![], "nothing else read it");
+        let indexed = with_reactive(|reactive| {
+            reactive
+                .subscribers
+                .borrow()
+                .widget_to_signals
+                .get(&widget)
+                .cloned()
+        });
+        assert_eq!(indexed.as_deref(), Some(&[shared][..]));
+
+        // Read again, it subscribes again: `active` forgot it too.
+        with_segment_tracking(widget, 0, || record_signal_read(own));
+        assert_eq!(subscribers(own), vec![(JobType::Reconcile, Some(0))]);
+
+        // A segment that was all a widget read leaves no empty entry behind,
+        // in either index.
+        let lone = widget_id(701);
+        let only = signal_id(82);
+        with_segment_tracking(lone, 0, || record_signal_read(only));
+        forget_segment_reads(lone, 0);
+        with_reactive(|reactive| {
+            let reg = reactive.subscribers.borrow();
+            assert!(!reg.signal_to_widgets.contains_key(&only.index()));
+            assert!(!reg.widget_to_signals.contains_key(&lone));
+        });
     }
 
     /// A signal no widget reads costs the widget index nothing: the thousand

@@ -260,7 +260,9 @@ text(move || format!("Count: {}", count.get()))
 
 A closure child re-runs when a signal it reads changes, and its result
 **replaces** the previous widget (returning `None` removes it). Tracking is
-per segment: only the closure whose signals changed re-runs.
+per segment: only the closure whose signals changed re-runs. And it is per
+run, as an effect's is: a run that takes a branch which no longer reads a
+signal stops depending on it.
 
 ```rust
 let items = create_signal(vec![
