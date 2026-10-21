@@ -119,45 +119,58 @@ pub struct OptionHandler;
 /// `Ret` is what the closure returns: `()` for a handler, the page for a
 /// render prop.
 ///
+/// [`Prop`](IntoHandler::Prop) is what each shape makes for a callback prop to
+/// hold: a closure or a `Callback` makes a `Callback`, an `Option` stays one.
+/// A required callback prop asks for `Prop = Callback<..>`, which is what
+/// keeps a `None` out of a prop that cannot be unset.
+///
 /// The marker parameter is the same trick [`IntoSignal`](super::IntoSignal)
 /// uses: it keeps the impls from overlapping.
 pub trait IntoHandler<Args, Marker = FnHandler, Ret = ()> {
+    /// What a `#[component]` callback prop holds when given this.
+    type Prop: Into<Option<Callback<Args, Ret>>>;
     /// As a closure the widget keeps for itself.
     fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>>;
     /// As a handle, which is what a `#[component]` callback prop holds.
-    fn into_callback_prop(self) -> Option<Callback<Args, Ret>>;
+    fn into_callback_prop(self) -> Self::Prop;
 }
 
 impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, FnHandler, Ret>
     for F
 {
+    type Prop = Callback<Args, Ret>;
+
     fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         Some(self.into_packed())
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
-        Some(Callback::new(self))
+    fn into_callback_prop(self) -> Callback<Args, Ret> {
+        Callback::new(self)
     }
 }
 
 impl<Args: 'static, Ret: 'static> IntoHandler<Args, CallbackHandler, Ret> for Callback<Args, Ret> {
+    type Prop = Self;
+
     fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         Some(Rc::new(move |args| self.run_packed(args)))
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
-        Some(self)
+    fn into_callback_prop(self) -> Self {
+        self
     }
 }
 
 impl<Args: 'static, Ret: 'static> IntoHandler<Args, OptionHandler, Ret>
     for Option<Callback<Args, Ret>>
 {
+    type Prop = Self;
+
     fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
         self.and_then(IntoHandler::into_handler)
     }
 
-    fn into_callback_prop(self) -> Option<Callback<Args, Ret>> {
+    fn into_callback_prop(self) -> Self {
         self
     }
 }

@@ -148,7 +148,8 @@ icon("battery").size(24.0)
 
 Required props are taken in the order they are declared, and each takes what
 its setter would have: a value, a closure or a signal — or, for a required
-`callback`, a handler. Leaving one out is an ordinary "this function takes 1
+`callback`, a closure or a `Callback`, though not an `Option`, which would let
+the caller leave it unset after all. Leaving one out is an ordinary "this function takes 1
 argument" error at the call, rather than a component that quietly draws its
 `Default`. Every other prop keeps its setter and its default.
 
@@ -195,7 +196,8 @@ button()
 # }
 ```
 
-Inside the body a callback prop is an `Option<Callback<..>>`. A
+Inside the body a callback prop is an `Option<Callback<..>>`, and a required
+one is the `Callback` itself. A
 [`Callback`](../concepts/reactive-model.md) is a `Copy` handle to the closure,
 so it goes into as many closures as needed without being cloned, and is called
 with `run`:
@@ -329,6 +331,26 @@ picker().render(|index| match index {
     0 => text("none").into_any(),
     _ => container().child(text(format!("item {index}"))).into_any(),
 })
+# ;
+# }
+```
+
+A render prop the component cannot draw without is made `required`, and the
+body calls it with no `Option` in the way:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn pages(
+    #[prop(required)] stack: Vec<String>,
+    #[prop(required, callback)] render: fn(String) -> impl Widget,
+) -> impl Widget {
+    container().child(move || stack.get().last().cloned().map(|page| render.run(page)))
+}
+# fn main() {
+# let _ =
+pages(vec!["home".to_string()], |page| text(page))
 # ;
 # }
 ```

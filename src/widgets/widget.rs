@@ -1420,9 +1420,15 @@ impl Widget for Box<dyn Widget> {
 /// again. It is a trait of its own rather than one more
 /// [`IntoHandler`](crate::reactive::IntoHandler) impl because there such a
 /// closure matches both the plain closure and the widget-returning one.
+///
+/// [`Prop`](IntoRenderProp::Prop) is `IntoHandler`'s: a closure or a
+/// `Callback` makes a `Callback`, an `Option` stays one, and a required render
+/// prop asks for the first.
 pub trait IntoRenderProp<Args, Marker> {
+    /// What the prop holds when given this.
+    type Prop: Into<Option<Callback<Args, AnyWidget>>>;
     /// As the handle the prop holds.
-    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>>;
+    fn into_render_prop(self) -> Self::Prop;
 }
 
 macro_rules! erases_to_any_widget {
@@ -1430,9 +1436,11 @@ macro_rules! erases_to_any_widget {
         impl<$($arg: 'static,)* W: Widget + 'static, F: Fn($($arg),*) -> W + 'static>
             IntoRenderProp<($($arg,)*), FnHandler> for F
         {
+            type Prop = Callback<($($arg,)*), AnyWidget>;
+
             #[allow(non_snake_case)]
-            fn into_render_prop(self) -> Option<Callback<($($arg,)*), AnyWidget>> {
-                Some(Callback::new(move |$($arg: $arg),*| self($($arg),*).into_any()))
+            fn into_render_prop(self) -> Self::Prop {
+                Callback::new(move |$($arg: $arg),*| self($($arg),*).into_any())
             }
         }
     )*};
@@ -1441,13 +1449,17 @@ macro_rules! erases_to_any_widget {
 erases_to_any_widget!((), (A), (A, B), (A, B, C));
 
 impl<Args: 'static> IntoRenderProp<Args, CallbackHandler> for Callback<Args, AnyWidget> {
-    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
-        Some(self)
+    type Prop = Self;
+
+    fn into_render_prop(self) -> Self {
+        self
     }
 }
 
 impl<Args: 'static> IntoRenderProp<Args, OptionHandler> for Option<Callback<Args, AnyWidget>> {
-    fn into_render_prop(self) -> Option<Callback<Args, AnyWidget>> {
+    type Prop = Self;
+
+    fn into_render_prop(self) -> Self {
         self
     }
 }
