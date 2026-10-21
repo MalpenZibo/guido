@@ -4,9 +4,13 @@ members = [".", "guido-macros"]
 [workspace.package]
 version = "0.12.0"
 edition = "2024"
+# The oldest Rust guido builds on, which its dependencies set rather than its
+# own code. The `msrv` job in `.github/workflows/ci.yml` builds on exactly
+# this, so the number cannot go stale while CI is green.
+rust-version = "1.90"
 authors = ["Simone Camito"]
-categories = ["gui", "reactive", "wayland", "leyershell", "wgpu"]
-keywords = ["gui", "reactive", "wayland", "leyershell", "wgpu", "guido"]
+categories = ["gui", "graphics"]
+keywords = ["gui", "reactive", "wayland", "layer-shell", "wgpu"]
 readme = "README.md"
 documentation = "https://docs.rs/guido"
 repository = "https://github.com/MalpenZibo/guido"
@@ -21,11 +25,14 @@ name = "guido"
 description = "A reactive Rust GUI library using wgpu for Wayland layer shell widgets"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 documentation.workspace = true
 homepage.workspace = true
 license.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [features]
 default = ["svg", "webp"]
@@ -70,7 +77,7 @@ smallvec = "1"
 rustc-hash = "2"
 # Fills and strokes a path into triangles; the 1-pixel fringe that anti-aliases
 # them is guido's own, since lyon does none and guido has no MSAA.
-lyon_tessellation = "1.0.22"
+lyon_tessellation = "1.0.23"
 
 [dev-dependencies]
 env_logger = "0.11"
@@ -86,7 +93,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # `tests/documentation_references.rs` reads the trait listings in the
 # documentation, and the traits they list, as Rust. The same `syn` the macros
 # crate builds, with what visiting and rewriting a signature needs.
-syn = { version = "2.0", features = ["full", "visit", "visit-mut"] }
+syn = { version = "3.0", features = ["full", "visit", "visit-mut"] }
 quote = "1.0"
 
 # The scrolling benchmark. `harness = false` because it is a plain binary that

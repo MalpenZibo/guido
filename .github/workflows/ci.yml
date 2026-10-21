@@ -119,6 +119,27 @@ jobs:
       - name: Compile the book's samples
         run: env -u WAYLAND_DISPLAY -u DISPLAY mdbook test book -L target/book/debug/deps
 
+  # The oldest Rust the manifest promises. Its `rust-version` is read here
+  # rather than repeated, so raising it is one edit, and the lockfile is the
+  # one every other job builds: a dependency that starts needing a newer Rust
+  # turns this red at the update that brought it in, not at a user's build.
+  msrv:
+    name: Builds on the oldest Rust it claims
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read the rust-version the manifest declares
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libxkbcommon-dev
+      - name: Build everything on it
+        run: cargo check --locked --all-features --all-targets
+
   # Keyed `golden` because the goldens are why this job has a rasterizer, and
   # named for what it does because it runs the whole suite. Renaming it costs
   # nothing once the `main` ruleset requires the `ci` job at the bottom of this
@@ -351,7 +372,7 @@ jobs:
   # a required check that never reports stays pending for ever.
   ci:
     name: CI
-    needs: [check, test, golden, book, golden-guard]
+    needs: [check, test, msrv, golden, book, golden-guard]
     # Without `always()` this job skips the moment a need fails — and GitHub
     # counts a skipped required check as a passing one, so the check the ruleset
     # waits for would report green exactly when CI is red. Running is not gating

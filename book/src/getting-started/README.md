@@ -12,8 +12,8 @@ This section will guide you through setting up Guido and creating your first app
 
 Before you begin, ensure you have:
 
-- **Rust** (1.70 or later) - Install via [rustup](https://rustup.rs/)
-- **Wayland compositor** - A compositor that supports the layer shell protocol (Sway, Hyprland, etc.)
+- **Rust** (1.90 or later) - Install via [rustup](https://rustup.rs/)
+- **Wayland compositor** - A compositor that supports the layer shell protocol (Sway, Hyprland, niri, KDE Plasma and others; not GNOME)
 - **System dependencies** - Development libraries for Wayland and graphics
 
 ## Quick Start

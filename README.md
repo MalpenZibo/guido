@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/MalpenZibo/guido/blob/main/assets/wordmark-dark.svg">
-    <img alt="GUIdo" src="https://github.com/MalpenZibo/guido/blob/main/assets/wordmark-light.svg" height="140">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/MalpenZibo/guido/main/assets/wordmark-dark.svg">
+    <img alt="GUIdo" src="https://raw.githubusercontent.com/MalpenZibo/guido/main/assets/wordmark-light.svg" height="140">
   </picture>
 </p>
 
@@ -13,31 +13,24 @@ A reactive Rust GUI library for Wayland layer shell widgets.
 
 ## Overview
 
-Guido is a GPU-accelerated GUI library for building Wayland layer shell applications like status bars, panels, and overlays. It features a fine-grained reactive programming model inspired by [Floem](https://github.com/lapce/floem), with automatic dependency tracking and efficient re-rendering.
+Guido is a GPU-accelerated GUI library for building Wayland layer shell applications like status bars, panels, popups, overlays and lock screens. Its state lives in fine-grained reactive signals: a widget property reads them and updates by itself when they change, with nothing rebuilt that did not read them.
 
 **Note:** This project is developed collaboratively using AI agents.
 
 ## Features
 
-- **Fine-Grained Reactivity** - Thread-safe reactive signals with automatic dependency tracking. Signals are `Copy`, eliminating manual cloning
-- **State Layer System** - Declarative hover/pressed style overrides with animations and Material-style ripple effects
-- **GPU Rendering** - Hardware-accelerated rendering via wgpu with SDF-based shapes
-- **Transform System** - Translate, rotate, and scale widgets with proper hit testing and animations
-- **Multi-Surface Apps** - Create multiple layer shell surfaces that share reactive state, with dynamic property modification
-- **Superellipse Corners** - `corners(Corners::squircle(12.0))`, and bevel, scoop, or any K value
-- **SDF Borders** - Crisp anti-aliased borders using signed distance field rendering
-- **Component Macro** - `#[component]` macro for creating reusable widgets with reactive props, callbacks, children, and slots
-- **Type Erasure** - `AnyWidget` and `Widget::into_any()` for conditional widget branches
-- **Composable Widgets** - Build UIs from minimal primitives with pluggable Flex layout
-- **Layer Shell Support** - Native Wayland layer shell integration for status bars and panels
-- **HiDPI Support** - Automatic scaling for high-resolution displays
-- **Image Widget** - Display raster images (PNG, JPEG, WebP) and SVGs with GPU texture caching
-- **Scrollable Containers** - Vertical/horizontal scrolling with customizable scrollbars and momentum
-- **Text Styling** - Font family (sans-serif, serif, monospace, custom) and weight (thin to black) support
+- **Fine-grained reactivity** - `Copy` signals that any property takes as readily as a value; a change updates only what read it
+- **Wayland surfaces** - Layer shell bars and panels, popups, lock screens and a surface per monitor, all sharing one reactive state
+- **Composable widgets** - A handful of primitives, flex and stack layouts, and `#[component]` for widgets of your own
+- **GPU rendering** - wgpu with SDF shapes: superellipse corners, borders, shadows, gradients, blur and paths
+- **Interaction** - Hover and pressed states, ripples, transforms with correct hit testing, scrolling and text input
+- **Animation** - Transitions, springs and keyframes on every animatable property
+- **Text and images** - Font families and weights, PNG, JPEG, WebP and SVG
+- **HiDPI** - Scales automatically on high-resolution displays
 
 ## Quick Start
 
-```rust
+```rust,no_run
 use guido::prelude::*;
 
 fn main() {
@@ -99,6 +92,8 @@ cargo run --example component_example
 
 ## Examples
 
+There are over sixty under `examples/`; the book's [Running Examples](https://malpenzibo.github.io/guido/getting-started/examples.html) page walks through them. A few to start with:
+
 - **status_bar** - Basic status bar layout demonstration
 - **reactive_example** - Interactive features with signals and state layers
 - **multi_surface** - Multiple surfaces with shared reactive state
@@ -118,6 +113,11 @@ cargo run --example component_example
 
 ## Documentation
 
+- [The Guido book](https://malpenzibo.github.io/guido) - Guides and examples for building with Guido
+- [API reference](https://docs.rs/guido) - Every public type and method
+
+For working on Guido itself:
+
 - [Architecture Overview](docs/ARCHITECTURE.md) - System design and module structure
 - [State Layer API](docs/STATE_LAYER.md) - Hover/pressed styles and ripple effects
 - [Transform System](docs/TRANSFORMS.md) - Translate, rotate, scale with animations
@@ -127,9 +127,9 @@ cargo run --example component_example
 
 ## Requirements
 
-- Rust 1.70+
-- Wayland compositor with layer shell support (e.g., Sway, Hyprland)
-- GPU with Vulkan or OpenGL support
+- Rust 1.90 or newer
+- A Wayland compositor with layer shell support (`wlr-layer-shell`): Sway, Hyprland, niri, KDE Plasma, river, labwc and others. GNOME does not support it
+- A GPU with Vulkan or OpenGL support
 
 ## License
 
