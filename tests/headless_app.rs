@@ -710,6 +710,81 @@ fn a_dynamic_child_reads_what_its_surface_declared() {
     );
 }
 
+/// #877: a dynamic child depends on what its latest run read, as an effect
+/// does. Once `flag` sends it down the branch that does not read `other`, a
+/// write to `other` leaves it alone — where it used to run again, rebuilding
+/// what it returned and everything under it.
+#[test]
+fn a_dynamic_child_forgets_what_its_earlier_runs_read() {
+    let Some(mut app) = headless() else { return };
+    let runs = Rc::new(Cell::new(0u32));
+    let flag = create_signal(false);
+    let other = create_signal(0u32);
+    let counted = runs.clone();
+    let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+        let runs = counted.clone();
+        container().child(move || {
+            runs.set(runs.get() + 1);
+            if flag.get() {
+                return container();
+            }
+            other.get();
+            container()
+        })
+    });
+    app.configure(surface, 100, 100, 1.0);
+    app.step();
+    assert_eq!(runs.get(), 1);
+
+    other.set(1);
+    app.step();
+    assert_eq!(runs.get(), 2, "the first branch reads `other`");
+
+    flag.set(true);
+    app.step();
+    assert_eq!(runs.get(), 3);
+
+    other.set(2);
+    app.step();
+    assert_eq!(runs.get(), 3, "the latest run did not read `other`");
+}
+
+/// Forgetting is per segment: a dynamic child that re-runs drops its own
+/// reads, not those of the dynamic child beside it in the same container.
+#[test]
+fn a_dynamic_child_forgets_only_its_own_reads() {
+    let Some(mut app) = headless() else { return };
+    let runs = Rc::new(Cell::new((0u32, 0u32)));
+    let first = create_signal(0u32);
+    let second = create_signal(0u32);
+    let counted = runs.clone();
+    let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+        let (a, b) = (counted.clone(), counted.clone());
+        container()
+            .child(move || {
+                first.get();
+                a.set((a.get().0 + 1, a.get().1));
+                container()
+            })
+            .child(move || {
+                second.get();
+                b.set((b.get().0, b.get().1 + 1));
+                container()
+            })
+    });
+    app.configure(surface, 100, 100, 1.0);
+    app.step();
+    assert_eq!(runs.get(), (1, 1));
+
+    first.set(1);
+    app.step();
+    assert_eq!(runs.get(), (2, 1));
+
+    second.set(1);
+    app.step();
+    assert_eq!(runs.get(), (2, 2), "the second child still hears `second`");
+}
+
 /// The rows of a keyed list are built by the same reconciler, so they read the
 /// same scope — and a list inside a row reads it through the row.
 #[test]
