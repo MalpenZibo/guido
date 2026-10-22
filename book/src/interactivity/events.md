@@ -97,6 +97,14 @@ and a press that was being held is dropped without a click, so nothing comes
 back hovered or pressed when it is shown or enabled again. That happens at the
 next pointer event to reach it, not at the instant it is hidden.
 
+Each wheel step or touchpad movement that scrolls content under a still pointer
+moves the hover with it: the row that scrolled away hears `on_hover(false)` and the one
+now under the pointer `on_hover(true)`, as if the pointer had moved there, and
+`on_pointer_move` hears that move too. A list whose rows open something on
+hover opens each one as it passes under the pointer. A scroll with a button
+held does not, and nor does a touchpad's glide after the fingers lift: the next
+pointer event works the hover out then.
+
 ### Hover with State Layer
 
 For visual hover effects, use `when_hovered` instead:

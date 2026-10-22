@@ -505,6 +505,7 @@ impl Container {
                         // animation pass to advance — it begins on the
                         // end-of-gesture, which asks for its own frames.
                         request_job(id, JobRequest::Paint);
+                        tree.a_scroller_moved_its_content();
                         return EventResponse::Handled;
                     }
 
