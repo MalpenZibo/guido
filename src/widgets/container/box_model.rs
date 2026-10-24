@@ -683,8 +683,20 @@ impl Container {
             return exact_within(length, size, parent_max);
         }
 
-        // min/max apply on top of everything above, fill included.
-        size = length.clamp(size);
+        // min/max apply on top of everything above, fill included. A size in
+        // flight is held within them stretched to where it set out from: it
+        // eases to a bound that moved past it, rather than landing on it the
+        // frame it moves (#884), and a spring still stops at a bound it
+        // overshoots.
+        size = match anim.filter(|_| animating) {
+            Some(anim) => {
+                let from = *anim.start();
+                let floor = length.min().map_or(f32::NEG_INFINITY, |min| min.min(from));
+                let ceiling = length.max().map_or(f32::INFINITY, |max| max.max(from));
+                size.max(floor).min(ceiling)
+            }
+            None => length.clamp(size),
+        };
         if !allow_shrink && anim.is_none() {
             size = size.max(content);
         }

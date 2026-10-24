@@ -140,7 +140,9 @@ impl<T> Animated<T> {
 
 impl<T: Clone + 'static> Animated<T> {
     /// Leave somewhere else when the widget is removed, travelling there with
-    /// the transition already named, and be disposed when it arrives.
+    /// the transition already named, and be disposed when it arrives. A
+    /// transition with a `.reverse()` uses it for an exit that decreases the
+    /// value, as it does for any other change: an exit is usually the close.
     ///
     /// The other half of [`entering_from`](Self::entering_from). Declared on
     /// the removed widget's own properties — a child of `.child(move || ..)`,

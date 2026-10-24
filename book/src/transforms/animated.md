@@ -70,7 +70,8 @@ a value quietly ignored — a timeline already says where it starts.
 removed. A child of `.child(move || ..)`, `.children(move || ..)` or `keyed(..)`
 that declares one is not torn down when it is removed. It stays where it stood,
 travels to its exit with the transition already named, and is disposed when it
-arrives.
+arrives. A transition with a `.reverse()` uses it on the way out when the exit
+makes the value smaller, the same as for any other change.
 
 ```rust
 # extern crate guido;
