@@ -5599,6 +5599,80 @@ fn a_merged_shape_is_cut_by_its_clip() {
     );
 }
 
+const NECK_BORDER: f32 = 3.0;
+const NECK_REACH: f32 = 24.0;
+/// Where the panel's sides meet the bar's top, in pixels at scale 1.
+const NECK_CORNERS: [(u32, u32); 2] = [(60, 80), (120, 80)];
+
+/// A panel standing on a wider bar, merged: where each of the panel's sides
+/// meets the bar's top the two join in a concave fillet, and the border runs
+/// round it. Red on black, so a pixel's red is how much of it the border
+/// covers.
+fn panel_on_bar() -> Container {
+    let member = |w: f32, h: f32| {
+        container()
+            .width(w)
+            .height(h)
+            .background(Color::rgb(0.0, 0.0, 0.0))
+            .border(NECK_BORDER, Color::rgb(1.0, 0.0, 0.0))
+    };
+    container().padding(20.0).child(
+        container()
+            .layout(Flex::column())
+            .child(member(60.0, 60.0).translate((40.0, 0.0)))
+            .child(member(160.0, 40.0))
+            .merge_children(NECK_REACH),
+    )
+}
+
+/// A merged border is as wide through the neck as along a straight edge
+/// (#885). The smooth minimum that joins the members is not a distance in the
+/// neck: it changes more slowly than one, by √2 where two edges meet at a
+/// right angle as they do here, so a band of it `border_width` deep swelled
+/// there.
+///
+/// Measured from the pixels, as the summed coverage across each: down a column
+/// through the bar's bottom edge, and out along each fillet's bisector, where
+/// a step from one pixel to the next is √2 pixels long.
+#[test]
+fn a_merged_border_is_as_wide_through_the_neck_as_along_an_edge() {
+    const NAME: &str = "a_merged_border_is_as_wide_through_the_neck_as_along_an_edge";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let pixels = render_with_own_renderer(
+        ctx,
+        panel_on_bar(),
+        (200.0, 140.0),
+        1.0,
+        Color::rgb(0.0, 0.0, 0.0),
+    );
+    let covered = |x: u32, y: u32| f32::from(red_at(&pixels, x, y)) / 255.0;
+
+    let edge: f32 = (100..140).map(|y| covered(150, y)).sum();
+    assert!(
+        (edge - NECK_BORDER).abs() < 0.25,
+        "the straight edge is the border's own width, got {edge}"
+    );
+    // Up and away from the panel: leftwards from its left side, rightwards
+    // from its right.
+    for ((x, y), away) in NECK_CORNERS.into_iter().zip([-1, 1]) {
+        let neck = (0..NECK_REACH as i32)
+            .map(|i| {
+                // The pixel whose centre is `i + ½` out along the bisector.
+                let x = x as i32 + if away > 0 { i } else { -1 - i };
+                covered(x as u32, y - 1 - i as u32)
+            })
+            .sum::<f32>()
+            * std::f32::consts::SQRT_2;
+        assert!(
+            (neck - edge).abs() < 0.35,
+            "through the neck the border is {neck} px wide, along the edge {edge} px"
+        );
+    }
+    assert_golden(NAME, adapter, pixels);
+}
+
 /// A scroller is cut inside its border, as CSS cuts at the padding box: the
 /// content, filling every scroller past each edge, leaves the whole border
 /// showing, corners included (#764).

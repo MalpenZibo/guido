@@ -862,12 +862,15 @@ struct Merged {
     fill: vec4<f32>,
     border_color: vec4<f32>,
     border_width: f32,
+    // whether the fold smoothed anywhere here: where it did, the distance is
+    // not one, and changes more slowly than the position does
+    smoothed: bool,
 }
 
 // The merged distance at `at`, in physical pixels, and what the members give
 // the fragment there — colours still premultiplied.
 fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
-    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0);
+    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0, false);
     var i = first;
     for (var n = 0u; n < MAX_MERGED && i != NO_MERGE; n = n + 1u) {
         let r = merge_records[i];
@@ -889,6 +892,7 @@ fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
         m.fill = mix(m.fill, r.fill, share);
         m.border_color = mix(m.border_color, r.border_color, share);
         m.border_width = mix(m.border_width, r.border_width, share);
+        m.smoothed = m.smoothed || h > 0.0;
         i = r.next;
     }
     return m;
@@ -914,9 +918,29 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     let first = in.kinds.x;
     let merged = merged_shape(pos, first);
     let aa = edge_fade(merged.dist);
+    // The border is `border_width` pixels deep, and where the fold smoothed
+    // the distance is not in pixels: it changes more slowly than one — by √2
+    // where two edges meet square, by more where they meet wider, as two
+    // pills' do — and a band of it as deep as the border swelled across the
+    // neck (#885). So there the depth is scaled by how fast the distance
+    // changes, read a quarter of a pixel either side. Not by `dpdx`: that is
+    // a whole pixel wide, and where the outline turns within a few, as at the
+    // tip of the bulge two aligned sides make, it notched the border. Only
+    // where the fold smoothed: a member's own distance is already in pixels.
+    var depth = merged.border_width;
+    if (merged.smoothed && depth > 0.0) {
+        let e = 0.25;
+        let slope = vec2<f32>(
+            merged_shape(pos + vec2<f32>(e, 0.0), first).dist
+                - merged_shape(pos - vec2<f32>(e, 0.0), first).dist,
+            merged_shape(pos + vec2<f32>(0.0, e), first).dist
+                - merged_shape(pos - vec2<f32>(0.0, e), first).dist,
+        ) / (2.0 * e);
+        depth = depth * length(slope);
+    }
     let covered = vec2<f32>(
         edge_coverage(merged.dist, aa),
-        edge_coverage(merged.dist + merged.border_width, aa),
+        edge_coverage(merged.dist + depth, aa),
     );
 
     var shadow = vec4<f32>(0.0, 0.0, 0.0, 0.0);
