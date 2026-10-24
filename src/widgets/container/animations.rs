@@ -630,6 +630,11 @@ impl<T: Animatable> AnimationState<T> {
         &self.target
     }
 
+    /// Where the segment in flight set out from.
+    pub(crate) fn start(&self) -> &T {
+        &self.start
+    }
+
     /// Set value immediately without animation, and mark it placed — unless this
     /// is a measure pass.
     ///
