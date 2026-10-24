@@ -918,9 +918,29 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     let first = in.kinds.x;
     let merged = merged_shape(pos, first);
     let aa = edge_fade(merged.dist);
+    // The border is `border_width` pixels deep, and where the fold smoothed
+    // the distance is not in pixels: it changes more slowly than one — by √2
+    // where two edges meet square, by more where they meet wider, as two
+    // pills' do — and a band of it as deep as the border swelled across the
+    // neck (#885). So there the depth is scaled by how fast the distance
+    // changes, read a quarter of a pixel either side. Not by `dpdx`: that is
+    // a whole pixel wide, and where the outline turns within a few, as at the
+    // tip of the bulge two aligned sides make, it notched the border. Only
+    // where the fold smoothed: a member's own distance is already in pixels.
+    var depth = merged.border_width;
+    if (merged.smoothed && depth > 0.0) {
+        let e = 0.25;
+        let slope = vec2<f32>(
+            merged_shape(pos + vec2<f32>(e, 0.0), first).dist
+                - merged_shape(pos - vec2<f32>(e, 0.0), first).dist,
+            merged_shape(pos + vec2<f32>(0.0, e), first).dist
+                - merged_shape(pos - vec2<f32>(0.0, e), first).dist,
+        ) / (2.0 * e);
+        depth = depth * length(slope);
+    }
     let covered = vec2<f32>(
         edge_coverage(merged.dist, aa),
-        edge_coverage(merged.dist + merged.border_width, aa),
+        edge_coverage(merged.dist + depth, aa),
     );
 
     var shadow = vec4<f32>(0.0, 0.0, 0.0, 0.0);

@@ -971,7 +971,17 @@ which leaves two distances further apart than its reach exactly as `min` leaves
 them — a member that moves away splits off by itself — and gives, beside the
 distance, the share of the fragment each side keeps. The fill, the border
 colour and the border width blend by that share, so the border follows the
-merged outline and fades along a neck towards a member without one. The shadow
+merged outline and fades along a neck towards a member without one. Where the
+fold smoothed, the merged distance is no longer in pixels — it changes more
+slowly than one across a neck — so the border's depth there is scaled by how
+fast it does change, read from the fold a quarter of a pixel either side, and
+the border is as wide through a neck as along an edge (#885). The fold says
+where it smoothed, so a member's own distance, already in pixels, is left as
+it is. One case it does not reach: outside a square corner a member's
+distance is the larger of the two sides' rather than the distance to the
+corner, which has a crease along the diagonal, and where two members' sides
+line up and the fold crosses that crease the border dips by most of a pixel
+for a pixel. The shadow
 is evaluated over the merged distance: the same SDF through the same
 `smoothstep` a lone shape's shadow uses, and it is left out from under the
 merged shape as a lone shape's is from under that shape. The merging
