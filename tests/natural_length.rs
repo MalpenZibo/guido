@@ -301,7 +301,12 @@ const WIDE: f32 = 400.0;
 /// `NARROW` otherwise, through the real loop. Nothing on a machine with no
 /// adapter.
 #[cfg(feature = "testing")]
-fn eased_bound(bound: fn(f32) -> Length, content_width: f32, widen: bool) -> Option<Vec<f32>> {
+fn eased_bound(
+    bound: fn(f32) -> Length,
+    content_width: f32,
+    widen: bool,
+    transition: Transition,
+) -> Option<Vec<f32>> {
     use std::time::{Duration, Instant};
     let mut app = common::headless()?;
     let placed = create_widget_ref();
@@ -312,7 +317,7 @@ fn eased_bound(bound: fn(f32) -> Length, content_width: f32, widen: bool) -> Opt
                 .height(40.0)
                 .width(
                     (move || bound(if wide.get() { WIDE } else { NARROW }))
-                        .transition(Transition::new(400.0, TimingFunction::EaseOut)),
+                        .transition(transition.clone()),
                 )
                 .widget_ref(placed)
                 .child(container().width(content_width).height(40.0)),
@@ -332,6 +337,34 @@ fn eased_bound(bound: fn(f32) -> Length, content_width: f32, widen: bool) -> Opt
     Some(frames)
 }
 
+#[cfg(feature = "testing")]
+fn ease_out() -> Transition {
+    Transition::new(400.0, TimingFunction::EaseOut)
+}
+
+/// A bound is still a bound in flight: a spring that overshoots a capped
+/// width on its way up to the cap stops at the cap, rather than running past
+/// it for the frames its wobble lasts. On its way down there is no floor, and
+/// it wobbles below the cap as an exact width wobbles below its value.
+#[cfg(feature = "testing")]
+#[test]
+fn a_spring_does_not_carry_a_natural_width_past_its_cap() {
+    for widen in [false, true] {
+        let Some(frames) = eased_bound(
+            |cap| natural().at_most(cap),
+            WIDE,
+            widen,
+            Transition::spring(SpringConfig::BOUNCY),
+        ) else {
+            return;
+        };
+        assert!(
+            frames.iter().all(|&w| w <= WIDE),
+            "widen {widen}: {frames:?}"
+        );
+    }
+}
+
 /// Whether `frames` travel to the end `widen` names through the widths
 /// between, rather than arriving there on the first frame.
 #[cfg(feature = "testing")]
@@ -349,7 +382,8 @@ fn eases(frames: &[f32], widen: bool) -> bool {
 #[test]
 fn a_capped_natural_width_eases_to_its_new_cap() {
     for widen in [false, true] {
-        let Some(frames) = eased_bound(|cap| natural().at_most(cap), WIDE, widen) else {
+        let Some(frames) = eased_bound(|cap| natural().at_most(cap), WIDE, widen, ease_out())
+        else {
             return;
         };
         assert!(eases(&frames, widen), "widen {widen}: {frames:?}");
@@ -362,7 +396,8 @@ fn a_capped_natural_width_eases_to_its_new_cap() {
 #[test]
 fn a_floored_natural_width_eases_to_its_new_floor() {
     for widen in [true, false] {
-        let Some(frames) = eased_bound(|floor| natural().at_least(floor), 40.0, widen) else {
+        let Some(frames) = eased_bound(|floor| natural().at_least(floor), 40.0, widen, ease_out())
+        else {
             return;
         };
         assert!(eases(&frames, widen), "widen {widen}: {frames:?}");
