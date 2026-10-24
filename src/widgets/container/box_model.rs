@@ -683,8 +683,13 @@ impl Container {
             return exact_within(length, size, parent_max);
         }
 
-        // min/max apply on top of everything above, fill included.
-        size = length.clamp(size);
+        // min/max apply on top of everything above, fill included — but not
+        // to a size in flight. It is heading for a target that already obeys
+        // them (`update_size_targets`), so cutting it here would land it on a
+        // bound the frame the bound moves, rather than ease it there (#884).
+        if !animating {
+            size = length.clamp(size);
+        }
         if !allow_shrink && anim.is_none() {
             size = size.max(content);
         }

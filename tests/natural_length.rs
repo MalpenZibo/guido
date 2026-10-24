@@ -289,3 +289,82 @@ fn a_natural_child_that_changes_is_placed_again() {
         Rect::new(-10.0, 20.0, 120.0, 20.0)
     );
 }
+
+/// The two ends a bound moves between.
+#[cfg(feature = "testing")]
+const NARROW: f32 = 60.0;
+#[cfg(feature = "testing")]
+const WIDE: f32 = 400.0;
+
+/// The bound at one end, eased to the other: a natural width's laid-out size
+/// at every 16 ms frame for 480 ms after it moves to `WIDE` if `widen`, or to
+/// `NARROW` otherwise, through the real loop. Nothing on a machine with no
+/// adapter.
+#[cfg(feature = "testing")]
+fn eased_bound(bound: fn(f32) -> Length, content_width: f32, widen: bool) -> Option<Vec<f32>> {
+    use std::time::{Duration, Instant};
+    let mut app = common::headless()?;
+    let placed = create_widget_ref();
+    let wide = create_signal(!widen);
+    let surface = app.surface(bar(), move || {
+        container().child(
+            container()
+                .height(40.0)
+                .width(
+                    (move || bound(if wide.get() { WIDE } else { NARROW }))
+                        .transition(Transition::new(400.0, TimingFunction::EaseOut)),
+                )
+                .widget_ref(placed)
+                .child(container().width(content_width).height(40.0)),
+        )
+    });
+    app.configure(surface, 800, 100, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    wide.set(widen);
+    let frames = (0..30)
+        .map(|_| {
+            at += Duration::from_millis(16);
+            app.step_at(at);
+            placed.layout_rect().get_untracked().width
+        })
+        .collect();
+    Some(frames)
+}
+
+/// Whether `frames` travel to the end `widen` names through the widths
+/// between, rather than arriving there on the first frame.
+#[cfg(feature = "testing")]
+fn eases(frames: &[f32], widen: bool) -> bool {
+    let to = if widen { WIDE } else { NARROW };
+    frames.first().is_some_and(|&w| w != to)
+        && frames.iter().filter(|&&w| w > NARROW && w < WIDE).count() > 5
+        && frames.last() == Some(&to)
+}
+
+/// A capped natural width eases to a new cap as an exact one does, both
+/// ways — the shrink is the one that snapped (#884), because the cap was
+/// applied to the width in flight as well as to where it was heading.
+#[cfg(feature = "testing")]
+#[test]
+fn a_capped_natural_width_eases_to_its_new_cap() {
+    for widen in [false, true] {
+        let Some(frames) = eased_bound(|cap| natural().at_most(cap), WIDE, widen) else {
+            return;
+        };
+        assert!(eases(&frames, widen), "widen {widen}: {frames:?}");
+    }
+}
+
+/// And its mirror: a floor raised past the content eases up to it, rather
+/// than lifting the width there on the first frame.
+#[cfg(feature = "testing")]
+#[test]
+fn a_floored_natural_width_eases_to_its_new_floor() {
+    for widen in [true, false] {
+        let Some(frames) = eased_bound(|floor| natural().at_least(floor), 40.0, widen) else {
+            return;
+        };
+        assert!(eases(&frames, widen), "widen {widen}: {frames:?}");
+    }
+}
