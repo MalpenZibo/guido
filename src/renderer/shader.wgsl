@@ -862,12 +862,15 @@ struct Merged {
     fill: vec4<f32>,
     border_color: vec4<f32>,
     border_width: f32,
+    // whether the fold smoothed anywhere here: where it did, the distance is
+    // not one, and changes more slowly than the position does
+    smoothed: bool,
 }
 
 // The merged distance at `at`, in physical pixels, and what the members give
 // the fragment there — colours still premultiplied.
 fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
-    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0);
+    var m = Merged(1e30, vec4<f32>(0.0), vec4<f32>(0.0), 0.0, false);
     var i = first;
     for (var n = 0u; n < MAX_MERGED && i != NO_MERGE; n = n + 1u) {
         let r = merge_records[i];
@@ -889,6 +892,7 @@ fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
         m.fill = mix(m.fill, r.fill, share);
         m.border_color = mix(m.border_color, r.border_color, share);
         m.border_width = mix(m.border_width, r.border_width, share);
+        m.smoothed = m.smoothed || h > 0.0;
         i = r.next;
     }
     return m;
