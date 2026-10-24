@@ -154,9 +154,13 @@ impl<T: Animatable> AnimationState<T> {
     /// whether it did.
     ///
     /// The value is asked for now, not at build: the caller knows which way a
-    /// child leaves only when the change that removes it happens. Forward
-    /// whichever way it travels, for the reason [`begin_enter`](Self::begin_enter)
-    /// gives, and from wherever the property is — a spring keeps its momentum.
+    /// child leaves only when the change that removes it happens. It travels
+    /// from wherever the property is — a spring keeps its momentum — with the
+    /// transition for that direction, as [`animate_to`](Self::animate_to)
+    /// picks one: an exit is the close a `.reverse()` is written for. An enter
+    /// is always forward, for the reason [`begin_enter`](Self::begin_enter)
+    /// gives.
+    ///
     /// An exit to where the property already is has nothing to play, at rest
     /// or in flight — a segment of no length gives momentum no direction to
     /// carry — and leaves it at rest there.
@@ -172,7 +176,7 @@ impl<T: Animatable> AnimationState<T> {
         if let Some(timeline) = self.timeline.as_deref_mut() {
             timeline.playing = None;
         }
-        self.using_reverse = false;
+        self.using_reverse = self.reverses_to(&to);
         if to == self.current {
             // Declared, but already there: nothing to wait for, whatever the
             // timing. A spring in flight has no momentum to carry into a
@@ -262,6 +266,12 @@ impl<T: Animatable> AnimationState<T> {
         true
     }
 
+    /// Whether going from where the property is to `to` takes the reverse
+    /// transition: there is one, and the change runs the way it is for.
+    fn reverses_to(&self, to: &T) -> bool {
+        self.reverse_transition.is_some() && T::is_reverse(&self.current, to)
+    }
+
     /// Get the currently active transition (forward or reverse).
     fn active_transition(&self) -> &Transition {
         if self.using_reverse {
@@ -278,9 +288,7 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
-        // Detect direction and select transition
-        self.using_reverse =
-            self.reverse_transition.is_some() && T::is_reverse(&self.current, &new_target);
+        self.using_reverse = self.reverses_to(&new_target);
 
         // Check if active transition is spring before mutating other fields
         let is_spring = matches!(
@@ -1095,6 +1103,60 @@ mod tests {
         at(&mut moving, 56);
         assert!(!moving.is_animating(), "and stays at rest");
         assert_eq!(*moving.current(), here);
+    }
+
+    /// An exit picks its transition by the way it travels, as a retarget does:
+    /// a panel closed by removal leaves with the transition written for
+    /// closing, not the one written for opening (#883).
+    #[test]
+    fn an_exit_takes_the_transition_for_its_direction() {
+        let slow_open = Transition::new(1000.0, TimingFunction::Linear)
+            .reverse(Transition::new(100.0, TimingFunction::Linear));
+        let leaving_to = |to: f32| {
+            let mut anim = AnimationState::new(50.0_f32, slow_open.clone())
+                .with_exit_to(Some(Box::new(move || to)));
+            anim.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
+            assert!(anim.begin_exit(FrameInstant::from(Instant::now())));
+            at(&mut anim, 100);
+            *anim.current()
+        };
+
+        assert_eq!(
+            leaving_to(0.0),
+            0.0,
+            "shrinking: the reverse, done at 100ms"
+        );
+        assert_eq!(
+            leaving_to(100.0),
+            55.0,
+            "growing: the forward, a tenth of the way"
+        );
+    }
+
+    /// And so the close's `on_complete` is the one an exit that closes fires:
+    /// the callback written for the transition that played, not the open's.
+    #[test]
+    fn an_exit_completes_the_transition_it_played() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let (opened, closed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (on_open, on_close) = (opened.clone(), closed.clone());
+        let mut anim = AnimationState::new(
+            50.0_f32,
+            Transition::new(1000.0, TimingFunction::Linear)
+                .on_complete(move || on_open.set(on_open.get() + 1))
+                .reverse(
+                    Transition::new(100.0, TimingFunction::Linear)
+                        .on_complete(move || on_close.set(on_close.get() + 1)),
+                ),
+        )
+        .with_exit_to(Some(Box::new(|| 0.0)));
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
+        assert!(anim.begin_exit(FrameInstant::from(Instant::now())));
+        at(&mut anim, 120);
+
+        assert_eq!((opened.get(), closed.get()), (0, 1));
     }
 
     /// And that momentum is what a wobble is made of: sent back to where it
