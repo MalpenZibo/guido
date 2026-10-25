@@ -3,7 +3,8 @@ use crate::reactive::Signal;
 use crate::tree::LayoutCtx;
 
 use crate::animation::{
-    Animatable, ExitTo, Keyframes, SpringState, Transition, TransitionConfig, carry_velocity,
+    Animatable, Choose, ExitTo, Keyframes, Segment, SegmentKind, Source, SpringState, Transition,
+    TransitionSource, carry_velocity,
 };
 
 /// A sequence a property plays, and what decides when it runs.
@@ -72,12 +73,12 @@ pub struct AnimationState<T: Animatable> {
     /// first one does: a state that has never animated has no start, and a
     /// placeholder instant would be a time nobody chose.
     start_time: Option<FrameInstant>,
-    /// Forward transition (used when value increases or no reverse is set)
+    /// The transition the running segment plays, or the last one played.
     transition: Transition,
-    /// Optional reverse transition (used when value decreases)
-    reverse_transition: Option<Transition>,
-    /// Whether the current animation is using the reverse transition
-    using_reverse: bool,
+    /// Where the next segment's transition comes from, when it is not always
+    /// the one above: read from the application's state, or chosen from the
+    /// segment. `None` for a constant, which is almost every declaration.
+    choose: Option<Choose<T>>,
     /// Spring state (for spring timing functions)
     spring_state: Option<SpringState>,
     /// Whether a real layout has placed this. A measure pass writes the value
@@ -109,10 +110,16 @@ pub struct AnimationState<T: Animatable> {
 }
 
 impl<T: Animatable> AnimationState<T> {
-    pub fn new(initial_value: T, config: impl Into<TransitionConfig>) -> Self {
-        let config = config.into();
+    pub fn new(initial_value: T, transition: impl Into<TransitionSource<T>>) -> Self {
+        // A chosen transition has nothing to be chosen for until a segment
+        // starts, so it holds a placeholder until then, and its spring is
+        // made by the segment that needs one.
+        let (transition, choose) = match transition.into().0 {
+            Source::Fixed(transition) => (transition, None),
+            Source::Chosen(choose) => (instant_transition(), Some(choose)),
+        };
         let spring_state = if matches!(
-            config.forward.timing,
+            transition.timing,
             crate::animation::TimingFunction::Spring(_)
         ) {
             Some(SpringState::new())
@@ -125,9 +132,8 @@ impl<T: Animatable> AnimationState<T> {
             start: initial_value,
             progress: 1.0, // Start completed
             start_time: None,
-            transition: config.forward,
-            reverse_transition: config.reverse,
-            using_reverse: false,
+            transition,
+            choose,
             spring_state,
             initialized: false, // Not yet initialized with real content-based value
             prev_value: None,
@@ -156,10 +162,8 @@ impl<T: Animatable> AnimationState<T> {
     /// The value is asked for now, not at build: the caller knows which way a
     /// child leaves only when the change that removes it happens. It travels
     /// from wherever the property is — a spring keeps its momentum — with the
-    /// transition for that direction, as [`animate_to`](Self::animate_to)
-    /// picks one: an exit is the close a `.reverse()` is written for. An enter
-    /// is always forward, for the reason [`begin_enter`](Self::begin_enter)
-    /// gives.
+    /// transition chosen now, as for any other segment: by then the state
+    /// that removed the widget already says it is closing.
     ///
     /// An exit to where the property already is has nothing to play, at rest
     /// or in flight — a segment of no length gives momentum no direction to
@@ -176,7 +180,7 @@ impl<T: Animatable> AnimationState<T> {
         if let Some(timeline) = self.timeline.as_deref_mut() {
             timeline.playing = None;
         }
-        self.using_reverse = self.reverses_to(&to);
+        self.choose_transition(to, SegmentKind::Exit);
         if to == self.current {
             // Declared, but already there: nothing to wait for, whatever the
             // timing. A spring in flight has no momentum to carry into a
@@ -254,31 +258,28 @@ impl<T: Animatable> AnimationState<T> {
         }
 
         self.set_immediate(ctx, from);
-        // Forward, whichever way it travels. `animate_to` would read the
-        // direction off `current`, which is now the enter value, so an enter
-        // that shrinks — a card settling down from a larger scale — would run
-        // the transition written for the value *later* decreasing, and fire
-        // its `on_complete`. In the pattern this feature exists for that
-        // callback destroys the popup, so appearing would close it.
-        self.using_reverse = false;
+        self.choose_transition(target, SegmentKind::Enter);
         self.target = target;
         self.begin_segment_from(from, now());
         true
     }
 
-    /// Whether going from where the property is to `to` takes the reverse
-    /// transition: there is one, and the change runs the way it is for.
-    fn reverses_to(&self, to: &T) -> bool {
-        self.reverse_transition.is_some() && T::is_reverse(&self.current, to)
-    }
-
-    /// Get the currently active transition (forward or reverse).
-    fn active_transition(&self) -> &Transition {
-        if self.using_reverse {
-            self.reverse_transition.as_ref().unwrap_or(&self.transition)
-        } else {
-            &self.transition
-        }
+    /// Choose the transition for a segment from where the property is to
+    /// `to`, which is the one moment it is chosen: a transition that changes
+    /// while a segment runs applies from the next one.
+    ///
+    /// Read like an event handler reads — for the moment the segment starts,
+    /// not a place to subscribe from.
+    fn choose_transition(&mut self, to: T, kind: SegmentKind) {
+        let from = self.current;
+        let chosen = match &self.choose {
+            None => return,
+            Some(choose) => crate::reactive::diagnostics::snapshot_zone(|| match choose {
+                Choose::Read(signal) => signal.get_untracked(),
+                Choose::Segment(choose) => choose(Segment { from, to, kind }),
+            }),
+        };
+        self.transition = chosen;
     }
 
     /// Start animating to a new target value
@@ -288,11 +289,11 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
-        self.using_reverse = self.reverses_to(&new_target);
+        self.choose_transition(new_target, SegmentKind::Retarget);
 
         // Check if active transition is spring before mutating other fields
         let is_spring = matches!(
-            self.active_transition().timing,
+            self.transition.timing,
             crate::animation::TimingFunction::Spring(_)
         );
 
@@ -314,7 +315,7 @@ impl<T: Animatable> AnimationState<T> {
     /// The bookkeeping every new segment shares.
     fn begin_segment(&mut self, from: T, carried: f32, now: FrameInstant) {
         let is_spring = matches!(
-            self.active_transition().timing,
+            self.transition.timing,
             crate::animation::TimingFunction::Spring(_)
         );
         self.start = from;
@@ -346,7 +347,7 @@ impl<T: Animatable> AnimationState<T> {
         let Some(spring) = &self.spring_state else {
             return 0.0;
         };
-        if self.active_transition().delay_ms > 0.0 {
+        if self.transition.delay_ms > 0.0 {
             return 0.0;
         }
         carry_velocity(
@@ -374,7 +375,7 @@ impl<T: Animatable> AnimationState<T> {
         // Extract scalar transition values upfront to avoid borrow conflicts
         // with self.spring_state. Copy SpringConfig (which is Copy) instead of
         // cloning the entire TimingFunction (which may contain an Arc).
-        let active = self.active_transition();
+        let active = &self.transition;
         let delay_ms = active.delay_ms;
         let duration_ms = active.duration_ms;
         let spring_config = match active.timing {
@@ -409,7 +410,7 @@ impl<T: Animatable> AnimationState<T> {
             // For non-spring animations: use normalized time 0..1
             let t = (adjusted_elapsed / duration_ms).min(1.0);
             // Safe to borrow self again — spring_state mutable borrow ended above
-            self.active_transition().timing.evaluate(t)
+            self.transition.timing.evaluate(t)
         };
 
         // Interpolate
@@ -457,7 +458,7 @@ impl<T: Animatable> AnimationState<T> {
         // advance_animations).
         if was_running
             && !self.is_animating()
-            && let Some(cb) = self.active_transition().on_complete.clone()
+            && let Some(cb) = self.transition.on_complete.clone()
         {
             // A completion callback reads for the current value, like an
             // event handler — it is not a place to subscribe from.
@@ -484,13 +485,10 @@ impl<T: Animatable> AnimationState<T> {
     }
 
     /// How far past its target this animation can travel, as a fraction of the
-    /// distance — the worse of the forward and reverse curves.
+    /// distance — on the transition it plays now, which is the only one that
+    /// can carry it past a target while it moves.
     pub fn peak_overshoot(&self) -> f32 {
-        let forward = self.transition.timing.peak_overshoot();
-        match &self.reverse_transition {
-            Some(reverse) => forward.max(reverse.timing.peak_overshoot()),
-            None => forward,
-        }
+        self.transition.timing.peak_overshoot()
     }
 
     /// Check if animation is still running
@@ -603,6 +601,7 @@ impl<T: Animatable> AnimationState<T> {
             // what made a card jump the moment a hover arrived mid-shake.
             timeline.playing = None;
             let landed = self.current;
+            self.choose_transition(self.target, SegmentKind::Retarget);
             self.begin_segment_from(landed, now);
             // Returning `None` lets this frame run the ordinary path, so the
             // hand-back is animated by the declared transition and reaches
@@ -941,6 +940,39 @@ mod tests {
         assert_eq!(*anim.current(), 100.0, "arriving under its own transition");
     }
 
+    /// The hand-back after a sequence is a segment like any other, so a
+    /// transition chosen per segment is chosen for it too, rather than the
+    /// placeholder a chosen transition holds until its first segment — which
+    /// is instant, and would snap.
+    #[test]
+    fn the_hand_back_after_a_sequence_chooses_its_transition() {
+        use crate::animation::Keyframes;
+
+        let mut anim = AnimationState::new(
+            0.0_f32,
+            crate::animation::IntoTransition::<f32, _>::into_transition(|_: Segment<f32>| {
+                Transition::new(200.0, TimingFunction::Linear)
+            }),
+        );
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        anim = anim.with_timeline(
+            Keyframes::new(60.0)
+                .at(0.0, 0.0)
+                .at(1.0, 10.0)
+                .played_by(never_played()),
+        );
+        anim.target = 100.0;
+
+        anim.play(FrameInstant::from(Instant::now()));
+        play_at(&mut anim, 70);
+        at(&mut anim, 50);
+        assert_eq!(
+            *anim.current(),
+            25.0,
+            "50ms into the chosen 200ms hand-back, a quarter of the way"
+        );
+    }
+
     /// And the transition it hands back to reaches its completion edge, so a
     /// callback gated on the property arriving still fires.
     #[test]
@@ -1110,58 +1142,161 @@ mod tests {
         assert_eq!(*moving.current(), here);
     }
 
-    /// An exit picks its transition by the way it travels, as a retarget does:
-    /// a panel closed by removal leaves with the transition written for
-    /// closing, not the one written for opening (#883).
-    #[test]
-    fn an_exit_takes_the_transition_for_its_direction() {
-        let slow_open = Transition::new(1000.0, TimingFunction::Linear)
-            .reverse(Transition::new(100.0, TimingFunction::Linear));
-        let leaving_to = |to: f32| {
-            let mut anim = AnimationState::new(50.0_f32, slow_open.clone())
-                .with_exit_to(Some(Box::new(move || to)));
-            anim.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
-            assert!(anim.begin_exit(FrameInstant::from(Instant::now())));
-            at(&mut anim, 100);
-            *anim.current()
-        };
-
-        assert_eq!(
-            leaving_to(0.0),
-            0.0,
-            "shrinking: the reverse, done at 100ms"
-        );
-        assert_eq!(
-            leaving_to(100.0),
-            55.0,
-            "growing: the forward, a tenth of the way"
-        );
+    fn linear(ms: f32) -> Transition {
+        Transition::new(ms, TimingFunction::Linear)
     }
 
-    /// And so the close's `on_complete` is the one an exit that closes fires:
-    /// the callback written for the transition that played, not the open's.
+    /// A transition read from the application's state is read when a segment
+    /// starts: an exit reads it at removal, when the state that removed the
+    /// widget already says it is closing, whichever way the value travels
+    /// (#883, #889).
+    #[test]
+    fn an_exit_reads_its_transition_when_it_begins() {
+        use crate::reactive::create_signal;
+
+        for to in [0.0, 100.0] {
+            let open = create_signal(true);
+            let mut anim = AnimationState::new(
+                50.0_f32,
+                crate::animation::IntoTransition::<f32, _>::into_transition(move || {
+                    if open.get() {
+                        linear(1000.0)
+                    } else {
+                        linear(100.0)
+                    }
+                }),
+            )
+            .with_exit_to(Some(Box::new(move || to)));
+            anim.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
+            open.set(false);
+            assert!(anim.begin_exit(FrameInstant::from(Instant::now())));
+            at(&mut anim, 100);
+            assert_eq!(*anim.current(), to, "closing to {to}: done in 100ms");
+        }
+    }
+
+    /// And so the close's `on_complete` is the one an exit fires: the callback
+    /// written for the transition that played, not the open's.
     #[test]
     fn an_exit_completes_the_transition_it_played() {
+        use crate::reactive::create_signal;
         use std::cell::Cell;
         use std::rc::Rc;
 
         let (opened, closed) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
-        let (on_open, on_close) = (opened.clone(), closed.clone());
-        let mut anim = AnimationState::new(
-            50.0_f32,
-            Transition::new(1000.0, TimingFunction::Linear)
-                .on_complete(move || on_open.set(on_open.get() + 1))
-                .reverse(
-                    Transition::new(100.0, TimingFunction::Linear)
-                        .on_complete(move || on_close.set(on_close.get() + 1)),
-                ),
-        )
+        let open = create_signal(true);
+        let mut anim = AnimationState::new(50.0_f32, {
+            let (opened, closed) = (opened.clone(), closed.clone());
+            crate::animation::IntoTransition::<f32, _>::into_transition(move || {
+                let (opened, closed) = (opened.clone(), closed.clone());
+                if open.get() {
+                    linear(1000.0).on_complete(move || opened.set(opened.get() + 1))
+                } else {
+                    linear(100.0).on_complete(move || closed.set(closed.get() + 1))
+                }
+            })
+        })
         .with_exit_to(Some(Box::new(|| 0.0)));
         anim.set_immediate(&mut laying_out(&mut Tree::new()), 50.0);
+        open.set(false);
         assert!(anim.begin_exit(FrameInstant::from(Instant::now())));
         at(&mut anim, 120);
 
         assert_eq!((opened.get(), closed.get()), (0, 1));
+    }
+
+    /// A transition that changes while a segment runs leaves that segment
+    /// alone, and applies from the next one — CSS's rule for a `transition`
+    /// changed mid-flight.
+    #[test]
+    fn a_transition_changed_mid_flight_applies_from_the_next_segment() {
+        use crate::reactive::create_signal;
+
+        let slow = create_signal(true);
+        let mut anim = AnimationState::new(
+            0.0_f32,
+            crate::animation::IntoTransition::<f32, _>::into_transition(move || {
+                if slow.get() {
+                    linear(1000.0)
+                } else {
+                    linear(100.0)
+                }
+            }),
+        );
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        anim.animate_to(100.0, FrameInstant::from(Instant::now()));
+        slow.set(false);
+        at(&mut anim, 100);
+        assert_eq!(*anim.current(), 10.0, "still a tenth of the slow one");
+
+        let started = anim.start_time.expect("a segment has begun");
+        let later = started + std::time::Duration::from_millis(100);
+        anim.animate_to(0.0, later);
+        at(&mut anim, 100);
+        assert_eq!(*anim.current(), 0.0, "the next segment is the fast one");
+    }
+
+    /// Each segment says which kind it is, and only that kind: an enter, then
+    /// a retarget, then an exit, through one property.
+    #[test]
+    fn each_segment_says_which_kind_it_is() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let mut anim = AnimationState::new(0.0_f32, {
+            let asked = asked.clone();
+            crate::animation::IntoTransition::<f32, _>::into_transition(move |s: Segment<f32>| {
+                asked
+                    .borrow_mut()
+                    .push((s.is_enter(), s.is_retarget(), s.is_exit()));
+                linear(100.0)
+            })
+        })
+        .with_enter_from(Some(50.0))
+        .with_exit_to(Some(Box::new(|| 0.0)));
+        let now = || FrameInstant::from(Instant::now());
+
+        assert!(anim.begin_enter(&mut laying_out(&mut Tree::new()), 100.0, now));
+        anim.animate_to(20.0, now());
+        assert!(anim.begin_exit(now()));
+
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (true, false, false),
+                (false, true, false),
+                (false, false, true)
+            ]
+        );
+    }
+
+    /// A transition chosen by its segment is handed where the property is,
+    /// mid-flight included, and not the target it was heading for: a grow
+    /// interrupted by a shrink is a shrink from where it got to.
+    #[test]
+    fn a_segment_starts_from_where_the_property_is() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let mut anim = AnimationState::new(0.0_f32, {
+            let asked = asked.clone();
+            crate::animation::IntoTransition::<f32, _>::into_transition(move |s: Segment<f32>| {
+                asked.borrow_mut().push((s.from, s.to, s.is_retarget()));
+                linear(100.0)
+            })
+        });
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        anim.animate_to(100.0, FrameInstant::from(Instant::now()));
+        at(&mut anim, 50);
+        let started = anim.start_time.expect("a segment has begun");
+        anim.animate_to(20.0, started + std::time::Duration::from_millis(50));
+
+        assert_eq!(
+            *asked.borrow(),
+            vec![(0.0, 100.0, true), (50.0, 20.0, true)]
+        );
     }
 
     /// And that momentum is what a wobble is made of: sent back to where it

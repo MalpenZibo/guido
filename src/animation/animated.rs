@@ -36,25 +36,25 @@
 
 use crate::reactive::{IntoSignal, IntoVal, Prop};
 
-use super::{Animatable, Keyframes, TransitionConfig};
+use super::{Animatable, IntoTransition, Keyframes, TransitionSource};
 
 /// A value, and how it moves when it changes.
 ///
 /// Built by [`Animate::transition`] or [`Animate::timeline`] on anything that
 /// can already be a property, and accepted wherever a `Container` setter
 /// declares an animatable property.
-pub struct Animated<T> {
+pub struct Animated<T: MovesAs> {
     prop: Prop<T>,
     /// Boxed and absent by default, for the reason `AnimationState` boxes its
     /// `Timeline`: every animatable setter routes through here, and almost
-    /// every call declares no motion at all. A `Motion` owns a `Keyframes` and
-    /// a `TransitionConfig` with two callback slots, so inline it would make
+    /// every call declares no motion at all. A `Motion` owns a `Keyframes` or
+    /// a `TransitionSource` with its enter and exit, so inline it would make
     /// `container().background(RED)` construct, move and drop a hundred and
     /// more bytes to say "nothing".
     motion: Option<Box<Motion<T>>>,
 }
 
-impl<T> Animated<T> {
+impl<T: MovesAs> Animated<T> {
     /// Start somewhere else the one time this widget appears, and travel to
     /// the declared value with the transition already named.
     ///
@@ -120,10 +120,10 @@ impl<T> Animated<T> {
     pub(crate) fn into_eased(self) -> (Prop<T>, Option<Eased<T>>) {
         let ease = match self.motion.map(|motion| *motion) {
             Some(Motion::Ease {
-                config,
+                transition,
                 enter_from,
                 exit_to,
-            }) => Some((config, enter_from, exit_to)),
+            }) => Some((transition, enter_from, exit_to)),
             None => None,
             // Loud rather than `None`, because the thing that makes this
             // unreachable is a bound three types away: silently dropping a
@@ -138,11 +138,11 @@ impl<T> Animated<T> {
     }
 }
 
-impl<T: Clone + 'static> Animated<T> {
+impl<T: Clone + MovesAs + 'static> Animated<T> {
     /// Leave somewhere else when the widget is removed, travelling there with
-    /// the transition already named, and be disposed when it arrives. A
-    /// transition with a `.reverse()` uses it for an exit that decreases the
-    /// value, as it does for any other change: an exit is usually the close.
+    /// the transition already named, and be disposed when it arrives. That
+    /// transition is chosen when the exit begins, as for any other change, so
+    /// one read from the application's state takes the close.
     ///
     /// The other half of [`entering_from`](Self::entering_from). Declared on
     /// the removed widget's own properties — a child of `.child(move || ..)`,
@@ -211,7 +211,30 @@ impl<T: Clone + 'static> Animated<T> {
 
 /// An eased motion taken apart: the transition, where it enters from and
 /// where it exits to.
-pub(crate) type Eased<T> = (TransitionConfig, Option<T>, Option<ExitTo<T>>);
+pub(crate) type Eased<T> = (
+    TransitionSource<<T as MovesAs>::Value>,
+    Option<T>,
+    Option<ExitTo<T>>,
+);
+
+/// The value a property moves as, which is what a transition chosen by its
+/// segment is handed.
+///
+/// Every animatable type moves as itself. A width and a height are the one
+/// exception: they say how the box is sized with a [`Length`](crate::layout::Length)
+/// and move the `f32` the layout resolved it to, so a closure choosing a
+/// size's transition compares two widths, not two declarations.
+pub trait MovesAs {
+    type Value: Animatable;
+}
+
+impl<T: Animatable> MovesAs for T {
+    type Value = T;
+}
+
+impl MovesAs for crate::layout::Length {
+    type Value = f32;
+}
 
 /// Where a property goes when its widget is removed — a closure, because it is
 /// asked at removal rather than at build.
@@ -220,11 +243,11 @@ pub(crate) type ExitTo<T> = Box<dyn Fn() -> T>;
 /// The two ways a value can move. An implementation detail: `motion` already
 /// means a pointer event here and scrolling calls its own `momentum`, so a
 /// public name about easing would sit between two unrelated meanings.
-pub(crate) enum Motion<T> {
+pub(crate) enum Motion<T: MovesAs> {
     /// Ease to each new value instead of jumping to it, and — if an enter was
     /// declared — begin from somewhere else on the first layout.
     Ease {
-        config: TransitionConfig,
+        transition: TransitionSource<T::Value>,
         /// Where the property starts the one time the widget appears. `None`
         /// for almost every declaration; see [`Animated::entering_from`].
         enter_from: Option<T>,
@@ -248,20 +271,40 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     /// Ease to each new value this holds, instead of jumping to it.
     ///
     /// A bare number is milliseconds; a [`Transition`](super::Transition) or a
-    /// [`SpringConfig`](super::SpringConfig) says which curve.
+    /// [`SpringConfig`](super::SpringConfig) says which curve. Which one plays
+    /// can also be the application's to say, read each time a change starts —
+    /// see [`IntoTransition`] for the shapes and when they are read.
     ///
     /// ```no_run
     /// # use guido::prelude::*;
     /// # let surface = Color::rgb(0.1, 0.1, 0.2);
     /// # let w = create_signal(120.0f32);
+    /// # let open = create_signal(false);
     /// container().background(surface.transition(200.0));
     /// container().width(w.transition(Transition::spring(SpringConfig::SNAPPY)));
+    /// // opens with a spring, closes with an ease, whichever way it travels
+    /// container().translate(
+    ///     (move || if open.get() { Translate::NONE } else { Translate::new(0.0, -40.0) })
+    ///         .transition(move || if open.get() {
+    ///             Transition::spring(SpringConfig::BOUNCY)
+    ///         } else {
+    ///             Transition::new(200.0, TimingFunction::EaseOut)
+    ///         }),
+    /// );
+    /// // grows after a pause, shrinks at once: a size no state knows the way of
+    /// container().width(at_least(0.0).transition(|s: Segment<f32>| {
+    ///     let ease = Transition::new(200.0, TimingFunction::EaseOut);
+    ///     if s.to > s.from { ease.delay(120.0) } else { ease }
+    /// }));
     /// ```
-    fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T> {
+    fn transition<N>(self, transition: impl IntoTransition<T::Value, N>) -> Animated<T>
+    where
+        T: MovesAs,
+    {
         Animated {
             prop: self.into_prop(),
             motion: Some(Box::new(Motion::Ease {
-                config: transition.into(),
+                transition: transition.into_transition(),
                 enter_from: None,
                 exit_to: None,
             })),
@@ -336,11 +379,11 @@ pub struct Plain<M>(std::marker::PhantomData<M>);
 /// The wider bound is what keeps the rule at compile time. `StateStyle`'s
 /// setters keep plain `IntoSignal`, so a timing declared on an override — a
 /// value for a property somebody else owns — does not compile.
-pub trait IntoAnimated<T: Clone + 'static, M> {
+pub trait IntoAnimated<T: Clone + MovesAs + 'static, M> {
     fn into_animated(self) -> Animated<T>;
 }
 
-impl<T: Clone + 'static, M, S: IntoSignal<T, M>> IntoAnimated<T, Plain<M>> for S {
+impl<T: Clone + MovesAs + 'static, M, S: IntoSignal<T, M>> IntoAnimated<T, Plain<M>> for S {
     fn into_animated(self) -> Animated<T> {
         Animated {
             prop: self.into_prop(),
@@ -349,7 +392,7 @@ impl<T: Clone + 'static, M, S: IntoSignal<T, M>> IntoAnimated<T, Plain<M>> for S
     }
 }
 
-impl<T: Clone + 'static> IntoAnimated<T, AnimatedMarker> for Animated<T> {
+impl<T: Clone + MovesAs + 'static> IntoAnimated<T, AnimatedMarker> for Animated<T> {
     fn into_animated(self) -> Animated<T> {
         self
     }

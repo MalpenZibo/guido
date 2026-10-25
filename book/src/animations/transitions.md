@@ -23,6 +23,79 @@ value.transition(Transition::new(duration_ms, timing))
 
 A bare number is the short form: `.transition(200.0)` is 200ms eased out.
 
+## Choosing the transition for each change
+
+A panel that springs open and eases shut needs two transitions, and which one
+plays is something only the application knows: it is opening or closing because
+of its own state. So the transition can be read from that state, with a closure:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let open = create_signal(false);
+container().height(
+    (move || if open.get() { 300.0 } else { 0.0 })
+        .transition(move || {
+            if open.get() {
+                Transition::spring(SpringConfig::BOUNCY)
+            } else {
+                Transition::new(200.0, TimingFunction::EaseOut).delay(100.0)
+            }
+        }),
+)
+# ;
+# }
+```
+
+The closure is read **when a change starts**: when the value moves to a new
+target, when an [`entering_from`](../transforms/animated.md) plays, and when an
+`exiting_to` begins. By the time a widget is removed, the state that removed it
+already says it is closing, so its exit takes the close. A transition that
+changes while a change is running leaves it alone and applies from the next
+one, which is what CSS does.
+
+Some of what decides the transition is not the application's to know, but
+guido's. Whether a change is the widget appearing, leaving, or its value
+moving, and where it goes from and to. For that, the closure can take the
+`Segment` itself:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+// a row that fades in slowly and out fast, with no state to say which
+container().opacity(
+    1.0.transition(|s: Segment<f32>| {
+        if s.is_exit() {
+            Transition::new(120.0, TimingFunction::EaseIn)
+        } else {
+            Transition::new(300.0, TimingFunction::EaseOut)
+        }
+    })
+    .entering_from(0.0)
+    .exiting_to(0.0),
+)
+# ;
+// a box sized by its content: only the layout knows the next one is wider
+container().width(at_least(0.0).transition(|s: Segment<f32>| {
+    let ease = Transition::new(200.0, TimingFunction::EaseOut);
+    // grow after the new content has faded in; shrink at once
+    if s.to > s.from { ease.delay(120.0) } else { ease }
+}))
+# ;
+# }
+```
+
+`s.from` is where the value is when the change starts, in flight or not, so a
+grow interrupted by a shrink is a shrink from where it got to. A width and a
+height hand the closure the sizes the layout resolved, as `f32`, whatever
+`Length` they were declared with.
+
+Both closures run inside a frame, not where the widget was built, so a
+[context](../advanced/context.md) read from inside them finds nothing. Read
+what they need while building, and move it in.
+
 ## Examples
 
 ### Background Animation
@@ -151,8 +224,10 @@ fn animated_card() -> Container {
 ## API Reference
 
 ```text
-/// Ease to each new value this holds
-value.transition(transition: impl Into<TransitionConfig>) -> Animated<T>;
+/// Ease to each new value this holds: a Transition, a SpringConfig, a number
+/// of milliseconds, a closure returning a Transition, or a closure of the
+/// change, |s: Segment<T>| -> Transition
+value.transition(transition: impl IntoTransition<T, M>) -> Animated<T>;
 
 /// A bare number is milliseconds, eased out
 Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition;

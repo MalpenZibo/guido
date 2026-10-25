@@ -107,13 +107,6 @@ impl Shadow {
         }
     }
 
-    /// How far the shadow is drawn from the edge, on the side its offset
-    /// carries it furthest: out of the box for an outer shadow, into it for
-    /// an inset one.
-    pub(crate) fn depth(&self) -> f32 {
-        self.spill() + self.offset.0.abs().max(self.offset.1.abs())
-    }
-
     /// How far the blurred edge is drawn past the box on every side, before
     /// the offset moves it.
     ///
@@ -683,22 +676,5 @@ mod shadows_tests {
             (carried - 1.0).abs() < 1e-6,
             "the same segment, so the same speed: {carried}"
         );
-    }
-
-    #[test]
-    fn a_list_rising_is_forward_and_falling_is_reverse() {
-        let (low, high) = (Shadows::from(NEAR), Shadows::new([NEAR, FAR]));
-        assert!(!Shadows::is_reverse(&low, &high));
-        assert!(Shadows::is_reverse(&high, &low));
-        assert!(Shadows::is_reverse(&low, &Shadows::none()));
-        let (shallow, deep) = (
-            Shadow::new((0.0, 0.0), 2.0, 0.0, Color::BLACK).inset(),
-            Shadow::new((0.0, 0.0), 12.0, 0.0, Color::BLACK).inset(),
-        );
-        assert!(
-            !Shadow::is_reverse(&shallow, &deep),
-            "an inset shadow reaching deeper in is the larger"
-        );
-        assert!(Shadow::is_reverse(&deep, &shallow));
     }
 }
