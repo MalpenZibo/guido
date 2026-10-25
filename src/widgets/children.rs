@@ -538,13 +538,16 @@ impl Rows<'_> {
                 .tree
                 .with_widget_mut(at, |widget, at, tree| widget.begin_exit(tree, at))
                 .unwrap_or(false);
-            if began && is_exiting(self.tree, at) {
+            // Kept whether or not it plays: one that began already where it
+            // was going is leaving all the same, and a key that comes back
+            // has to give it back as well.
+            if began {
                 exits.push(at);
             }
             let inside = self.tree.get_children(at);
             asked.extend(inside.iter().filter(|&&child| !self.tree.is_row(child)));
         }
-        if exits.is_empty() {
+        if !still_exiting(self.tree, &exits) {
             return None;
         }
         // The pointer goes as the focus does: a card removed under the cursor

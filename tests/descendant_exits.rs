@@ -49,7 +49,7 @@ struct Run {
 impl Run {
     /// One row while `shown`, built by `row` around a child that `child`
     /// points at.
-    fn new(shown: Signal<bool>, row: fn(WidgetRef) -> Container) -> Option<Self> {
+    fn new(shown: Signal<bool>, row: impl Fn(WidgetRef) -> Container + 'static) -> Option<Self> {
         let mut app = common::headless()?;
         let list = create_widget_ref();
         let child = create_widget_ref();
@@ -200,5 +200,72 @@ fn a_child_exiting_with_its_row_still_leads_its_stack() {
     assert!(
         leaving.iter().all(|frame| frame.1 == 300.0),
         "the stack keeps the size of the child fading out with it: {leaving:?}"
+    );
+}
+
+/// A row reclaimed mid-exit gives back every exit it began, including one that
+/// began already where it was going and so had nothing to play: that child
+/// follows its signal again, rather than staying gone for good.
+#[test]
+fn a_reclaimed_row_gives_back_an_exit_that_had_nothing_to_play() {
+    let shown = create_signal(true);
+    let wide = create_signal(false);
+    let Some(mut run) = Run::new(shown.into(), move |child| {
+        container()
+            .height(
+                Length::exact(50.0)
+                    .transition(linear(100.0))
+                    .exiting_to(Length::exact(0.0)),
+            )
+            .child(
+                container()
+                    .height(20.0)
+                    .width(
+                        (move || Length::exact(if wide.get() { 300.0 } else { 0.0 }))
+                            .transition(linear(100.0))
+                            .exiting_to(Length::exact(0.0)),
+                    )
+                    .widget_ref(child),
+            )
+    }) else {
+        return;
+    };
+
+    shown.set(false);
+    run.frames(2);
+    shown.set(true);
+    run.frames(2);
+    wide.set(true);
+    let after = run.frames(10);
+    assert_eq!(
+        after.last().map(|frame| frame.1),
+        Some(300.0),
+        "the child follows its signal again: {after:?}"
+    );
+}
+
+/// A child whose exit settles first does not take the row with it: the row
+/// stays until its own exit, the longer one, has settled too.
+#[test]
+fn a_row_stays_until_its_longest_exit_has_settled() {
+    let shown = create_signal(true);
+    let Some(mut run) = Run::new(shown.into(), |child| {
+        container()
+            .width(
+                Length::exact(400.0)
+                    .transition(linear(300.0))
+                    .exiting_to(Length::exact(0.0)),
+            )
+            .child(narrowing(child))
+    }) else {
+        return;
+    };
+
+    shown.set(false);
+    let leaving = run.frames(12);
+    assert_eq!(leaving[8].1, 0.0, "the child has gone by now: {leaving:?}");
+    assert!(
+        leaving[8].0 > 0.0,
+        "but the row is still narrowing, and still there: {leaving:?}"
     );
 }
