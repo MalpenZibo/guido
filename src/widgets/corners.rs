@@ -105,20 +105,6 @@ impl crate::animation::Animatable for Corners {
         }
     }
 
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        // Curvature counts too: a shape that only softens is still going
-        // somewhere, and a spring that ignored it would never call it a
-        // reversal.
-        let total = |c: &Self| {
-            c.radii.top_left
-                + c.radii.top_right
-                + c.radii.bottom_right
-                + c.radii.bottom_left
-                + c.curvature
-        };
-        total(to) < total(from)
-    }
-
     fn channels(&self) -> crate::animation::Channels {
         crate::animation::Channels::from_slice(&[
             self.radii.top_left,

@@ -20,40 +20,6 @@ pub trait Animatable: Copy + PartialEq + Send + Sync + 'static {
     /// t can exceed [0, 1] range for overshoot effects
     fn lerp(from: &Self, to: &Self, t: f32) -> Self;
 
-    /// Whether transitioning from `from` to `to` is a "reverse" direction.
-    /// Used to select the `.reverse()` transition when configured.
-    /// - `f32`: value decreasing
-    /// - `Translate`: distance from the origin decreasing
-    /// - `Scale`: the two factors, added and unsigned, decreasing
-    /// - `Color`: alpha decreasing, then luminance decreasing
-    /// - `Padding`: total padding decreasing
-    /// - `Shadow`: extent decreasing, then alpha decreasing
-    ///
-    /// # A value of more than one number has ties, and they are not reversals
-    ///
-    /// Every type here but `f32` answers by reducing itself to one number, and
-    /// no such reduction can order a plane: for each of them there is a family
-    /// of pairs that reduce to the same number, and every one of those reads as
-    /// forward in both directions. `(200, 0) -> (-200, 0)` for a `Translate`,
-    /// `(2, 0.5) -> (0.5, 2)` for a `Scale`, a `Color` that changes hue at
-    /// constant luminance.
-    ///
-    /// This is not a gap waiting to be closed by a better measure. A tie is a
-    /// change that is genuinely neither larger nor smaller, and `is_reverse`
-    /// answers a yes-or-no question about a partial order. Three different
-    /// measures have been tried on `Scale` — signed area, unsigned area,
-    /// unsigned sum — and each moved the tie to a different family rather than
-    /// removing it. What each type picks is which ties it prefers to have, and
-    /// the choice is stated in its own impl.
-    ///
-    /// The consequence to know: a declared `.reverse()` transition does not
-    /// fire for a tie, and the forward one plays both ways. Where that matters,
-    /// the direction is the application's to model — a signal saying which way
-    /// it is going, and two declarations.
-    fn is_reverse(_from: &Self, _to: &Self) -> bool {
-        false
-    }
-
     /// The value as the vector of numbers the animation interpolates.
     ///
     /// `carry_velocity` and the finiteness check read this, and only as a direction: a spring's
@@ -143,10 +109,6 @@ impl Animatable for f32 {
         from + (to - from) * t
     }
 
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        to < from
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[*self])
     }
@@ -156,12 +118,6 @@ impl Animatable for Color {
     /// With alpha premultiplied — see [`Color::mix`].
     fn lerp(from: &Self, to: &Self, t: f32) -> Self {
         from.mix(*to, t)
-    }
-
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        // Reverse when fading out (alpha decreasing),
-        // or when darkening (luminance decreasing) at same alpha
-        (to.a, to.luminance()) < (from.a, from.luminance())
     }
 
     /// Premultiplied, because that is the space `lerp` is straight in, and a
@@ -185,29 +141,6 @@ impl Animatable for Shadow {
         }
     }
 
-    /// Shrinking, and then fading at a constant size.
-    ///
-    /// `Shadow::depth` is the widest of the outsets the damage rect is sized
-    /// by, so "reverse" here means the same thing it means
-    /// to everything downstream: the shadow is giving ground back. Alpha breaks
-    /// the tie because the extent reports the full reach at any alpha above zero,
-    /// so a shadow fading out at a constant geometry would otherwise read as
-    /// forward in both directions.
-    ///
-    /// The ties this keeps are the ones that trade one dimension for another —
-    /// a blur of 4 becoming a spread of 8, an offset moving from down to
-    /// sideways. Both reduce to the same extent, and neither is larger.
-    ///
-    /// Showing comes before size: a transparent shadow measures zero, which is
-    /// above every shadow pulled inside its box, so by extent alone fading one
-    /// of those out would read as growing.
-    ///
-    /// An inset shadow is measured the same way, inwards: one reaching deeper
-    /// into the box is the larger.
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.size() < from.size()
-    }
-
     fn channels(&self) -> Channels {
         let [r, g, b, a] = self.color.premultiplied();
         Channels::from_slice(&[
@@ -220,15 +153,6 @@ impl Animatable for Shadow {
             b,
             a,
         ])
-    }
-}
-
-impl Shadow {
-    /// What [`Animatable::is_reverse`] orders shadows by: whether it shows,
-    /// then how deep it is drawn, then how strongly.
-    fn size(&self) -> (bool, f32, f32) {
-        let shows = self.color.a > 0.0;
-        (shows, if shows { self.depth() } else { 0.0 }, self.color.a)
     }
 }
 
@@ -262,18 +186,6 @@ impl Animatable for Shadows {
         between
     }
 
-    /// By the largest shadow in each list, measured as one shadow is.
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        let largest = |s: &Self| {
-            s.as_slice()
-                .iter()
-                .map(Shadow::size)
-                .reduce(|a, b| if b > a { b } else { a })
-                .unwrap_or((false, 0.0, 0.0))
-        };
-        largest(to) < largest(from)
-    }
-
     /// Each shadow's, one after another. A shorter list has fewer, which
     /// `carry_velocity` reads as zero — as `lerp` pads it.
     fn channels(&self) -> Channels {
@@ -291,12 +203,6 @@ impl Animatable for Padding {
         }
     }
 
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        let to_total = to.left + to.right + to.top + to.bottom;
-        let from_total = from.left + from.right + from.top + from.bottom;
-        to_total < from_total
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.left, self.right, self.top, self.bottom])
     }
@@ -310,11 +216,6 @@ impl Animatable for crate::renderer::CornerRadii {
             bottom_right: from.bottom_right + (to.bottom_right - from.bottom_right) * t,
             bottom_left: from.bottom_left + (to.bottom_left - from.bottom_left) * t,
         }
-    }
-
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        let total = |r: &Self| r.top_left + r.top_right + r.bottom_right + r.bottom_left;
-        total(to) < total(from)
     }
 
     fn channels(&self) -> Channels {
@@ -341,26 +242,6 @@ impl Animatable for Translate {
         }
     }
 
-    /// Moving back towards where it started, measured as distance from the
-    /// origin — so a slide out and a slide home are told apart, which the old
-    /// `Transform` could not do at all: it compared `extract_scale()`, which a
-    /// translation does not move, so every slide read as forward.
-    ///
-    /// Pixels and fractions are two distances in two units, and one cannot be
-    /// traded against the other without the size this is never told. So it is
-    /// a reversal when one of them shrinks and the other does not grow, and a
-    /// move that shrinks one while it grows the other is a tie.
-    ///
-    /// It ties on a move that keeps its distance — `(200, 0) -> (-200, 0)`, or
-    /// anything sliding along a circle. See the trait's note on ties.
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        let px = |t: &Self| t.x.hypot(t.y);
-        let rel = |t: &Self| t.relative_x.hypot(t.relative_y);
-        let (px_from, px_to) = (px(from), px(to));
-        let (rel_from, rel_to) = (rel(from), rel(to));
-        px_to <= px_from && rel_to <= rel_from && (px_to < px_from || rel_to < rel_from)
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.x, self.y, self.relative_x, self.relative_y])
     }
@@ -374,24 +255,6 @@ impl Animatable for Scale {
         }
     }
 
-    /// Getting smaller, measured as the two factors added rather than
-    /// multiplied, and unsigned.
-    ///
-    /// Unsigned because a negative factor is a mirror and a mirror that grows
-    /// is growing: the signed product sent `(-1, 1) -> (-2, 1)` down the
-    /// reverse transition while it got bigger.
-    ///
-    /// Added rather than multiplied because the product ties on every `(k, 1/k)`
-    /// — they all have area one — and shrinking a widget uniformly is the case
-    /// worth getting right, while a stretch that keeps its area is the case
-    /// worth ceding. The sum ties instead on transposes, `(2, 0.5)` against
-    /// `(0.5, 2)`, which is the rarer shape and a genuinely undecidable one:
-    /// neither of those is smaller than the other. See the trait's note on
-    /// ties. `Padding` totals its four edges for the same reason.
-    fn is_reverse(from: &Self, to: &Self) -> bool {
-        to.x.abs() + to.y.abs() < from.x.abs() + from.y.abs()
-    }
-
     fn channels(&self) -> Channels {
         Channels::from_slice(&[self.x, self.y])
     }
@@ -400,43 +263,6 @@ impl Animatable for Scale {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A stretch that keeps its area still has a direction. The product does
-    /// not see it — every `(k, 1/k)` has area one — so the reverse transition
-    /// was unreachable for the whole family.
-    #[test]
-    fn a_change_of_aspect_has_a_direction() {
-        let square = Scale::NONE;
-        let wide = Scale::new(2.0, 0.5);
-        assert!(!Scale::is_reverse(&square, &wide), "going out is forward");
-        assert!(Scale::is_reverse(&wide, &square), "and coming back is not");
-    }
-
-    /// A mirror that grows is growing.
-    #[test]
-    fn a_mirror_is_measured_by_its_size_not_its_sign() {
-        let small = Scale::new(-1.0, 1.0);
-        let large = Scale::new(-2.0, 1.0);
-        assert!(!Scale::is_reverse(&small, &large));
-        assert!(Scale::is_reverse(&large, &small));
-    }
-
-    /// The ties, written down so they are a decision and not a surprise. A
-    /// transposed scale and a slide that keeps its distance are neither larger
-    /// nor smaller, so both directions read as forward and a declared
-    /// `.reverse()` does not fire for them.
-    #[test]
-    fn a_tie_is_forward_in_both_directions() {
-        let wide = Scale::new(2.0, 0.5);
-        let tall = Scale::new(0.5, 2.0);
-        assert!(!Scale::is_reverse(&wide, &tall));
-        assert!(!Scale::is_reverse(&tall, &wide));
-
-        let right = Translate::new(200.0, 0.0);
-        let left = Translate::new(-200.0, 0.0);
-        assert!(!Translate::is_reverse(&right, &left));
-        assert!(!Translate::is_reverse(&left, &right));
-    }
 
     /// Every channel at a known `t`, because the behavioural test can only see
     /// a direction and a bound.
@@ -468,108 +294,6 @@ mod tests {
 
         // Past the target, which is what a spring needs of it.
         assert_eq!(Shadow::lerp(&from, &to, 1.5).blur, 34.0);
-    }
-
-    /// A shadow giving ground back is a reversal, and the three parts of the
-    /// rule are three different questions.
-    ///
-    /// Without these the whole body can be replaced by `false` and the suite
-    /// stays green — `is_reverse` only picks between a declared transition and
-    /// its `.reverse()`, so nothing else is watching it. Verified: that mutant
-    /// now fails two of the three below.
-    #[test]
-    fn a_shadow_is_reversing_when_it_gives_ground_back() {
-        let flat = Shadow::simple((0.0, 1.0), 2.0, Color::BLACK);
-        let deep = Shadow::simple((0.0, 6.0), 12.0, Color::BLACK);
-        assert!(!Shadow::is_reverse(&flat, &deep), "rising is forward");
-        assert!(Shadow::is_reverse(&deep, &flat), "and falling is not");
-    }
-
-    /// Alpha breaks the tie, because `extent` reports the full reach at any
-    /// alpha above zero — so a shadow fading at a constant geometry would
-    /// otherwise read as forward in both directions.
-    #[test]
-    fn a_shadow_fading_at_a_constant_size_is_still_reversing() {
-        let solid = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.5));
-        let faint = Shadow::simple((0.0, 6.0), 12.0, Color::rgba(0.0, 0.0, 0.0, 0.1));
-        assert_eq!(
-            solid.extent(),
-            faint.extent(),
-            "same reach, different alpha"
-        );
-        assert!(
-            Shadow::is_reverse(&solid, &faint),
-            "fading out is a reversal"
-        );
-        assert!(!Shadow::is_reverse(&faint, &solid));
-    }
-
-    /// A pressed state going from one pulled-in shadow to another still has a
-    /// direction, though neither reaches past the box.
-    #[test]
-    fn a_shadow_pulled_further_inside_its_box_is_reversing() {
-        let deep_inside = Shadow::new((0.0, 0.0), 2.0, -20.0, Color::BLACK);
-        let near_edge = Shadow::new((0.0, 0.0), 2.0, -8.0, Color::BLACK);
-        assert!(!Shadow::is_reverse(&deep_inside, &near_edge));
-        assert!(Shadow::is_reverse(&near_edge, &deep_inside));
-    }
-
-    /// Fading to nothing is giving ground back, whichever side of the edge the
-    /// shadow was on: a transparent shadow measures zero, which is above every
-    /// pulled-in one.
-    #[test]
-    fn a_shadow_fading_to_none_is_reversing_inside_its_box_or_out() {
-        for spread in [8.0, -20.0] {
-            let shown = Shadow::new((0.0, 0.0), 2.0, spread, Color::BLACK);
-            assert!(
-                Shadow::is_reverse(&shown, &Shadow::none()),
-                "spread {spread}"
-            );
-            assert!(
-                !Shadow::is_reverse(&Shadow::none(), &shown),
-                "spread {spread}"
-            );
-        }
-    }
-
-    /// A relative translate interpolates its fraction, not a width it was
-    /// never told, and a slide home in fractions is a slide home.
-    #[test]
-    fn a_relative_translate_lerps_its_fraction_and_reverses_home() {
-        let out = Translate::relative(-1.0, 0.0);
-        let mid = Translate::lerp(&Translate::NONE, &out, 0.5);
-        assert_eq!(mid, Translate::relative(-0.5, 0.0));
-
-        assert!(Translate::is_reverse(&out, &Translate::NONE));
-        assert!(!Translate::is_reverse(&Translate::NONE, &out));
-
-        // Pixels traded for a fraction: nothing says which is further.
-        let px = Translate::new(-100.0, 0.0);
-        assert!(!Translate::is_reverse(&px, &out));
-        assert!(!Translate::is_reverse(&out, &px));
-    }
-
-    /// Trading one dimension for another is neither larger nor smaller, and the
-    /// impl says which ties it chooses to keep.
-    #[test]
-    fn a_shadow_trading_one_dimension_for_another_is_a_tie() {
-        // A blurred edge is drawn two blurs out, so a blur of 4 reaches as far
-        // as a spread of 8.
-        let blurred = Shadow::new((0.0, 0.0), 4.0, 0.0, Color::BLACK);
-        let spread = Shadow::new((0.0, 0.0), 0.0, 8.0, Color::BLACK);
-        assert_eq!(blurred.extent(), spread.extent());
-        assert!(!Shadow::is_reverse(&blurred, &spread));
-        assert!(!Shadow::is_reverse(&spread, &blurred));
-    }
-
-    /// A slide back is a reversal — which the old `Transform` could not say,
-    /// because it compared scale and a translation does not change it.
-    #[test]
-    fn a_return_leg_is_a_reversal() {
-        let home = Translate::NONE;
-        let away = Translate::new(200.0, 0.0);
-        assert!(!Translate::is_reverse(&home, &away));
-        assert!(Translate::is_reverse(&away, &home));
     }
 
     #[test]
@@ -817,5 +541,14 @@ mod tests {
     fn an_almost_zero_segment_is_capped() {
         let carried = carry_velocity(10.0, &0.0_f32, &1.0, &0.5, &0.500001);
         assert!(carried.is_finite() && carried <= 60.0, "got {carried}");
+    }
+
+    /// A relative translate interpolates its fraction, not a width it was
+    /// never told.
+    #[test]
+    fn a_relative_translate_lerps_its_fraction() {
+        let out = Translate::relative(-1.0, 0.0);
+        let mid = Translate::lerp(&Translate::NONE, &out, 0.5);
+        assert_eq!(mid, Translate::relative(-0.5, 0.0));
     }
 }
