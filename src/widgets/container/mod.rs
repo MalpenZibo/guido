@@ -1996,13 +1996,14 @@ impl Widget for Container {
         // (the declared animations, the ripple, the kinetic scroll) handles its
         // own continuation
 
-        // The last exit has settled: the container that holds this one
-        // disposes it, and is asked to in this frame.
+        // An exit has settled: the container holding the row it was asked
+        // for by — this one, or the one it is built in — disposes the row once
+        // its last has, and is asked to in this frame.
         if leaving
             && !self.is_exiting()
-            && let Some(parent) = tree.get_parent(id)
+            && let Some(holder) = tree.row_of(id).and_then(|row| tree.get_parent(row))
         {
-            request_job(parent, JobRequest::Reconcile);
+            request_job(holder, JobRequest::Reconcile);
         }
 
         any_animating

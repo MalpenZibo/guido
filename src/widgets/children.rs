@@ -32,10 +32,11 @@ enum SegmentType {
         /// Current keys in display order — a leaving row's among them, in the
         /// place it held, so this and the segment's run of `merged` line up.
         current_keys: Vec<u64>,
-        /// The rows that were removed and are playing their exit, by key.
-        /// Findable here until they are disposed, which is what lets a key
-        /// that comes back mid-exit reclaim its row instead of building one.
-        leaving: FxHashMap<u64, WidgetId>,
+        /// The rows that were removed and are playing their exit, by key, and
+        /// the widgets in each whose exit began. Findable here until they are
+        /// disposed, which is what lets a key that comes back mid-exit reclaim
+        /// its row instead of building one.
+        leaving: FxHashMap<u64, Exits>,
         /// Whether items_fn has run at least once. After the first run the
         /// segment only re-runs when a signal it tracks is written
         /// (per-segment dirty marking in the invalidation registry).
@@ -200,7 +201,7 @@ impl ChildrenSource {
                         d.contains(&(idx as u32))
                             || d.contains(&crate::reactive::invalidation::EVERY_SEGMENT)
                     });
-                let settled = leaving.values().any(|&id| !is_exiting(tree, id));
+                let settled = leaving.values().any(|exits| !still_exiting(tree, exits));
                 if needs_run {
                     crate::reactive::invalidation::forget_segment_reads(parent_id, idx as u32);
                     let items_fn = Rc::clone(items_fn);
@@ -365,7 +366,7 @@ impl ChildrenSource {
 /// is in here gets its leaving row back, exit cancelled, instead of a new one
 /// built; a source that cannot promise its keys mean the same row across runs
 /// ignores it.
-pub struct Leaving<'a>(&'a FxHashMap<u64, WidgetId>);
+pub struct Leaving<'a>(&'a FxHashMap<u64, Exits>);
 
 impl Leaving<'_> {
     /// Whether the row this key named is still leaving.
@@ -374,10 +375,19 @@ impl Leaving<'_> {
     }
 }
 
+/// The widgets in a removed row whose exit began: the row's own, and those
+/// of what is built inside it.
+type Exits = Vec<WidgetId>;
+
 /// Whether the widget at `id` is still playing its exit.
 fn is_exiting(tree: &Tree, id: WidgetId) -> bool {
     tree.with_widget(id, |widget| widget.is_exiting())
         .unwrap_or(false)
+}
+
+/// Whether any exit a removed row asked for is still playing.
+fn still_exiting(tree: &Tree, exits: &[WidgetId]) -> bool {
+    exits.iter().any(|&id| is_exiting(tree, id))
 }
 
 /// One dynamic segment's rows, while a reconciliation rewrites them.
@@ -386,7 +396,7 @@ struct Rows<'a> {
     parent_id: WidgetId,
     cached: &'a mut FxHashMap<u64, WidgetId>,
     keys: &'a mut Vec<u64>,
-    leaving: &'a mut FxHashMap<u64, WidgetId>,
+    leaving: &'a mut FxHashMap<u64, Exits>,
     merged: &'a mut Vec<WidgetId>,
 }
 
@@ -405,11 +415,13 @@ impl Rows<'_> {
             let widget_id = match self.cached.remove(&item.key) {
                 Some(widget_id) => {
                     // Reuse existing widget (preserves state!) — and a leaving
-                    // one comes back from wherever its exit had taken it.
-                    if self.leaving.remove(&item.key).is_some() {
-                        self.tree.with_widget_mut(widget_id, |widget, id, tree| {
-                            widget.cancel_exit(tree, id)
-                        });
+                    // one comes back from wherever its exits had taken it.
+                    if let Some(exits) = self.leaving.remove(&item.key) {
+                        for id in exits {
+                            self.tree.with_widget_mut(id, |widget, id, tree| {
+                                widget.cancel_exit(tree, id)
+                            });
+                        }
                         crate::jobs::reattach_widget_subtree(self.tree, widget_id);
                     }
                     widget_id
@@ -419,6 +431,7 @@ impl Rows<'_> {
                     let widget = (item.widget_fn)();
                     let widget_id = self.tree.register(widget);
                     self.tree.set_parent(widget_id, self.parent_id);
+                    self.tree.mark_row(widget_id);
                     // Recursively register children with the newly assigned widget ID
                     self.tree.with_widget_mut(widget_id, |widget, id, tree| {
                         widget.register_children(tree, id);
@@ -442,14 +455,17 @@ impl Rows<'_> {
                 before = Some(key);
                 continue;
             }
-            let was_leaving = self.leaving.contains_key(&key);
-            let stays = if was_leaving {
-                is_exiting(self.tree, id)
-            } else {
-                self.begin_leaving(id)
+            let (was_leaving, stays) = match self.leaving.get(&key) {
+                Some(exits) => (true, still_exiting(self.tree, exits)),
+                None => match self.begin_leaving(id) {
+                    Some(exits) => {
+                        self.leaving.insert(key, exits);
+                        (false, true)
+                    }
+                    None => (false, false),
+                },
             };
             if stays {
-                self.leaving.insert(key, id);
                 after.entry(before).or_default().push((key, id));
             } else if was_leaving {
                 self.leaving.remove(&key);
@@ -486,7 +502,11 @@ impl Rows<'_> {
     /// ones whose exit has settled, which are disposed.
     fn dispose_settled(&mut self, old: Vec<(u64, WidgetId)>) {
         for (key, id) in old {
-            if self.leaving.contains_key(&key) && !is_exiting(self.tree, id) {
+            if self
+                .leaving
+                .get(&key)
+                .is_some_and(|exits| !still_exiting(self.tree, exits))
+            {
                 self.leaving.remove(&key);
                 crate::jobs::teardown_widget_subtree(self.tree, id);
             } else {
@@ -496,21 +516,36 @@ impl Rows<'_> {
         }
     }
 
-    /// Start the exit a removed row declared, if it declared one, and detach
-    /// it while it plays: nothing in it runs again, and its owner lives as
-    /// long as the widget does. The teardown's comment above is why that is
-    /// still safe — a live descendant could read state its owner had
+    /// Start the exits a removed row and what is built inside it declared,
+    /// and detach it while they play: nothing in it runs again, and its owner
+    /// lives as long as the widget does. The teardown's comment above is why
+    /// that is still safe — a live descendant could read state its owner had
     /// disposed, and a detached one is never asked to.
     ///
+    /// The walk stops at a row inside it: that row is its own segment's to
+    /// remove, and goes with this one whatever it declared. This is Svelte's
+    /// local transition and Motion's nested `AnimatePresence` (#891).
+    ///
     /// An exit that begins already where it was going has nothing to play,
-    /// and is a teardown like no exit at all.
-    fn begin_leaving(&mut self, id: WidgetId) -> bool {
-        let began = self
-            .tree
-            .with_widget_mut(id, |widget, id, tree| widget.begin_exit(tree, id))
-            .unwrap_or(false);
-        if !began || !is_exiting(self.tree, id) {
-            return false;
+    /// and a row none of whose exits plays is a teardown like no exit at all.
+    fn begin_leaving(&mut self, id: WidgetId) -> Option<Exits> {
+        // By hand rather than with `collect_subtree_post_order`, which cannot
+        // stop at a row; and pre-order, so the row's own exit comes first.
+        let mut exits = Exits::new();
+        let mut asked = vec![id];
+        while let Some(at) = asked.pop() {
+            let began = self
+                .tree
+                .with_widget_mut(at, |widget, at, tree| widget.begin_exit(tree, at))
+                .unwrap_or(false);
+            if began && is_exiting(self.tree, at) {
+                exits.push(at);
+            }
+            let inside = self.tree.get_children(at);
+            asked.extend(inside.iter().filter(|&&child| !self.tree.is_row(child)));
+        }
+        if exits.is_empty() {
+            return None;
         }
         // The pointer goes as the focus does: a card removed under the cursor
         // does not play its exit hovered, or pressed. Before the detach, which
@@ -522,7 +557,7 @@ impl Rows<'_> {
             self.tree.deliver_hover_changes();
         });
         crate::jobs::detach_widget_subtree(self.tree, id);
-        true
+        Some(exits)
     }
 }
 

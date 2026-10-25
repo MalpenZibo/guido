@@ -123,7 +123,8 @@ Two methods are required, the rest default:
 - `advance_animations`, `reconcile_children`, `layout_hints`,
   `register_children` — defaults
 - `begin_exit`, `is_exiting`, `cancel_exit` — defaults: what the reconciler
-  asks a removed widget, and `Container` is the one that answers
+  asks a removed widget and what is built inside it, as far as the next
+  dynamic list, and `Container` is the one that answers
 - `refresh_paint_bounds` — a default too, and the one a widget that transforms
   itself has to override: a parent narrows its children to the visible rect
   before painting them, by their laid-out bounds, so a widget that draws

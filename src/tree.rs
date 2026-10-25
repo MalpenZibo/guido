@@ -184,6 +184,13 @@ struct Slot {
     /// walk must not carry with the content they scroll.
     drawn_clear_of_scroll: bool,
 
+    /// Whether a dynamic segment registered this widget as one of its rows.
+    ///
+    /// A row is where a removal stops: one being removed asks what is built
+    /// inside it for its exits, and a row inside it is its own segment's to
+    /// remove — see `begin_leaving` in `children.rs`.
+    row: bool,
+
     /// Whether this widget clips its children to its own edges.
     ///
     /// A scroller's content runs far past its viewport by design, and what the
@@ -998,6 +1005,7 @@ impl Tree {
             own_paint_reach: Outsets::ZERO,
             children_outset: Outsets::ZERO,
             drawn_clear_of_scroll: false,
+            row: false,
             clips_children: false,
             children_reach: 0.0,
         });
@@ -1327,6 +1335,25 @@ impl Tree {
                 children.push(child_id);
             }
         }
+    }
+
+    /// Say that a dynamic segment holds this widget as one of its rows.
+    pub(crate) fn mark_row(&mut self, id: WidgetId) {
+        if let Some(idx) = self.get_dense_index(id) {
+            self.dense[idx].row = true;
+        }
+    }
+
+    /// Whether a dynamic segment holds this widget as one of its rows.
+    pub(crate) fn is_row(&self, id: WidgetId) -> bool {
+        self.get_dense_index(id)
+            .is_some_and(|idx| self.dense[idx].row)
+    }
+
+    /// The row this widget is built in: itself if it is one, or its nearest
+    /// ancestor that is.
+    pub(crate) fn row_of(&self, id: WidgetId) -> Option<WidgetId> {
+        self.ancestors(id).find(|&at| self.is_row(at))
     }
 
     /// Say that this widget's parent draws it clear of the parent's scroll

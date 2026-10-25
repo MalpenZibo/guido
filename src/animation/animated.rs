@@ -145,9 +145,10 @@ impl<T: Clone + MovesAs + 'static> Animated<T> {
     /// one read from the application's state takes the close.
     ///
     /// The other half of [`entering_from`](Self::entering_from). Declared on
-    /// the removed widget's own properties — a child of `.child(move || ..)`,
-    /// `.children(move || ..)` or `keyed(..)` — it keeps that widget in its
-    /// container, where it stood, until every exit it declared has settled.
+    /// a removed widget — a child of `.child(move || ..)`, `.children(move ||
+    /// ..)` or `keyed(..)` — or on something built inside it, it keeps that
+    /// widget in its container, where it stood, until every exit asked of it
+    /// has settled.
     /// While it leaves it is inert: it takes no pointer input and no focus,
     /// and nothing it reads relays out, repaints or reconciles it. Effects
     /// created while building it are not widgets, and live until it is
@@ -180,9 +181,10 @@ impl<T: Clone + MovesAs + 'static> Animated<T> {
     /// The dynamic children inside it re-run, since what they read while it
     /// was away was not watched.
     ///
-    /// Only a container's own properties leave, and only the removed widget's:
-    /// an exit declared on something inside it plays when that is the widget
-    /// removed.
+    /// Only a container's own properties leave. Removing a widget asks what is
+    /// built inside it for its exits too, and keeps it until the last of them
+    /// has settled — as far as the next dynamic list, whose rows are that
+    /// list's to remove.
     ///
     /// Panics if a timeline was declared instead of a transition, for the
     /// reason `entering_from` does.

@@ -118,9 +118,41 @@ In a [`ZStack`](../concepts/layout.md#leaders-and-followers) a leaving child
 no longer leads the stack's size while anything staying does, so a shape that
 sizes to its content moves toward the view replacing it from the first frame.
 
-Only the removed widget's own properties are waited on. An exit declared on
-something inside it plays when *that* is the widget removed, and a container
-removed with no exit of its own takes a leaving child with it at once.
+Removing a child also asks what is built inside it for its exits, and keeps the
+child until the last of them has settled — even if the child declares none of
+its own. A panel whose content fades before its shape goes back gives the
+content a short exit and the shape a delayed one:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let open = create_signal(true);
+container().child(move || {
+    open.get().then(|| {
+        container()
+            .height(
+                Length::exact(200.0)
+                    .transition(Transition::new(200.0, TimingFunction::EaseOut).delay(100.0))
+                    .exiting_to(Length::exact(0.0)),
+            )
+            .child(
+                container().opacity(
+                    1.0.transition(Transition::new(100.0, TimingFunction::EaseIn))
+                        .exiting_to(0.0),
+                ),
+            )
+    })
+})
+# ;
+# }
+```
+
+The walk stops at the next dynamic list. A `.child(move || ..)`, a
+`.children(move || ..)` or a `keyed(..)` inside the removed child decides its
+own rows, so their exits play when *that* list removes them, and they go with
+the child at once when it is removed. This is the line Svelte draws with its
+local transitions.
 
 ## Duration-Based Animation
 
