@@ -1236,6 +1236,41 @@ mod tests {
         assert_eq!(*anim.current(), 0.0, "the next segment is the fast one");
     }
 
+    /// Each segment says which kind it is, and only that kind: an enter, then
+    /// a retarget, then an exit, through one property.
+    #[test]
+    fn each_segment_says_which_kind_it_is() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let mut anim = AnimationState::new(0.0_f32, {
+            let asked = asked.clone();
+            crate::animation::IntoTransition::<f32, _>::into_transition(move |s: Segment<f32>| {
+                asked
+                    .borrow_mut()
+                    .push((s.is_enter(), s.is_retarget(), s.is_exit()));
+                linear(100.0)
+            })
+        })
+        .with_enter_from(Some(50.0))
+        .with_exit_to(Some(Box::new(|| 0.0)));
+        let now = || FrameInstant::from(Instant::now());
+
+        assert!(anim.begin_enter(&mut laying_out(&mut Tree::new()), 100.0, now));
+        anim.animate_to(20.0, now());
+        assert!(anim.begin_exit(now()));
+
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                (true, false, false),
+                (false, true, false),
+                (false, false, true)
+            ]
+        );
+    }
+
     /// A transition chosen by its segment is handed where the property is,
     /// mid-flight included, and not the target it was heading for: a grow
     /// interrupted by a shrink is a shrink from where it got to.
