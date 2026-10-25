@@ -486,7 +486,9 @@ container()
 # // not compiled: a signature listing — these declarations have no bodies.
 /// On everything a property setter accepts — a value, a signal, a closure.
 pub trait Animate<T, M>: IntoSignal<T, M> + Sized {
-    fn transition(self, transition: impl Into<TransitionConfig>) -> Animated<T>;
+    fn transition<N>(self, transition: impl IntoTransition<T::Value, N>) -> Animated<T>
+    where
+        T: MovesAs;
     fn timeline(self, keyframes: Keyframes<T>) -> Animated<T>
     where
         T: Animatable;

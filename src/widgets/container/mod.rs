@@ -176,7 +176,7 @@ pub(super) struct LayerProps {
     /// How a move layout gives this container is played, if it slides there
     /// rather than jumping. The slide itself is the tree's — see
     /// `Tree::set_origin`.
-    pub(super) position: Option<crate::animation::TransitionConfig>,
+    pub(super) position: Option<crate::animation::TransitionSource<crate::transform::Translate>>,
     pub(super) opacity_mode: Prop<OpacityMode>,
     pub(super) blur: Prop<f32>,
 }
@@ -1505,6 +1505,10 @@ impl Container {
     /// [`WidgetRef::layout_rect`] is where it is going. A size change is the
     /// width and height's own transitions, which compose with this one.
     ///
+    /// It takes what [`transition`](crate::animation::Animate::transition)
+    /// takes, read each time a move starts, and a closure of the segment is
+    /// handed the old origin and the new one.
+    ///
     /// ```no_run
     /// # use guido::prelude::*;
     /// container().animate_position(SpringConfig::SNAPPY);
@@ -1514,11 +1518,11 @@ impl Container {
     /// [`Animated::entering_from`]: crate::animation::Animated::entering_from
     /// [`WidgetRef::rect`]: crate::widget_ref::WidgetRef::rect
     /// [`WidgetRef::layout_rect`]: crate::widget_ref::WidgetRef::layout_rect
-    pub fn animate_position(
+    pub fn animate_position<M>(
         mut self,
-        transition: impl Into<crate::animation::TransitionConfig>,
+        transition: impl crate::animation::IntoTransition<crate::transform::Translate, M>,
     ) -> Self {
-        self.layer_mut().position = Some(transition.into());
+        self.layer_mut().position = Some(transition.into_transition());
         self
     }
 
@@ -1669,13 +1673,6 @@ impl Container {
     /// container's behalf: an angle that arrives already wrapped — from
     /// `atan2`, say — wraps the animation with it, and unwrapping it is the
     /// caller's to do because only the caller knows which way was meant.
-    ///
-    /// A declared `.reverse()` follows the *number*, not the turn, because the
-    /// angle is an `f32` and `f32::is_reverse` means decreasing. So a tilt from
-    /// `0.0` to `-8.0` takes the reverse curve going out and the forward one
-    /// coming home. Where that matters, declare the rest angle as the larger
-    /// number — `8.0` out and `0.0` home — or leave the reverse undeclared and
-    /// use one curve both ways.
     pub fn rotate<M>(mut self, degrees: impl IntoAnimated<f32, M>) -> Self {
         let declared = animated_properties::declare::rotate(&mut self.anims, degrees);
         self.layer_mut().rotate = declared;
@@ -2019,13 +2016,16 @@ impl Widget for Container {
             return false;
         }
         let now = tree.frame_instant();
-        let mut moves_the_box = false;
+        // A layout when an exit moves the box, or when the transition chosen
+        // for it can overshoot further than the reach layout last recorded.
+        let mut relayout = false;
         for slot in declared.slots_mut() {
+            let reach = slot.peak_overshoot();
             if slot.begin_exit(now) {
-                moves_the_box |= slot.moves_the_box();
+                relayout |= slot.moves_the_box() || slot.peak_overshoot() > reach;
             }
         }
-        let follow_up = if moves_the_box {
+        let follow_up = if relayout {
             RequiredJob::Layout
         } else {
             RequiredJob::Paint
@@ -2817,10 +2817,10 @@ fn declared_seed<T: Clone + 'static>(prop: &Prop<T>) -> T {
 fn install<T: Animatable>(seed: T, motion: Motion<T>) -> AnimationState<T> {
     match motion {
         Motion::Ease {
-            config,
+            transition,
             enter_from,
             exit_to,
-        } => AnimationState::new(seed, config)
+        } => AnimationState::new(seed, transition)
             .with_enter_from(enter_from)
             .with_exit_to(exit_to),
         Motion::Play { keyframes } => {
@@ -2865,11 +2865,11 @@ fn declare_size<M>(
     // A size declares a `Length` and animates the `f32` inside it, so the enter
     // is narrowed by the same formula as the seed.
     let resolved = |length: Length| length.exact_size().or(length.min()).unwrap_or(0.0);
-    let installed = ease.map(|(config, enter_from, exit_to)| {
+    let installed = ease.map(|(transition, enter_from, exit_to)| {
         install(
             resolved(declared_seed(&prop)),
             Motion::Ease {
-                config,
+                transition,
                 enter_from: enter_from.map(resolved),
                 exit_to: exit_to.map(|exit_to| {
                     Box::new(move || resolved(exit_to())) as crate::animation::ExitTo<f32>

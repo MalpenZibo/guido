@@ -4891,28 +4891,30 @@ fn an_enter_reaches_a_size_and_a_padding_too() {
     );
 }
 
-/// An appearance has no direction, so it runs the forward transition whichever
-/// way it travels.
+/// An enter reads its transition from the state at the appearance, so a card
+/// settling down from a larger scale opens with the open transition.
 ///
-/// `animate_to` reads the direction off the value it is leaving, and an enter
-/// has just placed that value at the start of the appearance. A card settling
-/// down from a larger scale therefore looked like a value decreasing, ran the
-/// transition written for the *later* close, and fired its `on_complete` — the
+/// When the direction was read off the values, a shrinking enter looked like
+/// a close, ran the close's transition and fired its `on_complete` — the
 /// callback that destroys the popup in the pattern this feature exists for.
 #[test]
-fn an_enter_that_shrinks_still_runs_the_forward_transition() {
+fn an_enter_that_shrinks_opens_with_the_open_transition() {
     let closed = std::rc::Rc::new(std::cell::Cell::new(0u32));
     let counted = std::rc::Rc::clone(&closed);
+    let open = create_signal(true);
     let t0 = std::time::Instant::now();
     let mut h = H::new(
         container().width(20.0).height(20.0).scale(
             Scale::uniform(1.0)
-                .transition(
-                    Transition::new(400.0, TimingFunction::Linear).reverse(
+                .transition(move || {
+                    let counted = std::rc::Rc::clone(&counted);
+                    if open.get() {
+                        Transition::new(400.0, TimingFunction::Linear)
+                    } else {
                         Transition::new(20.0, TimingFunction::Linear)
-                            .on_complete(move || counted.set(counted.get() + 1)),
-                    ),
-                )
+                            .on_complete(move || counted.set(counted.get() + 1))
+                    }
+                })
                 .entering_from(Scale::uniform(1.4)),
         ),
     );
@@ -4927,12 +4929,12 @@ fn an_enter_that_shrinks_still_runs_the_forward_transition() {
     assert_eq!(
         closed.get(),
         0,
-        "the reverse transition's completion belongs to the close, not the open"
+        "the close's completion belongs to the close, not the open"
     );
     let midway = h.paint().local_transform.a();
     assert!(
         midway > 1.0,
-        "and the forward curve is still running at 50ms of 400, got {midway}"
+        "and the open curve is still running at 50ms of 400, got {midway}"
     );
 }
 
@@ -8755,4 +8757,60 @@ fn a_flick_over_a_carousel_carries_the_page_on() {
     }
     let coasted = page(&mut h) - lifted;
     assert!(coasted > 10.0, "the page coasted {coasted} past the lift");
+}
+
+/// A hover shadow whose transition is chosen per change keeps the overshoot
+/// of the one it chose.
+///
+/// The reach a shadow may be drawn to is recorded at layout from
+/// `peak_overshoot`, and `animated_shadow` shrinks whatever is in flight back
+/// inside it. A hover lays nothing out — the state layer's shadow is a
+/// constant the layout already measured — so with a transition chosen when a
+/// change starts, the reach on record is the one of the transition that played
+/// last: here none, since nothing had, and a spring chosen for the lift had its
+/// bounce cut off at the hover's depth.
+#[test]
+fn a_hover_shadow_keeps_the_overshoot_of_the_transition_chosen_for_it() {
+    let hovered = create_signal(false);
+    let lifted = Shadow::new((0.0, 0.0), 10.0, 0.0, Color::BLACK);
+
+    let mut h = H::new(
+        container()
+            .width(40.0)
+            .height(40.0)
+            .background(Color::RED)
+            .on_hover(move |inside| hovered.set(inside))
+            .shadow(Shadow::none().transition(move || {
+                if hovered.get() {
+                    Transition::spring(SpringConfig::BOUNCY)
+                } else {
+                    Transition::new(100.0, TimingFunction::Linear)
+                }
+            }))
+            .when_hovered(move |s| s.shadow(lifted)),
+    );
+    h.fit(100.0, 100.0);
+    h.paint();
+
+    set_hover(&mut h, true);
+    let mut deepest: f32 = 0.0;
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(8));
+        pump(&mut h);
+        h.fit(100.0, 100.0);
+        let reach = h.tree.paint_overflow(h.root);
+        if let Some(drawn) = drawn_shadow(&h.paint()) {
+            deepest = deepest.max(drawn.extent());
+            assert!(
+                (reach + Outsets::all(0.01)).covers(drawn.outsets()),
+                "drew {:?} outside a damage rect of {reach:?}",
+                drawn.outsets()
+            );
+        }
+    }
+    assert!(
+        deepest > lifted.extent() + 1.0,
+        "the spring has to carry the shadow past the hover's {}, got {deepest}",
+        lifted.extent()
+    );
 }

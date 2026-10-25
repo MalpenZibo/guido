@@ -463,6 +463,14 @@ macro_rules! emit_slot_facts {
                 }
             }
 
+            /// How far past its target it can travel, on the transition it
+            /// plays now — see [`AnimationState::peak_overshoot`].
+            pub(crate) fn peak_overshoot(&self) -> f32 {
+                match self {
+                    $(AnimSlot::$name(anim) => anim.peak_overshoot(),)*
+                }
+            }
+
             /// Whether an exit has begun on it, settled or not.
             pub(crate) fn is_leaving(&self) -> bool {
                 match self {
@@ -494,7 +502,14 @@ macro_rules! retarget {
         if $anim.take_play() {
             $anim.play($now);
         }
+        // A transition chosen as the change starts can overshoot further than
+        // the one before it, and how far a property may be drawn past its
+        // target is recorded at layout — so a reach that grew asks for one.
+        let reach = $anim.peak_overshoot();
         $anim.animate_to($container.$target($id), $now);
+        if $anim.peak_overshoot() > reach {
+            request_job($id, JobRequest::Animation(RequiredJob::Layout));
+        }
     };
 }
 macro_rules! seed_from_target {

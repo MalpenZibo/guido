@@ -248,7 +248,7 @@ impl Slot {
 /// stands. The tree is the one party present at the move. Core Animation keeps
 /// a layer's implicit `position` animation on the layer for the same reason.
 struct PositionMotion {
-    transition: crate::animation::TransitionConfig,
+    transition: crate::animation::TransitionSource<crate::transform::Translate>,
     /// The widget's origin in its parent as it is drawn, heading for the last
     /// origin a real layout gave it. `None` until that first layout: there is
     /// no old place to slide from, so the first one is taken at once.
@@ -2985,7 +2985,7 @@ impl Tree {
     pub(crate) fn animate_position(
         &mut self,
         id: WidgetId,
-        transition: &crate::animation::TransitionConfig,
+        transition: &crate::animation::TransitionSource<crate::transform::Translate>,
     ) {
         if self.get_dense_index(id).is_some() {
             self.positions.entry(id).or_insert_with(|| PositionMotion {
@@ -5135,6 +5135,57 @@ mod tests {
             refresh_paint_reach(&*widget, tree, id)
         });
         (tree, root, card)
+    }
+
+    /// A slide's transition is chosen when the move starts, from the origin it
+    /// leaves and the one it goes to: a move down takes the fast one here, so
+    /// halfway through its 100 ms it is halfway — where the slow one would be
+    /// a twentieth of the way, and no transition at all would be there.
+    #[test]
+    fn a_slide_chooses_its_transition_from_the_move() {
+        use crate::animation::{TimingFunction, Transition};
+        use crate::transform::Translate;
+
+        let gap = crate::reactive::create_signal(0.0f32);
+        let t0 = std::time::Instant::now();
+        let mut tree = Tree::new();
+        tree.set_frame_instant(Some(t0));
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .width(300.0)
+                .height(300.0)
+                .child(
+                    crate::widgets::container()
+                        .layout(crate::layout::Flex::column())
+                        .child(crate::widgets::container().width(40.0).height(gap))
+                        .child(
+                            crate::widgets::container()
+                                .width(40.0)
+                                .height(40.0)
+                                .animate_position(|from: Translate, to: Translate| {
+                                    let ms = if to.y > from.y { 100.0 } else { 1000.0 };
+                                    Transition::new(ms, TimingFunction::Linear)
+                                }),
+                        ),
+                ),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+        let cons = Constraints::new(0.0, 0.0, 300.0, 300.0);
+        tree.layout_widget(root, cons);
+        let column = tree.get_children(root)[0];
+        let card = tree.get_children(column)[1];
+
+        gap.set(200.0);
+        tree.set_frame_instant(Some(t0 + std::time::Duration::from_millis(16)));
+        tree.mark_needs_layout(tree.get_children(column)[0]);
+        tree.layout_widget(root, cons);
+        assert_eq!(tree.position_offset(card), (0.0, -200.0), "the setup");
+
+        let halfway = t0 + std::time::Duration::from_millis(66);
+        tree.set_frame_instant(Some(halfway));
+        tree.advance_position(card, halfway.into());
+        tree.set_frame_instant(None);
+        assert_eq!(tree.position_offset(card), (0.0, -100.0), "the fast one");
     }
 
     /// A card sliding 200 pixels down a column, with `animate_position`, is

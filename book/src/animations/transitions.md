@@ -23,6 +23,59 @@ value.transition(Transition::new(duration_ms, timing))
 
 A bare number is the short form: `.transition(200.0)` is 200ms eased out.
 
+## Choosing the transition for each change
+
+A panel that springs open and eases shut needs two transitions, and which one
+plays is something only the application knows: it is opening or closing because
+of its own state. So the transition can be read from that state, with a closure:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let open = create_signal(false);
+container().height(
+    (move || if open.get() { 300.0 } else { 0.0 })
+        .transition(move || {
+            if open.get() {
+                Transition::spring(SpringConfig::BOUNCY)
+            } else {
+                Transition::new(200.0, TimingFunction::EaseOut).delay(100.0)
+            }
+        }),
+)
+# ;
+# }
+```
+
+The closure is read **when a change starts**: when the value moves to a new
+target, when an [`entering_from`](../transforms/animated.md) plays, and when an
+`exiting_to` begins. By the time a widget is removed, the state that removed it
+already says it is closing, so its exit takes the close. A transition that
+changes while a change is running leaves it alone and applies from the next
+one, which is what CSS does.
+
+Sometimes no state knows the way a value is going. A box sized by its content
+grows when the next content is wider, and only the layout finds that out. For
+that case the closure can take the change itself — where the value is when it
+starts, in flight or not, and where it is going:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().width(at_least(0.0).transition(|from: f32, to: f32| {
+    let ease = Transition::new(200.0, TimingFunction::EaseOut);
+    // grow after the new content has faded in; shrink at once
+    if to > from { ease.delay(120.0) } else { ease }
+}))
+# ;
+# }
+```
+
+A width and a height hand the closure the sizes the layout resolved, as `f32`,
+whatever `Length` they were declared with.
+
 ## Examples
 
 ### Background Animation
@@ -151,8 +204,10 @@ fn animated_card() -> Container {
 ## API Reference
 
 ```text
-/// Ease to each new value this holds
-value.transition(transition: impl Into<TransitionConfig>) -> Animated<T>;
+/// Ease to each new value this holds: a Transition, a SpringConfig, a number
+/// of milliseconds, a closure returning a Transition, or a closure of the
+/// change, |from, to| -> Transition
+value.transition(transition: impl IntoTransition<T, M>) -> Animated<T>;
 
 /// A bare number is milliseconds, eased out
 Transition::new(duration_ms: f32, timing: TimingFunction) -> Transition;
