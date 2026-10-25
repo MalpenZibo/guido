@@ -154,6 +154,9 @@ own rows, so their exits play when *that* list removes them, and they go with
 the child at once when it is removed. This is the line Svelte draws with its
 local transitions.
 
+A child exiting because the row around it was removed leaves with its
+`ZStack` rather than from it, and goes on leading the stack's size.
+
 ## Duration-Based Animation
 
 Standard easing curve transitions:

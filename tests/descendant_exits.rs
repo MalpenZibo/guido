@@ -163,3 +163,42 @@ fn a_reclaimed_row_brings_its_children_back() {
         "and arrives home: {back:?}"
     );
 }
+
+/// A child exiting because the row around its stack was removed leaves with
+/// the stack, not from it: it goes on leading the stack's size, where a child
+/// removed from the stack itself gives way to the ones that stay.
+#[test]
+fn a_child_exiting_with_its_row_still_leads_its_stack() {
+    let shown = create_signal(true);
+    let Some(mut run) = Run::new(shown.into(), |stack| {
+        // The row's own exit moves its box, so the stack inside is laid out
+        // again on every frame of it, which is when it asks who leads.
+        container()
+            .height(
+                Length::exact(50.0)
+                    .transition(linear(100.0))
+                    .exiting_to(Length::exact(0.0)),
+            )
+            .child(
+                container()
+                    .layout(ZStack::new())
+                    .child(
+                        container()
+                            .width(300.0)
+                            .height(20.0)
+                            .opacity(1.0.transition(linear(100.0)).exiting_to(0.0)),
+                    )
+                    .child(container().width(100.0).height(20.0))
+                    .widget_ref(stack),
+            )
+    }) else {
+        return;
+    };
+
+    shown.set(false);
+    let leaving = run.frames(3);
+    assert!(
+        leaving.iter().all(|frame| frame.1 == 300.0),
+        "the stack keeps the size of the child fading out with it: {leaving:?}"
+    );
+}
