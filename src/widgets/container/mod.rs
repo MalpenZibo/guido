@@ -1507,7 +1507,7 @@ impl Container {
     ///
     /// It takes what [`transition`](crate::animation::Animate::transition)
     /// takes, read each time a move starts, and a closure of the segment is
-    /// handed the old origin and the new one.
+    /// handed the old origin and the new one as its `from` and `to`.
     ///
     /// ```no_run
     /// # use guido::prelude::*;

@@ -5143,7 +5143,7 @@ mod tests {
     /// a twentieth of the way, and no transition at all would be there.
     #[test]
     fn a_slide_chooses_its_transition_from_the_move() {
-        use crate::animation::{TimingFunction, Transition};
+        use crate::animation::{Segment, TimingFunction, Transition};
         use crate::transform::Translate;
 
         let gap = crate::reactive::create_signal(0.0f32);
@@ -5162,8 +5162,8 @@ mod tests {
                             crate::widgets::container()
                                 .width(40.0)
                                 .height(40.0)
-                                .animate_position(|from: Translate, to: Translate| {
-                                    let ms = if to.y > from.y { 100.0 } else { 1000.0 };
+                                .animate_position(|s: Segment<Translate>| {
+                                    let ms = if s.to.y > s.from.y { 100.0 } else { 1000.0 };
                                     Transition::new(ms, TimingFunction::Linear)
                                 }),
                         ),

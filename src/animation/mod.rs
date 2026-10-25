@@ -109,10 +109,10 @@ impl Default for Transition {
 /// - something reactive — a closure, a signal or a memo returning a
 ///   `Transition` — for the application to say which one plays from its own
 ///   state: `move || if open.get() { spring() } else { ease() }`;
-/// - a closure of the segment, `|from: T, to: T| -> Transition`, for a change
-///   whose direction is only in the value, such as a size the layout
-///   measured. `from` is where the property is when the segment starts, in
-///   flight or not, and `to` is where it is going.
+/// - a closure of the [`Segment`], `|s: Segment<T>| -> Transition`, for what
+///   guido knows about the change and the application does not: whether it
+///   is an enter, an exit or a retarget, and where it goes from and to — a
+///   size the layout measured has a direction no state holds.
 ///
 /// A transition that changes while a segment runs leaves that segment alone
 /// and applies from the next one, which is the rule CSS gives a
@@ -139,8 +139,8 @@ pub(crate) enum Source<T> {
 pub(crate) enum Choose<T> {
     /// Read from the application's state.
     Read(crate::reactive::Signal<Transition>),
-    /// Chosen from where the segment starts and where it goes.
-    Segment(std::rc::Rc<dyn Fn(T, T) -> Transition>),
+    /// Chosen from the segment itself.
+    Segment(std::rc::Rc<dyn Fn(Segment<T>) -> Transition>),
 }
 
 impl<T> Clone for Choose<T> {
@@ -167,6 +167,48 @@ impl<T> From<Transition> for TransitionSource<T> {
     }
 }
 
+/// A change about to play, as a transition chosen by its segment sees it.
+///
+/// `from` is where the property is when the change starts, in flight or not —
+/// so a grow interrupted by a shrink is a shrink from where it got to — and
+/// `to` is where it is going.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Segment<T> {
+    pub from: T,
+    pub to: T,
+    pub(crate) kind: SegmentKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SegmentKind {
+    Retarget,
+    Enter,
+    Exit,
+}
+
+impl<T> Segment<T> {
+    /// The widget appearing, from its [`entering_from`](Animated::entering_from).
+    ///
+    /// Only the first appearance: a row whose exit is cancelled — its key came
+    /// back while it was leaving — travels back from where it is, and that is
+    /// a [retarget](Self::is_retarget). Asking `is_exit` rather than
+    /// `is_enter` gives it the enter's transition.
+    pub fn is_enter(&self) -> bool {
+        self.kind == SegmentKind::Enter
+    }
+
+    /// The widget leaving, to its [`exiting_to`](Animated::exiting_to).
+    pub fn is_exit(&self) -> bool {
+        self.kind == SegmentKind::Exit
+    }
+
+    /// The declared value moving: neither an enter nor an exit. A cancelled
+    /// exit going back, and the hand-back after a timeline, are retargets too.
+    pub fn is_retarget(&self) -> bool {
+        self.kind == SegmentKind::Retarget
+    }
+}
+
 #[doc(hidden)]
 pub struct Shorthand;
 #[doc(hidden)]
@@ -190,7 +232,7 @@ impl<T, M, S: crate::reactive::IntoSignal<Transition, M>> IntoTransition<T, Read
     }
 }
 
-impl<T, F: Fn(T, T) -> Transition + 'static> IntoTransition<T, BySegment> for F {
+impl<T, F: Fn(Segment<T>) -> Transition + 'static> IntoTransition<T, BySegment> for F {
     fn into_transition(self) -> TransitionSource<T> {
         TransitionSource(Source::Chosen(Choose::Segment(std::rc::Rc::new(self))))
     }

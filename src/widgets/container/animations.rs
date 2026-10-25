@@ -3,8 +3,8 @@ use crate::reactive::Signal;
 use crate::tree::LayoutCtx;
 
 use crate::animation::{
-    Animatable, Choose, ExitTo, Keyframes, Source, SpringState, Transition, TransitionSource,
-    carry_velocity,
+    Animatable, Choose, ExitTo, Keyframes, Segment, SegmentKind, Source, SpringState, Transition,
+    TransitionSource, carry_velocity,
 };
 
 /// A sequence a property plays, and what decides when it runs.
@@ -180,7 +180,7 @@ impl<T: Animatable> AnimationState<T> {
         if let Some(timeline) = self.timeline.as_deref_mut() {
             timeline.playing = None;
         }
-        self.choose_transition(to);
+        self.choose_transition(to, SegmentKind::Exit);
         if to == self.current {
             // Declared, but already there: nothing to wait for, whatever the
             // timing. A spring in flight has no momentum to carry into a
@@ -258,7 +258,7 @@ impl<T: Animatable> AnimationState<T> {
         }
 
         self.set_immediate(ctx, from);
-        self.choose_transition(target);
+        self.choose_transition(target, SegmentKind::Enter);
         self.target = target;
         self.begin_segment_from(from, now());
         true
@@ -270,13 +270,13 @@ impl<T: Animatable> AnimationState<T> {
     ///
     /// Read like an event handler reads — for the moment the segment starts,
     /// not a place to subscribe from.
-    fn choose_transition(&mut self, to: T) {
+    fn choose_transition(&mut self, to: T, kind: SegmentKind) {
         let from = self.current;
         let chosen = match &self.choose {
             None => return,
             Some(choose) => crate::reactive::diagnostics::snapshot_zone(|| match choose {
                 Choose::Read(signal) => signal.get_untracked(),
-                Choose::Segment(choose) => choose(from, to),
+                Choose::Segment(choose) => choose(Segment { from, to, kind }),
             }),
         };
         self.transition = chosen;
@@ -289,7 +289,7 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
-        self.choose_transition(new_target);
+        self.choose_transition(new_target, SegmentKind::Retarget);
 
         // Check if active transition is spring before mutating other fields
         let is_spring = matches!(
@@ -601,7 +601,7 @@ impl<T: Animatable> AnimationState<T> {
             // what made a card jump the moment a hover arrived mid-shake.
             timeline.playing = None;
             let landed = self.current;
-            self.choose_transition(self.target);
+            self.choose_transition(self.target, SegmentKind::Retarget);
             self.begin_segment_from(landed, now);
             // Returning `None` lets this frame run the ordinary path, so the
             // hand-back is animated by the declared transition and reaches
@@ -950,7 +950,7 @@ mod tests {
 
         let mut anim = AnimationState::new(
             0.0_f32,
-            crate::animation::IntoTransition::<f32, _>::into_transition(|_: f32, _: f32| {
+            crate::animation::IntoTransition::<f32, _>::into_transition(|_: Segment<f32>| {
                 Transition::new(200.0, TimingFunction::Linear)
             }),
         );
@@ -1247,12 +1247,10 @@ mod tests {
         let asked = Rc::new(RefCell::new(Vec::new()));
         let mut anim = AnimationState::new(0.0_f32, {
             let asked = asked.clone();
-            crate::animation::IntoTransition::<f32, _>::into_transition(
-                move |from: f32, to: f32| {
-                    asked.borrow_mut().push((from, to));
-                    linear(100.0)
-                },
-            )
+            crate::animation::IntoTransition::<f32, _>::into_transition(move |s: Segment<f32>| {
+                asked.borrow_mut().push((s.from, s.to, s.is_retarget()));
+                linear(100.0)
+            })
         });
         anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
         anim.animate_to(100.0, FrameInstant::from(Instant::now()));
@@ -1260,7 +1258,10 @@ mod tests {
         let started = anim.start_time.expect("a segment has begun");
         anim.animate_to(20.0, started + std::time::Duration::from_millis(50));
 
-        assert_eq!(*asked.borrow(), vec![(0.0, 100.0), (50.0, 20.0)]);
+        assert_eq!(
+            *asked.borrow(),
+            vec![(0.0, 100.0, true), (50.0, 20.0, true)]
+        );
     }
 
     /// And that momentum is what a wobble is made of: sent back to where it

@@ -55,26 +55,46 @@ already says it is closing, so its exit takes the close. A transition that
 changes while a change is running leaves it alone and applies from the next
 one, which is what CSS does.
 
-Sometimes no state knows the way a value is going. A box sized by its content
-grows when the next content is wider, and only the layout finds that out. For
-that case the closure can take the change itself — where the value is when it
-starts, in flight or not, and where it is going:
+Some of what decides the transition is not the application's to know, but
+guido's. Whether a change is the widget appearing, leaving, or its value
+moving, and where it goes from and to. For that, the closure can take the
+`Segment` itself:
 
 ```rust
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-container().width(at_least(0.0).transition(|from: f32, to: f32| {
+// a row that fades in slowly and out fast, with no state to say which
+container().opacity(
+    1.0.transition(|s: Segment<f32>| {
+        if s.is_exit() {
+            Transition::new(120.0, TimingFunction::EaseIn)
+        } else {
+            Transition::new(300.0, TimingFunction::EaseOut)
+        }
+    })
+    .entering_from(0.0)
+    .exiting_to(0.0),
+)
+# ;
+// a box sized by its content: only the layout knows the next one is wider
+container().width(at_least(0.0).transition(|s: Segment<f32>| {
     let ease = Transition::new(200.0, TimingFunction::EaseOut);
     // grow after the new content has faded in; shrink at once
-    if to > from { ease.delay(120.0) } else { ease }
+    if s.to > s.from { ease.delay(120.0) } else { ease }
 }))
 # ;
 # }
 ```
 
-A width and a height hand the closure the sizes the layout resolved, as `f32`,
-whatever `Length` they were declared with.
+`s.from` is where the value is when the change starts, in flight or not, so a
+grow interrupted by a shrink is a shrink from where it got to. A width and a
+height hand the closure the sizes the layout resolved, as `f32`, whatever
+`Length` they were declared with.
+
+Both closures run inside a frame, not where the widget was built, so a
+[context](../advanced/context.md) read from inside them finds nothing. Read
+what they need while building, and move it in.
 
 ## Examples
 
@@ -206,7 +226,7 @@ fn animated_card() -> Container {
 ```text
 /// Ease to each new value this holds: a Transition, a SpringConfig, a number
 /// of milliseconds, a closure returning a Transition, or a closure of the
-/// change, |from, to| -> Transition
+/// change, |s: Segment<T>| -> Transition
 value.transition(transition: impl IntoTransition<T, M>) -> Animated<T>;
 
 /// A bare number is milliseconds, eased out

@@ -150,8 +150,8 @@ fn a_transition_chosen_by_the_segment_grows_late_and_shrinks_at_once() {
         container().child(
             container()
                 .height(20.0)
-                .width(at_least(0.0).transition(|from: f32, to: f32| {
-                    if to > from {
+                .width(at_least(0.0).transition(|s: Segment<f32>| {
+                    if s.to > s.from {
                         linear(100.0).delay(200.0)
                     } else {
                         linear(100.0)
@@ -180,5 +180,62 @@ fn a_transition_chosen_by_the_segment_grows_late_and_shrinks_at_once() {
         Some(&50.0),
         "a shrink interrupting it starts at once from where the width is, \
          and lands in 100 ms: {shrinking:?}"
+    );
+}
+
+/// A property that only enters and leaves needs no state to choose its
+/// transitions: the segment says which it is. Here the enter shrinks and the
+/// exit grows, so a choice read off the direction would pick the other one
+/// both times.
+#[test]
+fn a_segment_says_whether_it_enters_or_leaves() {
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let shown = create_signal(true);
+    let placed = create_widget_ref();
+    let surface = app.surface(bar(), move || {
+        container().children(keyed(
+            move || shown.get().then_some(()).into_iter().collect::<Vec<_>>(),
+            |_| (),
+            move |_| {
+                container()
+                    .height(20.0)
+                    .width(
+                        Length::exact(300.0)
+                            .transition(|s: Segment<f32>| {
+                                if s.is_enter() {
+                                    linear(1000.0)
+                                } else if s.is_exit() {
+                                    linear(100.0)
+                                } else {
+                                    // a retarget, which this row never makes: a
+                                    // kind mistaken for one shows as a jump
+                                    linear(0.0)
+                                }
+                            })
+                            .entering_from(Length::exact(600.0))
+                            .exiting_to(Length::exact(600.0)),
+                    )
+                    .widget_ref(placed)
+            },
+        ))
+    });
+    app.configure(surface, 800, 100, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    let entering = widths(&mut app, &mut at, placed, 4);
+    assert!(
+        entering.iter().all(|&w| w > 540.0),
+        "the enter takes the slow one, shrinking though it is: {entering:?}"
+    );
+
+    widths(&mut app, &mut at, placed, 70);
+    shown.set(false);
+    let leaving = widths(&mut app, &mut at, placed, 4);
+    assert!(
+        leaving[3] > 420.0,
+        "the exit takes the fast one, growing though it is: 48 ms into 100 it \
+         is past 444, where the slow one would be short of 315: {leaving:?}"
     );
 }

@@ -292,9 +292,9 @@ pub trait Animate<T: Clone + 'static, M>: IntoSignal<T, M> + Sized {
     ///         }),
     /// );
     /// // grows after a pause, shrinks at once: a size no state knows the way of
-    /// container().width(at_least(0.0).transition(|from: f32, to: f32| {
+    /// container().width(at_least(0.0).transition(|s: Segment<f32>| {
     ///     let ease = Transition::new(200.0, TimingFunction::EaseOut);
-    ///     if to > from { ease.delay(120.0) } else { ease }
+    ///     if s.to > s.from { ease.delay(120.0) } else { ease }
     /// }));
     /// ```
     fn transition<N>(self, transition: impl IntoTransition<T::Value, N>) -> Animated<T>

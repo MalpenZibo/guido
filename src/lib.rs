@@ -334,7 +334,7 @@ pub fn quit_app() {
 /// signature either way.
 pub mod prelude {
     pub use crate::animation::{
-        Animate, Animated, IntoAnimated, Keyframes, Repeat, SpringConfig, TimingFunction,
+        Animate, Animated, IntoAnimated, Keyframes, Repeat, Segment, SpringConfig, TimingFunction,
         Transition,
     };
     pub use crate::backdrop::{BackdropBlur, BackdropSources};
