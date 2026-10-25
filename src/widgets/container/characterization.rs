@@ -7934,9 +7934,8 @@ fn turned_degrees(node: &RenderNode) -> f32 {
 
 /// The jobs a write queues anywhere in the tree, rather than on the root.
 ///
-/// Every property in the table is declared on the root now — a removed
-/// widget's exit plays only on its own properties, so the recipe declares on
-/// the widget it would remove — but what is asserted of every property is
+/// Every property in the table is declared on the root, the widget the recipe
+/// would remove — but what is asserted of every property is
 /// still only that the write asks *somebody* for a frame: a declared value's
 /// only subscription is
 /// the read the drift check makes of it, and without that read the write

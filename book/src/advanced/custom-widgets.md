@@ -38,8 +38,9 @@ dynamic-children segment rather than the whole of it.
 
 `Widget` has two required methods. Everything else — `event`,
 `advance_animations`, `reconcile_children`, `layout_hints`,
-`register_children`, `refresh_paint_bounds`, and the three a removed widget is
-asked about its exit, `begin_exit`, `is_exiting` and `cancel_exit` — has a
+`register_children`, `refresh_paint_bounds`, and the three a removed widget, and
+what is built inside it, are asked about their exits, `begin_exit`, `is_exiting`
+and `cancel_exit` — has a
 default.
 
 A row that cannot fit its children shrinks the ones that can be narrower, and

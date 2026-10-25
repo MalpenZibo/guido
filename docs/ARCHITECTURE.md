@@ -515,12 +515,14 @@ pub trait Widget {
     /// Reconcile dynamic children. Returns true if children changed.
     fn reconcile_children(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
-    /// Removed from a dynamic list: play the exit it declared, if any, and
-    /// say whether it did. `false` is torn down in the same pass.
+    /// Removed from a dynamic list, or built inside a row that was (as far
+    /// as the next list): play the exit it declared, if any, and say whether
+    /// it did. A row none of whose exits plays is torn down in the same pass.
     fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
-    /// Whether that exit is still playing; once not, it is disposed.
+    /// Whether that exit is still playing. The row is disposed once none of
+    /// the exits it asked for is.
     fn is_exiting(&self) -> bool { false }
-    /// Its key came back mid-exit: stay, and go home from where it is.
+    /// Its row's key came back mid-exit: stay, and go home from where it is.
     fn cancel_exit(&mut self, tree: &mut Tree, id: WidgetId) {}
     /// The reactive scope it owns, if any: a leaving subtree pauses the
     /// effects and timers in it, and a reclaimed one resumes them. Hidden

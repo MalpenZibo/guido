@@ -140,9 +140,16 @@ impl Layout for ZStack {
     ) -> Size {
         self.hints.clear();
         self.hints.extend(children.iter().map(|&child_id| {
-            ctx.tree_ref()
+            let tree = ctx.tree_ref();
+            let mut hints = tree
                 .with_widget(child_id, |w| w.layout_hints())
-                .unwrap_or_default()
+                .unwrap_or_default();
+            // Leaving the stack is being removed from it. A child exiting
+            // because a row around the stack was removed leaves with the
+            // stack, and goes on leading it (#891).
+            hints.leaving =
+                hints.leaving && tree.row_of(child_id).is_none_or(|row| row == child_id);
+            hints
         }));
 
         // Pass 1: children that don't fill an axis establish the stack size on

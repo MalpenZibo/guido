@@ -1153,8 +1153,10 @@ pub trait Widget {
     /// child always was. `true` keeps it in the tree, inert, until
     /// [`is_exiting`](Self::is_exiting) says the exit has settled.
     ///
-    /// Only the removed widget itself is asked: an exit declared further down
-    /// plays when *that* widget is the one removed.
+    /// Asked of the removed widget and of everything built inside it, as far
+    /// as the next dynamic list: a row of a list inside it is that list's to
+    /// remove, and goes with it whatever it declared. The removed widget stays
+    /// until every exit that began has settled.
     fn begin_exit(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let _ = (tree, id);
         false
