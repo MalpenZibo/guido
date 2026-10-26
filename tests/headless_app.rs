@@ -3744,10 +3744,57 @@ fn a_text_wider_than_the_screen_measures_the_height_it_wraps_to() {
 
     let (_, one_line) = *app.sizes_asked(short).last().expect("measured");
     let (width, height) = *app.sizes_asked(long).last().expect("measured");
-    assert!(width <= 800, "capped at the screen: {width}");
+    assert!(
+        (700..=800).contains(&width),
+        "wrapped at the cap, 800 with no output, so as wide as its longest line \
+         there: {width}"
+    );
     assert!(
         height >= 3 * one_line,
         "and as tall as the lines it wraps to there, not one: {height} against \
+         {one_line} for one line"
+    );
+}
+
+/// A height that follows a text with a transition heads for the height the
+/// text wraps to, when the text grows past the screen.
+///
+/// The measure past the cap is the second of the frame, and a size that
+/// follows its content keeps the target the frame's first measure gave it.
+/// That one is the measure with no maximum, where the text is one line — so
+/// unless the second measure starts the frame's targets over, the box eases to
+/// one line while the text wraps to several.
+#[test]
+fn a_transitioned_height_follows_a_text_that_grows_past_the_screen() {
+    let Some(mut app) = headless() else { return };
+    let words = create_signal(String::from("one line"));
+    let toast = app.surface(
+        SurfaceConfig::new()
+            .width(content())
+            .height(content())
+            .anchor(Anchor::TOP),
+        move || {
+            container()
+                .height(
+                    Length::default().transition(Transition::new(100.0, TimingFunction::Linear)),
+                )
+                .child(text(move || words.get()))
+        },
+    );
+    app.configure(toast, 1, 1, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+    app.step_at(t0);
+    let (_, one_line) = *app.sizes_asked(toast).last().expect("measured");
+
+    words.set("a line far too long to fit on any screen ".repeat(40));
+    for ms in [0, 50, 100, 200] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    let (_, height) = *app.sizes_asked(toast).last().expect("measured");
+    assert!(
+        height >= 3 * one_line,
+        "the box heads for the lines the text wraps to: {height} against \
          {one_line} for one line"
     );
 }

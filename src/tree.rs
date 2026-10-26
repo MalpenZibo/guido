@@ -1236,6 +1236,17 @@ impl Tree {
         }
     }
 
+    /// Withdraw what this frame's measures said about where content-following
+    /// sizes are heading, so the next measure says it again.
+    ///
+    /// For a measure that replaces the one before it rather than one asked
+    /// inside it: a content-sized surface measured with no maximum and then
+    /// again at the cap, where a text wraps. The stamps compare against the
+    /// frame's count, so moving the count on withdraws all of them at once.
+    pub(crate) fn measure_again(&mut self) {
+        self.frame = self.frame.wrapping_add(1).max(1);
+    }
+
     /// Whether a measure has already asked `id` where it is heading on this
     /// frame: a size that follows its content has its target from that
     /// measure until the frame ends. The first such measure's: a layout that

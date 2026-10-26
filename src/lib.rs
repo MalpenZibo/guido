@@ -732,6 +732,8 @@ fn measure_natural_size(
     let (past_w, past_h) = (past(w, fixed_w, cap_w), past(h, fixed_h, cap_h));
     let (w, h) = if past_w || past_h {
         let at = |past: bool, cap: f32| if past { cap } else { f32::INFINITY };
+        // The targets the first measure set are the ones the cap replaces.
+        tree.measure_again();
         measure_within(tree, root, pins, (at(past_w, cap_w), at(past_h, cap_h)))
     } else {
         (w, h)

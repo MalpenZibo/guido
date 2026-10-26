@@ -235,8 +235,8 @@ impl From<[u32; 4]> for Margin {
 ///   its parent on purpose is not part of the natural size.
 /// - A `Content` axis is measured with no maximum, then held under the
 ///   output's size: a root that fills the surface measures at its content,
-///   as `fill()` does on a scroller's axis, and content too wide for the
-///   screen is measured again at its width.
+///   as `fill()` does on a scroller's axis, and an axis that comes out past
+///   the cap is measured again at it.
 /// - On an axis anchored to both screen edges the compositor owns the
 ///   size; `Content` there is ignored with a warning at creation.
 /// - An exclusive zone of [`ExclusiveZone::Auto`] follows content
