@@ -147,7 +147,11 @@ impl Container {
     ) -> BoxLengths {
         let (padding, border, mut width, mut height, overflow) = (
             self.animated_padding(ctx, id),
-            self.laid_out_border_width(ctx, id),
+            if self.border_is_the_merges(id) {
+                0.0
+            } else {
+                self.laid_out_border_width(ctx, id)
+            },
             self.width.get_finite_or(Length::default(), id, "width"),
             self.height.get_finite_or(Length::default(), id, "height"),
             self.overflow.get_or(Overflow::Visible),

@@ -1357,3 +1357,37 @@ fn merged_children_are_drawn_once_where_their_container_is() {
         render_flattened(view, 240.0, 60.0),
     );
 }
+
+/// A merging container's border belongs to the merged shape: it is drawn
+/// along the merged outline and takes no room in the container's box, so the
+/// child sits at the box's corner and an `Overflow::Hidden` box cuts its
+/// children at its own edge, not inside a border it does not draw (#902).
+#[test]
+fn a_merged_border_takes_no_room_in_its_box() {
+    // And a scroller that merges, whose scrollbar sits at the box's edge where
+    // its track was laid out, not inset by the border.
+    let view = container()
+        .padding(8.0)
+        .layout(Flex::row().spacing(8.0))
+        .child(
+            container()
+                .layout(ZStack::new())
+                .merge_children(8.0)
+                .border(1.0, Color::WHITE)
+                .overflow(Overflow::Hidden)
+                .child(swatch(36.0, 36.0, Color::BLACK).corners(18.0)),
+        )
+        .child(
+            container()
+                .height(36.0)
+                .merge_children(8.0)
+                .border(1.0, Color::WHITE)
+                .scroll(Scroll::vertical())
+                .child(swatch(36.0, 100.0, Color::BLACK)),
+        );
+
+    assert_snapshot(
+        "a_merged_border_takes_no_room_in_its_box",
+        render_flattened(view, 120.0, 60.0),
+    );
+}

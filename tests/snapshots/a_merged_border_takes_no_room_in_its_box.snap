@@ -1,0 +1,20 @@
+node 0,0 96x52
+  node 0,0 36x36 at 8,8 children_clip(0,0 36x36 r=0) merge(distance=8)
+    node 0,0 36x36
+      draw rect 0,0 36x36 fill=#000000ff radius=18/18/18/18
+  node 0,0 36x36 at 52,8 children_clip(0,0 36x36 r=0) merge(distance=8)
+    node 0,0 36x100
+      draw rect 0,0 36x100 fill=#000000ff radius=0/0/0/0
+    node 0,0 6x32 at 28,2
+      draw rect 0,0 6x32 fill=#ffffff0d radius=100/100/100/100
+    node 0,0 6x20 at 28,2
+      draw rect 0,0 6x20 fill=#ffffff4d radius=100/100/100/100
+flattened
+  at 8,8
+    draw merged -2,-2 40x40 distance=8 border=#ffffffff@1
+      member 0,0 36x36 at 0,0 fill=#000000ff radius=18
+  at 52,8
+    draw merged -2,-2 40x104 distance=8 border=#ffffffff@1
+      member 0,0 36x100 at 0,0 fill=#000000ff radius=0
+      member 0,0 6x32 at 28,2 fill=#ffffff0d radius=100
+      member 0,0 6x20 at 28,2 fill=#ffffff4d radius=100

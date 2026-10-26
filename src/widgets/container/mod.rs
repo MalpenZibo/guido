@@ -1565,7 +1565,8 @@ impl Container {
     /// This container's own [`border`](Self::border) and
     /// [`shadow`](Self::shadow) belong to the merged shape: the border is drawn
     /// along its outline in place of the children's, and every outer shadow is
-    /// cast by it. Its inset shadows, and its own background, stay on its own
+    /// cast by it. Never drawn round this container's box, the border takes no
+    /// room in it either; [`padding`](Self::padding) is what keeps room inside. Its inset shadows, and its own background, stay on its own
     /// box, drawn underneath as usual.
     ///
     /// Children that each [blur their backdrop](Self::backdrop_blur) alike
@@ -2310,7 +2311,7 @@ impl Widget for Container {
             || self.scroll_axis != ScrollAxis::None;
         let in_clip = clips_children && {
             let (clip, inner) =
-                style::inside_border(hit.bounds, hit.corners, self.animated_border_width(id));
+                style::inside_border(hit.bounds, hit.corners, self.box_border_width(id));
             clip.contains_shape_at(local_event.coords(), inner)
         };
 
@@ -2612,9 +2613,10 @@ impl Widget for Container {
         let is_scrollable = self.scroll_axis != ScrollAxis::None;
 
         // A scroller or an `Overflow::Hidden` box cuts its children inside
-        // its border, so they cannot paint over it.
+        // the border its box keeps, so they cannot paint over it.
         if is_scrollable || overflow == Overflow::Hidden {
-            let (clip, inner) = style::inside_border(local_bounds, corners, border_width);
+            let (clip, inner) =
+                style::inside_border(local_bounds, corners, self.box_border_width(id));
             ctx.set_children_clip(clip, inner.radii, inner.curvature);
         }
 

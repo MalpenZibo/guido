@@ -336,7 +336,7 @@ impl Container {
     ) -> (f32, f32) {
         let bounds = tree.get_bounds(id).unwrap_or_default();
         let local_bounds =
-            Self::scrollbar_box(bounds.width, bounds.height, self.animated_border_width(id));
+            Self::scrollbar_box(bounds.width, bounds.height, self.box_border_width(id));
 
         let sd = self.scroll_data();
         let needs_other = match axis {
@@ -548,7 +548,7 @@ impl Container {
         let bounds = Self::scrollbar_box(
             hit.bounds.width,
             hit.bounds.height,
-            self.animated_border_width(id),
+            self.box_border_width(id),
         );
 
         match event {
