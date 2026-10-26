@@ -126,6 +126,15 @@ pub struct WaylandSurfaceState {
 }
 
 impl WaylandSurfaceState {
+    /// Commit what is pending on this surface — unless a resize is holding it
+    /// for the buffer drawn at it, which will carry it instead: a commit of its
+    /// own would latch the size over the buffer the surface is leaving (#900).
+    pub(crate) fn commit_requests(&self) {
+        if !self.resize_rides {
+            self.wl_surface.commit();
+        }
+    }
+
     /// Take on a size to draw at, leaving an axis given as zero as it is, and
     /// say whether that changed it. The one writer of the drawn size: a
     /// configure, and a resize asked for since.
@@ -532,7 +541,7 @@ impl WaylandState {
         );
 
         if commit {
-            surface_state.wl_surface.commit();
+            surface_state.commit_requests();
         }
     }
 
@@ -540,7 +549,7 @@ impl WaylandState {
     pub fn set_surface_input_region(&mut self, id: SurfaceId, rects: Option<&[Rect]>) {
         if let Some(surface_state) = self.surfaces.get(&id) {
             self.apply_input_region(&surface_state.wl_surface, rects);
-            surface_state.wl_surface.commit();
+            surface_state.commit_requests();
             log::info!(
                 "Surface {:?} input region set to {}",
                 id,
@@ -696,13 +705,11 @@ impl WaylandState {
     pub(crate) fn close_layer_batch(&mut self, batch: LayerBatch) {
         let (id, outermost) = (batch.id, batch.is_outermost());
         drop(batch);
-        // A group holding a resize is committed by the buffer drawn at it.
         if outermost
             && let Some(state) = self.surfaces.get(&id)
             && matches!(state.role, SurfaceRole::Layer(_))
-            && !state.resize_rides
         {
-            state.wl_surface.commit();
+            state.commit_requests();
         }
     }
 
@@ -719,8 +726,8 @@ impl WaylandState {
             match &surface_state.role {
                 SurfaceRole::Layer(layer_surface) => {
                     f(layer_surface);
-                    if !batching && !surface_state.resize_rides {
-                        surface_state.wl_surface.commit();
+                    if !batching {
+                        surface_state.commit_requests();
                     }
                 }
                 SurfaceRole::Lock(_) | SurfaceRole::Popup { .. } => {

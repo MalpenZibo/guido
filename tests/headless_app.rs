@@ -3855,6 +3855,55 @@ fn a_shrinking_surface_commits_its_size_with_a_buffer_of_it() {
     resizes_with_a_buffer_of_its_size(80.0, 24.0);
 }
 
+/// A width on a surface anchored to the right edge, where the box grows to the
+/// left and the old buffer would be drawn from its new left edge.
+#[test]
+fn a_right_anchored_surface_commits_its_width_with_a_buffer_of_it() {
+    let Some(mut app) = headless() else { return };
+    let width = create_signal(100.0f32);
+    let dock = app.surface(
+        SurfaceConfig::new()
+            .width(content())
+            .height(30)
+            .anchor(Anchor::TOP | Anchor::RIGHT),
+        move || container().width(move || width.get()).height(30.0),
+    );
+    app.configure(dock, 100, 30, 1.0);
+    app.step();
+    let commits = app.size_commits(dock).len();
+
+    width.set(300.0);
+    app.step();
+
+    every_size_rode_a_buffer_of_it(&app, dock, commits);
+    assert_eq!(app.physical_size(dock), (300, 30));
+}
+
+/// The compositor has the last word: a configure that does not give the size
+/// asked for — niri clamping a surface to the area it may take — is the size
+/// the next frame is drawn at.
+#[test]
+fn a_configure_that_clamps_the_size_asked_for_is_drawn_at() {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(24.0f32);
+    let bar = app.surface(content_bar(), move || {
+        container().height(move || height.get())
+    });
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+
+    height.set(80.0);
+    app.step();
+    assert_eq!(app.physical_size(bar), (200, 80), "drawn at what it asked");
+    app.configure(bar, 200, 70, 1.0);
+    app.step();
+    assert_eq!(
+        app.physical_size(bar),
+        (200, 70),
+        "and then at what it was given"
+    );
+}
+
 /// And for a size an application sets, pinning a content axis and handing it
 /// back: the bar that covers the output while a panel is open.
 #[test]
