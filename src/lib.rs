@@ -1864,7 +1864,16 @@ fn layout_pass<P: Platform>(
     if has_pending_layouts
         && let Some(popup_width) = wayland_state.surface(id).and_then(|s| s.popup_auto_width())
     {
-        let natural = measure_popup_height(tree, surface.widget_id, popup_width, id);
+        // A shrink waits for the content to settle, as a content-sized layer
+        // surface's does.
+        let measured = measure_popup_height(tree, surface.widget_id, popup_width, id);
+        let (_, natural) = hold_content_size(
+            surface,
+            tree,
+            (popup_width, measured),
+            (Some(popup_width), None),
+            frame,
+        );
         tree.layout_widget(surface.widget_id, constraints);
         with_surface(wayland_state, id, |s| {
             s.reposition_popup_if_changed(natural)
@@ -1887,13 +1896,7 @@ fn layout_pass<P: Platform>(
         // waits for it to settle.
         let pins = surface::measure_pins(&surface.config, (frame.width, frame.height));
         let measured = measure_natural_size(tree, surface.widget_id, pins.0, pins.1, id);
-        let (nw, nh) = surface::held_while_in_flight(
-            measured,
-            surface.content_size.unwrap_or((frame.width, frame.height)),
-            pins,
-            tree.depended_on_the_pass(surface.widget_id, tree::LayoutPass::Measure),
-        );
-        surface.content_size = Some((nw, nh));
+        let (nw, nh) = hold_content_size(surface, tree, measured, pins, frame);
         // Compared as they will be *asked for*, not as they were measured. On an
         // axis the compositor owns both sides are zero, so a `content()` width
         // under `LEFT | RIGHT` cannot make this true for ever by measuring 300
@@ -1964,6 +1967,27 @@ fn layout_pass<P: Platform>(
     // against.
     reactive::focus::apply_pending_focus(tree);
     drawn
+}
+
+/// What a content-sized surface asks for from what its content `measured`,
+/// with a shrink held while the content is in flight (see
+/// [`surface::held_while_in_flight`]) — and remembered, as the size it asked
+/// for, which the next frame's hold starts from.
+fn hold_content_size(
+    surface: &mut ManagedSurface,
+    tree: &Tree,
+    measured: (u32, u32),
+    pins: (Option<u32>, Option<u32>),
+    frame: &Frame,
+) -> (u32, u32) {
+    let held = surface::held_while_in_flight(
+        measured,
+        surface.content_size.unwrap_or((frame.width, frame.height)),
+        pins,
+        tree.depended_on_the_pass(surface.widget_id, tree::LayoutPass::Measure),
+    );
+    surface.content_size = Some(held);
+    held
 }
 
 /// Send the size the surface is currently asking for, and report whether the

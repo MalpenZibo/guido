@@ -412,8 +412,8 @@ pub(crate) fn needs_content_measure(config: &SurfaceConfig) -> bool {
     (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h)
 }
 
-/// The size a content-sized layer surface asks for, from what its content
-/// measured. An auto-height popup does not come through here yet.
+/// The size a content-sized surface asks for, from what its content measured:
+/// a layer surface on its content axes, an auto-height popup on its height.
 ///
 /// The measure reads where animations are going, so a growth is asked for at
 /// once and plays inside the size it ends at. A shrink waits: while the measure
@@ -845,7 +845,9 @@ pub struct PopupConfig {
     /// Popup height in logical pixels. `None` (the default) sizes the popup
     /// to its content: the widget is laid out at the given width before the
     /// popup is created, and repositioned when its content height changes
-    /// (submenus expanding, lists growing). Content using `height(fill())`
+    /// (submenus expanding, lists growing) — at once when it grows, and once
+    /// the content has settled when it shrinks, so a close is not cut off in
+    /// its first frame. Content using `height(fill())`
     /// resolves to the screen-height cap — give such popups an explicit
     /// height instead.
     pub height: Option<u32>,

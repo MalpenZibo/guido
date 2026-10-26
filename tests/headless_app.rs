@@ -3540,20 +3540,26 @@ fn a_content_sized_surface_follows_content_that_grows() {
     );
 }
 
-/// A content-sized surface eased from 80 to 24 over 100 ms, configured at 80.
-/// Returns the app, the surface, the signal that opens it, and the instant the
-/// close starts at: what the zones asked after that instant are compared from.
-fn closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
-    let mut app = headless()?;
-    let tall = create_signal(true);
-    let bar = app.surface(content_bar(), move || {
+/// A box 80 tall while `tall` holds and 24 when it does not, easing between
+/// the two over 100 ms.
+fn eases_80_to_24(tall: RwSignal<bool>) -> impl Fn() -> Container + 'static {
+    move || {
         container().child(
             container().height(
                 (move || if tall.get() { 80.0 } else { 24.0 })
                     .transition(Transition::new(100.0, TimingFunction::Linear)),
             ),
         )
-    });
+    }
+}
+
+/// A content-sized surface eased from 80 to 24 over 100 ms, configured at 80.
+/// Returns the app, the surface, the signal that opens it, and the instant the
+/// close starts at: what the zones asked after that instant are compared from.
+fn closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
+    let mut app = headless()?;
+    let tall = create_signal(true);
+    let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 80, 1.0);
     let t0 = Instant::now();
     app.step_at(t0);
@@ -3578,11 +3584,22 @@ fn a_shrinking_child_keeps_the_surface_until_it_has_settled() {
 /// Steps a surface through a 100 ms shrink that started at `t0`: nothing new
 /// is reserved while it plays, and 24 once, when it is over.
 fn holds_then_shrinks_to_24(app: &mut Headless, bar: SurfaceId, t0: Instant) {
-    let before = app.exclusive_zones_asked(bar).len();
+    holds_then_asks_once_for_24(app, bar, t0, Headless::exclusive_zones_asked);
+}
+
+/// The same, for whatever `asked` reads off the surface: nothing new while
+/// the shrink plays, and 24 once, when it is over.
+fn holds_then_asks_once_for_24<T: PartialEq + std::fmt::Debug + From<u8>>(
+    app: &mut Headless,
+    id: SurfaceId,
+    t0: Instant,
+    asked: fn(&Headless, SurfaceId) -> &[T],
+) {
+    let before = asked(app, id).len();
     for ms in [0, 20, 40, 60, 80] {
         app.step_at(t0 + Duration::from_millis(ms));
         assert_eq!(
-            app.exclusive_zones_asked(bar)[before..],
+            asked(app, id)[before..],
             [],
             "{ms} ms into a 100 ms shrink, the surface already shrank"
         );
@@ -3591,8 +3608,8 @@ fn holds_then_shrinks_to_24(app: &mut Headless, bar: SurfaceId, t0: Instant) {
         app.step_at(t0 + Duration::from_millis(ms));
     }
     assert_eq!(
-        app.exclusive_zones_asked(bar)[before..],
-        [24],
+        asked(app, id)[before..],
+        [T::from(24)],
         "settled, it asks once for where the content went"
     );
 }
@@ -3609,14 +3626,7 @@ fn holds_then_shrinks_to_24(app: &mut Headless, bar: SurfaceId, t0: Instant) {
 fn a_content_axis_given_back_mid_close_holds_the_pinned_size() {
     let Some(mut app) = headless() else { return };
     let tall = create_signal(false);
-    let bar = app.surface(content_bar(), move || {
-        container().child(
-            container().height(
-                (move || if tall.get() { 80.0 } else { 24.0 })
-                    .transition(Transition::new(100.0, TimingFunction::Linear)),
-            ),
-        )
-    });
+    let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 24, 1.0);
     let t0 = Instant::now();
     app.step_at(t0);
@@ -3925,6 +3935,52 @@ fn a_pinned_size_and_its_release_commit_with_a_buffer_of_them() {
     assert_eq!(app.physical_size(bar), (200, 24), "and back at its content");
 }
 
+/// An auto-height popup whose content eases from 80 to 24 over 100 ms, opened
+/// on a bar. Returns the app, the popup, the signal that opens it, and the
+/// instant the close starts at.
+fn popup_closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
+    let mut app = headless()?;
+    let bar = app.surface(content_bar(), measuring_24);
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+    let tall = create_signal(true);
+    let popup = spawn_popup(bar, PopupConfig::new(80), eases_80_to_24(tall));
+    let t0 = Instant::now();
+    app.step_at(t0);
+    app.step_at(t0);
+    tall.set(false);
+    Some((app, popup.id(), tall, t0))
+}
+
+/// An auto-height popup whose content animates smaller keeps its height while
+/// the content is on its way down, and asks once for where it went: the hold
+/// a content-sized layer surface has (#893), on the popup's own measure (#894).
+#[test]
+fn a_shrinking_popup_keeps_its_height_until_it_has_settled() {
+    let Some((mut app, popup, _, t0)) = popup_closing_from_80() else {
+        return;
+    };
+    holds_then_asks_once_for_24(&mut app, popup, t0, Headless::popup_heights_asked);
+}
+
+/// A popup's close reopened half way asks for nothing.
+#[test]
+fn a_popup_close_reopened_half_way_never_repositions_it() {
+    let Some((mut app, popup, tall, t0)) = popup_closing_from_80() else {
+        return;
+    };
+    let before = app.popup_heights_asked(popup).len();
+
+    for ms in [0, 20, 40] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    tall.set(true);
+    for ms in [40, 60, 80, 100, 120, 160, 200] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    assert_eq!(app.popup_heights_asked(popup)[before..], []);
+}
+
 /// A close interrupted by a reopen asks for nothing: the surface never shrank,
 /// so there is nothing to grow back to.
 #[test]
@@ -4044,14 +4100,7 @@ fn a_surface_turned_content_wide_at_its_own_height_asks_as_before() {
 fn a_growing_child_configures_the_surface_once_to_where_it_is_going() {
     let Some(mut app) = headless() else { return };
     let tall = create_signal(false);
-    let bar = app.surface(content_bar(), move || {
-        container().child(
-            container().height(
-                (move || if tall.get() { 80.0 } else { 24.0 })
-                    .transition(Transition::new(100.0, TimingFunction::Linear)),
-            ),
-        )
-    });
+    let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 24, 1.0);
     let t0 = Instant::now();
     app.step_at(t0);
