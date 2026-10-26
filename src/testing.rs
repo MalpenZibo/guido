@@ -56,6 +56,15 @@ struct RecordedSurface {
     /// `conflicting_grab_popups` cannot be answered without it, and a recorder
     /// that throws it away leaves that path with no sensor at all.
     grab: bool,
+    /// The width an auto-height popup is measured at, or `None` for a surface
+    /// whose height is its own.
+    auto_width: Option<u32>,
+    /// Every height an auto-height popup asked to be repositioned to, oldest
+    /// first.
+    popup_heights_asked: Vec<u32>,
+    /// The height asked for and not yet configured, which is not asked again,
+    /// as the Wayland platform keeps it.
+    pending_popup_height: Option<u32>,
     width: u32,
     height: u32,
     scale: f32,
@@ -281,6 +290,20 @@ impl Surface for &mut RecordedSurface {
         self.exclusive_zones.push(zone);
     }
 
+    fn popup_auto_width(&self) -> Option<u32> {
+        self.auto_width
+    }
+
+    /// As `WaylandState::reposition_popup_if_changed` answers it: nothing for
+    /// the height it has, or the one it is already waiting on.
+    fn reposition_popup_if_changed(&mut self, new_height: u32) {
+        if self.height == new_height || self.pending_popup_height == Some(new_height) {
+            return;
+        }
+        self.popup_heights_asked.push(new_height);
+        self.pending_popup_height = Some(new_height);
+    }
+
     /// A compositor with `wp_viewporter`: without one the loop's declaration
     /// goes nowhere and the recorder would be keeping an empty list.
     fn set_viewport_destination(&mut self, width: u32, height: u32) {
@@ -380,6 +403,7 @@ impl Platform for Recorder {
             RecordedSurface {
                 parent: Some(parent),
                 grab: config.grab,
+                auto_width: config.height.is_none().then_some(config.width),
                 width: size.0,
                 height: size.1,
                 scale: 1.0,
@@ -657,6 +681,7 @@ impl Headless {
         surface.width = width;
         surface.height = height;
         surface.configured = true;
+        surface.pending_popup_height = None;
     }
 
     /// Stop sending one surface its frame callbacks, as a compositor does for
@@ -850,6 +875,12 @@ impl Headless {
     /// blur hands it over again, and it is the platform that drops the repeat.
     pub fn blur_regions_asked(&self, id: SurfaceId) -> &[Vec<Rect>] {
         &self.host.get(id).blur_regions
+    }
+
+    /// Every height an auto-height popup asked to be repositioned to, oldest
+    /// first.
+    pub fn popup_heights_asked(&self, id: SurfaceId) -> &[u32] {
+        &self.host.get(id).popup_heights_asked
     }
 
     /// The sizes a surface has asked for, oldest first.
