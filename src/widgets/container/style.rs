@@ -619,6 +619,24 @@ impl Container {
         width.max(0.0)
     }
 
+    /// Whether this container's border belongs to the merged shape of its
+    /// children rather than to its box. It is drawn along the merged outline
+    /// and never round the box, so the box keeps none of it: no room in the
+    /// layout, and no inset for the clip, the hit test or the scrollbar (#902).
+    pub(super) fn border_is_the_merges(&self, id: WidgetId) -> bool {
+        self.merge_distance(id).is_some()
+    }
+
+    /// The border this container's box keeps, as the clip, the hit test and
+    /// the scrollbar read it: none for a merging container.
+    pub(super) fn box_border_width(&self, id: WidgetId) -> f32 {
+        if self.border_is_the_merges(id) {
+            0.0
+        } else {
+            self.animated_border_width(id)
+        }
+    }
+
     /// Never below zero, as the layout reads it: a spring overshooting past
     /// none must not turn the clip and the hit test inside the border into an
     /// outset.

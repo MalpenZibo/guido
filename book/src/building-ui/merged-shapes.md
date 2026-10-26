@@ -49,7 +49,10 @@ without a border fades the border out along the neck.
 
 The merging container's own `border` and `shadow` belong to the merged shape.
 The border is drawn along its outline in place of the children's, and every outer
-shadow is cast by the whole of it, neck included. An inset shadow stays inside
+shadow is cast by the whole of it, neck included. Since the border is never drawn
+round the container's own box, it takes no room in it, as a stroke on a merged
+shape takes none in a vector tool: the children are laid out from the box's edge,
+and padding is what keeps room inside. An inset shadow stays inside
 the container's own box, and so does its background, if it has one, drawn
 underneath as usual. A child's own shadows are drawn beneath the merged shape,
 and its inset ones over it, inside the child's box.
