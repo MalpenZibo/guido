@@ -2904,11 +2904,12 @@ impl Tree {
         }
     }
 
-    /// Whether the last layout that ran `id` said its answer depended on the
-    /// pass: something in flight, in it or below it.
-    pub(crate) fn last_layout_depended_on_the_pass(&self, id: WidgetId) -> bool {
+    /// Whether the last time `pass` ran `id` it said its answer depended on
+    /// the pass: something in flight, in it or below it. For a measure, that
+    /// the size it reported is where something is going, not where it is yet.
+    pub(crate) fn depended_on_the_pass(&self, id: WidgetId, pass: LayoutPass) -> bool {
         self.get_dense_index(id)
-            .and_then(|idx| self.dense[idx].laid_out)
+            .and_then(|idx| self.dense[idx].ran(pass))
             .is_some_and(|entry| entry.pass_dependent)
     }
 
@@ -5495,7 +5496,7 @@ impl LayoutCtx<'_> {
     /// Whether this widget's last layout said its answer depended on the
     /// pass: something in flight, in it or below it, as of the last frame.
     pub(crate) fn last_layout_depended_on_the_pass(&self) -> bool {
-        self.tree.last_layout_depended_on_the_pass(self.id)
+        self.tree.depended_on_the_pass(self.id, LayoutPass::Layout)
     }
 
     /// Whether a measure has already asked this widget where it is heading on

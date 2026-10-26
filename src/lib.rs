@@ -1849,10 +1849,17 @@ fn layout_pass<P: Platform>(
         // surface is stuck at its initial size: the real layout
         // clamps to the surface, so a measured rect can never exceed
         // it. The measure reads animation TARGETS, so an animated
-        // growth resizes once and the animation plays inside.
-        let (fixed_w, fixed_h) =
-            surface::measure_pins(&surface.config, (frame.width, frame.height));
-        let (nw, nh) = measure_natural_size(tree, surface.widget_id, fixed_w, fixed_h, id);
+        // growth resizes once and the animation plays inside; a shrink
+        // waits for it to settle.
+        let pins = surface::measure_pins(&surface.config, (frame.width, frame.height));
+        let measured = measure_natural_size(tree, surface.widget_id, pins.0, pins.1, id);
+        let (nw, nh) = surface::held_while_in_flight(
+            measured,
+            surface.content_size.unwrap_or((frame.width, frame.height)),
+            pins,
+            tree.depended_on_the_pass(surface.widget_id, tree::LayoutPass::Measure),
+        );
+        surface.content_size = Some((nw, nh));
         tree.layout_widget(surface.widget_id, constraints);
         // Compared as they will be *asked for*, not as they were measured. On an
         // axis the compositor owns both sides are zero, so a `content()` width

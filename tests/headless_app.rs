@@ -3540,6 +3540,114 @@ fn a_content_sized_surface_follows_content_that_grows() {
     );
 }
 
+/// A content-sized surface eased from 80 to 24 over 100 ms, configured at 80.
+/// Returns the app, the surface, the signal that opens it, and the instant the
+/// close starts at: what the zones asked after that instant are compared from.
+fn closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
+    let mut app = headless()?;
+    let tall = create_signal(true);
+    let bar = app.surface(content_bar(), move || {
+        container().child(
+            container().height(
+                (move || if tall.get() { 80.0 } else { 24.0 })
+                    .transition(Transition::new(100.0, TimingFunction::Linear)),
+            ),
+        )
+    });
+    app.configure(bar, 200, 80, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+    tall.set(false);
+    Some((app, bar, tall, t0))
+}
+
+/// A surface whose content animates smaller keeps its size while the content
+/// is on its way down, and asks once for where it went when it gets there.
+///
+/// The measure reads where the animation is going, which is what lets a growth
+/// resize once, up front. The same read on a close shrinks the surface in the
+/// close's first frame and cuts off everything still on its way (#893).
+#[test]
+fn a_shrinking_child_keeps_the_surface_until_it_has_settled() {
+    let Some((mut app, bar, _, t0)) = closing_from_80() else {
+        return;
+    };
+    holds_then_shrinks_to_24(&mut app, bar, t0);
+}
+
+/// Steps a surface through a 100 ms shrink that started at `t0`: nothing new
+/// is reserved while it plays, and 24 once, when it is over.
+fn holds_then_shrinks_to_24(app: &mut Headless, bar: SurfaceId, t0: Instant) {
+    let before = app.exclusive_zones_asked(bar).len();
+    for ms in [0, 20, 40, 60, 80] {
+        app.step_at(t0 + Duration::from_millis(ms));
+        assert_eq!(
+            app.exclusive_zones_asked(bar)[before..],
+            [],
+            "{ms} ms into a 100 ms shrink, the surface already shrank"
+        );
+    }
+    for ms in [100, 120, 140] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    assert_eq!(
+        app.exclusive_zones_asked(bar)[before..],
+        [24],
+        "settled, it asks once for where the content went"
+    );
+}
+
+/// A close interrupted by a reopen asks for nothing: the surface never shrank,
+/// so there is nothing to grow back to.
+#[test]
+fn a_close_reopened_half_way_never_resizes_the_surface() {
+    let Some((mut app, bar, tall, t0)) = closing_from_80() else {
+        return;
+    };
+    let zones = app.exclusive_zones_asked(bar).len();
+    let sizes = app.sizes_asked(bar).len();
+
+    for ms in [0, 20, 40] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    tall.set(true);
+    for ms in [40, 60, 80, 100, 120, 140, 160, 200] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    assert_eq!(
+        app.exclusive_zones_asked(bar)[zones..],
+        [],
+        "no reservation"
+    );
+    assert_eq!(app.sizes_asked(bar)[sizes..], [], "and no size");
+}
+
+/// A keyed row that leaves by collapsing holds the surface open for its exit,
+/// and the surface shrinks once the row is gone.
+#[test]
+fn a_collapsing_row_keeps_the_surface_until_it_is_gone() {
+    let Some(mut app) = headless() else { return };
+    let rows = create_signal(vec![0u32, 1]);
+    let bar = app.surface(content_bar(), move || {
+        container().layout(Flex::column()).children(keyed(
+            move || rows.get(),
+            |key| *key,
+            |_| {
+                container().height(
+                    Length::exact(24.0)
+                        .transition(Transition::new(100.0, TimingFunction::Linear))
+                        .exiting_to(Length::exact(0.0)),
+                )
+            },
+        ))
+    });
+    app.configure(bar, 200, 48, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+    rows.set(vec![0]);
+    holds_then_shrinks_to_24(&mut app, bar, t0);
+}
+
 /// The sizes a surface asked for, and the zones it reserved.
 type Asked = (Vec<(u32, u32)>, Vec<i32>);
 

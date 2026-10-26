@@ -227,7 +227,12 @@ impl From<[u32; 4]> for Margin {
 ///   happens on CONTENT changes, not per animation frame: the natural
 ///   size is measured against animation **targets**, so an animated
 ///   growth resizes once up front and the animation plays inside the
-///   final-size surface.
+///   final-size surface. A shrink waits instead, until no layout animation
+///   in the surface is still in flight — a close, or a keyed row's
+///   collapsing exit — and then resizes once, so nothing still on its way
+///   down is cut off.
+/// - It measures layout, not paint: what `translate` moves or what overflows
+///   its parent on purpose is not part of the natural size.
 /// - On an axis anchored to both screen edges the compositor owns the
 ///   size; `Content` there is ignored with a warning at creation.
 /// - An exclusive zone of [`ExclusiveZone::Auto`] follows content
@@ -401,6 +406,35 @@ pub(crate) fn initial_declaration(config: &SurfaceConfig) -> InitialDeclaration 
 pub(crate) fn needs_content_measure(config: &SurfaceConfig) -> bool {
     let (owns_w, owns_h) = compositor_owned_axes(config.anchor);
     (config.width.is_content() && !owns_w) || (config.height.is_content() && !owns_h)
+}
+
+/// The size a content-sized layer surface asks for, from what its content
+/// measured. An auto-height popup does not come through here yet.
+///
+/// The measure reads where animations are going, so a growth is asked for at
+/// once and plays inside the size it ends at. A shrink waits: while the measure
+/// read something still in flight, each content axis keeps the size it last
+/// asked for if that is larger, and the smaller size is asked for on the first
+/// frame the content has settled. Asked for any earlier, it cuts off a close, or
+/// a row's collapsing exit, in the close's first frame (#893). An axis the
+/// measure was pinned on is the pin, whatever is in flight.
+pub(crate) fn held_while_in_flight(
+    measured: (u32, u32),
+    asked: (u32, u32),
+    pins: (Option<u32>, Option<u32>),
+    in_flight: bool,
+) -> (u32, u32) {
+    let hold = |measured: u32, asked: u32, pin: Option<u32>| {
+        if in_flight && pin.is_none() {
+            measured.max(asked)
+        } else {
+            measured
+        }
+    };
+    (
+        hold(measured.0, asked.0, pins.0),
+        hold(measured.1, asked.1, pins.1),
+    )
 }
 
 /// Zero the axes the compositor owns, whatever size was going to be asked for.
@@ -1311,6 +1345,33 @@ mod tests {
             .height(content())
             .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
         assert_eq!(measure_pins(&stretched, confirmed), (Some(300), None));
+    }
+
+    /// While the content is in flight a content axis asks for no less than it
+    /// did, and grows at once; settled, it asks for what it measured. A pinned
+    /// axis is the pin either way, so a fixed height lowered mid-animation is
+    /// asked for when it is set.
+    #[test]
+    fn a_content_axis_shrinks_once_settled_and_grows_at_once() {
+        let content = (None, None);
+        assert_eq!(
+            held_while_in_flight((200, 24), (200, 80), content, true),
+            (200, 80)
+        );
+        assert_eq!(
+            held_while_in_flight((240, 80), (200, 24), content, true),
+            (240, 80)
+        );
+        assert_eq!(
+            held_while_in_flight((200, 24), (200, 80), content, false),
+            (200, 24)
+        );
+
+        let pinned = (Some(200), Some(24));
+        assert_eq!(
+            held_while_in_flight((200, 24), (300, 80), pinned, true),
+            (200, 24)
+        );
     }
 
     /// The doc promises "the same shorthands a `Padding` takes, in the same
