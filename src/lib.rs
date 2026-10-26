@@ -697,16 +697,27 @@ fn process_surface_commands<P: Platform>(
     !(closed_surface && quit_on_last_surface && surface_manager.is_empty())
 }
 
-/// Measure a popup's natural content height at the given width.
+/// Measure a popup's natural content height at the given width, under the
+/// cap: a popup's `fill()` height resolves to it.
 fn measure_popup_height(tree: &mut Tree, root: WidgetId, width: u32, parent: SurfaceId) -> u32 {
-    measure_natural_size(tree, root, Some(width), None, parent).1
+    let (_, cap_h) = output_cap(parent);
+    measure_within(tree, root, (Some(width), None), (f32::INFINITY, cap_h)).1
 }
 
-/// Measure a widget tree's natural size. `fixed_w`/`fixed_h` pin an axis;
-/// `None` measures it loose, capped at the surface's output size (minus a
-/// margin) so a runaway or `fill()` content can't request an absurd
-/// surface. Runs as a measure: animation TARGETS, not
-/// in-flight values, so the result is animation-invariant.
+/// Measure a content-sized surface's natural size. `fixed_w`/`fixed_h` pin an
+/// axis; `None` is a content axis.
+///
+/// A content axis is measured with no maximum: the surface has no size there
+/// yet, so there is no space for a `fill()` to fill, and it sizes to its
+/// content as it does on a scroller's axis (#898). The answer is then held
+/// under the output's size, less a margin. An axis that came out past that
+/// cap is measured again *at* it, so a text wraps there and a scroller
+/// scrolls, and the height counts the lines the width wraps to: the width
+/// first and then the height for it, as GTK, Qt and CSS's shrink-to-fit
+/// measure a window sized to its content.
+///
+/// Runs as a measure: animation TARGETS, not in-flight values, so the result
+/// is animation-invariant.
 fn measure_natural_size(
     tree: &mut Tree,
     root: WidgetId,
@@ -714,6 +725,26 @@ fn measure_natural_size(
     fixed_h: Option<u32>,
     surface: SurfaceId,
 ) -> (u32, u32) {
+    let pins = (fixed_w, fixed_h);
+    let (cap_w, cap_h) = output_cap(surface);
+    let (w, h) = measure_within(tree, root, pins, (f32::INFINITY, f32::INFINITY));
+    let past = |v: u32, pin: Option<u32>, cap: f32| pin.is_none() && v as f32 > cap;
+    let (past_w, past_h) = (past(w, fixed_w, cap_w), past(h, fixed_h, cap_h));
+    let (w, h) = if past_w || past_h {
+        let at = |past: bool, cap: f32| if past { cap } else { f32::INFINITY };
+        // The targets the first measure set are the ones the cap replaces.
+        tree.measure_again();
+        measure_within(tree, root, pins, (at(past_w, cap_w), at(past_h, cap_h)))
+    } else {
+        (w, h)
+    };
+    let held = |v: u32, pin: Option<u32>, cap: f32| pin.unwrap_or_else(|| v.min(cap as u32));
+    (held(w, fixed_w, cap_w), held(h, fixed_h, cap_h))
+}
+
+/// The most a content axis may ask for: the output the surface is on, less a
+/// margin, so a runaway content cannot ask for an absurd surface.
+fn output_cap(surface: SurfaceId) -> (f32, f32) {
     let output_size = outputs::current_surface_output(surface)
         .and_then(|oid| {
             outputs::current_outputs()
@@ -727,25 +758,28 @@ fn measure_natural_size(
                 .find_map(|o| o.logical_size)
         });
     let cap = |v: i32| (v as f32 - 64.0).max(100.0);
-    let (cap_w, cap_h) = match output_size {
+    match output_size {
         Some((w, h)) => (cap(w), cap(h)),
         None => (800.0, 800.0),
-    };
+    }
+}
 
-    let (min_w, max_w) = match fixed_w {
-        Some(w) => (w as f32, w as f32),
-        None => (0.0, cap_w),
+/// One measure of `root`: a pinned axis at its pin, a free one under `max`.
+fn measure_within(
+    tree: &mut Tree,
+    root: WidgetId,
+    (fixed_w, fixed_h): (Option<u32>, Option<u32>),
+    (max_w, max_h): (f32, f32),
+) -> (u32, u32) {
+    let axis = |fixed: Option<u32>, max: f32| match fixed {
+        Some(v) => (v as f32, v as f32),
+        None => (0.0, max),
     };
-    let (min_h, max_h) = match fixed_h {
-        Some(h) => (h as f32, h as f32),
-        None => (0.0, cap_h),
-    };
-
-    let constraints = Constraints::new(min_w, min_h, max_w, max_h);
+    let (min_w, max_w) = axis(fixed_w, max_w);
+    let (min_h, max_h) = axis(fixed_h, max_h);
     let measured = tree
-        .measure_widget(root, constraints)
+        .measure_widget(root, Constraints::new(min_w, min_h, max_w, max_h))
         .unwrap_or(layout::Size::new(100.0, 100.0));
-
     let w = fixed_w.unwrap_or_else(|| (measured.width.ceil() as u32).max(1));
     let h = fixed_h.unwrap_or_else(|| (measured.height.ceil() as u32).max(1));
     (w, h)

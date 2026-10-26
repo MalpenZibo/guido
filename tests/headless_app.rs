@@ -3643,6 +3643,162 @@ fn a_content_axis_given_back_mid_close_holds_the_pinned_size() {
     );
 }
 
+/// A bar's root: a stack that fills the surface, holding a backdrop that fills
+/// it too and a strip whose height eases to `strip` over 100 ms, at the bottom.
+fn filling_root(strip: RwSignal<f32>, placed: WidgetRef) -> Container {
+    container()
+        .height(fill())
+        .layout(ZStack::new().align(Alignment::BOTTOM_START))
+        .child(container().width(fill()).height(fill()))
+        .child(
+            container()
+                .width(fill())
+                .height(
+                    (move || strip.get())
+                        .transition(Transition::new(100.0, TimingFunction::Linear)),
+                )
+                .widget_ref(placed),
+        )
+}
+
+/// A root that fills a content axis is measured at its content, not at the
+/// screen: with no surface size yet there is no space to fill, so `fill()`
+/// sizes to what it holds, as it does on a scroller's axis (#898).
+#[test]
+fn a_filling_root_measures_to_its_content() {
+    let Some(mut app) = headless() else { return };
+    let strip = create_signal(24.0f32);
+    let bar = app.surface(content_bar(), move || {
+        filling_root(strip, create_widget_ref())
+    });
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+    app.step();
+
+    assert_eq!(
+        app.exclusive_zones_asked(bar).last(),
+        Some(&24),
+        "the surface follows the strip, not the screen: {:?}",
+        app.exclusive_zones_asked(bar)
+    );
+}
+
+/// While a shrink is held the surface is taller than its content, and a
+/// filling root keeps what it aligns to the bottom at the bottom: the bar
+/// stays on its edge until the surface has shrunk.
+#[test]
+fn a_filling_root_keeps_a_bottom_strip_at_the_bottom_while_a_shrink_is_held() {
+    let Some(mut app) = headless() else { return };
+    let strip = create_signal(80.0f32);
+    let placed = create_widget_ref();
+    let bar = app.surface(content_bar(), move || filling_root(strip, placed));
+    app.configure(bar, 200, 80, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+
+    let before = app.exclusive_zones_asked(bar).len();
+    strip.set(24.0);
+    for ms in [0, 20, 40] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    let rect = placed.rect().get_untracked();
+    assert!(
+        rect.height < 80.0 && rect.height > 24.0,
+        "the strip is on its way down: {rect:?}"
+    );
+    assert_eq!(
+        rect.y + rect.height,
+        80.0,
+        "and its bottom is the surface's: {rect:?}"
+    );
+    assert_eq!(
+        app.exclusive_zones_asked(bar)[before..],
+        [],
+        "the shrink is held"
+    );
+
+    // The same instants again, which moves nothing, and on to the end.
+    holds_then_shrinks_to_24(&mut app, bar, t0);
+}
+
+/// A text too long for the screen still wraps when its surface is measured:
+/// with no maximum it answers with one line, so past the cap its width is
+/// measured again at the cap and the height counts the lines it wraps to.
+#[test]
+fn a_text_wider_than_the_screen_measures_the_height_it_wraps_to() {
+    let Some(mut app) = headless() else { return };
+    let toast = || {
+        SurfaceConfig::new()
+            .width(content())
+            .height(content())
+            .anchor(Anchor::TOP)
+    };
+    let short = app.surface(toast(), || container().child(text("one line")));
+    let long = app.surface(toast(), || {
+        container().child(text("a line far too long to fit on any screen ".repeat(40)))
+    });
+    app.configure(short, 1, 1, 1.0);
+    app.configure(long, 1, 1, 1.0);
+    app.step();
+    app.step();
+
+    let (_, one_line) = *app.sizes_asked(short).last().expect("measured");
+    let (width, height) = *app.sizes_asked(long).last().expect("measured");
+    assert!(
+        (700..=800).contains(&width),
+        "wrapped at the cap, 800 with no output, so as wide as its longest line \
+         there: {width}"
+    );
+    assert!(
+        height >= 3 * one_line,
+        "and as tall as the lines it wraps to there, not one: {height} against \
+         {one_line} for one line"
+    );
+}
+
+/// A height that follows a text with a transition heads for the height the
+/// text wraps to, when the text grows past the screen.
+///
+/// The measure past the cap is the second of the frame, and a size that
+/// follows its content keeps the target the frame's first measure gave it.
+/// That one is the measure with no maximum, where the text is one line — so
+/// unless the second measure starts the frame's targets over, the box eases to
+/// one line while the text wraps to several.
+#[test]
+fn a_transitioned_height_follows_a_text_that_grows_past_the_screen() {
+    let Some(mut app) = headless() else { return };
+    let words = create_signal(String::from("one line"));
+    let toast = app.surface(
+        SurfaceConfig::new()
+            .width(content())
+            .height(content())
+            .anchor(Anchor::TOP),
+        move || {
+            container()
+                .height(
+                    Length::default().transition(Transition::new(100.0, TimingFunction::Linear)),
+                )
+                .child(text(move || words.get()))
+        },
+    );
+    app.configure(toast, 1, 1, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+    app.step_at(t0);
+    let (_, one_line) = *app.sizes_asked(toast).last().expect("measured");
+
+    words.set("a line far too long to fit on any screen ".repeat(40));
+    for ms in [0, 50, 100, 200] {
+        app.step_at(t0 + Duration::from_millis(ms));
+    }
+    let (_, height) = *app.sizes_asked(toast).last().expect("measured");
+    assert!(
+        height >= 3 * one_line,
+        "the box heads for the lines the text wraps to: {height} against \
+         {one_line} for one line"
+    );
+}
+
 /// A close interrupted by a reopen asks for nothing: the surface never shrank,
 /// so there is nothing to grow back to.
 #[test]
