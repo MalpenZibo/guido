@@ -137,7 +137,7 @@ impl WaylandState {
         surface_state.blur_region = Some(rects);
 
         if commit {
-            surface_state.wl_surface.commit();
+            surface_state.commit_requests();
         }
     }
 }

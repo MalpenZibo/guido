@@ -81,6 +81,15 @@ struct RecordedSurface {
     /// a withdrawal, and is kept.
     blur_regions: Vec<Vec<Rect>>,
     sizes_asked: Vec<(u32, u32)>,
+    /// Every buffer commit that latched a new size, oldest first: the size, and
+    /// the logical size the buffer stands for — the destination declared on
+    /// that commit — or `None` where the buffer is the size it was before.
+    size_commits: Vec<SizeCommit>,
+    /// The destination declared since the last buffer commit.
+    pending_destination: Option<(u32, u32)>,
+    /// The new size asked for since the last buffer, which the next one
+    /// latches: a resize rides the frame drawn at it, as on Wayland.
+    pending_size: Option<(u32, u32)>,
     /// Every logical size the surface declared its buffer stands for, oldest
     /// first. A list, because what is asserted is that one was declared for
     /// each buffer the frame path resolved and never for a frame that resolved
@@ -217,6 +226,10 @@ impl Recorder {
     }
 }
 
+/// A buffer commit that latched a new size: the size asked for, and the
+/// logical size the buffer stands for, or `None` where it is the size it was.
+pub type SizeCommit = ((u32, u32), Option<(u32, u32)>);
+
 /// The two ways to name a surface that is not there, said once.
 fn missing(id: SurfaceId) -> ! {
     panic!("surface {id:?} was never declared, or has been closed")
@@ -248,8 +261,20 @@ impl Surface for &mut RecordedSurface {
         self.scale
     }
 
+    /// As `WaylandState::set_surface_size` does: a size that changes the one
+    /// drawn at is drawn at from the next frame on, and rides its commit.
     fn set_size(&mut self, width: u32, height: u32) {
         self.sizes_asked.push((width, height));
+        let drawn = (self.width, self.height);
+        if width > 0 {
+            self.width = width;
+        }
+        if height > 0 {
+            self.height = height;
+        }
+        if (self.width, self.height) != drawn {
+            self.pending_size = Some((width, height));
+        }
     }
 
     fn set_exclusive_zone(&mut self, zone: i32) {
@@ -260,6 +285,7 @@ impl Surface for &mut RecordedSurface {
     /// goes nowhere and the recorder would be keeping an empty list.
     fn set_viewport_destination(&mut self, width: u32, height: u32) {
         self.viewport_destinations.push((width, height));
+        self.pending_destination = Some((width, height));
     }
 
     fn set_input_region(&mut self, rects: Option<&[Rect]>) {
@@ -295,6 +321,10 @@ impl Surface for &mut RecordedSurface {
 
     fn mark_frame_callback_pending(&mut self) {
         self.pacing.committed();
+        let buffer = self.pending_destination.take();
+        if let Some(size) = self.pending_size.take() {
+            self.size_commits.push((size, buffer));
+        }
     }
 }
 
@@ -825,6 +855,14 @@ impl Headless {
     /// The sizes a surface has asked for, oldest first.
     pub fn sizes_asked(&self, id: SurfaceId) -> &[(u32, u32)] {
         &self.host.get(id).sizes_asked
+    }
+
+    /// Every buffer commit that latched a new size, oldest first, with the
+    /// logical size the buffer stands for, or `None` where it is the size it
+    /// was before: the compositor placing the box for the new size around the
+    /// buffer it already shows (#900).
+    pub fn size_commits(&self, id: SurfaceId) -> &[SizeCommit] {
+        &self.host.get(id).size_commits
     }
 
     /// Every logical size a surface has declared its buffer stands for, oldest

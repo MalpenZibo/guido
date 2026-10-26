@@ -84,10 +84,14 @@ pub struct WaylandSurfaceState {
     pub wl_surface: wl_surface::WlSurface,
     /// Whether the surface has been configured
     pub configured: bool,
-    /// Logical width of the surface
+    /// Logical width of the surface: what frames are drawn at — the last
+    /// configure's, or a size asked for since.
     pub width: u32,
-    /// Logical height of the surface
+    /// Logical height of the surface, likewise.
     pub height: u32,
+    /// Whether a size asked for is waiting to ride the next buffer this
+    /// surface presents, holding the commit of the requests beside it.
+    pub(crate) resize_rides: bool,
     /// Scale factor for HiDPI
     pub scale_factor: f32,
     /// The frame callbacks in flight and what the compositor has confirmed —
@@ -122,6 +126,29 @@ pub struct WaylandSurfaceState {
 }
 
 impl WaylandSurfaceState {
+    /// Commit what is pending on this surface — unless a resize is holding it
+    /// for the buffer drawn at it, which will carry it instead: a commit of its
+    /// own would latch the size over the buffer the surface is leaving (#900).
+    pub(crate) fn commit_requests(&self) {
+        if !self.resize_rides {
+            self.wl_surface.commit();
+        }
+    }
+
+    /// Take on a size to draw at, leaving an axis given as zero as it is, and
+    /// say whether that changed it. The one writer of the drawn size: a
+    /// configure, and a resize asked for since.
+    fn adopt_size(&mut self, width: u32, height: u32) -> bool {
+        let drawn = (self.width, self.height);
+        if width > 0 {
+            self.width = width;
+        }
+        if height > 0 {
+            self.height = height;
+        }
+        (self.width, self.height) != drawn
+    }
+
     /// Create a new surface state.
     pub fn new(
         role: SurfaceRole,
@@ -138,6 +165,7 @@ impl WaylandSurfaceState {
             height,
             scale_factor: 1.0,
             pacing: crate::surface::FramePacing::default(),
+            resize_rides: false,
             pending_events: Vec::new(),
             bg_effect_surface: None,
             blur_region: None,
@@ -432,6 +460,7 @@ impl WaylandState {
     pub fn mark_frame_callback_pending(&mut self, id: SurfaceId) {
         if let Some(surface) = self.surfaces.get_mut(&id) {
             surface.pacing.committed();
+            surface.resize_rides = false;
         }
     }
 
@@ -512,7 +541,7 @@ impl WaylandState {
         );
 
         if commit {
-            surface_state.wl_surface.commit();
+            surface_state.commit_requests();
         }
     }
 
@@ -520,7 +549,7 @@ impl WaylandState {
     pub fn set_surface_input_region(&mut self, id: SurfaceId, rects: Option<&[Rect]>) {
         if let Some(surface_state) = self.surfaces.get(&id) {
             self.apply_input_region(&surface_state.wl_surface, rects);
-            surface_state.wl_surface.commit();
+            surface_state.commit_requests();
             log::info!(
                 "Surface {:?} input region set to {}",
                 id,
@@ -680,7 +709,7 @@ impl WaylandState {
             && let Some(state) = self.surfaces.get(&id)
             && matches!(state.role, SurfaceRole::Layer(_))
         {
-            state.wl_surface.commit();
+            state.commit_requests();
         }
     }
 
@@ -698,7 +727,7 @@ impl WaylandState {
                 SurfaceRole::Layer(layer_surface) => {
                     f(layer_surface);
                     if !batching {
-                        surface_state.wl_surface.commit();
+                        surface_state.commit_requests();
                     }
                 }
                 SurfaceRole::Lock(_) | SurfaceRole::Popup { .. } => {
@@ -734,7 +763,21 @@ impl WaylandState {
     }
 
     /// Set the size of a surface.
+    ///
+    /// A size that changes the one the surface is drawn at is drawn at from the
+    /// next frame, and is committed by that frame's buffer, not here: committed
+    /// alone it reaches the compositor a round trip before a buffer of it, and
+    /// smithay and wlroots both place the box for the new size around the
+    /// buffer already attached — a bottom bar that grows is drawn for a frame
+    /// as far up as it grew (#900). wlr-layer-shell ties no buffer to the last
+    /// acked configure, and gtk4-layer-shell commits the two together too.
     pub fn set_surface_size(&mut self, id: SurfaceId, width: u32, height: u32) {
+        if let Some(state) = self.surfaces.get_mut(&id)
+            && matches!(state.role, SurfaceRole::Layer(_))
+            && state.adopt_size(width, height)
+        {
+            state.resize_rides = true;
+        }
         self.with_layer_surface(id, |ls| ls.set_size(width, height));
         log::info!("Surface {:?} size set to {}x{}", id, width, height);
     }
@@ -955,12 +998,7 @@ impl LayerShellHandler for WaylandState {
                 surface_state.width,
                 surface_state.height
             );
-            if configure.new_size.0 > 0 {
-                surface_state.width = configure.new_size.0;
-            }
-            if configure.new_size.1 > 0 {
-                surface_state.height = configure.new_size.1;
-            }
+            surface_state.adopt_size(configure.new_size.0, configure.new_size.1);
             log::info!(
                 "Surface {:?} using size: {}x{}",
                 id,
