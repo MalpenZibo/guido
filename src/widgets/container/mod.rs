@@ -1566,8 +1566,9 @@ impl Container {
     /// [`shadow`](Self::shadow) belong to the merged shape: the border is drawn
     /// along its outline in place of the children's, and every outer shadow is
     /// cast by it. Never drawn round this container's box, the border takes no
-    /// room in it either; [`padding`](Self::padding) is what keeps room inside. Its inset shadows, and its own background, stay on its own
-    /// box, drawn underneath as usual.
+    /// room in it either; [`padding`](Self::padding) is what keeps room
+    /// inside. Its inset shadows, and its own background, stay on its own box,
+    /// drawn underneath as usual.
     ///
     /// Children that each [blur their backdrop](Self::backdrop_blur) alike
     /// blur it as one: through the merged outline, neck included, so the
