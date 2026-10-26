@@ -68,10 +68,11 @@ pub struct ManagedSurface {
     /// never send it.
     pub exclusive_zone: Option<i32>,
     /// The size the content measure last asked for, or `None` before it has
-    /// asked for one: what a shrink waits behind while the content is still on
-    /// its way down. The size asked for rather than the size confirmed, because
-    /// it is where the surface is going, and holding to a configure that has not
-    /// caught up yet would ask for a size the surface has already left.
+    /// asked for one or since a resize asked for something else: what a shrink
+    /// waits behind while the content is still on its way down. The size asked
+    /// for rather than the size confirmed, because it is where the surface is
+    /// going, and holding to a configure that has not caught up yet would ask
+    /// for a size the surface has already left.
     pub content_size: Option<(u32, u32)>,
 }
 
