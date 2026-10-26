@@ -1945,10 +1945,12 @@ fn layout_pass<P: Platform>(
 /// the noise
 /// [`warn_content_on_stretched_axis`](surface::warn_content_on_stretched_axis)
 /// was split off to avoid. The caller that was handed a size says so.
-fn send_size<S: Surface>(managed: &ManagedSurface, surface: &mut S) -> (bool, WidgetId) {
+fn send_size<S: Surface>(managed: &mut ManagedSurface, surface: &mut S) -> (bool, WidgetId) {
     let live = surface.configured_size();
     let (ask_w, ask_h, needs_measure) = surface::resize_request(&managed.config, live);
     surface.set_size(ask_w, ask_h);
+    // This request supersedes what the content measure last asked for (#896).
+    managed.content_size = None;
     (needs_measure, managed.widget_id)
 }
 
@@ -4273,10 +4275,10 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn a_bar_asks_for_its_own_height_and_leaves_the_stretched_width_to_the_compositor() {
         let mut tree = Tree::new();
-        let managed = managed_surface(bar(), &mut tree);
+        let mut managed = managed_surface(bar(), &mut tree);
         let mut surface = confirmed(1920, 32);
 
-        let (needs_measure, root) = send_size(&managed, &mut surface);
+        let (needs_measure, root) = send_size(&mut managed, &mut surface);
 
         assert_eq!(surface.sizes_asked, vec![(0, 32)]);
         assert!(!needs_measure, "two fixed axes have nothing to measure");
@@ -4292,10 +4294,10 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn a_dock_asks_for_the_width_it_was_confirmed_at_rather_than_the_placeholder() {
         let mut tree = Tree::new();
-        let managed = managed_surface(side_dock(), &mut tree);
+        let mut managed = managed_surface(side_dock(), &mut tree);
         let mut surface = confirmed(240, 1080);
 
-        let (needs_measure, _) = send_size(&managed, &mut surface);
+        let (needs_measure, _) = send_size(&mut managed, &mut surface);
 
         assert_eq!(surface.sizes_asked, vec![(240, 0)]);
         assert!(

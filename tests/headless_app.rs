@@ -3597,6 +3597,52 @@ fn holds_then_shrinks_to_24(app: &mut Headless, bar: SurfaceId, t0: Instant) {
     );
 }
 
+/// An axis pinned with `set_size` and given back to `content()` while the
+/// content is closing holds the shrink behind the size the pin gave it, not
+/// behind what the content measured before the pin.
+///
+/// A bar that pins itself to the output's height while a panel is open, and
+/// hands the height back as the panel closes, is the shape: the content
+/// measure does not run while the axis is pinned, so what it last asked for
+/// is the strip from before the panel opened (#896).
+#[test]
+fn a_content_axis_given_back_mid_close_holds_the_pinned_size() {
+    let Some(mut app) = headless() else { return };
+    let tall = create_signal(false);
+    let bar = app.surface(content_bar(), move || {
+        container().child(
+            container().height(
+                (move || if tall.get() { 80.0 } else { 24.0 })
+                    .transition(Transition::new(100.0, TimingFunction::Linear)),
+            ),
+        )
+    });
+    app.configure(bar, 200, 24, 1.0);
+    let t0 = Instant::now();
+    app.step_at(t0);
+
+    surface_handle(bar).set_size(400, 200);
+    app.step_at(t0);
+    app.configure(bar, 200, 200, 1.0);
+    tall.set(true);
+    let t1 = t0 + Duration::from_millis(1000);
+    for ms in [0, 200] {
+        app.step_at(t1 + Duration::from_millis(ms));
+    }
+
+    let t2 = t1 + Duration::from_millis(1000);
+    let sizes = app.sizes_asked(bar).len();
+    tall.set(false);
+    surface_handle(bar).set_size(400, content());
+    holds_then_shrinks_to_24(&mut app, bar, t2);
+    let asked = &app.sizes_asked(bar)[sizes..];
+    let (_, held) = asked.split_last().expect("the shrink was asked for");
+    assert!(
+        held.iter().all(|&(_, height)| height >= 200),
+        "only the last size asked is smaller than the pin: {asked:?}"
+    );
+}
+
 /// A close interrupted by a reopen asks for nothing: the surface never shrank,
 /// so there is nothing to grow back to.
 #[test]
