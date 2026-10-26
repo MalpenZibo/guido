@@ -3799,6 +3799,83 @@ fn a_transitioned_height_follows_a_text_that_grows_past_the_screen() {
     );
 }
 
+/// Every size `bar` has committed since commit `from` came with a buffer of
+/// that size, on the axes it asked for: none moved the surface's box around
+/// the buffer it already had.
+#[track_caller]
+fn every_size_rode_a_buffer_of_it(app: &Headless, bar: SurfaceId, from: usize) {
+    let commits = &app.size_commits(bar)[from..];
+    assert!(!commits.is_empty(), "nothing asked for a size");
+    for &((width, height), buffer) in commits {
+        let Some((drawn_w, drawn_h)) = buffer else {
+            panic!("{width}x{height} was committed over the buffer it had: {commits:?}");
+        };
+        assert!(
+            (width == 0 || width == drawn_w) && (height == 0 || height == drawn_h),
+            "{width}x{height} was committed with a {drawn_w}x{drawn_h} buffer: {commits:?}"
+        );
+    }
+}
+
+/// A content-sized surface resized from `from` to `to` commits the new size
+/// with a buffer drawn at it, in the frame that asked.
+fn resizes_with_a_buffer_of_its_size(from: f32, to: f32) {
+    let Some(mut app) = headless() else { return };
+    let height = create_signal(from);
+    let bar = app.surface(content_bar(), move || {
+        container().height(move || height.get())
+    });
+    app.configure(bar, 200, from as u32, 1.0);
+    app.step();
+    let commits = app.size_commits(bar).len();
+
+    height.set(to);
+    app.step();
+
+    every_size_rode_a_buffer_of_it(&app, bar, commits);
+    assert_eq!(
+        app.physical_size(bar),
+        (200, to as u32),
+        "and that frame is drawn at it, before any configure"
+    );
+}
+
+/// Committed on its own, a size reaches the compositor a round trip before a
+/// buffer of it does, and the compositor places the box for the new size
+/// around the old buffer: a bar on the bottom edge drawn for a frame as far up
+/// as it grew (#900).
+#[test]
+fn a_growing_surface_commits_its_size_with_a_buffer_of_it() {
+    resizes_with_a_buffer_of_its_size(24.0, 80.0);
+}
+
+/// The same for a shrink, once nothing holds it.
+#[test]
+fn a_shrinking_surface_commits_its_size_with_a_buffer_of_it() {
+    resizes_with_a_buffer_of_its_size(80.0, 24.0);
+}
+
+/// And for a size an application sets, pinning a content axis and handing it
+/// back: the bar that covers the output while a panel is open.
+#[test]
+fn a_pinned_size_and_its_release_commit_with_a_buffer_of_them() {
+    let Some(mut app) = headless() else { return };
+    let bar = app.surface(content_bar(), || container().height(24.0));
+    app.configure(bar, 200, 24, 1.0);
+    app.step();
+    let from = app.size_commits(bar).len();
+
+    surface_handle(bar).set_size(400, 300);
+    app.step();
+    assert_eq!(app.physical_size(bar), (200, 300), "drawn at the pin");
+    surface_handle(bar).set_size(400, content());
+    app.step();
+    app.step();
+
+    every_size_rode_a_buffer_of_it(&app, bar, from);
+    assert_eq!(app.physical_size(bar), (200, 24), "and back at its content");
+}
+
 /// A close interrupted by a reopen asks for nothing: the surface never shrank,
 /// so there is nothing to grow back to.
 #[test]

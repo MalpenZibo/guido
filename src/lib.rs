@@ -475,10 +475,9 @@ fn close_surface_now<P: Platform>(
 /// which policies are worth resolving.
 ///
 /// The size is the one just *asked* for, not the one the compositor last told us
-/// about: `set_surface_size` only sends a request, and `WaylandSurfaceState`
-/// learns the new size a round trip later, in `configure`. Resolving against
-/// that reserves for the size the surface is leaving — a bar going from 32 to 48
-/// keeps reserving 32.
+/// about: the compositor answers a request a round trip later, in `configure`,
+/// and resolving against the size it last sent reserves for the size the
+/// surface is leaving — a bar going from 32 to 48 keeps reserving 32.
 ///
 /// A `Fixed` axis is therefore authoritative here. A `Content` one has no number
 /// yet, so it falls back to `measured` if the caller has one and to the live
@@ -1037,13 +1036,16 @@ pub(crate) trait Surface {
     /// opening one. The loop reads it to decide how long it may sleep.
     fn pacing(&self) -> surface::FramePacing;
 
-    /// The size the compositor has confirmed, if it has confirmed one.
+    /// The size this surface is drawn at, once the compositor has configured it:
+    /// the last configure's, or a size asked for since — a resize is drawn at
+    /// in the frame that asks for it (see [`set_size`](Self::set_size)).
     ///
-    /// Not the size that was *requested*: `WaylandSurfaceState` is created
-    /// holding that, which for a content axis is the 1px placeholder — so
-    /// reading it unconditionally would report a number nobody agreed on as
-    /// though it were live, and make `requested_extent`'s "no size yet" branch
-    /// unreachable while the case it describes was still happening.
+    /// `None` before the first configure: `WaylandSurfaceState` is created
+    /// holding the size declared at creation, which for a content axis is the
+    /// 1px placeholder — so reading it unconditionally would report a number
+    /// nobody agreed on as though it were live, and make `requested_extent`'s
+    /// "no size yet" branch unreachable while the case it describes was still
+    /// happening.
     fn configured_size(&self) -> Option<(u32, u32)> {
         None
     }
@@ -1066,7 +1068,9 @@ pub(crate) trait Surface {
         let _ = new_height;
     }
 
-    /// Ask for a size. A request: the answer arrives as a configure.
+    /// Ask for a size, whose answer arrives as a configure. One that changes
+    /// the size is drawn at from now on and committed with the next buffer —
+    /// why is on `WaylandState::set_surface_size`. Zero leaves an axis as it is.
     fn set_size(&mut self, width: u32, height: u32) {
         let _ = (width, height);
     }
@@ -1088,7 +1092,8 @@ pub(crate) trait Surface {
     }
 
     /// Run `f` and let its requests reach the compositor as one commit, so a
-    /// group of them never shows an intermediate surface on the way.
+    /// group of them never shows an intermediate surface on the way — the next
+    /// buffer's commit, for a group that changed the size.
     fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, f: F) {
         f(self);
     }
@@ -1824,25 +1829,20 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
 /// themselves re-run, from their relayout boundaries. The root is laid out
 /// again whenever the surface's size moves, because that is the one change no
 /// widget can have noticed on its own — whatever else the frame has pending.
+///
+/// Returns the size to draw the frame at when the measure asked for a new
+/// one: the frame that asks is drawn at it.
 fn layout_pass<P: Platform>(
     ctx: &mut FrameContext<P>,
     frame: &Frame,
-    geometry: &Geometry,
     has_pending_layouts: bool,
     layout_roots: &mut Vec<WidgetId>,
-) {
+) -> Option<(u32, u32)> {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
     let wayland_state = &mut *ctx.wayland_state;
-    let renderer = &mut *ctx.renderer;
     let tree = &mut *ctx.tree;
-
-    // Update renderer for this surface
-    renderer.set_screen_size(
-        geometry.physical_width as f32,
-        geometry.physical_height as f32,
-    );
-    renderer.set_scale_factor(frame.scale_factor);
+    let mut drawn = None;
 
     let constraints = Constraints::new(0.0, 0.0, frame.width as f32, frame.height as f32);
     // From the root under the surface's size, then from each dirty boundary
@@ -1894,7 +1894,6 @@ fn layout_pass<P: Platform>(
             tree.depended_on_the_pass(surface.widget_id, tree::LayoutPass::Measure),
         );
         surface.content_size = Some((nw, nh));
-        tree.layout_widget(surface.widget_id, constraints);
         // Compared as they will be *asked for*, not as they were measured. On an
         // axis the compositor owns both sides are zero, so a `content()` width
         // under `LEFT | RIGHT` cannot make this true for ever by measuring 300
@@ -1932,8 +1931,18 @@ fn layout_pass<P: Platform>(
                     // helper look it up.
                     publish_exclusive_zone(surface, config, Some((nw, nh)), published);
                 });
+                // A resize is drawn at in the frame that asks for it, whose
+                // buffer carries the group (#900).
+                drawn = handle
+                    .configured_size()
+                    .filter(|&size| size != (frame.width, frame.height));
             }
         }
+        let (width, height) = drawn.unwrap_or((frame.width, frame.height));
+        tree.layout_widget(
+            surface.widget_id,
+            Constraints::new(0.0, 0.0, width as f32, height as f32),
+        );
     }
 
     // Where every ref'd widget is drawn now: after layout, and on a frame
@@ -1954,6 +1963,7 @@ fn layout_pass<P: Platform>(
     // must exist for this to run — without one there is no tree to resolve
     // against.
     reactive::focus::apply_pending_focus(tree);
+    drawn
 }
 
 /// Send the size the surface is currently asking for, and report whether the
@@ -2406,7 +2416,7 @@ fn render_surface<P: Platform>(
     active_roots: &rustc_hash::FxHashSet<WidgetId>,
     at: std::time::Instant,
 ) {
-    let Some(frame) = open_frame(ctx) else {
+    let Some(mut frame) = open_frame(ctx) else {
         return;
     };
 
@@ -2416,7 +2426,7 @@ fn render_surface<P: Platform>(
         close_requested(platform, id)
     });
 
-    let geometry = resolve_geometry(ctx, &frame);
+    let mut geometry = resolve_geometry(ctx, &frame);
 
     // This returns BEFORE draining jobs, and that is the whole point:
     // animation continuations have to stay queued. Advancing them on every
@@ -2455,7 +2465,19 @@ fn render_surface<P: Platform>(
         return;
     }
 
-    layout_pass(ctx, &frame, &geometry, has_pending_layouts, layout_roots);
+    // The size the frame is drawn at moves with a resize it asked for, so the
+    // buffer it presents is the one that size is committed with.
+    if let Some((width, height)) = layout_pass(ctx, &frame, has_pending_layouts, layout_roots) {
+        (frame.width, frame.height) = (width, height);
+        let scale_changed = geometry.scale_changed;
+        geometry = resolve_geometry(ctx, &frame);
+        geometry.scale_changed |= scale_changed;
+    }
+    ctx.renderer.set_screen_size(
+        geometry.physical_width as f32,
+        geometry.physical_height as f32,
+    );
+    ctx.renderer.set_scale_factor(frame.scale_factor);
     paint_and_present(ctx, &frame, &geometry);
     // The frame is over, and so is its instant. Leaving it set would let a
     // later call read a time that has nothing to do with it, silently — the
