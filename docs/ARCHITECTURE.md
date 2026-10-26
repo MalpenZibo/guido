@@ -653,6 +653,13 @@ the children were laid out twice a frame; taffy keeps a node's final layout
 apart from its measures, and Chromium's LayoutNG its measure results apart from
 its layout results, for the same reason.
 
+The same flag is how a content-sized layer surface knows when it may shrink. The
+measure says where the content is going, which is the size to grow to at once;
+a smaller one is asked for only once the root's measure no longer depends on
+the pass (`Tree::depended_on_the_pass`), so a close or a collapsing exit
+is not cut off in its first frame. Until then each content axis keeps the
+size it last asked for, `ManagedSurface::content_size`.
+
 ### Widgets written outside the crate
 
 The trait is implementable from anywhere, and a leaf needs only `layout` and
