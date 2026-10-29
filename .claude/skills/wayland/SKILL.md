@@ -49,6 +49,10 @@ Multiple surfaces share one reactive state and one renderer.
   rounded halfway away from zero, a `wp_viewport` destination declares the
   logical size, and `set_buffer_scale` is never touched. With none, the integer
   path is unchanged. See `src/platform/scaling.rs`
+- **Layer shell** (`zwlr_layer_shell_v1`) — bound directly, up to version 5,
+  because sctk binds 4 at most and keeps the global private, so no surface
+  made through it can send `set_exclusive_edge`. `Anchor`, `Layer` and
+  `KeyboardInteractivity` are still sctk's. See `src/platform/layer_shell.rs`
 
 ## The thing to know before changing it
 

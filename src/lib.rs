@@ -359,9 +359,9 @@ pub mod prelude {
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity, PopupHandle, SurfaceConfig,
-        SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup, spawn_surface,
-        surface_handle,
+        Edge, ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity, PopupHandle,
+        SurfaceConfig, SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup,
+        spawn_surface, surface_handle,
     };
     pub use crate::transform::{Scale, Translate};
     pub use crate::widget_ref::{WidgetRef, create_widget_ref};
@@ -485,11 +485,11 @@ fn close_surface_now<P: Platform>(
 /// `Auto` reservation follows is always one we own — `follow_axis` gives up on
 /// an axis anchored to both edges, the only kind the compositor sizes — so the
 /// value we asked for is the value that will take effect.
-fn publish_exclusive_zone<S: Surface>(
+fn publish_reservation<S: Surface>(
     surface: &mut S,
     config: &SurfaceConfig,
     measured: Option<(u32, u32)>,
-    published: &mut Option<i32>,
+    published: &mut Option<surface::Reservation>,
 ) {
     // A content axis waiting to be measured has no size to reserve for, and the
     // confirmed one is the wrong answer rather than an old one: a surface
@@ -511,12 +511,10 @@ fn publish_exclusive_zone<S: Surface>(
     let known = measured.or_else(|| surface.configured_size());
     let width = surface::requested_extent(config.width, known.map(|(w, _)| w));
     let height = surface::requested_extent(config.height, known.map(|(_, h)| h));
-    let zone = config
-        .exclusive_zone
-        .resolve(config.anchor, config.margin, width, height);
-    if *published != Some(zone) {
-        surface.set_exclusive_zone(zone);
-        *published = Some(zone);
+    let reservation = surface::reservation(config, width, height);
+    if *published != Some(reservation) {
+        surface.set_reservation(reservation);
+        *published = Some(reservation);
     }
 }
 
@@ -604,6 +602,13 @@ fn process_surface_commands<P: Platform>(
                 if let Some((true, root)) = asked {
                     jobs::request_job(root, jobs::JobRequest::Layout);
                 }
+            }
+            SurfaceCommand::SetExclusiveEdge { id, edge } => {
+                // Published by `reconfigure` with the zone, whose resolution
+                // the edge is part of.
+                reconfigure(id, surface_manager, wayland_state, |managed, _| {
+                    managed.config.exclusive_edge = edge;
+                });
             }
             SurfaceCommand::SetMargin { id, margin } => {
                 let asked = reconfigure(id, surface_manager, wayland_state, |managed, surface| {
@@ -1075,9 +1080,10 @@ pub(crate) trait Surface {
         let _ = (width, height);
     }
 
-    /// Publish the screen space this surface reserves.
-    fn set_exclusive_zone(&mut self, zone: i32) {
-        let _ = zone;
+    /// Publish the screen space this surface reserves, and the edge it
+    /// applies to.
+    fn set_reservation(&mut self, reservation: surface::Reservation) {
+        let _ = reservation;
     }
 
     /// Declare the logical size the buffer about to be attached stands for.
@@ -1574,8 +1580,8 @@ impl Surface for WaylandSurface<'_> {
         self.state.set_surface_size(self.id, width, height)
     }
 
-    fn set_exclusive_zone(&mut self, zone: i32) {
-        self.state.set_surface_exclusive_zone(self.id, zone)
+    fn set_reservation(&mut self, reservation: surface::Reservation) {
+        self.state.set_surface_reservation(self.id, reservation)
     }
 
     fn set_viewport_destination(&mut self, width: u32, height: u32) {
@@ -1907,7 +1913,7 @@ fn layout_pass<P: Platform>(
             asking != surface::honour_owned_axes(surface.config.anchor, frame.width, frame.height);
         // The resize is conditional; the publish is not. This is the only place
         // the measurement is known, and the reservation may be waiting on it even
-        // when the size did not move — `publish_exclusive_zone` declines to
+        // when the size did not move — `publish_reservation` declines to
         // resolve `Auto` against an unmeasured content axis, so a re-anchoring
         // that measures back to the number it already had would otherwise leave
         // the reservation deferred for ever.
@@ -1917,7 +1923,7 @@ fn layout_pass<P: Platform>(
             // frame show the compositor the new size against the old reservation
             // in between.
             let config = &surface.config;
-            let published = &mut surface.exclusive_zone;
+            let published = &mut surface.reservation;
             if let Some(mut handle) = wayland_state.surface(id) {
                 handle.batch_layer_requests(|surface| {
                     if resizing {
@@ -1932,7 +1938,7 @@ fn layout_pass<P: Platform>(
                     // is the one caller that knows the measured size before the
                     // compositor does — so it passes it rather than letting the
                     // helper look it up.
-                    publish_exclusive_zone(surface, config, Some((nw, nh)), published);
+                    publish_reservation(surface, config, Some((nw, nh)), published);
                 });
                 // A resize is drawn at in the frame that asks for it, whose
                 // buffer carries the group (#900).
@@ -2046,7 +2052,8 @@ fn reconfigure<P: Platform, R>(
     // compositor two intermediate surfaces on the way.
     handle.batch_layer_requests(|surface| {
         result = Some(change(managed, surface));
-        publish_exclusive_zone(surface, &managed.config, None, &mut managed.exclusive_zone);
+        surface::warn_unanchored_exclusive_edge(id, &managed.config);
+        publish_reservation(surface, &managed.config, None, &mut managed.reservation);
     });
     result
 }
@@ -4250,8 +4257,8 @@ mod a_second_host_can_answer_for_a_compositor {
             self.configured
         }
 
-        fn set_exclusive_zone(&mut self, zone: i32) {
-            self.exclusive_zones.push(zone);
+        fn set_reservation(&mut self, reservation: crate::surface::Reservation) {
+            self.exclusive_zones.push(reservation.zone);
         }
 
         fn set_size(&mut self, width: u32, height: u32) {
@@ -4281,7 +4288,7 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn a_bar_reserving_automatically_asks_for_the_height_it_declared() {
         let mut surface = confirmed(800, 32);
-        publish_exclusive_zone(&mut surface, &bar(), None, &mut None);
+        publish_reservation(&mut surface, &bar(), None, &mut None);
         assert_eq!(surface.exclusive_zones, vec![32]);
     }
 
@@ -4291,7 +4298,7 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn only_the_margin_facing_away_from_the_anchor_is_asked_for() {
         let mut surface = confirmed(800, 32);
-        publish_exclusive_zone(
+        publish_reservation(
             &mut surface,
             &bar().margin(Margin::from([8, 0, 0, 0])),
             None,
@@ -4304,7 +4311,7 @@ mod a_second_host_can_answer_for_a_compositor {
         );
 
         let mut surface = confirmed(800, 32);
-        publish_exclusive_zone(&mut surface, &bar().margin(Margin::all(8)), None, &mut None);
+        publish_reservation(&mut surface, &bar().margin(Margin::all(8)), None, &mut None);
         assert_eq!(surface.exclusive_zones, vec![40], "the bottom margin is");
     }
 
@@ -4325,13 +4332,13 @@ mod a_second_host_can_answer_for_a_compositor {
     }
 
     /// An unmeasured content axis publishes nothing and waits for the measure.
-    /// This is the case the guard in `publish_exclusive_zone` exists for, and
+    /// This is the case the guard in `publish_reservation` exists for, and
     /// its comment says what 1920 would cost; here it is only the number the
     /// guard has to refuse.
     #[test]
     fn a_dock_whose_width_is_unmeasured_reserves_nothing_rather_than_the_whole_output() {
         let mut surface = confirmed(1920, 1080);
-        publish_exclusive_zone(&mut surface, &side_dock(), None, &mut None);
+        publish_reservation(&mut surface, &side_dock(), None, &mut None);
         assert!(
             surface.exclusive_zones.is_empty(),
             "reserved {:?} against a width the compositor imposed",
@@ -4345,7 +4352,7 @@ mod a_second_host_can_answer_for_a_compositor {
     #[test]
     fn the_dock_reserves_the_measured_width_not_the_confirmed_one() {
         let mut surface = confirmed(1920, 1080);
-        publish_exclusive_zone(&mut surface, &side_dock(), Some((240, 1080)), &mut None);
+        publish_reservation(&mut surface, &side_dock(), Some((240, 1080)), &mut None);
         assert_eq!(surface.exclusive_zones, vec![240]);
     }
 
@@ -4387,12 +4394,12 @@ mod a_second_host_can_answer_for_a_compositor {
     }
 
     /// A constant on the same unmeasured surface goes out at once: the guard is
-    /// `Auto`-only, and `publish_exclusive_zone` says what deferring one would
+    /// `Auto`-only, and `publish_reservation` says what deferring one would
     /// cost.
     #[test]
     fn a_constant_reservation_on_an_unmeasured_dock_is_not_deferred() {
         let mut surface = Recorder::default();
-        publish_exclusive_zone(
+        publish_reservation(
             &mut surface,
             &side_dock().exclusive_zone(48u32),
             None,

@@ -66,7 +66,7 @@ pub struct ManagedSurface {
     /// with the one a layer surface is created with, so a number the compositor
     /// already has is not sent again. Popups and lock surfaces carry one too and
     /// never send it.
-    pub exclusive_zone: Option<i32>,
+    pub reservation: Option<crate::surface::Reservation>,
     /// The size the content measure last asked for, or `None` before it has
     /// asked for one or since a resize asked for something else: what a shrink
     /// waits behind while the content is still on its way down. The size asked
@@ -105,7 +105,7 @@ impl ManagedSurface {
         tree: &mut Tree,
     ) -> Self {
         let config_input_region = config.input_region.clone();
-        let exclusive_zone = Some(crate::surface::initial_declaration(&config).exclusive_zone);
+        let reservation = Some(crate::surface::initial_declaration(&config).reservation);
 
         // Register root widget - tree assigns the ID
         let widget_id = tree.register(widget);
@@ -129,7 +129,7 @@ impl ManagedSurface {
             input_base: config_input_region,
             input_region: None,
             viewport_destination: None,
-            exclusive_zone,
+            reservation,
             content_size: None,
         }
     }
