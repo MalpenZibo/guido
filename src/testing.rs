@@ -108,6 +108,9 @@ struct RecordedSurface {
     /// Every damage rectangle reported, oldest first, in buffer pixels: one
     /// per frame presented.
     damage: Vec<(i32, i32, i32, i32)>,
+    /// Every place a buffer smaller than the surface was put, oldest first,
+    /// in logical surface coordinates.
+    buffer_origins: Vec<(i32, i32)>,
     frame_callbacks: u32,
 }
 
@@ -165,6 +168,9 @@ struct Recorder {
     /// oldest first. A resize is not a build, so a target built at one scale
     /// and grown to another shows here as the first size only.
     targets_built: std::cell::RefCell<rustc_hash::FxHashMap<SurfaceId, Vec<(u32, u32)>>>,
+    /// The compositor has no `wl_subcompositor` or no `wp_viewporter`, so a
+    /// buffer is always the whole surface.
+    without_subsurfaces: bool,
 }
 
 impl Recorder {
@@ -344,6 +350,10 @@ impl Surface for &mut RecordedSurface {
         self.damage.push((x, y, width, height));
     }
 
+    fn place_buffer(&mut self, x: i32, y: i32) {
+        self.buffer_origins.push((x, y));
+    }
+
     fn mark_frame_callback_pending(&mut self) {
         self.pacing.committed();
         let buffer = self.pending_destination.take();
@@ -364,6 +374,10 @@ impl Platform for Recorder {
     /// asks for a blur region, and the recorder would have nothing to keep.
     fn supports_blur_region(&self) -> bool {
         true
+    }
+
+    fn supports_content_buffer(&self) -> bool {
+        !self.without_subsurfaces
     }
 
     fn create_surface(&mut self, id: SurfaceId, config: &crate::surface::SurfaceConfig) {
@@ -598,6 +612,12 @@ impl Headless {
     /// Stand where a machine without a usable Vulkan adapter stands.
     pub fn without_gpu(&mut self) {
         self.gpu = crate::renderer::GpuSlot::Absent;
+    }
+
+    /// Stand where a compositor without subsurfaces stands: a buffer that
+    /// would cover only the content covers the whole surface instead.
+    pub fn without_subsurfaces(&mut self) {
+        self.host.without_subsurfaces = true;
     }
 
     /// Whether the compositor was ever asked to lock the session.
@@ -875,6 +895,12 @@ impl Headless {
     /// that changes nothing must not add to this.
     pub fn input_regions_published(&self, id: SurfaceId) -> usize {
         self.host.get(id).input_requests.len()
+    }
+
+    /// Every place a surface put a buffer smaller than itself, oldest first,
+    /// in logical surface coordinates: one for each time it moved.
+    pub fn buffer_origins(&self, id: SurfaceId) -> &[(i32, i32)] {
+        &self.host.get(id).buffer_origins
     }
 
     /// Every blur region a surface was handed, oldest first, in logical

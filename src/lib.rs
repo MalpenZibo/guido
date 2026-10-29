@@ -170,7 +170,7 @@ use std::sync::Arc;
 use layout::Constraints;
 use platform::create_wayland_app;
 use reactive::{OwnerId, take_clipboard_change, take_cursor_change};
-use renderer::{GpuSlot, Renderer, flatten_root_into};
+use renderer::{GpuSlot, Renderer};
 use surface::{SurfaceCommand, SurfaceConfig, SurfaceId, drain_surface_commands};
 use surface_manager::{ManagedSurface, SurfaceManager};
 use widgets::Widget;
@@ -1097,6 +1097,19 @@ pub(crate) trait Surface {
         let _ = (width, height);
     }
 
+    /// Place the buffer about to be presented inside the surface, at `(x, y)`
+    /// in logical surface coordinates, on that buffer's commit.
+    ///
+    /// Only a surface whose buffer covers its content rather than the whole of
+    /// it has one to place — see [`BufferExtent::Content`] — and it is placed
+    /// where the frame drew it from, so the pixels land where the layout put
+    /// them.
+    ///
+    /// [`BufferExtent::Content`]: surface::BufferExtent::Content
+    fn place_buffer(&mut self, x: i32, y: i32) {
+        let _ = (x, y);
+    }
+
     /// Run `f` and let its requests reach the compositor as one commit, so a
     /// group of them never shows an intermediate surface on the way — the next
     /// buffer's commit, for a group that changed the size.
@@ -1416,6 +1429,13 @@ pub(crate) trait Platform {
     /// Whether backdrop blur regions can be published at all. A capability of
     /// the connection, which is why it is here and not on a surface.
     fn supports_blur_region(&self) -> bool {
+        false
+    }
+
+    /// Whether a surface can have a buffer smaller than itself, placed inside
+    /// it — a subsurface, with a viewport to stretch the surface's own nothing
+    /// over the rest. A capability of the connection, like the blur region's.
+    fn supports_content_buffer(&self) -> bool {
         false
     }
 
@@ -1749,6 +1769,10 @@ struct Geometry {
     /// the compositor holds is still right. Resolved beside the buffer and
     /// sent beside the commit — see [`resolve_geometry`].
     declare_destination: Option<(u32, u32)>,
+    /// Where in the surface this frame's buffer has to be placed, for a buffer
+    /// that covers only the content and has moved — which also moves every
+    /// pixel in it, so the frame is drawn whole.
+    place_at: Option<(i32, i32)>,
 }
 
 /// Read the surface's state and take its queued input, or give up on this
@@ -1778,11 +1802,10 @@ fn open_frame<P: Platform>(ctx: &mut FrameContext<P>) -> Option<Frame> {
 /// would leave it pending across a `batch_layer_requests` group — which a
 /// content-sized surface opens in `layout_pass`, in between — and that group's
 /// commit would latch the new destination over the previous frame's buffer.
-fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Geometry {
-    let id = ctx.id;
-    let surface = &mut *ctx.surface;
-    let (physical_width, physical_height) =
-        surface::buffer_size((frame.width, frame.height), frame.scale_factor);
+fn resolve_geometry(id: SurfaceId, surface: &mut ManagedSurface, frame: &Frame) -> Geometry {
+    let buffer = surface.buffer_rect(frame.width, frame.height);
+    let logical = (buffer.width as u32, buffer.height as u32);
+    let (physical_width, physical_height) = surface::buffer_size(logical, frame.scale_factor);
 
     let wgpu_surface = surface.wgpu_surface.as_mut().unwrap();
     let needs_resize =
@@ -1815,9 +1838,13 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
     // Compared here rather than in a platform for the reason the input region
     // is — a frame that has nothing new to declare declares nothing, once, for
     // every surface there is.
-    let destination = (frame.width, frame.height);
-    let declare_destination =
-        (surface.viewport_destination != Some(destination)).then_some(destination);
+    let declare_destination = (surface.viewport_destination != Some(logical)).then_some(logical);
+    let origin = (buffer.x as i32, buffer.y as i32);
+    let place_at = surface
+        .content_buffer
+        .is_some()
+        .then_some(origin)
+        .filter(|&origin| surface.placed_buffer != Some(origin));
 
     Geometry {
         physical_width,
@@ -1825,6 +1852,7 @@ fn resolve_geometry<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame) -> Ge
         needs_resize,
         scale_changed,
         declare_destination,
+        place_at,
     }
 }
 
@@ -1954,6 +1982,13 @@ fn layout_pass<P: Platform>(
         );
     }
 
+    // Where a buffer that covers only the content has to have room for before
+    // the frame says what it drew: read now, while the layout is fresh.
+    if surface.content_buffer.is_some() {
+        let size = drawn.unwrap_or((frame.width, frame.height));
+        surface.content_floor = content_floor(surface, tree, size);
+    }
+
     // Where every ref'd widget is drawn now: after layout, and on a frame
     // that only scrolled or animated a transform, which moves it all the same.
     widget_ref::update_widget_refs(tree);
@@ -1973,6 +2008,69 @@ fn layout_pass<P: Platform>(
     // against.
     reactive::focus::apply_pending_focus(tree);
     drawn
+}
+
+/// What a buffer that covers only the content has to hold besides what the
+/// frame draws, for a surface laid out at `size`: while anything is in flight,
+/// where the animations are taking the content and the box the buffer already
+/// has, and nothing once it has settled.
+///
+/// Where the content is going is read off a second pass, the measure that sizes
+/// a `content()` surface, run at the surface's size: it places every widget at
+/// its animations' targets, so a growth has its room from its first frame and
+/// plays inside a buffer that is not resized again. The layout is then run
+/// again to put every widget back where it is drawn now.
+///
+/// Holding the box it has is how a shrink waits, as a `content()` size's does:
+/// a closing panel is drawn whole on its way down, and the buffer comes down to
+/// it once, on the first frame the content has settled.
+fn content_floor(
+    surface: &ManagedSurface,
+    tree: &mut Tree,
+    (width, height): (u32, u32),
+) -> Option<widgets::Rect> {
+    let root = surface.widget_id;
+    if !tree.depended_on_the_pass(root, tree::LayoutPass::Layout) {
+        return None;
+    }
+    let constraints = Constraints::new(0.0, 0.0, width as f32, height as f32);
+    tree.measure_widget(root, constraints);
+    // The root paints into the surface's own node rather than a cached one, so
+    // the last frame's node is what says whether it draws.
+    let going = tree.drawn_extent(root, surface.root_node.draws_pixels());
+    tree.layout_widget(root, constraints);
+    [going, surface.content_buffer]
+        .into_iter()
+        .flatten()
+        .reduce(renderer::union_of)
+}
+
+/// The box a buffer that covers only the content needs for the frame just
+/// flattened — what it drew, and the floor the layout left — in whole logical
+/// pixels and inside the surface, if that is not the box it has.
+fn fitted_content_buffer(surface: &ManagedSurface, frame: &Frame) -> Option<widgets::Rect> {
+    let buffer = surface.content_buffer?;
+    let drawn = surface
+        .flatten_scratch
+        .frame(&surface.flattened_commands, &surface.command_layers)
+        .drawn_extent(frame.scale_factor)
+        .map(|drawn| drawn.offset(buffer.x, buffer.y));
+    let whole = widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+    let fitted = [drawn, surface.content_floor]
+        .into_iter()
+        .flatten()
+        .reduce(renderer::union_of)
+        .and_then(|needed| needed.intersection(&whole))
+        .and_then(region::RegionRect::covering)
+        .map_or(surface_manager::ONE_PIXEL, |needed| {
+            widgets::Rect::new(
+                needed.x as f32,
+                needed.y as f32,
+                needed.width as f32,
+                needed.height as f32,
+            )
+        });
+    (fitted != buffer).then_some(fitted)
 }
 
 /// What a content-sized surface asks for from what its content `measured`,
@@ -2085,15 +2183,24 @@ fn buffer_damage(rect: widgets::Rect, scale: f32, buffer: (i32, i32)) -> (i32, i
 /// are both requested BEFORE presenting, because presenting is what commits
 /// the surface. Anything set afterwards would ride an empty second commit
 /// the compositor cannot use.
-fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geometry: &Geometry) {
+fn paint_and_present<P: Platform>(
+    ctx: &mut FrameContext<P>,
+    frame: &Frame,
+    mut geometry: Geometry,
+) {
     let id = ctx.id;
     let surface = &mut *ctx.surface;
     let wayland_state = &mut *ctx.wayland_state;
     let renderer = &mut *ctx.renderer;
     let tree = &mut *ctx.tree;
 
-    // Force full repaint on resize, scale change, or during initialization
-    if frame.pacing.forced() || geometry.needs_resize || geometry.scale_changed {
+    // Force full repaint on resize, scale change, a buffer that moved, or
+    // during initialization
+    if frame.pacing.forced()
+        || geometry.needs_resize
+        || geometry.scale_changed
+        || geometry.place_at.is_some()
+    {
         tree.mark_subtree_needs_paint(surface.widget_id);
     }
 
@@ -2109,11 +2216,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         if let Some(mut handle) = wayland_state.surface(id)
             && handle.take_blur_resync()
         {
-            let blur_rects = blur::regions_from_commands(
-                &surface.flattened_commands,
-                surface.flatten_scratch.clip_chains(),
-            );
-            handle.sync_blur_region(blur_rects, true);
+            handle.sync_blur_region(blur_regions(surface), true);
         }
         render_stats::record_frame_skipped();
         render_stats::end_frame(&DamageRegion::None);
@@ -2137,6 +2240,24 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
         carried = paint_and_flatten(surface, tree, frame);
     }
 
+    // A buffer that covers only the content takes the box round what this
+    // frame drew, which only the flattened frame knows exactly: a transform or
+    // a colour moves no layout. Resized and moved, the frame is flattened
+    // again into it — the paint does not depend on where the buffer is.
+    if let Some(fitted) = fitted_content_buffer(surface, frame) {
+        surface.content_buffer = Some(fitted);
+        let scale_changed = geometry.scale_changed;
+        geometry = resolve_geometry(id, surface, frame);
+        geometry.scale_changed |= scale_changed;
+        tree.set_full_damage(surface.widget_id);
+        carried = flatten(surface, frame);
+    }
+    renderer.set_screen_size(
+        geometry.physical_width as f32,
+        geometry.physical_height as f32,
+    );
+    renderer.set_scale_factor(frame.scale_factor);
+
     // The compositor blur region is read off the frame that was just built, so
     // it cannot disagree with what is on screen — see `blur`. Set before
     // present() so it rides the buffer commit: region and content change
@@ -2150,15 +2271,18 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     // almost all of them — with no compositor blur in the frame at all. The one
     // frame that has to be walked without carrying one is the frame that stops:
     // it owes the compositor the empty region that withdraws the last one.
+    //
+    // A surface whose buffer covers only its content declares a region on
+    // every frame, empty when nothing blurs: stretched over the screen, it is
+    // the whole screen to a compositor rule that blurs a layer surface which
+    // has said nothing.
     if wayland_state.supports_blur_region()
         && let Some(mut handle) = wayland_state.surface(id)
-        && (carried.compositor_blur || handle.has_published_blur())
+        && (carried.compositor_blur
+            || handle.has_published_blur()
+            || surface.content_buffer.is_some())
     {
-        let blur_rects = blur::regions_from_commands(
-            &surface.flattened_commands,
-            surface.flatten_scratch.clip_chains(),
-        );
-        handle.sync_blur_region(blur_rects, false);
+        handle.sync_blur_region(blur_regions(surface), false);
     }
 
     // And the other region read off the same frame, on the same commit. The
@@ -2169,7 +2293,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     // frame that must be published while carrying nothing is the frame that
     // stops declaring, which owes the compositor its base back.
     if carried.input_region || surface.input_region.is_some() {
-        let request = region::InputRegionRequest {
+        let mut request = region::InputRegionRequest {
             base: region::base_rects(
                 surface.input_base.as_deref(),
                 frame.width as f32,
@@ -2180,6 +2304,7 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
                 surface.flatten_scratch.clip_chains(),
             ),
         };
+        on_surface(surface, request.ops.iter_mut().map(|op| &mut op.rect));
         if surface.input_region.as_ref() != Some(&request)
             && let Some(mut handle) = wayland_state.surface(id)
         {
@@ -2212,15 +2337,25 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     // blocking inside the Fifo swapchain.
     with_surface(wayland_state, id, |s| s.request_frame_callback());
 
+    // Where the buffer goes rides its commit too: placed anywhere else, the
+    // compositor would show the last buffer at the new place for a frame.
+    if let Some((x, y)) = geometry.place_at {
+        surface.placed_buffer = Some((x, y));
+        with_surface(wayland_state, id, |s| s.place_buffer(x, y));
+    }
+
     let damage = tree.take_damage(surface.widget_id);
+    let (dx, dy) = buffer_origin(surface);
     let (buffer_width, buffer_height) = (
         geometry.physical_width as i32,
         geometry.physical_height as i32,
     );
     let (x, y, width, height) = match damage {
-        DamageRegion::Partial(rect) => {
-            buffer_damage(rect, frame.scale_factor, (buffer_width, buffer_height))
-        }
+        DamageRegion::Partial(rect) => buffer_damage(
+            rect.offset(-dx as f32, -dy as f32),
+            frame.scale_factor,
+            (buffer_width, buffer_height),
+        ),
         // `None` shouldn't happen since we're rendering, but full damage is
         // the safe report for it.
         DamageRegion::None | DamageRegion::Full => (0, 0, buffer_width, buffer_height),
@@ -2273,6 +2408,43 @@ fn paint_and_present<P: Platform>(ctx: &mut FrameContext<P>, frame: &Frame, geom
     with_surface(wayland_state, id, |s| s.mark_frame_callback_pending());
 }
 
+/// The compositor blur the last frame asked for, in surface coordinates.
+fn blur_regions(surface: &ManagedSurface) -> Vec<region::RegionRect> {
+    let mut rects = blur::regions_from_commands(
+        &surface.flattened_commands,
+        surface.flatten_scratch.clip_chains(),
+    );
+    on_surface(surface, rects.iter_mut());
+    rects
+}
+
+/// Where the surface's buffer starts in it, in whole logical pixels: the
+/// corner a buffer covering only the content is placed at, and nothing for
+/// one that is the whole surface.
+fn buffer_origin(surface: &ManagedSurface) -> (i32, i32) {
+    surface
+        .content_buffer
+        .map_or((0, 0), |buffer| (buffer.x as i32, buffer.y as i32))
+}
+
+/// Regions read off the frame, which is drawn in the buffer's coordinates,
+/// moved into the surface's: the input and blur regions are the surface's
+/// whatever its buffer covers, so they reach past what it draws — a backdrop
+/// that takes a click anywhere, over pixels nothing was drawn into.
+fn on_surface<'a>(
+    surface: &ManagedSurface,
+    rects: impl Iterator<Item = &'a mut region::RegionRect>,
+) {
+    let (dx, dy) = buffer_origin(surface);
+    if (dx, dy) == (0, 0) {
+        return;
+    }
+    for rect in rects {
+        rect.x += dx;
+        rect.y += dy;
+    }
+}
+
 /// Paint the surface into its retained root node and flatten it into the
 /// surface's buffers, returning what the frame carries for the compositor.
 fn paint_and_flatten(
@@ -2293,12 +2465,18 @@ fn paint_and_flatten(
         );
     });
 
-    // Flatten tree into reused buffers
+    flatten(surface, frame)
+}
+
+/// Flatten the surface's painted root node into its buffers, into the part of
+/// the surface its buffer covers.
+fn flatten(surface: &mut ManagedSurface, frame: &Frame) -> renderer::RegionsCarried {
     let carried;
     time_phase!(render_stats::Phase::Flatten, {
-        carried = flatten_root_into(
+        carried = renderer::flatten_root_for(
             &surface.root_node,
             frame.scale_factor,
+            surface.content_buffer,
             &mut surface.flattened_commands,
             &mut surface.command_layers,
             &mut surface.flatten_scratch,
@@ -2457,7 +2635,7 @@ fn render_surface<P: Platform>(
         close_requested(platform, id)
     });
 
-    let mut geometry = resolve_geometry(ctx, &frame);
+    let mut geometry = resolve_geometry(ctx.id, ctx.surface, &frame);
 
     // This returns BEFORE draining jobs, and that is the whole point:
     // animation continuations have to stay queued. Advancing them on every
@@ -2501,15 +2679,10 @@ fn render_surface<P: Platform>(
     if let Some((width, height)) = layout_pass(ctx, &frame, has_pending_layouts, layout_roots) {
         (frame.width, frame.height) = (width, height);
         let scale_changed = geometry.scale_changed;
-        geometry = resolve_geometry(ctx, &frame);
+        geometry = resolve_geometry(ctx.id, ctx.surface, &frame);
         geometry.scale_changed |= scale_changed;
     }
-    ctx.renderer.set_screen_size(
-        geometry.physical_width as f32,
-        geometry.physical_height as f32,
-    );
-    ctx.renderer.set_scale_factor(frame.scale_factor);
-    paint_and_present(ctx, &frame, &geometry);
+    paint_and_present(ctx, &frame, geometry);
     // The frame is over, and so is its instant. Leaving it set would let a
     // later call read a time that has nothing to do with it, silently — the
     // failure a stale clock always has.
@@ -4156,6 +4329,7 @@ mod a_frame_is_a_description_not_a_connection {
             needs_resize,
             scale_changed,
             declare_destination: None,
+            place_at: None,
         }
     }
 
@@ -4625,7 +4799,7 @@ mod a_frame_lands_where_the_surface_points {
             height: H,
         });
         let id = surface.id;
-        let mut ctx = FrameContext {
+        let ctx = FrameContext {
             id,
             surface: &mut surface,
             wayland_state: &mut platform,
@@ -4634,7 +4808,7 @@ mod a_frame_lands_where_the_surface_points {
         };
         let frame = ctx.wayland_state.surface(id).unwrap().open_frame().unwrap();
 
-        let first = resolve_geometry(&mut ctx, &frame);
+        let first = resolve_geometry(ctx.id, ctx.surface, &frame);
         assert!(first.needs_resize, "an 8x8 target for a 100x32 frame");
         assert_eq!(
             (
@@ -4644,7 +4818,7 @@ mod a_frame_lands_where_the_surface_points {
             (W, H)
         );
 
-        let again = resolve_geometry(&mut ctx, &frame);
+        let again = resolve_geometry(ctx.id, ctx.surface, &frame);
         assert!(!again.needs_resize, "the target already fits");
     }
 }

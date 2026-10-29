@@ -16,6 +16,15 @@ use crate::tree::{Tree, WidgetId};
 use crate::widgets::{Rect, Widget};
 use crate::{Platform, Surface};
 
+/// The smallest buffer there is, which a buffer covering only the content
+/// starts as and comes down to when nothing is drawn.
+pub(crate) const ONE_PIXEL: Rect = Rect {
+    x: 0.0,
+    y: 0.0,
+    width: 1.0,
+    height: 1.0,
+};
+
 /// A surface with unified GPU lifecycle management.
 ///
 /// This combines the widget tree, GPU surface state, and configuration
@@ -74,6 +83,20 @@ pub struct ManagedSurface {
     /// going, and holding to a configure that has not caught up yet would ask
     /// for a size the surface has already left.
     pub content_size: Option<(u32, u32)>,
+    /// Where the buffer goes, for a surface whose buffer covers only what it
+    /// draws ([`BufferExtent::Content`] on a compositor that can place one):
+    /// the box the last layout decided, in logical surface coordinates and
+    /// whole pixels. `None` for a buffer that is the whole surface.
+    ///
+    /// [`BufferExtent::Content`]: crate::surface::BufferExtent::Content
+    pub content_buffer: Option<Rect>,
+    /// Where the last buffer presented was placed, for one of those: a buffer
+    /// that stays where it was is not placed again.
+    pub placed_buffer: Option<(i32, i32)>,
+    /// What that box has to hold besides what the frame draws: while anything
+    /// is in flight, where the content is going and the box it already has.
+    /// Left by the layout for the paint, which knows the rest.
+    pub content_floor: Option<Rect>,
 }
 
 impl ManagedSurface {
@@ -131,6 +154,9 @@ impl ManagedSurface {
             viewport_destination: None,
             reservation,
             content_size: None,
+            content_buffer: None,
+            placed_buffer: None,
+            content_floor: None,
         }
     }
 
@@ -151,8 +177,18 @@ impl ManagedSurface {
             return true; // Already initialized
         }
 
+        // A buffer that covers only the content starts as a pixel, and the
+        // first frame gives it the content's size: built at the surface's, it
+        // would be the whole screen for one frame, which is what it is there
+        // not to be.
+        if self.config.buffer == crate::surface::BufferExtent::Content
+            && platform.supports_content_buffer()
+        {
+            self.content_buffer = Some(ONE_PIXEL);
+        }
+        let buffer = self.buffer_rect(width, height);
         let (physical_width, physical_height) =
-            crate::surface::buffer_size((width, height), scale_factor);
+            crate::surface::buffer_size((buffer.width as u32, buffer.height as u32), scale_factor);
 
         log::info!(
             "Creating render target for {:?}: logical {}x{}, physical {}x{}, scale {}",
@@ -176,6 +212,13 @@ impl ManagedSurface {
         self.layout_widget(tree, width as f32, height as f32, at);
 
         true
+    }
+
+    /// The part of the surface its buffer covers, for a frame of `width` by
+    /// `height`, in logical surface coordinates.
+    pub fn buffer_rect(&self, width: u32, height: u32) -> Rect {
+        self.content_buffer
+            .unwrap_or_else(|| Rect::new(0.0, 0.0, width as f32, height as f32))
     }
 
     /// Check if GPU is initialized.
