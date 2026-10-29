@@ -19,14 +19,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{SeatState, pointer::cursor_shape::CursorShapeManager},
     session_lock::{SessionLockState, SessionLockSurface},
-    shell::{
-        WaylandSurface,
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-            LayerSurfaceConfigure,
-        },
-        xdg::popup::Popup,
-    },
+    shell::xdg::popup::Popup,
 };
 use wayland_backend::sys::client::ObjectId;
 use wayland_protocols::ext::background_effect::v1::client::{
@@ -38,6 +31,7 @@ use std::cell::Cell;
 
 use super::backdrop::Backdrop;
 use super::input::InputState;
+use super::layer_shell::{LayerShell, LayerSurface};
 use super::lock::Lock;
 use super::outputs::OutputRegistry;
 use super::popups::Popups;
@@ -47,6 +41,7 @@ use crate::outputs::{self};
 use crate::region::RegionRect;
 use crate::surface::SurfaceId;
 use crate::widgets::{Event, Rect};
+use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 /// The shell role of a surface: an ordinary layer-shell surface or an
 /// ext-session-lock-v1 lock surface. Both share the same widget tree, GPU
@@ -587,8 +582,9 @@ impl WaylandState {
             qh,
             wl_surface.clone(),
             config.layer,
-            Some(config.namespace.clone()),
+            config.namespace.clone(),
             target_output.as_ref(),
+            id,
         );
 
         layer_surface.set_anchor(config.anchor);
@@ -961,12 +957,10 @@ impl CompositorHandler for WaylandState {
     }
 }
 
-impl LayerShellHandler for WaylandState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        // O(1) lookup via the wl_surface object id
-        let closed_id = self.surface_lookup.get(&layer.wl_surface().id()).copied();
-
-        if let Some(id) = closed_id {
+impl WaylandState {
+    /// The compositor closed this layer surface.
+    pub(crate) fn layer_closed(&mut self, id: SurfaceId) {
+        if self.surfaces.contains_key(&id) {
             log::info!("Surface {:?} closed by compositor", id);
             // Route through the normal close command so the managed surface
             // is fully cleaned up (widgets, reactive owner, wgpu surface —
@@ -977,28 +971,17 @@ impl LayerShellHandler for WaylandState {
         }
     }
 
-    fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        layer: &LayerSurface,
-        configure: LayerSurfaceConfigure,
-        _serial: u32,
-    ) {
-        // O(1) lookup via the wl_surface object id (fires on every resize)
-        let surface_id = self.surface_lookup.get(&layer.wl_surface().id()).copied();
-
-        if let Some(id) = surface_id
-            && let Some(surface_state) = self.surfaces.get_mut(&id)
-        {
+    /// The compositor configured this layer surface, already acked.
+    pub(crate) fn layer_configured(&mut self, id: SurfaceId, width: u32, height: u32) {
+        if let Some(surface_state) = self.surfaces.get_mut(&id) {
             log::info!(
                 "Surface {:?} configure: requested size {:?}, current {}x{}",
                 id,
-                configure.new_size,
+                (width, height),
                 surface_state.width,
                 surface_state.height
             );
-            surface_state.adopt_size(configure.new_size.0, configure.new_size.1);
+            surface_state.adopt_size(width, height);
             log::info!(
                 "Surface {:?} using size: {}x{}",
                 id,

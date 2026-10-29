@@ -227,7 +227,8 @@ blocks live beside their state rather than all in one file.
 
 | File | Concern |
 |------|---------|
-| `platform/wayland.rs` | Connection, surfaces, layer shell, compositor handler |
+| `platform/wayland.rs` | Connection, surfaces, compositor handler |
+| `platform/layer_shell.rs` | `zwlr_layer_shell_v1`, bound up to version 5, which sctk does not: the role, its requests and its configure |
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
 | `platform/clicks.rs` | Which press of a run a press is — the double click — shared with the headless recorder |
 | `platform/selections.rs` | Clipboard and primary selection, read on paste |
