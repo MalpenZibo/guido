@@ -79,6 +79,7 @@ struct RecordedSurface {
     /// frame promptly would.
     callbacks_held: bool,
     exclusive_zones: Vec<i32>,
+    exclusive_edges: Vec<Option<crate::surface::Edge>>,
     /// Every input region asked for, oldest first. Kept whole rather than
     /// resolved, because "no region at all" and "a region holding nothing" are
     /// opposite instructions that a list of rectangles cannot tell apart.
@@ -286,8 +287,9 @@ impl Surface for &mut RecordedSurface {
         }
     }
 
-    fn set_exclusive_zone(&mut self, zone: i32) {
-        self.exclusive_zones.push(zone);
+    fn set_reservation(&mut self, reservation: crate::surface::Reservation) {
+        self.exclusive_zones.push(reservation.zone);
+        self.exclusive_edges.push(reservation.edge);
     }
 
     fn popup_auto_width(&self) -> Option<u32> {
@@ -374,7 +376,8 @@ impl Platform for Recorder {
             RecordedSurface {
                 scale: 1.0,
                 sizes_asked: vec![declared.asked],
-                exclusive_zones: vec![declared.exclusive_zone],
+                exclusive_zones: vec![declared.reservation.zone],
+                exclusive_edges: vec![declared.reservation.edge],
                 input_regions: Vec::from_iter(declared.input_region.map(Some)),
                 ..Default::default()
             },
@@ -820,6 +823,12 @@ impl Headless {
     /// and only a list can tell them apart.
     pub fn exclusive_zones_asked(&self, id: SurfaceId) -> &[i32] {
         &self.host.get(id).exclusive_zones
+    }
+
+    /// The edge each of those reservations was asked to apply to, in step with
+    /// them: `None` where none was sent, and the one the anchor gives stands.
+    pub fn exclusive_edges_asked(&self, id: SurfaceId) -> &[Option<crate::surface::Edge>] {
+        &self.host.get(id).exclusive_edges
     }
 
     /// Every input region a surface has asked for, oldest first. `None` is the

@@ -231,6 +231,123 @@ fn a_content_sized_surface_reserves_only_once_a_frame_has_measured_it() {
     );
 }
 
+/// A bar anchored to every edge, so that the compositor sizes it and nothing
+/// is ever drawn at a size it did not give (#909). Anchored to both edges of an
+/// axis, a positive zone counts for nothing unless the zone names its edge.
+fn stretched_bar() -> SurfaceConfig {
+    SurfaceConfig::new()
+        .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+        .exclusive_zone(52)
+        .exclusive_edge(Edge::Bottom)
+}
+
+/// The zone and the edge it applies to are declared together, at creation.
+#[test]
+fn a_stretched_bar_reserves_its_zone_at_the_edge_it_names() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let bar = app.surface(stretched_bar(), move || self::bar(clicks));
+    app.configure(bar, 1440, 892, 1.0);
+    app.step();
+
+    assert_eq!(app.exclusive_zones_asked(bar), [52]);
+    assert_eq!(app.exclusive_edges_asked(bar), [Some(Edge::Bottom)]);
+}
+
+/// `Auto` reserves the extent on the edge's axis, and on a stretched axis that
+/// extent is the screen's: nothing a bar means to keep for itself.
+#[test]
+fn auto_reserves_nothing_on_an_axis_the_compositor_stretches() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let bar = app.surface(
+        stretched_bar().exclusive_zone(ExclusiveZone::Auto),
+        move || self::bar(clicks),
+    );
+    app.configure(bar, 1440, 892, 1.0);
+    app.step();
+
+    assert_eq!(app.exclusive_zones_asked(bar), [0]);
+}
+
+/// `Auto` with an edge on an axis the surface sizes itself follows that axis,
+/// as it would anchored to the edge alone: a corner bar reserving its height.
+#[test]
+fn auto_follows_the_named_edge_in_a_corner() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let corner = SurfaceConfig::new()
+        .width(300)
+        .height(40)
+        .anchor(Anchor::TOP | Anchor::LEFT)
+        .exclusive_zone(ExclusiveZone::Auto)
+        .exclusive_edge(Edge::Top);
+    let bar = app.surface(corner, move || self::bar(clicks));
+    app.configure(bar, 300, 40, 1.0);
+    app.step();
+
+    assert_eq!(app.exclusive_zones_asked(bar), [40]);
+    assert_eq!(app.exclusive_edges_asked(bar), [Some(Edge::Top)]);
+}
+
+/// A bar along one edge and both beside it keeps its height along that edge:
+/// the axis the compositor stretches is the other one.
+#[test]
+fn auto_follows_the_named_edge_across_the_stretched_axis() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let top_bar = fixed_bar()
+        .exclusive_zone(ExclusiveZone::Auto)
+        .exclusive_edge(Edge::Top);
+    let bar = app.surface(top_bar, move || self::bar(clicks));
+
+    assert_eq!(app.exclusive_zones_asked(bar), [50]);
+}
+
+/// The compositor refuses an edge the surface is not anchored to as a protocol
+/// error, so it is never sent: neither at creation, nor left standing by a
+/// re-anchoring that leaves it, which withdraws it in the same group as the
+/// anchor.
+#[test]
+fn an_edge_the_surface_is_not_anchored_to_is_never_sent() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let top_bar = fixed_bar().exclusive_zone(52).exclusive_edge(Edge::Bottom);
+    let bar = app.surface(top_bar, move || self::bar(clicks));
+    assert_eq!(app.exclusive_edges_asked(bar), [None], "not anchored to it");
+
+    let stretched = app.surface(stretched_bar(), move || self::bar(clicks));
+    app.configure(stretched, 1440, 892, 1.0);
+    app.step();
+    surface_handle(stretched).set_anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT);
+    app.step();
+
+    assert_eq!(
+        app.exclusive_edges_asked(stretched),
+        [Some(Edge::Bottom), None],
+        "the re-anchoring left the edge, and took it back"
+    );
+}
+
+/// Set at runtime, like the zone, and sent with it.
+#[test]
+fn a_handle_moves_the_edge_the_zone_applies_to() {
+    let Some(mut app) = headless() else { return };
+    let clicks = create_signal(0u32);
+    let bar = app.surface(stretched_bar(), move || self::bar(clicks));
+    app.configure(bar, 1440, 892, 1.0);
+    app.step();
+
+    surface_handle(bar).set_exclusive_edge(Some(Edge::Top));
+    app.step();
+
+    assert_eq!(app.exclusive_zones_asked(bar), [52, 52]);
+    assert_eq!(
+        app.exclusive_edges_asked(bar),
+        [Some(Edge::Bottom), Some(Edge::Top)]
+    );
+}
+
 /// The other half of what a frame tells the compositor: not only what to
 /// reserve, but what size to be.
 ///

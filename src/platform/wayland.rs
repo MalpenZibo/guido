@@ -593,12 +593,13 @@ impl WaylandState {
         // that dimension: set it to 0 so it stretches. Content sizing on
         // such an axis can never take effect — warn loudly.
         crate::surface::warn_content_on_stretched_axis(id, config);
+        crate::surface::warn_unanchored_exclusive_edge(id, config);
         let declared = crate::surface::initial_declaration(config);
         let (initial_width, initial_height) = declared.believed;
 
         layer_surface.set_size(declared.asked.0, declared.asked.1);
         layer_surface.set_keyboard_interactivity(config.keyboard_interactivity);
-        layer_surface.set_exclusive_zone(declared.exclusive_zone);
+        layer_surface.set_reservation(declared.reservation);
 
         let margin = config.margin;
         if !margin.is_zero() {
@@ -778,10 +779,14 @@ impl WaylandState {
         log::info!("Surface {:?} size set to {}x{}", id, width, height);
     }
 
-    /// Set the exclusive zone for a surface.
-    pub fn set_surface_exclusive_zone(&mut self, id: SurfaceId, zone: i32) {
-        self.with_layer_surface(id, |ls| ls.set_exclusive_zone(zone));
-        log::info!("Surface {:?} exclusive zone set to {}", id, zone);
+    /// Set the exclusive zone for a surface, and the edge it applies to.
+    pub(crate) fn set_surface_reservation(
+        &mut self,
+        id: SurfaceId,
+        reservation: crate::surface::Reservation,
+    ) {
+        self.with_layer_surface(id, |ls| ls.set_reservation(reservation));
+        log::info!("Surface {:?} reservation set to {:?}", id, reservation);
     }
 
     /// Set the margin for a surface.

@@ -104,6 +104,9 @@ pub struct SurfaceConfig {
     pub background_color: Color,
     /// Screen-space reservation policy (see [`ExclusiveZone`]).
     pub exclusive_zone: ExclusiveZone,
+    /// The edge the reservation applies to, where the anchor alone does not
+    /// say (see [`SurfaceConfig::exclusive_edge`]).
+    pub exclusive_edge: Option<Edge>,
     /// Margins from the anchored screen edges.
     pub margin: Margin,
     /// Output (monitor) to show the surface on. None lets the compositor choose.
@@ -371,7 +374,7 @@ pub(crate) struct InitialDeclaration {
     /// the former falls back to it.
     pub believed: (u32, u32),
     /// The screen space to reserve, resolved against `believed`.
-    pub exclusive_zone: i32,
+    pub reservation: Reservation,
     /// The input region to apply, or `None` where the surface declared none
     /// and takes input everywhere. Here rather than read from the config at
     /// each platform, so "applied at birth only when one was declared" is one
@@ -388,12 +391,7 @@ pub(crate) fn initial_declaration(config: &SurfaceConfig) -> InitialDeclaration 
     InitialDeclaration {
         asked: (ask_w, ask_h),
         believed,
-        exclusive_zone: config.exclusive_zone.resolve(
-            config.anchor,
-            config.margin,
-            believed.0,
-            believed.1,
-        ),
+        reservation: reservation(config, believed.0, believed.1),
         input_region: config.input_region.clone(),
     }
 }
@@ -606,7 +604,8 @@ pub enum ExclusiveZone {
     /// surfaces keep the reservation in sync when they resize. Per the
     /// layer-shell spec a zone is only meaningful anchored to one edge
     /// (plus optionally both perpendicular ones); on other anchors this
-    /// resolves to no reservation.
+    /// resolves to no reservation, unless the zone names its edge with
+    /// [`SurfaceConfig::exclusive_edge`], whose axis it then follows.
     Auto,
     /// Reserve this many logical pixels.
     Fixed(u32),
@@ -669,6 +668,100 @@ impl ExclusiveZone {
     }
 }
 
+/// An edge of the output, as [`SurfaceConfig::exclusive_edge`] names the one a
+/// reservation applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Edge {
+    /// The top edge.
+    Top,
+    /// The bottom edge.
+    Bottom,
+    /// The left edge.
+    Left,
+    /// The right edge.
+    Right,
+}
+
+impl Edge {
+    /// Whether `anchor` holds this edge and the one opposite it, so that the
+    /// compositor sets the surface's extent across them.
+    fn is_stretched_by(self, anchor: Anchor) -> bool {
+        let (stretched_w, stretched_h) = compositor_owned_axes(anchor);
+        match self {
+            Edge::Top | Edge::Bottom => stretched_h,
+            Edge::Left | Edge::Right => stretched_w,
+        }
+    }
+
+    /// The anchor of this edge alone.
+    pub fn anchor(self) -> Anchor {
+        match self {
+            Edge::Top => Anchor::TOP,
+            Edge::Bottom => Anchor::BOTTOM,
+            Edge::Left => Anchor::LEFT,
+            Edge::Right => Anchor::RIGHT,
+        }
+    }
+}
+
+/// What a layer surface asks the compositor to keep for it: the zone, and the
+/// edge it applies to where one was named and the surface is anchored to it.
+/// The two are one request in effect, so they are resolved and sent together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Reservation {
+    pub zone: i32,
+    pub edge: Option<Edge>,
+}
+
+/// The reservation `config` makes at this size. An edge the surface is not
+/// anchored to is left out, as the compositor would end the connection over
+/// it; [`warn_unanchored_exclusive_edge`] says so where the config is set.
+///
+/// With an edge, the zone is what it would be anchored to that edge alone,
+/// unless it is `Auto` on an axis the anchor stretches: the extent there is the
+/// screen's, not the surface's to reserve.
+pub(crate) fn reservation(config: &SurfaceConfig, width: u32, height: u32) -> Reservation {
+    let edge = config
+        .exclusive_edge
+        .filter(|edge| config.anchor.contains(edge.anchor()));
+    let zone = match edge {
+        Some(edge)
+            if config.exclusive_zone == ExclusiveZone::Auto
+                && edge.is_stretched_by(config.anchor) =>
+        {
+            0
+        }
+        _ => config.exclusive_zone.resolve(
+            edge.map_or(config.anchor, Edge::anchor),
+            config.margin,
+            width,
+            height,
+        ),
+    };
+    Reservation { zone, edge }
+}
+
+/// Warn about an exclusive edge that will not be sent, or a zone it leaves
+/// with nothing to reserve. Where the config is set, not where it is resolved,
+/// which is every resize of a content surface.
+pub(crate) fn warn_unanchored_exclusive_edge(id: SurfaceId, config: &SurfaceConfig) {
+    let Some(edge) = config.exclusive_edge else {
+        return;
+    };
+    if !config.anchor.contains(edge.anchor()) {
+        log::warn!(
+            "Surface {id:?}: exclusive edge {edge:?} is not one it is anchored to \
+             ({:?}); not sending it",
+            config.anchor
+        );
+    } else if config.exclusive_zone == ExclusiveZone::Auto && edge.is_stretched_by(config.anchor) {
+        log::warn!(
+            "Surface {id:?}: ExclusiveZone::Auto along {edge:?}, on an axis the \
+             compositor stretches, has no extent of its own; reserving nothing"
+        );
+    }
+}
+
 /// The axis an [`ExclusiveZone::Auto`] reservation tracks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FollowAxis {
@@ -693,6 +786,7 @@ impl Default for SurfaceConfig {
             namespace: "guido-surface".to_string(),
             background_color: Color::rgb(0.1, 0.1, 0.15),
             exclusive_zone: ExclusiveZone::None,
+            exclusive_edge: None,
             margin: Margin::default(),
             output: None,
             input_region: None,
@@ -742,10 +836,39 @@ impl SurfaceConfig {
         self
     }
 
-    /// Set the exclusive zone (reserves screen space).
-    /// Pass Some(0) for no exclusive zone, None to use the surface height.
+    /// Set the screen space the surface reserves (see [`ExclusiveZone`]).
     pub fn exclusive_zone(mut self, zone: impl Into<ExclusiveZone>) -> Self {
         self.exclusive_zone = zone.into();
+        self
+    }
+
+    /// Name the edge the reservation applies to.
+    ///
+    /// The anchor says it for a surface against one edge. Anchored to both
+    /// edges of an axis it says nothing, and a positive zone counts for
+    /// nothing either, so a bar the compositor stretches over the whole
+    /// screen names its edge to keep its zone:
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// SurfaceConfig::new()
+    ///     .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+    ///     .exclusive_zone(52)
+    ///     .exclusive_edge(Edge::Bottom);
+    /// ```
+    ///
+    /// The surface is then as large as the compositor allows from its first
+    /// configure, and the 52 pixels come off the bottom for every other
+    /// surface and window.
+    ///
+    /// The edge has to be one the surface is anchored to; one it is not is
+    /// never sent, as the compositor would end the connection over it. It
+    /// takes wlr-layer-shell version 5, and on a compositor with an older one
+    /// it is not sent either and the zone is what the anchor makes of it.
+    /// [`ExclusiveZone::Auto`] follows the edge's axis, so on a stretched one
+    /// it reserves nothing: give the zone in pixels there.
+    pub fn exclusive_edge(mut self, edge: Edge) -> Self {
+        self.exclusive_edge = Some(edge);
         self
     }
 
@@ -1040,6 +1163,13 @@ impl SurfaceHandle {
         });
     }
 
+    /// Set the edge the reservation applies to, as
+    /// [`SurfaceConfig::exclusive_edge`] does, or `None` for the one the anchor
+    /// gives. Sent in the same commit as the zone.
+    pub fn set_exclusive_edge(&self, edge: Option<Edge>) {
+        push_surface_command(SurfaceCommand::SetExclusiveEdge { id: self.id, edge });
+    }
+
     /// Set the margins from the anchored screen edges, in the same vocabulary
     /// [`SurfaceConfig::margin`] takes.
     pub fn set_margin(&self, margin: impl Into<Margin>) {
@@ -1090,6 +1220,8 @@ pub(crate) enum SurfaceCommand {
     /// Set the screen-space reservation for a surface. Resolved to a protocol
     /// value by the loop, which is where the anchor and the current extent are.
     SetExclusiveZone { id: SurfaceId, zone: ExclusiveZone },
+    /// Set the edge a surface's reservation applies to.
+    SetExclusiveEdge { id: SurfaceId, edge: Option<Edge> },
     /// Set the margin for a surface.
     SetMargin { id: SurfaceId, margin: Margin },
     /// Set the input region for a surface.
@@ -1473,7 +1605,7 @@ mod tests {
     /// spec has no answer for it either.
     ///
     /// It is worth pinning because it is a premise elsewhere: the dock fixtures
-    /// that watch the deferral guard in `publish_exclusive_zone` are anchored
+    /// that watch the deferral guard in `publish_reservation` are anchored
     /// `LEFT | TOP | BOTTOM` rather than `TOP | LEFT` precisely so that their
     /// assertions do not hold for this reason instead of the intended one.
     #[test]

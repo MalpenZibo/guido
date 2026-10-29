@@ -234,6 +234,38 @@ compositors such as sway, and smithay ones such as niri, both do), so
 top. `ExclusiveZone::Auto` reserves the surface's own size plus the margin facing
 away from the edge: a gap below a top bar is `.margin([0, 0, 8, 0])`.
 
+### A bar the compositor sizes
+
+A bar that grows to the whole screen while a panel is open has to say how tall
+the screen is, and it cannot know: the compositor takes the other bars'
+reservations off the space it arranges the surface in, and may give less than
+was asked. Anchored to every edge instead, the surface is as large as the
+compositor allows from its first configure, and never asks for a size at all.
+
+Anchored to both edges of an axis, though, a zone counts for nothing unless it
+names the edge it applies to:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+SurfaceConfig::new()
+    .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+    .exclusive_zone(52)
+    .exclusive_edge(Edge::Bottom)  // the 52px come off the bottom
+# ;
+# }
+```
+
+Limit the input to what the bar shows with an input region, so the rest of
+the screen still reaches the windows beneath.
+
+The edge needs wlr-layer-shell version 5: niri, cosmic-comp, sway with wlroots
+0.19, Hyprland 0.41 and KWin 6 have it. On an older compositor the edge is not
+sent and the zone counts for nothing, as before. An edge the surface is not
+anchored to is never sent. `ExclusiveZone::Auto` follows the edge's axis, so on
+a stretched one it reserves nothing: give the zone in pixels.
+
 ## Multi-Surface Applications
 
 Guido supports creating multiple surfaces within a single application. All surfaces share the same reactive state, allowing for coordinated updates.
@@ -394,6 +426,9 @@ impl SurfaceHandle {
 
     /// Change the screen-space reservation policy
     pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>);
+
+    /// Change the edge the reservation applies to, or `None` for the anchor's
+    pub fn set_exclusive_edge(&self, edge: Option<Edge>);
 
     /// Change margins — CSS shorthands, as `padding` takes
     pub fn set_margin(&self, margin: impl Into<Margin>);
@@ -1050,6 +1085,7 @@ impl SurfaceConfig {
     pub fn layer(self, layer: Layer) -> Self;
     pub fn keyboard_interactivity(self, mode: KeyboardInteractivity) -> Self;
     pub fn exclusive_zone(self, zone: impl Into<ExclusiveZone>) -> Self;
+    pub fn exclusive_edge(self, edge: Edge) -> Self;
     pub fn namespace(self, namespace: impl Into<String>) -> Self;
     pub fn background_color(self, color: Color) -> Self;
     pub fn margin(self, margin: impl Into<Margin>) -> Self;
@@ -1121,6 +1157,7 @@ impl SurfaceHandle {
     pub fn set_anchor(&self, anchor: Anchor);
     pub fn set_size(&self, width: impl Into<SurfaceExtent>, height: impl Into<SurfaceExtent>);
     pub fn set_exclusive_zone(&self, zone: impl Into<ExclusiveZone>);
+    pub fn set_exclusive_edge(&self, edge: Option<Edge>);
     pub fn set_margin(&self, margin: impl Into<Margin>);
     pub fn set_input_region(&self, rects: Option<Vec<Rect>>);
 }

@@ -8,9 +8,11 @@
 //! Its `Anchor`, `Layer` and `KeyboardInteractivity` do not depend on who
 //! bound the global, so they are still sctk's.
 
+use std::cell::Cell;
+
 use smithay_client_toolkit::compositor::Surface;
 use smithay_client_toolkit::reexports::client::{
-    Connection, Dispatch, QueueHandle, delegate_noop,
+    Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
     globals::{BindError, GlobalList},
     protocol::{wl_output, wl_surface},
 };
@@ -22,7 +24,7 @@ use smithay_client_toolkit::reexports::protocols_wlr::layer_shell::v1::client::{
 use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 use super::wayland::WaylandState;
-use crate::surface::SurfaceId;
+use crate::surface::{Edge, Reservation, SurfaceId};
 
 /// The first version with `set_exclusive_edge`.
 const EXCLUSIVE_EDGE_SINCE: u32 = 5;
@@ -61,6 +63,7 @@ impl LayerShell {
         LayerSurface {
             role,
             surface: Surface::from(surface),
+            asked_edge: Cell::new(None),
         }
     }
 }
@@ -71,6 +74,10 @@ impl LayerShell {
 pub struct LayerSurface {
     role: ZwlrLayerSurfaceV1,
     surface: Surface,
+    /// The exclusive edge last asked for: none until one is, as the protocol
+    /// starts it. Kept on a compositor too old to be sent it as well, so that
+    /// it is refused once rather than on every resize.
+    asked_edge: Cell<Option<Edge>>,
 }
 
 impl LayerSurface {
@@ -95,8 +102,33 @@ impl LayerSurface {
             ));
     }
 
-    pub(crate) fn set_exclusive_zone(&self, zone: i32) {
-        self.role.set_exclusive_zone(zone);
+    /// Ask for a reservation: the zone, and the edge it applies to where it
+    /// changed. Before version 5 there is no edge to send, and the zone is what
+    /// the anchor makes of it.
+    ///
+    /// After the anchor, always: Hyprland checks the edge against the anchor
+    /// as the request arrives, not at the commit, so an edge sent before the
+    /// anchor that makes it valid ends the connection. 0 clears it, as smithay,
+    /// KWin and Hyprland all read it.
+    pub(crate) fn set_reservation(&self, reservation: Reservation) {
+        self.role.set_exclusive_zone(reservation.zone);
+        if reservation.edge == self.asked_edge.replace(reservation.edge) {
+            return;
+        }
+        if self.role.version() >= EXCLUSIVE_EDGE_SINCE {
+            let edge = reservation.edge.map_or(Anchor::empty(), Edge::anchor);
+            self.role
+                .set_exclusive_edge(zwlr_layer_surface_v1::Anchor::from_bits_truncate(
+                    edge.bits(),
+                ));
+        } else if let Some(edge) = reservation.edge {
+            log::warn!(
+                "the compositor's layer shell is version {}, before \
+                 set_exclusive_edge; {edge:?} is not sent, and a zone on a \
+                 stretched surface counts for nothing",
+                self.role.version()
+            );
+        }
     }
 
     pub(crate) fn set_margin(&self, top: i32, right: i32, bottom: i32, left: i32) {
