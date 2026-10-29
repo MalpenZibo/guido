@@ -627,8 +627,10 @@ impl Container {
         self.merge_distance(id).is_some()
     }
 
-    /// The border this container's box keeps, as the clip, the hit test and
-    /// the scrollbar read it: none for a merging container.
+    /// The border this container's box keeps, as the clip, the hit test, the
+    /// scrollbar and [`draws_its_own_surface`](Self::draws_its_own_surface)
+    /// read it: none for a merging container, whose box therefore has no
+    /// border for a click to stop on (#907).
     pub(super) fn box_border_width(&self, id: WidgetId) -> f32 {
         if self.border_is_the_merges(id) {
             0.0
@@ -1050,7 +1052,8 @@ impl Container {
     /// Whether this container draws a surface of its own: a fill, a border
     /// frame or a backdrop blur, by the gates `paint` puts each through. A
     /// shadow does not count — it rides the fill, and draws nothing without
-    /// one.
+    /// one — and nor does a merging container's border, which is the merged
+    /// shape's and not round this box (#907).
     ///
     /// What makes a point inside its shape a point *on* it, which covers the
     /// siblings painted beneath it (#636).
@@ -1061,10 +1064,7 @@ impl Container {
             || self
                 .effective_gradient(id)
                 .is_some_and(|g| gradient_shows(&g))
-            || border_shows(
-                self.animated_border_width(id),
-                self.animated_border_color(id),
-            )
+            || border_shows(self.box_border_width(id), self.animated_border_color(id))
             || self
                 .backdrop_blur
                 .get()
