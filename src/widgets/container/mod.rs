@@ -1585,9 +1585,10 @@ impl Container {
     /// layer, blurred or faded with the rest of it — every child after the first
     /// [`MAX_MEMBERS`](crate::renderer::MAX_MEMBERS), and anything below the
     /// direct children. A debug build says so for the first four. The neck
-    /// takes no input — each child answers clicks in its own box. A container
-    /// that also [scrolls](Self::scroll) merges its scrollbar track too, since
-    /// the track is one of its children.
+    /// takes no input — each child answers clicks in its own box — and nor
+    /// does the part of this box no child covers, unless this container has a
+    /// background of its own. A container that also [scrolls](Self::scroll)
+    /// merges its scrollbar track too, since the track is one of its children.
     pub fn merge_children<M>(mut self, distance: impl IntoSignal<f32, M>) -> Self {
         self.decoration_mut().merge_children = distance.into_prop();
         self

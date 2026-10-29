@@ -1,7 +1,8 @@
 //! A merging container's border is drawn along the merged shape, never round
 //! the container's own box, so its box keeps none of it (#902). The layout and
 //! the clip are in the `a_merged_border_takes_no_room_in_its_box` snapshot;
-//! this is the hit test, which has to agree with them.
+//! this is the hit test, which has to agree with them: a border that is not
+//! round the box does not make the box a surface either (#907).
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -42,5 +43,47 @@ fn a_click_inside_a_merging_box_reaches_the_child_at_its_edge() {
         clicked.get(),
         1,
         "the child is drawn there, and answers there"
+    );
+}
+
+/// A click in the part of a merging box no child covers goes on to what is
+/// beneath it: the border is drawn round the children, not over that part,
+/// so the box draws nothing there to stop the click with.
+#[test]
+fn a_click_beside_the_merged_children_reaches_what_is_beneath() {
+    let clicked = Rc::new(Cell::new(0));
+    let counted = clicked.clone();
+    let mut h = Harness::laid_out(
+        container()
+            .layout(ZStack::new())
+            .child(
+                container()
+                    .width(fill())
+                    .height(fill())
+                    .on_click(move || counted.set(counted.get() + 1)),
+            )
+            .child(
+                container()
+                    .width(120.0)
+                    .height(120.0)
+                    .merge_children(8.0)
+                    .border(1.0, Color::WHITE)
+                    .child(
+                        container()
+                            .width(40.0)
+                            .height(40.0)
+                            .background(Color::BLACK),
+                    ),
+            ),
+        200.0,
+        200.0,
+    );
+
+    h.click(100.0, 100.0);
+
+    assert_eq!(
+        clicked.get(),
+        1,
+        "nothing is drawn there but what is beneath, and that answers"
     );
 }

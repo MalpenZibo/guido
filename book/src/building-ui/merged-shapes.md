@@ -113,6 +113,9 @@ without `merge_children`.
 - Anything below the direct children.
 
 The neck draws but takes no input: each child answers clicks in its own box.
+Nor does the merging container's border make its box something to click on.
+A click in the part of the box that no child covers goes on to whatever is
+beneath, unless the container has a background of its own.
 
 A container that both scrolls and merges merges its scrollbar track as well: the
 track is one of its children.
