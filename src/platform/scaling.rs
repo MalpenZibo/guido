@@ -64,7 +64,7 @@ pub struct Scaling {
 /// have to keep in step.
 pub struct SurfaceScaling {
     fractional: WpFractionalScaleV1,
-    viewport: WpViewport,
+    pub(super) viewport: WpViewport,
 }
 
 impl SurfaceScaling {
@@ -126,8 +126,18 @@ impl WaylandState {
     /// A request and not a commit: it is latched by the `present` that attaches
     /// the buffer it describes, which is what keeps the two in step — see
     /// `resolve_geometry`, which is the only caller.
+    ///
+    /// For a surface drawn through a child, the buffer is the child's, and so
+    /// is the destination; the parent's viewport stretches its pixel instead.
     pub(crate) fn set_viewport_destination(&self, id: SurfaceId, width: u32, height: u32) {
-        let Some(scaling) = self.surfaces.get(&id).and_then(|s| s.scaling.as_ref()) else {
+        let Some(surface) = self.surfaces.get(&id) else {
+            return;
+        };
+        if let Some(content) = &surface.content {
+            content.set_destination(width, height);
+            return;
+        }
+        let Some(scaling) = surface.scaling.as_ref() else {
             return;
         };
         scaling

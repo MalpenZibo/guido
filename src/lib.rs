@@ -1608,6 +1608,16 @@ impl Surface for WaylandSurface<'_> {
         self.state.set_viewport_destination(self.id, width, height)
     }
 
+    fn place_buffer(&mut self, x: i32, y: i32) {
+        if let Some(content) = self
+            .state
+            .get_surface(self.id)
+            .and_then(|surface| surface.content.as_ref())
+        {
+            content.place(x, y);
+        }
+    }
+
     fn batch_layer_requests<F: FnOnce(&mut Self)>(&mut self, f: F) {
         let id = self.id;
         // The batching is the state's — one commit for the group — and what the
@@ -1677,6 +1687,10 @@ impl Platform for platform::WaylandState {
 
     fn supports_blur_region(&self) -> bool {
         self.supports_blur_region()
+    }
+
+    fn supports_content_buffer(&self) -> bool {
+        self.content_globals.is_some()
     }
 
     fn create_surface(&mut self, id: SurfaceId, config: &SurfaceConfig) {
@@ -1751,7 +1765,7 @@ impl Platform for platform::WaylandState {
         gpu: &renderer::GpuContext,
         size: (u32, u32),
     ) -> Option<renderer::RenderTarget> {
-        let wl_surface = &self.get_surface(id)?.wl_surface;
+        let wl_surface = self.get_surface(id)?.drawn_surface();
         let window = platform::WaylandWindowWrapper::new(&self.connection, wl_surface);
         Some(renderer::RenderTarget::Swapchain(
             gpu.create_surface(window, size.0, size.1),
