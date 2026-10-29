@@ -8813,3 +8813,120 @@ fn a_hover_shadow_keeps_the_overshoot_of_the_transition_chosen_for_it() {
         lifted.extent()
     );
 }
+
+// ---------------------------------------------------------------------------
+// What the hover is owed, through events that work no hover out
+// ---------------------------------------------------------------------------
+
+/// What each row's `on_hover` said, in the order it said it.
+type HoverLog = std::rc::Rc<std::cell::RefCell<Vec<(usize, bool)>>>;
+
+/// Forty 100×20 rows in a 100×100 scroller, each saying when it is hovered,
+/// with the pointer resting on row 0.
+fn short_rows_under_a_pointer() -> (H, HoverLog) {
+    let heard: HoverLog = Default::default();
+    let rows = (0..40).map(|n| {
+        let heard = heard.clone();
+        container()
+            .width(100.0)
+            .height(20.0)
+            .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)))
+            .into_any()
+    });
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .scroll(Scroll::vertical())
+            .child(container().layout(Flex::column()).children(rows)),
+    );
+    h.fit(100.0, 100.0);
+    h.send(Event::mouse_move(50.0, 10.0));
+    assert_eq!(heard.take(), [(0, true)], "the pointer rests on row 0");
+    (h, heard)
+}
+
+fn wheel_step_of(h: &mut H, by: f32) {
+    h.send(Event::scroll(
+        50.0,
+        10.0,
+        0.0,
+        by,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+}
+
+/// A second wheel step before the pointer moves is offered where the first
+/// one carried the content, not where the hovered row is: it works no hover
+/// out, so it leaves that row owed, and the move after it tells the row the
+/// hover went.
+#[test]
+fn a_row_two_steps_carried_off_hears_the_next_move() {
+    let (mut h, heard) = short_rows_under_a_pointer();
+    wheel_step_of(&mut h, 40.0);
+    wheel_step_of(&mut h, 40.0);
+    h.send(Event::mouse_move(50.0, 11.0));
+    assert_eq!(heard.take(), [(0, false), (4, true)]);
+    h.send(Event::MouseLeave);
+    assert_eq!(
+        heard.take(),
+        [(4, false)],
+        "and nothing else is left hovered"
+    );
+}
+
+/// The same with a click between a long step and the move: the click works
+/// no hover out either.
+#[test]
+fn a_row_a_step_carried_off_before_a_click_hears_the_next_move() {
+    let (mut h, heard) = short_rows_under_a_pointer();
+    wheel_step_of(&mut h, 80.0);
+    h.send(Event::mouse_down(50.0, 10.0, MouseButton::Left));
+    h.send(Event::mouse_up(50.0, 10.0, MouseButton::Left));
+    h.send(Event::mouse_move(50.0, 11.0));
+    assert_eq!(heard.take(), [(0, false), (4, true)]);
+    h.send(Event::MouseLeave);
+    assert_eq!(
+        heard.take(),
+        [(4, false)],
+        "and nothing else is left hovered"
+    );
+}
+
+/// A click works no hover out, so it settles nothing a move offered, and
+/// settles what the click before it offered: clicking again where the
+/// pointer rests owes each row once.
+#[test]
+fn clicks_at_a_resting_pointer_owe_each_row_once() {
+    let (mut h, _) = short_rows_under_a_pointer();
+    let click = |h: &mut H| {
+        h.send(Event::mouse_down(50.0, 10.0, MouseButton::Left));
+        h.send(Event::mouse_up(50.0, 10.0, MouseButton::Left));
+    };
+    click(&mut h);
+    let owed = h.tree.owed_offers();
+    for _ in 0..10 {
+        click(&mut h);
+    }
+    assert_eq!(h.tree.owed_offers(), owed);
+}
+
+/// Wheel steps with a button held work no hover out; each settles what the
+/// one before it offered, so what is owed stays the move's rows and the
+/// last step's, however far the wheel goes: six here once a step's rows are
+/// no longer the move's.
+#[test]
+fn steps_with_a_button_held_owe_no_more_than_the_last_one_offered() {
+    let (mut h, _) = short_rows_under_a_pointer();
+    h.send(Event::mouse_down(50.0, 10.0, MouseButton::Right));
+    let owed: Vec<usize> = (0..20)
+        .map(|_| {
+            wheel_step_of(&mut h, 40.0);
+            h.tree.owed_offers()
+        })
+        .collect();
+    assert!(
+        owed[2..].iter().all(|&n| n == 6),
+        "owed after each step: {owed:?}"
+    );
+}

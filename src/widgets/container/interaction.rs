@@ -170,7 +170,8 @@ impl Container {
     /// that belongs to a press somewhere else (#716). Each child the pointer
     /// record owes an event is told the pointer left, and passes it on down
     /// the same way, so the walk is the record's and not the subtree's. A
-    /// hover is told once; a press is told again on each event until its
+    /// hover is told until the next move or enter, the events that settle
+    /// what a move offered; a press is told again on each event until its
     /// button comes up, because the record holds it that long, and every
     /// `MouseLeave` arm is change-guarded. After that, the events that keep
     /// arriving over a switched-off container ask one search of the record and

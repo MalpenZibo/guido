@@ -733,11 +733,12 @@ are ordered along an axis offers it to the ones that can be under the point —
 the window paint narrows to, by the same search (`window_of` on the `Tree`),
 grown by the children's reach so a transformed child is found where it draws —
 and to the children the pointer record still owes one. The record lives on the
-`Tree` and holds two sets of offers: those of the last positioned event to
+`Tree` and holds two sets of offers: those of the last move or enter to
 reach each container, so a widget the pointer just left sees the move that
 clears its hover however far the pointer went — or whatever else it passed over
-on the way back — and those of the press, until the release, so a drag reaches
-the widget it started on wherever it goes. Flutter keeps the same two —
+on the way back — with what the last press, release or scroll offered since
+added, since they work no hover out; and those of the press, until the
+release, so a drag reaches the widget it started on wherever it goes. Flutter keeps the same two —
 `MouseTracker`'s last hit set and `GestureBinding`'s hit path per pointer.
 There is one press route per chord: the first button down decides it, and it is
 dropped when the last button is up. A press or release of another button in

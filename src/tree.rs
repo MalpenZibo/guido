@@ -447,6 +447,11 @@ struct Offered {
     parent: WidgetId,
     index: u32,
     child: WidgetId,
+    /// Offered by a move or an enter, which work the hover out: the child
+    /// may be hovered, and is owed until the next move or enter to reach its
+    /// container. What any other event offered is only owed until the next
+    /// one does.
+    by_a_move: bool,
 }
 
 /// Which widgets the pointer still owes an event to, outside the window an
@@ -473,11 +478,15 @@ struct PointerRecord {
     /// it did not reach — one whose parent clipped the point away, one covered by
     /// the sibling the walk stopped at and owed nothing — stays owed.
     reached: Vec<WidgetId>,
-    /// What the last positioned event to reach each container offered by
-    /// position. Sorted by container, so each finds its own with a search.
+    /// What the last move or enter to reach each container offered by
+    /// position, and what the last other positioned event to reach it offered
+    /// since: a press, a release or a scroll works no hover out, so it settles
+    /// only what the one before it offered. Sorted by container, so each finds
+    /// its own with a search.
     last: Vec<Offered>,
-    /// What the first press of a chord offered by position, until the last
-    /// button is released. Sorted the same.
+    /// What the first press of a chord offered by position, and what was
+    /// owed in the containers it did not reach, until the last button is
+    /// released. Sorted by container.
     pressed: Vec<Offered>,
     /// The chord that holds `pressed`: the surface root its first press
     /// entered at, and the buttons still down. One route per chord, as
@@ -1762,7 +1771,9 @@ impl Tree {
     /// The one way an event enters a tree: the loop's dispatch, and every test
     /// that hands a root an event, go through here. What the containers below
     /// offered a positioned event through their windows is what the next event
-    /// is owed as well, so a widget the pointer left sees it go; and what they
+    /// is owed as well, so a widget the pointer left sees it go — kept through
+    /// a press, a release or a scroll, which work no hover out and settle only
+    /// what the last of them offered; and what they
     /// offered the first press of a chord is owed every event until the last
     /// button is up, so a drag reaches the widget it started on wherever it
     /// goes. A press or release of another button in between goes along that
@@ -1818,21 +1829,51 @@ impl Tree {
             let PointerRecord {
                 offering,
                 last,
+                pressed,
                 reached,
                 ..
             } = record;
             reached.sort_unstable_by_key(|id| id.as_u64());
-            last.retain(|entry| {
+            let reached = |entry: &Offered| {
                 reached
                     .binary_search_by_key(&by_parent(entry), |id| id.as_u64())
-                    .is_err()
-            });
+                    .is_ok()
+            };
+            // The press's route: what it offered, and what is owed in the
+            // containers it did not reach.
+            if matches!(event, Event::MouseDown { .. }) {
+                pressed.clear();
+                pressed.extend(
+                    offering
+                        .iter()
+                        .chain(last.iter().filter(|entry| !reached(entry)))
+                        .filter(|entry| entry.root == root),
+                );
+                pressed.sort_unstable_by_key(by_parent);
+            }
+            // Only a move or an enter works the hover out, and only it settles
+            // what is owed where it reached. A press, a release or a scroll
+            // settles only what the last of them offered: a row a scroll
+            // carried off, then a click or a held button's release before the
+            // frame, is still owed the move that takes its hover away, and
+            // what is owed stays two windows' worth however many of them come.
+            let by_a_move = matches!(event, Event::MouseMove { .. } | Event::MouseEnter { .. });
+            last.retain(|entry| !reached(entry) || (entry.by_a_move && !by_a_move));
+            for entry in offering.iter_mut() {
+                entry.by_a_move = by_a_move;
+            }
             last.append(offering);
-            last.sort_unstable_by_key(by_parent);
+            // Once each, as a move's offer where both are.
+            last.sort_unstable_by_key(|entry| {
+                (by_parent(entry), entry.child.as_u64(), !entry.by_a_move)
+            });
+            last.dedup_by_key(|entry| (entry.parent, entry.child));
             keep_what_the_root_reaches(last, root);
         }
         match event {
-            Event::MouseDown { .. } if !record.chorded => {
+            // With no point it reaches nothing by position: what is owed is
+            // its route.
+            Event::MouseDown { .. } if !record.chorded && event.coords().is_none() => {
                 record.pressed.clear();
                 record
                     .pressed
@@ -1851,6 +1892,13 @@ impl Tree {
         }
         self.deliver_hover_changes();
         response
+    }
+
+    /// How many offers the pointer record owes the next event, for a test to
+    /// see that what is owed does not grow with events that work no hover out.
+    #[cfg(test)]
+    pub(crate) fn owed_offers(&self) -> usize {
+        self.pointer.last.len()
     }
 
     /// Owe `callback` the hover `id` just took on, until the dispatch carrying
@@ -2190,8 +2238,9 @@ impl Tree {
     /// went on outside, and nothing else can be under a point that is nowhere.
     ///
     /// What the event offered by position is owed the next one. The children
-    /// it was owed are not: having had it, they are owed nothing more unless
-    /// the press holds them.
+    /// it was owed are not, once a move or an enter has told them where the
+    /// pointer is: having had it, they are owed nothing more unless the press
+    /// holds them.
     pub(crate) fn event_targets(
         &mut self,
         parent: WidgetId,
@@ -2255,6 +2304,7 @@ impl Tree {
                     parent,
                     index: index as u32,
                     child: children[index],
+                    by_a_move: false,
                 }),
         );
 
@@ -3295,6 +3345,7 @@ mod tests {
                 parent: root,
                 index: 0,
                 child,
+                by_a_move: true,
             };
             tree.pointer.last.push(entry);
             tree.pointer.pressed.push(entry);
@@ -3318,6 +3369,7 @@ mod tests {
             parent: id(parent),
             index: 0,
             child: id(child),
+            by_a_move: true,
         };
         // root 1 → 2 → 3 is a path; 7 → 8 was carried under a row that has
         // scrolled away; 20 → 21 is another surface's, and stays.

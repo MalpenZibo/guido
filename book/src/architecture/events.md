@@ -97,8 +97,10 @@ so a transformed child is found where it is drawn. Children in no order are
 tested one by one against the same reach.
 
 *The pointer record* keeps two sets of offers, as Flutter's `MouseTracker` and
-`GestureBinding` do. The last event's offers make a widget the pointer just
-left see the move that takes its hover away, however far the pointer went. The
+`GestureBinding` do. The last move's offers make a widget the pointer just
+left see the move that takes its hover away, however far the pointer went; a
+press, a release or a scroll since only adds its own, which the next of them
+replaces, as none of them works the hover out. The
 press's offers, kept until the release, make a drag reach the widget it started
 on wherever it goes. A mouse has one press route however many of its buttons
 are down: the first button pressed decides it, it is kept until the last one is
