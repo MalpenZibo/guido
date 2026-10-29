@@ -359,8 +359,8 @@ pub mod prelude {
         LockState, lock_session, lock_state, session_locked, unlock_session,
     };
     pub use crate::surface::{
-        Edge, ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity, PopupHandle,
-        SurfaceConfig, SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup,
+        BufferExtent, Edge, ExclusiveZone, Margin, PopupAnchor, PopupConfig, PopupGravity,
+        PopupHandle, SurfaceConfig, SurfaceExtent, SurfaceHandle, SurfaceId, content, spawn_popup,
         spawn_surface, surface_handle,
     };
     pub use crate::transform::{Scale, Translate};
