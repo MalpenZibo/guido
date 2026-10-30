@@ -2752,6 +2752,46 @@ fn a_squeezed_label_is_cut_by_its_card_not_its_box() {
     );
 }
 
+/// Letters set on lines shorter than they are reach past them, above the
+/// first and below the last, whichever path draws them.
+///
+/// Two lines of 32-pixel letters set 19 apart, an accent on the first and
+/// descenders on the second. Left: glyphon. Middle: corners that send them to
+/// the quad path. Right: turned. The quad's texture was as tall as the lines
+/// and a fixed padding, and cut the accent's top and the descenders' bottom.
+#[test]
+fn tightly_set_lines_keep_their_overhang() {
+    let card = |corners: f32, degrees: f32| {
+        box_of(120.0, 96.0)
+            .corners(Corners::rounded(corners))
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .padding([20.0, 12.0])
+            .child(
+                container()
+                    .width(96.0)
+                    .child(label("ÁÉ gyp", 32.0).line_height(LineHeight::Relative(0.6))),
+            )
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(24.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(card(0.0, 0.0))
+        .child(card(40.0, 0.0))
+        .child(card(0.0, 8.0));
+
+    golden(
+        "tightly_set_lines_keep_their_overhang",
+        (456.0, 144.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// Two cards over stripes, one upright and one turned, each filtering the
 /// surface's own content through its own shape.
 ///

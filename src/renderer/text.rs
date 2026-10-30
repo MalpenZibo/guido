@@ -248,7 +248,8 @@ pub(super) fn drawn_weight(weight: FontWeight) -> FontWeight {
 #[derive(Clone, Copy)]
 pub(crate) struct ResolvedFont {
     family: FontFamily,
-    line_ratio: f32,
+    /// The face's line, ascent and descent and line gap, over the em.
+    pub(super) line_ratio: f32,
     /// How far above the baseline the capitals and the lowercase reach, over
     /// the em: what a text's box is trimmed to (`TextEdge`).
     pub(super) cap_ratio: f32,

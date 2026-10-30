@@ -63,6 +63,9 @@ struct CachedTextTexture {
     bind_group: std::rc::Rc<BindGroup>,
     /// Its size in texels: a width from the box, a height from the lines.
     size: (u32, u32),
+    /// The texels above the first line: the padding, and as far as its
+    /// glyphs reach above it.
+    top: f32,
 }
 
 /// A rasterized text in the cache, and how long it has waited for a frame to
@@ -308,11 +311,28 @@ impl TextQuadRenderer {
             entry.fit,
             effective_scale,
         );
-        let bottom = buffer
-            .layout_runs()
-            .map(|run| run.line_top + run.line_height)
-            .fold(0.0, f32::max);
-        let tex_height = ((bottom * TEXT_MARGIN + padding * 2.0).ceil() as u32).max(1);
+        // cosmic-text centres a line's glyphs in it, so on a line shorter
+        // than they are they reach past it by half the difference each way:
+        // as much as the face's own line, ascent to descent, overhangs it.
+        let glyphs = super::text::resolve_font(
+            &mut shaper.font_system,
+            entry.font_family,
+            entry.font_weight,
+            entry.font_style,
+        )
+        .line_ratio
+            * scaled_font_size;
+        let (bottom, overhang) =
+            buffer
+                .layout_runs()
+                .fold((0.0, 0.0), |(bottom, overhang), run| {
+                    (
+                        f32::max(bottom, run.line_top + run.line_height),
+                        f32::max(overhang, (glyphs - run.line_height) / 2.0),
+                    )
+                });
+        let top = padding + overhang;
+        let tex_height = ((bottom + top * 2.0).ceil() as u32).max(1);
 
         // Another height that kept the same lines drew the same picture, in a
         // texture as tall: which lines show is cosmic-text's to say, so it is
@@ -357,7 +377,7 @@ impl TextQuadRenderer {
         let text_area = TextArea {
             buffer: &buffer,
             left: padding + super::text::paint_offset(&buffer, box_width, entry.align),
-            top: padding,
+            top,
             scale: 1.0,
             bounds: TextBounds {
                 left: 0,
@@ -385,6 +405,7 @@ impl TextQuadRenderer {
             texture,
             bind_group,
             size: (tex_width, tex_height),
+            top,
         });
         self.cache(cache_key, cached.clone());
         self.build_quad(entry, cached, padding, scale_factor)
@@ -436,7 +457,7 @@ impl TextQuadRenderer {
         // Get the local rect corners with padding adjustment
         // The texture has padding, so we need to expand the display rect accordingly
         let local_left = entry.rect.x - display_padding / scale_factor;
-        let local_top = entry.rect.y - display_padding / scale_factor;
+        let local_top = entry.rect.y - cached.top / total_scale / scale_factor;
         let local_right = local_left + display_width / scale_factor;
         let local_bottom = local_top + display_height / scale_factor;
 

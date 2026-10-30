@@ -61,3 +61,63 @@ fn a_squeezed_label_is_cut_by_its_clip_not_by_its_box_on_a_quad() {
         "ink down to row {on_a_quad} on the quad, {upright} upright"
     );
 }
+
+/// The first and last rows of ink of two lines of 40-pixel letters set 24
+/// pixels apart, in a card whose corners reach them or do not.
+fn ink_of_tightly_set_lines(corners: f32) -> Option<(u32, u32)> {
+    let mut app = common::headless()?;
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(180)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container().width(fill()).padding(30.0).child(
+                container()
+                    .width(200.0)
+                    .height(120.0)
+                    .overflow(Overflow::Hidden)
+                    .corners(corners)
+                    .background(Color::BLACK)
+                    .padding([18.0, 20.0])
+                    .child(
+                        text("Ágyp Ágyp")
+                            .font_size(40.0)
+                            .line_height(LineHeight::Relative(0.6))
+                            .color(Color::WHITE),
+                    ),
+            )
+        },
+    );
+    app.configure(surface, 300, 180, 1.0);
+    app.step();
+    let rows: Vec<u32> = (0..180)
+        .filter(|&y| (60..200).any(|x| app.read_pixel(surface, x, y)[0] > 128))
+        .collect();
+    Some((*rows.first()?, *rows.last()?))
+}
+
+/// Letters taller than the lines they are set on reach past them, above the
+/// first and below the last, and the quad's texture has room for that.
+///
+/// cosmic-text centres a line's glyphs in it, so where the line is shorter
+/// than they are they overhang it by half the difference on each side. The
+/// texture was as tall as the lines and a fixed padding, which an accent
+/// above the first line and the descenders below the last ran out of.
+#[test]
+fn tightly_set_lines_keep_their_overhang_on_a_quad() {
+    let (Some(upright), Some(on_a_quad)) = (
+        ink_of_tightly_set_lines(0.0),
+        ink_of_tightly_set_lines(30.0),
+    ) else {
+        return;
+    };
+    // A row apart at most, as for the squeezed label above.
+    assert!(
+        on_a_quad.0 <= upright.0 + 1 && on_a_quad.1 + 1 >= upright.1,
+        "ink from row {} to {} on the quad, {} to {} upright",
+        on_a_quad.0,
+        on_a_quad.1,
+        upright.0,
+        upright.1
+    );
+}
