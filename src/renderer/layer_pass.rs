@@ -35,7 +35,7 @@ use crate::transform::Transform;
 /// How many times its own surface's patience a texture is kept for while no
 /// surface at all names it — long enough for a surface that paints rarely,
 /// short enough that one which has gone does not hold it for good.
-const ANY_SURFACE: u32 = 30;
+pub(super) const ANY_SURFACE: u32 = 30;
 
 /// Textures are allocated in steps of this many texels a side, so a layer
 /// whose size animates draws into the texture it already has.

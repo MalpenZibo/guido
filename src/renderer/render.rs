@@ -480,6 +480,12 @@ impl Renderer {
         self.layer_textures.textures()
     }
 
+    /// How many textures transformed and cut texts are rasterized into.
+    #[cfg(feature = "testing")]
+    pub(crate) fn text_textures(&self) -> usize {
+        self.text_quad_renderer.texture_count()
+    }
+
     /// How many image textures are cached.
     #[cfg(feature = "testing")]
     pub(crate) fn image_textures(&self) -> usize {
@@ -713,6 +719,7 @@ impl Renderer {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         self.layer_textures.end_frame(frame.surface);
+        self.text_quad_renderer.end_frame(frame.surface);
     }
 
     /// A group's shapes, in order. Where a merged shape is among them, the
