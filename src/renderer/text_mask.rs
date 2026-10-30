@@ -18,12 +18,10 @@
 //! metrics, same width, same offset — because two shapings that disagree break
 //! their lines in different places, and the frost then lands beside a letter
 //! that wrapped elsewhere. Every path shapes in the width the text was laid out
-//! in and places it with the same offset, both from [`text`](super::text); what
-//! differs between [`text`](super::text), which draws an untransformed text,
-//! and [`text_quad`](super::text_quad), which draws a transformed one, is the
-//! height an uncut text is given — 50 logical pixels at least through one, the
-//! box and a margin through the other. So the caller hands the height in rather
-//! than this module guessing which is about to be used.
+//! in, in the same height — [`text::buffer_height`](super::text::buffer_height),
+//! whether [`text`](super::text) draws it upright or
+//! [`text_quad`](super::text_quad) draws it transformed — and places it with
+//! the same offset.
 //!
 //! Colour is deliberately absent from the cache key: the frost of a white label
 //! and a red one is the same hole.
@@ -72,11 +70,8 @@ pub struct MaskSpec<'a> {
     /// have it.
     pub align: TextAlign,
     /// The height to shape an uncut text in, in the same texels as everything
-    /// else here.
-    ///
-    /// Handed in rather than derived, because the rule belongs to whichever
-    /// path will draw the glyphs and there are two of them — see the module
-    /// documentation.
+    /// else here: [`text::buffer_height`](super::text::buffer_height) at the
+    /// mask's density.
     pub buffer_height: f32,
     /// The width of the text's box, in texels: what the glyphs are placed
     /// across, by [`paint_offset`](super::text::paint_offset), as the letters
