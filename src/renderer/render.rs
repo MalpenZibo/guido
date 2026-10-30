@@ -480,6 +480,12 @@ impl Renderer {
         self.layer_textures.textures()
     }
 
+    /// How many textures transformed and cut texts are rasterized into.
+    #[cfg(feature = "testing")]
+    pub(crate) fn text_textures(&self) -> usize {
+        self.text_quad_renderer.texture_count()
+    }
+
     /// How many image textures are cached.
     #[cfg(feature = "testing")]
     pub(crate) fn image_textures(&self) -> usize {
@@ -713,6 +719,7 @@ impl Renderer {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         self.layer_textures.end_frame(frame.surface);
+        self.text_quad_renderer.end_frame(frame.surface);
     }
 
     /// A group's shapes, in order. Where a merged shape is among them, the
@@ -1341,14 +1348,9 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             letter_spacing: *letter_spacing,
             fit: *fit,
             align: *align,
-            // The height of whichever path will draw the glyphs over the
-            // frost: the two give an uncut text different heights, and the
-            // frost has to keep the lines the letters keep.
-            buffer_height: if cmd.world_transform.is_translation_only() {
-                super::text::buffer_height(*rect, density)
-            } else {
-                super::text_quad::buffer_height(*rect, density)
-            },
+            // The height both paths shape the glyphs over the frost in, so
+            // the frost keeps the lines the letters keep.
+            buffer_height: super::text::buffer_height(*rect, density),
             box_width: rect.width * density,
             size: (width as u32, height as u32),
             offset: (slack * density, slack * density),

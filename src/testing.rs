@@ -1123,6 +1123,14 @@ impl Headless {
         }
     }
 
+    /// How many textures the renderer holds for texts it draws as quads —
+    /// turned, scaled, or cut by a shape their box does not cut like.
+    pub fn text_textures(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .map_or(0, |renderer| renderer.text_textures())
+    }
+
     /// How many atlas pages the renderer holds small images on.
     pub fn image_atlas_pages(&self) -> usize {
         self.renderer
