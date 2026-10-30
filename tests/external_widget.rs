@@ -148,6 +148,7 @@ fn a_widget_from_outside_the_crate_can_tell_a_position_from_none() {
             &Event::MouseMove {
                 at,
                 pointer: PointerKind::Mouse,
+                recheck: false,
             },
         );
     };

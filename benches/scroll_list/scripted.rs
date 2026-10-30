@@ -344,6 +344,15 @@ where
     let start = Instant::now();
     app.step_at(start);
     app.wait_for_image_decodes();
+    // The pointer is on the list before the wheel turns, as a person's is: a
+    // compositor sends a wheel's turns only to the surface the pointer is on.
+    // A script that turns no wheel has no pointer.
+    if script.iter().any(|delta| *delta != 0.0) {
+        app.event_at(id, Event::mouse_enter(POINTER.0, POINTER.1), start);
+        app.event_at(id, Event::mouse_move(POINTER.0, POINTER.1), start);
+        app.step_at(start);
+        app.wait_for_image_decodes();
+    }
 
     let mut run = Run {
         adapter: app.adapter_name().to_string(),

@@ -596,10 +596,22 @@ impl Container {
             // ends on the release, which needs no position at all. The hover
             // below is the other half, and wants the opposite: over nothing
             // is not hovered.
-            Event::MouseMove { at, .. } => {
-                // Handle dragging
+            Event::MouseMove { at, recheck, .. } => {
+                // Handle dragging. A re-check is no drag step: the pointer did
+                // not move, and one taken as a step would ask for a frame each
+                // time, and be re-checked after each. A step marks the
+                // surface whether or not it moved the content: the drag took
+                // the move from what is under the pointer, which is owed the
+                // hover at the release. A drag still held when a re-check
+                // comes, its chord ended elsewhere, keeps the pointer as a
+                // step would.
+                let state = &self.scroll_data().scroll_state;
+                if *recheck && (state.scrollbar_dragging || state.h_scrollbar_dragging) {
+                    return Some(EventResponse::Handled);
+                }
                 if let Some(at) = at {
                     if self.scroll_data().scroll_state.scrollbar_dragging {
+                        tree.mark_hover_stale(id);
                         return Some(self.handle_scrollbar_drag(
                             id,
                             bounds,
@@ -608,6 +620,7 @@ impl Container {
                         ));
                     }
                     if self.scroll_data().scroll_state.h_scrollbar_dragging {
+                        tree.mark_hover_stale(id);
                         return Some(self.handle_scrollbar_drag(
                             id,
                             bounds,
@@ -774,6 +787,7 @@ impl Container {
                 let offset = ratio * sd.scroll_state.max_scroll(axis);
                 sd.scroll_state.set_offset(axis, offset);
                 request_job(id, JobRequest::Paint);
+                tree.mark_hover_stale(id);
             }
             return Some(EventResponse::Handled);
         }
@@ -1000,6 +1014,7 @@ impl Container {
             Event::MouseMove {
                 at: Some(at),
                 pointer: PointerKind::Finger,
+                ..
             } => {
                 // A scroller below took it, so stop watching the press. A
                 // watch kept alive would claim the moment the finger wandered

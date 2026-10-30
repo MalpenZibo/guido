@@ -179,6 +179,17 @@ Hardware-accelerated rendering using wgpu.
     retry frame is requested — no stale content
 14. `cache_paint_results()` - Rc-share paint output per widget into the cache,
     clear `needs_paint`/`repainted` flags (skips already-clean subtrees)
+15. `Tree::recheck_hover()` - If something moved under the pointer on this
+    surface (a scroller's content, a widget's place or size, a widget built
+    or removed), work the hover and the cursor out again where it rests: a
+    `MouseMove` to the same point with `recheck` set, so `on_pointer_move`
+    does not hear it. An animation that only draws a box elsewhere (a
+    transform, a slide, an enter by either) marks nothing, and the hover
+    follows it at the next pointer event; one that changes a size lays out,
+    and marks as any layout does. Not with a
+    button held (the release that ends a mouse chord does it,
+    in `dispatch_events`), not on a surface that asked to close, and not
+    after a resize (#842)
 
 Rendering is paced by the compositor's frame callbacks: an animating surface
 renders once per callback, and an idle surface renders nothing at all. There is
@@ -733,12 +744,15 @@ are ordered along an axis offers it to the ones that can be under the point —
 the window paint narrows to, by the same search (`window_of` on the `Tree`),
 grown by the children's reach so a transformed child is found where it draws —
 and to the children the pointer record still owes one. The record lives on the
-`Tree` and holds two sets of offers: those of the last positioned event to
+`Tree` and holds two sets of offers: those of the last move or enter to
 reach each container, so a widget the pointer just left sees the move that
 clears its hover however far the pointer went — or whatever else it passed over
-on the way back — and those of the press, until the release, so a drag reaches
-the widget it started on wherever it goes. Flutter keeps the same two —
+on the way back — with what the last press, release or scroll offered since
+added, since they work no hover out; and those of the press, until the
+release, so a drag reaches the widget it started on wherever it goes. Flutter keeps the same two —
 `MouseTracker`'s last hit set and `GestureBinding`'s hit path per pointer.
+It also keeps where the last positioned event put the pointer on each surface,
+and which surfaces something has moved on since, for the post-frame re-check.
 There is one press route per chord: the first button down decides it, and it is
 dropped when the last button is up. A press or release of another button in
 between is still its own event, but it goes along that route alone, not

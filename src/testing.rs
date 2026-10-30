@@ -1328,3 +1328,812 @@ mod the_next_application_on_this_thread {
         app.read_pixel(id, 20, 25)
     }
 }
+
+#[cfg(test)]
+mod the_hover_after_a_frame {
+    use super::*;
+    use crate::layout::Flex;
+    use crate::reactive::{CursorIcon, RwSignal, create_signal};
+    use crate::widgets::{Scroll, ScrollSource, container};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    type Heard = Rc<RefCell<Vec<(usize, bool)>>>;
+
+    /// The pointer arrives at `(x, y)` on `id`, and the frame that follows is
+    /// drawn.
+    fn rest_at(app: &mut Headless, id: SurfaceId, x: f32, y: f32) {
+        let now = Instant::now();
+        app.event_at(id, Event::mouse_enter(x, y), now);
+        app.event_at(id, Event::mouse_move(x, y), now);
+        app.step();
+    }
+
+    /// Four 100×50 rows in a 100×100 scroller, each saying when it is
+    /// hovered; row 0 asks for the hand, and takes the focus.
+    fn rows_with_a_hand(app: &mut Headless, heard: &Heard) -> SurfaceId {
+        let rows_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let rows = (0..4).map(|n| {
+                let heard = rows_heard.clone();
+                let row = container()
+                    .width(100.0)
+                    .height(50.0)
+                    .focusable(n == 0)
+                    .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)));
+                if n == 0 {
+                    row.cursor(CursorIcon::Pointer).into_any()
+                } else {
+                    row.into_any()
+                }
+            });
+            container()
+                .width(100.0)
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .child(container().layout(Flex::column()).children(rows))
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        id
+    }
+
+    /// Two 100×50 rows in a column, the first as tall as `tall`, each saying
+    /// when it is hovered, with the pointer resting on the second; a click on
+    /// the second calls `clicked`.
+    fn column(
+        app: &mut Headless,
+        heard: &Heard,
+        tall: RwSignal<f32>,
+        clicked: impl Fn() + 'static,
+    ) -> SurfaceId {
+        let rows_heard = heard.clone();
+        let clicked = Rc::new(clicked);
+        let id = app.surface(SurfaceConfig::new().width(100).height(200), move || {
+            let say = |n: usize| {
+                let heard = rows_heard.clone();
+                move |hovered| heard.borrow_mut().push((n, hovered))
+            };
+            let clicked = clicked.clone();
+            container()
+                .layout(Flex::column())
+                .child(container().width(100.0).height(tall).on_hover(say(0)))
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(say(1))
+                        .on_click(move || clicked()),
+                )
+        });
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        rest_at(app, id, 50.0, 75.0);
+        assert_eq!(heard.take(), [(1, true)], "the pointer rests on row 1");
+        id
+    }
+
+    /// A wheel step under a still pointer, and once the frame is drawn the
+    /// hover and the cursor are worked out where the pointer is (#842). Row 0
+    /// shows the hand; row 1, now under the pointer, shows none.
+    #[test]
+    fn moves_with_what_a_scroll_moved() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let id = rows_with_a_hand(&mut app, &heard);
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert_eq!(heard.take(), [(0, true)], "the pointer rests on row 0");
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Pointer));
+
+        app.event_at(
+            id,
+            Event::scroll(50.0, 25.0, 0.0, 50.0, ScrollSource::Wheel),
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(heard.take(), [(0, false), (1, true)]);
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Default));
+    }
+
+    /// Not only a scroll: a row above the pointer that grows pushes the row
+    /// under it down, and the hover goes to what is under the pointer now.
+    #[test]
+    fn moves_with_what_a_layout_moved() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        column(&mut app, &heard, tall, || {});
+        tall.set(100.0);
+        app.step();
+        assert_eq!(heard.take(), [(1, false), (0, true)]);
+    }
+
+    /// A row that grows under the pointer, in a box that does not: only its
+    /// size changed, and that is enough.
+    #[test]
+    fn moves_with_a_row_that_grows_under_it() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let row_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(200), move || {
+            let heard = row_heard.clone();
+            container().width(100.0).height(200.0).child(
+                container()
+                    .width(100.0)
+                    .height(tall)
+                    .on_hover(move |hovered| heard.borrow_mut().push((0, hovered))),
+            )
+        });
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 75.0);
+        assert!(heard.take().is_empty(), "the pointer rests below the row");
+        tall.set(100.0);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)]);
+    }
+
+    /// A row pushed under the pointer without changing size: only where it
+    /// is changed, and that is enough.
+    #[test]
+    fn moves_with_a_row_pushed_under_it() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let above = create_signal(0.0f32);
+        let row_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(200), move || {
+            let heard = row_heard.clone();
+            container()
+                .width(100.0)
+                .height(200.0)
+                .padding(move || crate::widgets::Padding::default().with_top(above.get()))
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(move |hovered| heard.borrow_mut().push((0, hovered))),
+                )
+        });
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 75.0);
+        assert!(heard.take().is_empty(), "the pointer rests below the row");
+        above.set(50.0);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)]);
+    }
+
+    /// A child built where the pointer is: nothing moved, something appeared.
+    #[test]
+    fn moves_to_a_child_built_under_it() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let shown = create_signal(false);
+        let child_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(200), move || {
+            let heard = child_heard.clone();
+            container().width(100.0).height(200.0).child(move || {
+                let heard = heard.clone();
+                shown.get().then(|| {
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(move |hovered| heard.borrow_mut().push((0, hovered)))
+                })
+            })
+        });
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        shown.set(true);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)]);
+    }
+
+    /// A surface that changed size may have moved under the pointer — one
+    /// anchored at its bottom grows upwards — so the point it last had is not
+    /// trusted: the hover waits for the pointer to say where it is.
+    #[test]
+    fn waits_after_a_resize_for_the_pointer_to_say_where_it_is() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let id = column(&mut app, &heard, tall, || {});
+        app.configure(id, 100, 300, 1.0);
+        app.step();
+        tall.set(100.0);
+        app.step();
+        assert!(heard.take().is_empty(), "nothing at a point not trusted");
+        app.event_at(id, Event::mouse_move(50.0, 75.0), Instant::now());
+        app.step();
+        assert_eq!(
+            heard.take(),
+            [(1, false), (0, true)],
+            "until the pointer says"
+        );
+    }
+
+    /// A surface that asked to close takes no more input (#675), and the
+    /// hover worked out again is input of a kind: the row that grew under the
+    /// pointer as the dialog went hears nothing.
+    #[test]
+    fn is_not_worked_out_on_a_surface_that_asked_to_close() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let me: Rc<Cell<Option<SurfaceId>>> = Rc::default();
+        let closing = me.clone();
+        let id = column(&mut app, &heard, tall, move || {
+            tall.set(100.0);
+            if let Some(id) = closing.get() {
+                crate::surface::surface_handle(id).close();
+            }
+        });
+        me.set(Some(id));
+        app.click(id, 50.0, 75.0);
+        app.step();
+        assert!(
+            heard.take().is_empty(),
+            "row 0 grew under the pointer, unheard"
+        );
+    }
+
+    /// What a removal uncovers: nothing moved or changed size, but the
+    /// overlay that covered the row is gone, and the row hears its hover.
+    #[test]
+    fn moves_to_what_a_removal_uncovers() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let shown = create_signal(true);
+        let base_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let heard = base_heard.clone();
+            container()
+                .width(100.0)
+                .height(50.0)
+                .layout(crate::layout::ZStack::new())
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(move |hovered| heard.borrow_mut().push((0, hovered))),
+                )
+                .child(move || {
+                    shown.get().then(|| {
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .background(crate::widgets::Color::RED)
+                    })
+                })
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert!(heard.take().is_empty(), "the overlay covers the row");
+        shown.set(false);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)]);
+    }
+
+    /// The same overlay playing an exit stops taking events as the exit
+    /// starts, and the row hears its hover then, not when the exit ends.
+    #[test]
+    fn moves_to_what_an_exit_uncovers_as_it_starts() {
+        use crate::animation::{Animate, TimingFunction, Transition};
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let shown = create_signal(true);
+        let base_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let heard = base_heard.clone();
+            container()
+                .width(100.0)
+                .height(50.0)
+                .layout(crate::layout::ZStack::new())
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(move |hovered| heard.borrow_mut().push((0, hovered))),
+                )
+                .child(move || {
+                    shown.get().then(|| {
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .background(crate::widgets::Color::RED)
+                            .opacity(
+                                1.0.transition(Transition::new(1000.0, TimingFunction::Linear))
+                                    .exiting_to(0.0),
+                            )
+                    })
+                })
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert!(heard.take().is_empty(), "the overlay covers the row");
+        shown.set(false);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)]);
+    }
+
+    /// A list scrolled to its end that loses a row is clamped back in layout,
+    /// and what that pulls under the pointer hears its hover.
+    #[test]
+    fn moves_with_a_scroll_clamped_by_content_that_shrank() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let rows = create_signal(vec![0usize, 1, 2]);
+        let rows_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let heard = rows_heard.clone();
+            container()
+                .width(100.0)
+                .height(100.0)
+                .scroll(Scroll::vertical())
+                .layout(Flex::column())
+                .children(crate::widgets::keyed(
+                    move || rows.get(),
+                    |n| *n,
+                    move |n| {
+                        let heard = heard.clone();
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)))
+                    },
+                ))
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        app.event_at(
+            id,
+            Event::scroll(50.0, 25.0, 0.0, 50.0, ScrollSource::Wheel),
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(
+            heard.take(),
+            [(0, true), (0, false), (1, true)],
+            "scrolled to the end"
+        );
+        rows.set(vec![0, 1]);
+        app.step();
+        assert_eq!(heard.take(), [(1, false), (0, true)]);
+    }
+
+    /// Rows that slide to a new order are drawn where they were while the
+    /// slide runs, and the hover is worked out where they are drawn: the
+    /// slide only draws them elsewhere, which marks nothing (#842), so the
+    /// hover follows the rows when the pointer next moves.
+    #[test]
+    fn moves_with_a_slide_when_the_pointer_moves() {
+        use crate::animation::{TimingFunction, Transition};
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let order = create_signal(vec![0usize, 1]);
+        let rows_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let heard = rows_heard.clone();
+            container()
+                .layout(Flex::column())
+                .children(crate::widgets::keyed(
+                    move || order.get(),
+                    |n| *n,
+                    move |n| {
+                        let heard = heard.clone();
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .animate_position(Transition::new(200.0, TimingFunction::Linear))
+                            .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)))
+                    },
+                ))
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert_eq!(heard.take(), [(0, true)], "the pointer rests on row 0");
+        order.set(vec![1, 0]);
+        let mut at = Instant::now();
+        for _ in 0..20 {
+            at += std::time::Duration::from_millis(16);
+            app.step_at(at);
+        }
+        assert!(heard.borrow().is_empty(), "landed, and nothing heard");
+        app.event_at(id, Event::mouse_move(50.0, 26.0), at);
+        app.step_at(at);
+        assert_eq!(
+            heard.take(),
+            [(0, false), (1, true)],
+            "until the pointer moves"
+        );
+    }
+
+    /// The release that ends a chord works out what the held button put off,
+    /// with no frame of its own. The compositor's callback is held, so the
+    /// step takes the input and draws nothing: whatever is heard, the release
+    /// worked out. A wake request from another test in the binary, which is
+    /// process-wide, could otherwise draw a frame here.
+    #[test]
+    fn is_worked_out_at_a_release_that_draws_nothing() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let id = column(&mut app, &heard, tall, || {});
+        app.event_at(
+            id,
+            Event::mouse_down(50.0, 75.0, crate::widgets::MouseButton::Right),
+            Instant::now(),
+        );
+        app.step();
+        tall.set(100.0);
+        app.step();
+        assert!(heard.borrow().is_empty(), "nothing with the button down");
+        let drawn = app.frames_presented(id);
+        app.hold_frame_callbacks(id);
+        app.event_at(
+            id,
+            Event::mouse_up(50.0, 75.0, crate::widgets::MouseButton::Right),
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(app.frames_presented(id), drawn, "the release drew nothing");
+        assert_eq!(heard.take(), [(1, false), (0, true)], "and worked it out");
+    }
+
+    /// Unless the click the release made asked for the surface to close: the
+    /// dismissed surface hears nothing more (#675).
+    #[test]
+    fn is_not_worked_out_at_a_release_whose_click_closes() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let me: Rc<Cell<Option<SurfaceId>>> = Rc::default();
+        let closing = me.clone();
+        let rows_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(200), move || {
+            let say = |n: usize| {
+                let heard = rows_heard.clone();
+                move |hovered| heard.borrow_mut().push((n, hovered))
+            };
+            let closing = closing.clone();
+            container()
+                .layout(Flex::column())
+                .on_click(move || {
+                    if let Some(id) = closing.get() {
+                        crate::surface::surface_handle(id).close();
+                    }
+                })
+                .child(container().width(100.0).height(tall).on_hover(say(0)))
+                .child(container().width(100.0).height(50.0).on_hover(say(1)))
+        });
+        me.set(Some(id));
+        app.configure(id, 100, 200, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 75.0);
+        assert_eq!(heard.take(), [(1, true)], "the pointer rests on row 1");
+        app.event_at(
+            id,
+            Event::mouse_down(50.0, 75.0, crate::widgets::MouseButton::Left),
+            Instant::now(),
+        );
+        app.step();
+        tall.set(100.0);
+        app.step();
+        app.event_at(
+            id,
+            Event::mouse_up(50.0, 75.0, crate::widgets::MouseButton::Left),
+            Instant::now(),
+        );
+        app.step();
+        assert!(heard.take().is_empty(), "the closing surface heard nothing");
+    }
+
+    /// A content-sized surface resized in the frame its content changed may
+    /// have moved under the pointer, as one anchored at its bottom does: the
+    /// point it had is not trusted, as after a configure.
+    #[test]
+    fn waits_after_its_own_content_resizes_the_surface() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let tall = create_signal(50.0f32);
+        let rows_heard = heard.clone();
+        let id = app.surface(
+            SurfaceConfig::new()
+                .width(100)
+                .height(crate::surface::content()),
+            move || {
+                let say = |n: usize| {
+                    let heard = rows_heard.clone();
+                    move |hovered| heard.borrow_mut().push((n, hovered))
+                };
+                container()
+                    .layout(Flex::column())
+                    .child(container().width(100.0).height(tall).on_hover(say(0)))
+                    .child(container().width(100.0).height(50.0).on_hover(say(1)))
+            },
+        );
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        app.step();
+        rest_at(&mut app, id, 50.0, 75.0);
+        assert_eq!(heard.take(), [(1, true)], "the pointer rests on row 1");
+        tall.set(100.0);
+        app.step();
+        app.step();
+        assert!(heard.take().is_empty(), "nothing at a point not trusted");
+    }
+
+    /// A hover style that lifts the box draws it elsewhere and marks
+    /// nothing; but a layout elsewhere on the surface works the hover out
+    /// from where the box is drawn, lifted. A pointer resting in the strip the
+    /// lift uncovered then loses the hover, and the next such layout gives it
+    /// back.
+    #[test]
+    fn a_lifted_box_is_worked_out_where_it_is_drawn() {
+        use crate::widgets::Stateful;
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let below = create_signal(10.0f32);
+        let card_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(200).height(100), move || {
+            let heard = card_heard.clone();
+            container()
+                .layout(Flex::column())
+                .padding(20.0)
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .background(crate::widgets::Color::RED)
+                        .when_hovered(|s| s.translate(crate::transform::Translate::new(0.0, -4.0)))
+                        .on_hover(move |hovered| heard.borrow_mut().push((0, hovered))),
+                )
+                .child(container().width(100.0).height(below))
+        });
+        app.configure(id, 200, 100, 1.0);
+        app.step();
+        // The box spans 20..70 at rest and 16..66 lifted.
+        app.event_at(id, Event::mouse_move(50.0, 68.0), Instant::now());
+        app.step();
+        assert_eq!(heard.take(), [(0, true)], "hovered, and lifted");
+        below.set(12.0);
+        app.step();
+        assert_eq!(heard.take(), [(0, false)], "worked out where it was drawn");
+        below.set(10.0);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)], "and back where it rests");
+    }
+
+    /// A key that scrolls, after a click: the release said nothing that
+    /// outlives it, so the key is worked out after its frame, cursor and all.
+    #[test]
+    fn moves_the_cursor_with_a_key_that_scrolls_after_a_click() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let id = rows_with_a_hand(&mut app, &heard);
+        rest_at(&mut app, id, 50.0, 25.0);
+        app.click(id, 50.0, 25.0);
+        app.step();
+        assert_eq!(heard.take(), [(0, true)], "row 0 is hovered, and focused");
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Pointer));
+        app.event_at(
+            id,
+            Event::KeyDown {
+                key: crate::widgets::Key::Down,
+                modifiers: crate::widgets::Modifiers::default(),
+                repeat: false,
+            },
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(heard.take(), [(0, false), (1, true)]);
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Default));
+    }
+
+    /// A release a driver sends with no position, ending a held button's
+    /// chord: what the button put off is worked out where the pointer rests,
+    /// cursor and all. With the callback held, so that the release is the
+    /// only thing that can do it: no frame follows.
+    #[test]
+    fn moves_the_cursor_at_a_release_with_no_position() {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let id = rows_with_a_hand(&mut app, &heard);
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert_eq!(heard.take(), [(0, true)], "the pointer rests on row 0");
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Pointer));
+        let now = Instant::now();
+        app.event_at(
+            id,
+            Event::mouse_down(50.0, 25.0, crate::widgets::MouseButton::Right),
+            now,
+        );
+        app.event_at(
+            id,
+            Event::scroll(50.0, 25.0, 0.0, 50.0, ScrollSource::Wheel),
+            now,
+        );
+        app.step();
+        assert!(heard.borrow().is_empty(), "nothing with the button down");
+        app.hold_frame_callbacks(id);
+        app.event_at(
+            id,
+            Event::MouseUp {
+                at: None,
+                button: crate::widgets::MouseButton::Right,
+            },
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(heard.take(), [(0, false), (1, true)]);
+        assert_eq!(app.cursors_asked().last(), Some(&CursorIcon::Default));
+    }
+
+    /// A row brought back while its exit plays takes events again, and is
+    /// what is under the pointer where it covers.
+    #[test]
+    fn moves_to_a_row_brought_back_mid_exit() {
+        use crate::animation::{Animate, TimingFunction, Transition};
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let items = create_signal(vec![0usize]);
+        let (base_heard, over_heard) = (heard.clone(), heard.clone());
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let base_heard = base_heard.clone();
+            let over_heard = over_heard.clone();
+            container()
+                .width(100.0)
+                .height(50.0)
+                .layout(crate::layout::ZStack::new())
+                .child(
+                    container()
+                        .width(100.0)
+                        .height(50.0)
+                        .on_hover(move |hovered| base_heard.borrow_mut().push((0, hovered))),
+                )
+                .children(crate::widgets::keyed(
+                    move || items.get(),
+                    |k| *k,
+                    move |_| {
+                        let heard = over_heard.clone();
+                        container()
+                            .width(100.0)
+                            .height(50.0)
+                            .background(crate::widgets::Color::RED)
+                            .opacity(
+                                1.0.transition(Transition::new(1000.0, TimingFunction::Linear))
+                                    .exiting_to(0.0),
+                            )
+                            .on_hover(move |hovered| heard.borrow_mut().push((1, hovered)))
+                    },
+                ))
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        assert_eq!(
+            heard.take(),
+            [(1, true)],
+            "the pointer rests on the overlay"
+        );
+        let mut at = Instant::now();
+        items.set(vec![]);
+        for _ in 0..2 {
+            at += std::time::Duration::from_millis(16);
+            app.step_at(at);
+        }
+        assert_eq!(heard.take(), [(1, false), (0, true)], "its exit began");
+        items.set(vec![0]);
+        for _ in 0..3 {
+            at += std::time::Duration::from_millis(16);
+            app.step_at(at);
+        }
+        assert_eq!(
+            heard.take(),
+            [(0, false), (1, true)],
+            "and it is back on top"
+        );
+    }
+
+    /// A list scrolled to its end whose bottom padding shrinks is clamped
+    /// back in layout, moving its rows under the pointer though no row
+    /// changed size or went.
+    #[test]
+    fn moves_with_a_scroll_clamped_by_padding_that_shrank() {
+        clamped_by_padding_that_shrank(Scroll::vertical());
+    }
+
+    /// The same with no scrollbar: the clamp says so itself, with no handle
+    /// laid out anew to say it for it.
+    #[test]
+    fn moves_with_a_scroll_clamped_by_padding_that_shrank_with_no_scrollbar() {
+        clamped_by_padding_that_shrank(
+            Scroll::vertical().visibility(crate::widgets::ScrollbarVisibility::Hidden),
+        );
+    }
+
+    fn clamped_by_padding_that_shrank(scroll: Scroll) {
+        let Some(mut app) = crate::or_skip(Headless::new()) else {
+            return;
+        };
+        let heard: Heard = Rc::default();
+        let bottom = create_signal(50.0f32);
+        let rows_heard = heard.clone();
+        let id = app.surface(SurfaceConfig::new().width(100).height(100), move || {
+            let heard = rows_heard.clone();
+            let rows = (0..3).map(move |n| {
+                let heard = heard.clone();
+                container()
+                    .width(100.0)
+                    .height(50.0)
+                    .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)))
+                    .into_any()
+            });
+            container()
+                .width(100.0)
+                .height(100.0)
+                .padding(move || crate::widgets::Padding::default().with_bottom(bottom.get()))
+                .scroll(scroll)
+                .child(container().layout(Flex::column()).children(rows))
+        });
+        app.configure(id, 100, 100, 1.0);
+        app.step();
+        rest_at(&mut app, id, 50.0, 25.0);
+        app.event_at(
+            id,
+            Event::scroll(50.0, 25.0, 0.0, 100.0, ScrollSource::Wheel),
+            Instant::now(),
+        );
+        app.step();
+        assert_eq!(
+            heard.take(),
+            [(0, true), (0, false), (2, true)],
+            "at the end"
+        );
+        bottom.set(0.0);
+        app.step();
+        assert_eq!(heard.take(), [(2, false), (1, true)]);
+    }
+}

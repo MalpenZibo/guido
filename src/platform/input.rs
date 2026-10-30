@@ -1622,6 +1622,7 @@ mod tests {
                 Event::MouseMove {
                     at: moved,
                     pointer: moved_by,
+                    ..
                 },
             ),
             (
@@ -1747,7 +1748,7 @@ mod tests {
         touch.send(down(0, landed_on, PX, PY));
 
         let slid = touch.send(motion(0, -40.0, 900.0));
-        let [(surface, Event::MouseMove { at, pointer })] = slid.as_slice() else {
+        let [(surface, Event::MouseMove { at, pointer, .. })] = slid.as_slice() else {
             panic!("the primary finger moves the pointer, got {slid:?}");
         };
         assert_eq!(*surface, landed_on, "off the surface, still the surface's");

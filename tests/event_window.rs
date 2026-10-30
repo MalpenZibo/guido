@@ -3,7 +3,8 @@
 //! A container used to offer every pointer event to every child, so a wheel
 //! event over a list cost the whole list. It now offers the window paint
 //! narrows to, plus what the pointer record still owes something: the children
-//! the last event was offered to, and the ones the press landed on. These say
+//! the last move was offered to, those the last event of another kind was
+//! offered to, and the ones the press landed on. These say
 //! both halves hold — the window is narrow, and nothing the walk used to reach
 //! for a reason is lost.
 
@@ -184,6 +185,41 @@ fn a_press_dragged_far_away_still_gets_its_moves_and_its_release() {
     assert!(log.clicks.is_empty(), "which was not over it: no click");
 }
 
+/// A press with no position reaches nothing by position, and holds what the
+/// pointer rested on as its route. The first move away is owed to that row
+/// by what was owed, and settles it; the next reaches it by the press alone.
+#[test]
+fn a_press_with_no_position_holds_the_row_the_pointer_rested_on() {
+    let Some(mut app) = headless() else { return };
+    let (first, rest) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+    let (counted, others) = (first.clone(), rest.clone());
+    let (id, mut at) = surface(&mut app, move || {
+        let (counted, others) = (counted.clone(), others.clone());
+        list((0..ROWS).map(move |n| {
+            let visits = if n == 0 { &counted } else { &others };
+            Box::new(Counted(visits.clone())) as Box<dyn Widget>
+        }))
+    });
+
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 10.0)]);
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [Event::MouseDown {
+            at: None,
+            button: MouseButton::Left,
+            pointer: PointerKind::Mouse,
+            count: 1,
+        }],
+    );
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 400.0)]);
+    first.set(0);
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 410.0)]);
+
+    assert_eq!(first.get(), 1, "row 0 hears the move, though 400 px away");
+}
+
 #[test]
 fn a_row_moved_by_a_transform_is_clicked_where_it_is_drawn() {
     let Some(mut app) = headless() else { return };
@@ -259,6 +295,44 @@ fn play(
         app.event_at(id, event, *at);
         app.step_at(*at);
     }
+}
+
+/// Two wheel steps in one frame, before the pointer moves: the second is
+/// offered where the first carried the content, away from row 0, which the
+/// record still owes the move that takes its hover away.
+#[test]
+fn a_row_two_wheel_steps_carry_off_is_no_longer_hovered_once_the_pointer_leaves() {
+    let Some(mut app) = headless() else { return };
+    let log = Rc::new(RefCell::new(Log::default()));
+    let rows = log.clone();
+    let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
+
+    play(&mut app, id, &mut at, [Event::mouse_move(50.0, 10.0)]);
+    at += Duration::from_millis(16);
+    for _ in 0..2 {
+        app.event_at(
+            id,
+            Event::scroll(50.0, 10.0, 0.0, 40.0, ScrollSource::Wheel),
+            at,
+        );
+    }
+    app.step_at(at);
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [Event::mouse_move(50.0, 11.0), Event::MouseLeave],
+    );
+
+    let mut hovered = std::collections::BTreeMap::new();
+    for &(row, on) in &log.borrow().hover {
+        hovered.insert(row, on);
+    }
+    let left: Vec<usize> = hovered
+        .into_iter()
+        .filter_map(|(row, on)| on.then_some(row))
+        .collect();
+    assert!(left.is_empty(), "rows left hovered: {left:?}");
 }
 
 #[test]
@@ -531,12 +605,19 @@ fn row_0_half_under_the_header(
             under_a_header(logged_rows(rows.clone(), ROWS))
         }
     });
+    // A wheel turns where the pointer is, and the frame after it works the
+    // hover out there (#842). The pointer goes again, so the moves each test
+    // makes arrive on rows it was never over.
     play(
         &mut app,
         id,
         &mut at,
-        [Event::scroll(50.0, 300.0, 0.0, 10.0, ScrollSource::Wheel)],
+        [
+            Event::scroll(50.0, 300.0, 0.0, 10.0, ScrollSource::Wheel),
+            Event::MouseLeave,
+        ],
     );
+    log.borrow_mut().hover.clear();
     (app, id, at)
 }
 

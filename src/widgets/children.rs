@@ -559,6 +559,9 @@ impl Rows<'_> {
             });
             self.tree.deliver_hover_changes();
         });
+        // Leaving, it takes no events: whatever it covered is under the
+        // pointer now.
+        self.tree.mark_hover_stale(id);
         crate::jobs::detach_widget_subtree(self.tree, id);
         Some(exits)
     }

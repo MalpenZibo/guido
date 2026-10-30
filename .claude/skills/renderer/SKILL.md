@@ -34,6 +34,11 @@ animating surface renders once per callback, an idle surface renders nothing.
 12. `cache_paint_results()` — `Rc`-share paint output, clear `needs_paint`.
     Partial paints poison their ancestors, are never cached, and drop the
     entry the last complete paint left
+13. `Tree::recheck_hover()` — if a scroll, a layout that moved or resized a
+    widget, or a widget built or removed has changed what is under a still
+    pointer on this surface, a `MouseMove` with `recheck` set to where it
+    rests: hover and cursor worked out again (#842). An animation that only
+    draws a box elsewhere (a transform, a slide) marks nothing
 
 ## Layers and ordering
 
