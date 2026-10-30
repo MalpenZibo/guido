@@ -1,5 +1,6 @@
 pub mod backdrop;
 pub(crate) mod clicks;
+pub(crate) mod content_buffer;
 pub mod input;
 pub(crate) mod layer_shell;
 pub mod lock;

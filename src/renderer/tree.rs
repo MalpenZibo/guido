@@ -303,6 +303,24 @@ impl RenderNode {
         }
     }
 
+    /// Whether this node puts pixels in the buffer itself, children aside.
+    ///
+    /// An input declaration draws nothing, and nor does a blur only the
+    /// compositor runs: both are published as regions, which cover the whole
+    /// surface whatever its buffer covers.
+    pub(crate) fn draws_pixels(&self) -> bool {
+        self.commands
+            .iter()
+            .chain(&self.overlay_commands)
+            .any(|command| match &**command {
+                DrawCommand::InputRegion { .. } => false,
+                DrawCommand::BackdropBlur { sources, .. } => {
+                    sources.contains(crate::backdrop::BackdropSources::SURFACE)
+                }
+                _ => true,
+            })
+    }
+
     /// This node's own space to its parent's: its local transform, about its
     /// pivot. What flatten composes onto the parent's world transform.
     pub fn placement(&self) -> Transform {

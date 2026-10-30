@@ -2391,6 +2391,67 @@ impl Tree {
         )
     }
 
+    /// The box round everything `root`'s subtree can put in the buffer, in
+    /// `root`'s coordinates, from where the last pass placed it: `None` for a
+    /// subtree that draws nothing.
+    ///
+    /// Read right after a measure, it is where the content is going, since a
+    /// measure places every widget at its animations' targets — which is what
+    /// a buffer sized to its content has to have room for from the first frame
+    /// of a growth. The frame then says exactly what it drew; this is the part
+    /// it cannot say, because it has not been drawn yet.
+    ///
+    /// A widget counts by what its last paint drew, so a transparent box the
+    /// size of the surface does not make the buffer the surface again, and one
+    /// not painted yet counts whole, which cuts nothing. The root's own paint
+    /// is the caller's to say (`root_draws`): it is painted into the surface's
+    /// node rather than cached. Below a widget that clips, moves or blurs what
+    /// its children draw, the walk stops and takes everything that widget can
+    /// draw, as damage does.
+    pub(crate) fn drawn_extent(&self, root: WidgetId, root_draws: bool) -> Option<Rect> {
+        let mut extent = None;
+        self.gather_drawn(root, (0.0, 0.0), Some(root_draws), &mut extent);
+        extent
+    }
+
+    fn gather_drawn(
+        &self,
+        id: WidgetId,
+        at: (f32, f32),
+        draws: Option<bool>,
+        extent: &mut Option<Rect>,
+    ) {
+        let Some(idx) = self.get_dense_index(id) else {
+            return;
+        };
+        let slot = &self.dense[idx];
+        let Some(size) = slot.cached_size else {
+            return;
+        };
+        let bounds = Rect::new(at.0, at.1, size.width, size.height);
+        let mut take = |rect: Rect| {
+            *extent = Some(extent.map_or(rect, |held| crate::renderer::union_of(held, rect)));
+        };
+        if slot.clips_children || self.carry(id) != Carry::NONE {
+            take(bounds.outset_by(self.slot_reach(id, idx)));
+            return;
+        }
+        let draws = draws.unwrap_or_else(|| {
+            slot.cached_paint
+                .as_ref()
+                .is_none_or(|node| node.draws_pixels())
+        });
+        if draws {
+            take(bounds.outset_by(slot.own_paint_reach));
+        }
+        for &child in &slot.children {
+            let Some(origin) = self.get_origin(child) else {
+                continue;
+            };
+            self.gather_drawn(child, (at.0 + origin.0, at.1 + origin.1), None, extent);
+        }
+    }
+
     /// Get the children of a widget (returns a slice to avoid heap allocation).
     pub fn get_children(&self, id: WidgetId) -> &[WidgetId] {
         self.get_dense_index(id)
@@ -2857,8 +2918,10 @@ impl Tree {
     /// A layout's answer is read only while its placement stands — while it
     /// was the last to run — because a skip leaves what is below the widget
     /// where the last run put it. A measure's is read whatever ran since:
-    /// nothing reads where a measure placed anything, and what it answers
-    /// changes only with what marks the widget, which withdraws it.
+    /// what it answers changes only with what marks the widget, which
+    /// withdraws it, and where it placed anything is read only by
+    /// [`drawn_extent`](Self::drawn_extent), right after the measure that
+    /// placed it, before the layout puts everything back.
     fn cached_for_pass(
         &self,
         id: WidgetId,

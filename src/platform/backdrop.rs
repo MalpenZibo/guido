@@ -87,7 +87,8 @@ impl WaylandState {
     ///
     /// Surfaces that never requested blur are left untouched — declaring an
     /// empty region would override compositor-side blur rules (e.g. blur by
-    /// namespace). Once a surface has blurred, dropping to zero rects sends
+    /// namespace) — except one drawn through a child, which is stretched over
+    /// the screen, so that such a rule would blur the screen behind it. Once a surface has blurred, dropping to zero rects sends
     /// an *empty* region, never NULL: NULL only withdraws our opinion and
     /// lets such a rule blur the whole surface, where an empty region says
     /// "blur exactly nothing".
@@ -107,6 +108,7 @@ impl WaylandState {
         if rects.is_empty()
             && surface_state.blur_region.is_none()
             && surface_state.bg_effect_surface.is_none()
+            && surface_state.content.is_none()
         {
             return;
         }

@@ -128,6 +128,54 @@ impl<'a> FlatFrame<'a> {
     pub fn surface_layers(&self) -> &'a [CommandLayer] {
         &self.layers[self.surface_start()..]
     }
+
+    /// The box round every pixel this frame puts on the surface, in the space
+    /// it was flattened in: each draw with its shadow and its antialiased
+    /// edge, cut by its clips, to be rounded out to the pixels it touches.
+    /// `None` for a frame that draws nothing.
+    ///
+    /// A layer counts by its composite, which is where its pixels land; an
+    /// input declaration and a blur only the compositor runs draw nothing.
+    pub(crate) fn drawn_extent(&self, scale: f32) -> Option<Rect> {
+        let mut drawn: Option<Rect> = None;
+        for group in self.surface_layers() {
+            let ranges = [
+                &group.backdrop,
+                &group.shapes,
+                &group.paths,
+                &group.images,
+                &group.text,
+                &group.overlay,
+            ];
+            for cmd in ranges
+                .into_iter()
+                .flat_map(|range| &self.commands[range.clone()])
+            {
+                let Some(rect) = extent(cmd, scale) else {
+                    continue;
+                };
+                // An upright edge fades over half a device pixel either side of
+                // it, which lands inside the pixels the edge itself touches; a
+                // turned corner reaches a pixel further out.
+                let fringe = if cmd.world_transform.keeps_axes() {
+                    0.0
+                } else {
+                    antialiased_past(cmd)
+                };
+                let rect = rect.outset(fringe / scale);
+                let cut = match cmd.clip() {
+                    Some(clip) => self.clips.shapes(&clip).try_fold(rect, |rect, shape| {
+                        rect.intersection(&shape.placement.map_rect(shape.rect))
+                    }),
+                    None => Some(rect),
+                };
+                if let Some(rect) = cut {
+                    drawn = Some(drawn.map_or(rect, |held| union_of(held, rect)));
+                }
+            }
+        }
+        drawn
+    }
 }
 
 /// A subtree the frame draws into a texture of its own and composites once.
@@ -1231,15 +1279,39 @@ pub fn flatten_root_into(
     layers: &mut Vec<CommandLayer>,
     scratch: &mut FlattenScratch,
 ) -> RegionsCarried {
+    flatten_root_for(root, scale, None, commands, layers, scratch)
+}
+
+/// The same, into a buffer that covers only `buffer` of the surface, in its
+/// logical coordinates: everything is moved by the buffer's corner, so what
+/// the layout put at that corner lands on the buffer's first pixel. A layer is
+/// still cut to the surface, so that what it draws past the buffer is there to
+/// be seen by [`FlatFrame::drawn_extent`]. `None` is a buffer that is the whole
+/// surface.
+pub(crate) fn flatten_root_for(
+    root: &RenderNode,
+    scale: f32,
+    buffer: Option<Rect>,
+    commands: &mut Vec<FlattenedCommand>,
+    layers: &mut Vec<CommandLayer>,
+    scratch: &mut FlattenScratch,
+) -> RegionsCarried {
     commands.clear();
     layers.clear();
     scratch.clear();
     scratch.scale = scale;
     scratch.root = root.id;
-    scratch.surface = (root.bounds.width > 0.0 && root.bounds.height > 0.0).then_some(root.bounds);
+    let (visible, placed) = match buffer {
+        Some(buffer) => (
+            root.bounds.offset(-buffer.x, -buffer.y),
+            Transform::translate(-buffer.x, -buffer.y),
+        ),
+        None => (root.bounds, Transform::IDENTITY),
+    };
+    scratch.surface = (visible.width > 0.0 && visible.height > 0.0).then_some(visible);
 
     // Not replayable: the root is cleared before every paint (see `replayable`).
-    flatten_node(root, Transform::IDENTITY, None, 1.0, false, scratch);
+    flatten_node(root, placed, None, 1.0, false, scratch);
 
     let carried = scratch.carried;
     scratch.drain_into(commands, layers);
@@ -1792,7 +1864,7 @@ const EVERYTHING: Rect = Rect {
     height: f32::MAX,
 };
 
-pub(super) fn union_of(a: Rect, b: Rect) -> Rect {
+pub(crate) fn union_of(a: Rect, b: Rect) -> Rect {
     let x = a.x.min(b.x);
     let y = a.y.min(b.y);
     let right = (a.x + a.width).max(b.x + b.width);

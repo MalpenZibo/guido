@@ -115,6 +115,8 @@ pub struct SurfaceConfig {
     /// surface accepts input; `Some(rects)` limits input to those rectangles
     /// (an empty list makes the surface fully click-through).
     pub input_region: Option<Vec<Rect>>,
+    /// How much of the surface its buffer covers (see [`BufferExtent`]).
+    pub buffer: BufferExtent,
 }
 
 /// Margins from the anchored screen edges, in logical pixels.
@@ -580,6 +582,47 @@ pub fn content() -> SurfaceExtent {
     SurfaceExtent::Content
 }
 
+/// How much of a surface its buffer covers: what is drawn and held in memory,
+/// as against the space the surface takes.
+///
+/// The two are the same for nearly every surface. They part for one the
+/// compositor stretches over the screen so that it never has to ask for a
+/// size — a bar that opens a panel above itself, and catches a click anywhere
+/// to close it — and that draws in only a strip of it. Its buffer, the
+/// swapchain behind it and every offscreen target are the screen's size with
+/// [`BufferExtent::Surface`], and the size of the strip with
+/// [`BufferExtent::Content`]:
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// SurfaceConfig::new()
+///     .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+///     .exclusive_zone(52)
+///     .exclusive_edge(Edge::Bottom)
+///     .background_color(Color::TRANSPARENT)
+///     .buffer(BufferExtent::Content);
+/// ```
+///
+/// Layout does not change: the root is laid out at the surface's size, the
+/// input region and the blur region are the surface's, in its coordinates,
+/// and popups open from it. What changes is where the pixels go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BufferExtent {
+    /// The buffer is the whole surface.
+    #[default]
+    Surface,
+    /// The buffer covers what the surface draws: the box round everything
+    /// painted, with its shadows and blur, and where a running animation is
+    /// taking it. It grows as soon as the content is going to need more, and
+    /// shrinks once the content has settled, as a [`content()`] size does.
+    ///
+    /// The background colour is drawn inside that box only, so this is for a
+    /// surface with a transparent one. A compositor without
+    /// `wl_subcompositor`, `wp_viewporter` or `wl_shm` gets the whole surface
+    /// instead, which draws the same and costs the memory this saves.
+    Content,
+}
+
 /// Screen-space reservation for layer surfaces, mapping the layer-shell
 /// exclusive-zone semantics to intent. Reserving is **opt-in**: the
 /// default is [`ExclusiveZone::None`] — a bar declares its reservation
@@ -790,6 +833,7 @@ impl Default for SurfaceConfig {
             margin: Margin::default(),
             output: None,
             input_region: None,
+            buffer: BufferExtent::Surface,
         }
     }
 }
@@ -869,6 +913,12 @@ impl SurfaceConfig {
     /// it reserves nothing: give the zone in pixels there.
     pub fn exclusive_edge(mut self, edge: Edge) -> Self {
         self.exclusive_edge = Some(edge);
+        self
+    }
+
+    /// Say how much of the surface its buffer covers (see [`BufferExtent`]).
+    pub fn buffer(mut self, buffer: BufferExtent) -> Self {
+        self.buffer = buffer;
         self
     }
 

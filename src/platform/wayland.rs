@@ -30,6 +30,7 @@ use wayland_protocols::ext::background_effect::v1::client::{
 use std::cell::Cell;
 
 use super::backdrop::Backdrop;
+use super::content_buffer::{ContentBuffer, ContentGlobals};
 use super::input::InputState;
 use super::layer_shell::{LayerShell, LayerSurface};
 use super::lock::Lock;
@@ -118,6 +119,10 @@ pub struct WaylandSurfaceState {
     /// [`super::scaling`]. `None` is a compositor that does not, and the
     /// integer `set_buffer_scale` path.
     pub(super) scaling: Option<SurfaceScaling>,
+    /// The child that draws the content, for a surface whose buffer covers
+    /// only that — see [`super::content_buffer`]. `None` is a surface that
+    /// draws into itself.
+    pub(crate) content: Option<ContentBuffer>,
 }
 
 impl WaylandSurfaceState {
@@ -167,7 +172,16 @@ impl WaylandSurfaceState {
             blur_resync_owed: false,
             pending_popup_height: None,
             scaling,
+            content: None,
         }
+    }
+
+    /// The surface the frames land on: the child, for a surface whose buffer
+    /// covers only its content, and the surface itself for the rest.
+    pub(crate) fn drawn_surface(&self) -> &wl_surface::WlSurface {
+        self.content
+            .as_ref()
+            .map_or(&self.wl_surface, |content| &content.surface)
     }
 
     /// Take all pending events (drains the queue)
@@ -256,6 +270,10 @@ pub struct WaylandState {
     /// Fractional scaling and viewports, where the compositor offers both
     /// globals — see [`super::scaling`].
     pub(super) scaling: Option<Scaling>,
+
+    /// What a buffer smaller than its surface needs, where the compositor has
+    /// all of it — see [`super::content_buffer`].
+    pub(crate) content_globals: Option<ContentGlobals>,
 
     /// Pointer, touch and keyboard — see [`super::input`].
     pub(super) input: InputState,
@@ -379,6 +397,7 @@ pub fn create_wayland_app(
         popups: Popups::new(wm_base),
         lock: Lock::new(session_lock_state),
         scaling: Scaling::bind(&globals, &qh),
+        content_globals: ContentGlobals::bind(&globals, &qh),
         input: InputState::new(cursor_shape_manager, loop_handle),
         selections: Selections::new(data_device_manager, primary_selection_manager),
     };
@@ -432,9 +451,8 @@ impl WaylandState {
     /// The callback's arrival is what lets this surface render its next frame.
     pub fn request_frame_callback(&mut self, id: SurfaceId) {
         if let Some(surface) = self.surfaces.get(&id) {
-            surface
-                .wl_surface
-                .frame(&self.qh, FrameCallbackData(surface.wl_surface.clone()));
+            let drawn = surface.drawn_surface();
+            drawn.frame(&self.qh, FrameCallbackData(drawn.clone()));
         }
     }
 
@@ -446,7 +464,7 @@ impl WaylandState {
     /// the compositor cannot use.
     pub fn damage_surface(&mut self, id: SurfaceId, x: i32, y: i32, width: i32, height: i32) {
         if let Some(surface) = self.surfaces.get(&id) {
-            surface.wl_surface.damage_buffer(x, y, width, height);
+            surface.drawn_surface().damage_buffer(x, y, width, height);
         }
     }
 
@@ -456,6 +474,11 @@ impl WaylandState {
         if let Some(surface) = self.surfaces.get_mut(&id) {
             surface.pacing.committed();
             surface.resize_rides = false;
+            // The child's commit waits for the parent's, which carries it with
+            // everything the frame asked of the parent.
+            if surface.content.is_some() {
+                surface.wl_surface.commit();
+            }
         }
     }
 
@@ -477,7 +500,11 @@ impl WaylandState {
     ///
     /// The `Region` is dropped (and the wl_region destroyed) right away:
     /// the protocol copies the region state at `set_input_region` time.
-    fn apply_input_region(&self, wl_surface: &wl_surface::WlSurface, rects: Option<&[Rect]>) {
+    pub(super) fn apply_input_region(
+        &self,
+        wl_surface: &wl_surface::WlSurface,
+        rects: Option<&[Rect]>,
+    ) {
         match rects {
             None => wl_surface.set_input_region(None),
             Some(rects) => {
@@ -613,6 +640,9 @@ impl WaylandState {
         // Before the commit, so the compositor can answer with a scale on the
         // same round trip as the first configure.
         let scaling = self.create_surface_scaling(id, &wl_surface);
+        let content = (config.buffer == crate::surface::BufferExtent::Content)
+            .then(|| self.create_content_buffer(id, &wl_surface, scaling.as_ref()))
+            .flatten();
 
         wl_surface.commit();
 
@@ -621,13 +651,14 @@ impl WaylandState {
         self.surface_lookup.insert(object_id, id);
 
         // Create and store surface state
-        let surface_state = WaylandSurfaceState::new(
+        let mut surface_state = WaylandSurfaceState::new(
             SurfaceRole::Layer(layer_surface),
             wl_surface,
             initial_width,
             initial_height,
             scaling,
         );
+        surface_state.content = content;
         self.surfaces.insert(id, surface_state);
 
         log::info!(
@@ -647,6 +678,12 @@ impl WaylandState {
             // Remove from lookup table
             let object_id = surface_state.wl_surface.id();
             self.surface_lookup.remove(&object_id);
+
+            // The child before the parent it hangs from.
+            if let Some(content) = surface_state.content {
+                self.surface_lookup.remove(&content.surface.id());
+                content.destroy();
+            }
 
             // Destroy the blur proxy before its wl_surface goes away
             if let Some(effect) = surface_state.bg_effect_surface {
@@ -881,6 +918,15 @@ impl CompositorHandler for WaylandState {
         if let Some(id) = self.surface_lookup.get(&surface.id()).copied()
             && let Some(surface_state) = self.surfaces.get_mut(&id)
         {
+            // A surface drawn through a child is scaled through viewports, as
+            // a fractional one is, and its scale is the parent's: the child
+            // says the same number again, and neither may set a buffer scale.
+            if let Some(content) = &surface_state.content {
+                if content.surface != *surface && surface_state.scaling.is_none() {
+                    surface_state.adopt_scale(new_factor as f32);
+                }
+                return;
+            }
             // `preferred_buffer_scale` is the compositor rounding its real
             // preference up to an integer, because this event has no way to
             // say 1.5. A surface with a fractional scale has already been told
@@ -987,6 +1033,13 @@ impl WaylandState {
                 surface_state.height
             );
             surface_state.adopt_size(width, height);
+            if let Some(content) = surface_state.content.as_mut() {
+                content.stretch(
+                    &surface_state.wl_surface,
+                    surface_state.width,
+                    surface_state.height,
+                );
+            }
             log::info!(
                 "Surface {:?} using size: {}x{}",
                 id,

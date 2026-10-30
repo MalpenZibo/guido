@@ -266,6 +266,39 @@ sent and the zone counts for nothing, as before. An edge the surface is not
 anchored to is never sent. `ExclusiveZone::Auto` follows the edge's axis, so on
 a stretched one it reserves nothing: give the zone in pixels.
 
+### Drawing only what the bar shows
+
+A surface the size of the screen has a buffer the size of the screen, and so do
+the swapchain behind it and every offscreen target, though the bar draws a strip
+of it. Declare that the buffer covers only what is drawn:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+SurfaceConfig::new()
+    .anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT)
+    .exclusive_zone(52)
+    .exclusive_edge(Edge::Bottom)
+    .background_color(Color::TRANSPARENT)
+    .buffer(BufferExtent::Content)
+# ;
+# }
+```
+
+Nothing else changes: the root is laid out at the surface's size, the input
+region and the blur region are the surface's, and popups open from it. The
+buffer is the box round everything drawn, shadows and blur included. An
+animation that grows it takes the room it ends at on its first frame and plays
+inside it; one that shrinks it is drawn whole, and the buffer comes down once it
+has settled. A box that only takes clicks draws nothing, so a backdrop that
+closes the panel can fill the screen and cost nothing.
+
+The background colour is drawn inside the buffer only, so use a transparent
+one. Behind it is a subsurface, which needs `wl_subcompositor`, `wp_viewporter`
+and `wl_shm`; a compositor without one of them gets the whole surface drawn,
+which looks the same and costs the memory this saves.
+
 ## Multi-Surface Applications
 
 Guido supports creating multiple surfaces within a single application. All surfaces share the same reactive state, allowing for coordinated updates.
@@ -1092,6 +1125,12 @@ impl SurfaceConfig {
     pub fn output(self, output: OutputId) -> Self;
     pub fn input_region(self, rects: impl Into<Vec<Rect>>) -> Self;
     pub fn click_through(self) -> Self;
+    pub fn buffer(self, buffer: BufferExtent) -> Self;
+}
+
+pub enum BufferExtent {
+    Surface, // the buffer is the whole surface (the default)
+    Content, // the buffer covers what is drawn
 }
 ```
 

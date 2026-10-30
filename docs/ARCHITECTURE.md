@@ -228,6 +228,7 @@ blocks live beside their state rather than all in one file.
 | File | Concern |
 |------|---------|
 | `platform/wayland.rs` | Connection, surfaces, compositor handler |
+| `platform/content_buffer.rs` | A buffer smaller than its surface: a synchronized subsurface that draws the content, and the transparent pixel the layer surface shows |
 | `platform/layer_shell.rs` | `zwlr_layer_shell_v1`, bound up to version 5, which sctk does not: the role, its requests and its configure |
 | `platform/input.rs` | Seat: pointer, touch, keyboard, cursor shape and hiding, key repeat |
 | `platform/clicks.rs` | Which press of a run a press is — the double click — shared with the headless recorder |

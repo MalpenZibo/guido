@@ -49,6 +49,13 @@ Multiple surfaces share one reactive state and one renderer.
   rounded halfway away from zero, a `wp_viewport` destination declares the
   logical size, and `set_buffer_scale` is never touched. With none, the integer
   path is unchanged. See `src/platform/scaling.rs`
+- **A buffer smaller than its surface** (`BufferExtent::Content`) — the layer
+  surface shows one transparent pixel stretched by a viewport, and a
+  synchronized subsurface draws the content, placed with `set_position`. The
+  child's commit, made by wgpu's present, is applied by the parent's, which the
+  platform sends right after it; frame callbacks are asked for on the child.
+  Input and blur regions stay on the parent. See
+  `src/platform/content_buffer.rs`
 - **Layer shell** (`zwlr_layer_shell_v1`) — bound directly, up to version 5,
   because sctk binds 4 at most and keeps the global private, so no surface
   made through it can send `set_exclusive_edge`. `Anchor`, `Layer` and
