@@ -505,6 +505,24 @@ struct PointerRecord {
     withholding: bool,
     /// The surface root the event being dispatched entered at.
     root: Option<WidgetId>,
+    /// Where the last positioned event on each surface put the pointer, by
+    /// surface root, until it leaves that surface. One per surface, because
+    /// each surface's events are delivered as a batch of their own: a pointer
+    /// crossing from one to another can be heard arriving before it is heard
+    /// leaving.
+    at: SmallVec<[(WidgetId, crate::widgets::Point); 2]>,
+    /// The surface roots where something has moved under the pointer since
+    /// the hover was last worked out there. See [`Tree::recheck_hover`].
+    stale: SmallVec<[WidgetId; 2]>,
+    /// The chord was opened by a finger. A finger lifted is gone, and its
+    /// release works nothing out where it was.
+    chord_by_finger: bool,
+    /// The event just dispatched ended a chord held by the mouse. See
+    /// [`Tree::chord_ended`].
+    chord_ended: bool,
+    /// A re-check is being dispatched. What it moves — a scrollbar handle's
+    /// hit-test origin brought up to date — moved nothing under the pointer.
+    rechecking: bool,
 }
 
 /// An `on_hover` a pointer event owes, held until the dispatch that carried
@@ -1057,6 +1075,8 @@ impl Tree {
         if self.dense[dense_index].parent.is_none() {
             self.pointer.last.retain(|entry| entry.root != id);
             self.pointer.pressed.retain(|entry| entry.root != id);
+            self.pointer.at.retain(|(on, _)| *on != id);
+            self.pointer.stale.retain(|on| *on != id);
             if self.keyboard == KeyboardAt::On(id) {
                 self.keyboard = KeyboardAt::Nowhere;
             }
@@ -1778,12 +1798,20 @@ impl Tree {
     /// button is up, so a drag reaches the widget it started on wherever it
     /// goes. A press or release of another button in between goes along that
     /// route alone, without a new hit test (#625).
+    ///
+    /// A driver of its own follows a release as the loop does: when
+    /// [`chord_ended`](Self::chord_ended) says the last mouse button came up,
+    /// [`recheck_hover`](Self::recheck_hover) works out what the held button
+    /// put off.
     pub fn dispatch(
         &mut self,
         root: WidgetId,
         event: &crate::widgets::Event,
     ) -> Option<crate::widgets::EventResponse> {
         use crate::widgets::Event;
+        // Said of the event just dispatched, and of no other: a key after the
+        // release must not find it still said.
+        self.pointer.chord_ended = false;
         if event.follows_the_focus() {
             // The focus stays through the keyboard leaving; coming back, the
             // surface has whatever it had focused when the focus went to
@@ -1823,6 +1851,33 @@ impl Tree {
             _ => (held, false),
         };
         self.pointer.chorded = press_or_release && held != 0 && after != 0;
+        // Where the pointer is, before the widgets hear the event: a scroll
+        // that moves content marks the surface as it is heard, and the mark
+        // counts only where the pointer is known to be.
+        match event.coords() {
+            Some(at) => match self.pointer.at.iter_mut().find(|(on, _)| *on == root) {
+                Some(entry) => entry.1 = at,
+                None => self.pointer.at.push((root, at)),
+            },
+            // Gone from this surface, or over nothing on it.
+            None if matches!(
+                event,
+                Event::MouseLeave | Event::MouseMove { .. } | Event::MouseEnter { .. }
+            ) =>
+            {
+                self.pointer.at.retain(|(on, _)| *on != root);
+            }
+            None => {}
+        }
+        // A move of the pointer itself, with no button held, works the hover
+        // out where it goes: a mark made before it is answered.
+        if matches!(
+            event,
+            Event::MouseMove { recheck: false, .. } | Event::MouseEnter { .. }
+        ) && held == 0
+        {
+            self.pointer.stale.retain(|on| *on != root);
+        }
         let response = self.with_widget_mut(root, |widget, id, tree| widget.event(tree, id, event));
         let record = &mut self.pointer;
         if event.coords().is_some() && !record.chorded {
@@ -1887,6 +1942,12 @@ impl Tree {
             }
             _ => {}
         }
+        if let Event::MouseDown { pointer, .. } = event
+            && held == 0
+        {
+            record.chord_by_finger = *pointer == crate::widgets::PointerKind::Finger;
+        }
+        record.chord_ended = press_or_release && held != 0 && after == 0 && !record.chord_by_finger;
         if press_or_release {
             record.chord = (after != 0).then_some((root, after));
         }
@@ -1894,11 +1955,107 @@ impl Tree {
         response
     }
 
+    /// Whether the event just dispatched let go of the last mouse button, so
+    /// that a re-check a held button put off is owed now: a release need not
+    /// draw a frame to be followed by one. Chromium sends its fake move on the
+    /// release for the same reason. `dispatch_events` asks, and runs
+    /// [`recheck_hover`](Self::recheck_hover) unless the surface asked to
+    /// close; a test driving a tree does it itself.
+    ///
+    /// Not for a finger: lifted, it is over nothing, and the leave that
+    /// follows its release says so.
+    pub fn chord_ended(&self) -> bool {
+        self.pointer.chord_ended
+    }
+
     /// How many offers the pointer record owes the next event, for a test to
     /// see that what is owed does not grow with events that work no hover out.
     #[cfg(test)]
     pub(crate) fn owed_offers(&self) -> usize {
         self.pointer.last.len()
+    }
+
+    /// Say that what is under the pointer on `id`'s surface may have moved,
+    /// so that the hover is worked out again there once the frame is drawn:
+    /// a scroller's content moved, or a widget appeared, went or came back.
+    /// A layout that moves or resizes a widget says it on its own.
+    ///
+    /// Not a paint, and not a hover style: one draws the hovered box
+    /// elsewhere without moving it, and a hover worked out again from where
+    /// it was drawn would take itself back on the next frame and give itself
+    /// back on the one after, for as long as the pointer rests there.
+    pub(crate) fn mark_hover_stale(&mut self, id: WidgetId) {
+        if self.hover_can_go_stale()
+            && let Some(root) = self.surface_root_of(id)
+        {
+            self.hover_moved_on(root);
+        }
+    }
+
+    /// [`mark_hover_stale`](Self::mark_hover_stale), for a surface root
+    /// already found.
+    fn hover_moved_on(&mut self, root: WidgetId) {
+        if self.hover_can_go_stale() && !self.pointer.stale.contains(&root) {
+            self.pointer.stale.push(root);
+        }
+    }
+
+    /// Whether a mark counts now: the pointer is on some surface, no
+    /// re-check is being dispatched, and no measure is running — a measure
+    /// places things where the layout after it puts them back.
+    fn hover_can_go_stale(&self) -> bool {
+        !self.pointer.at.is_empty() && !self.pointer.rechecking && !self.measuring()
+    }
+
+    /// Forget where the pointer is on the surface rooted at `root`, because
+    /// the surface changed size and a point inside it may no longer be where
+    /// the pointer is: one anchored at its bottom grows upwards. The next
+    /// pointer event says where it is.
+    pub(crate) fn forget_where_the_pointer_is(&mut self, root: WidgetId) {
+        self.pointer.at.retain(|(on, _)| *on != root);
+    }
+
+    /// Work out the hover and the cursor again where the pointer already is on
+    /// the surface rooted at `root`, if something has moved under it since
+    /// they were last worked out there: a scroller's content, or a layout
+    /// (#842). The loop calls it once a frame has been drawn; it returns
+    /// whether it asked anything, which is when the cursor under the point
+    /// has something to say.
+    ///
+    /// It is a move to the point the pointer is at, marked `recheck`, so that
+    /// whoever follows the pointer itself — `on_pointer_move` — can tell the
+    /// pointer did not move.
+    ///
+    /// Once a frame, not after each change, as Chromium, Gecko and Flutter
+    /// have it. Not for a surface the pointer is not on. Not with a button
+    /// held, which a move would carry on as a drag: the release that ends the
+    /// chord does it then — see [`chord_ended`](Self::chord_ended).
+    pub fn recheck_hover(&mut self, root: WidgetId) -> bool {
+        if !self.pointer.stale.contains(&root)
+            || self
+                .pointer
+                .chord
+                .is_some_and(|(held_on, _)| held_on == root)
+        {
+            return false;
+        }
+        self.pointer.stale.retain(|on| *on != root);
+        let Some(&(_, at)) = self.pointer.at.iter().find(|(on, _)| *on == root) else {
+            return false;
+        };
+        // What the pointer was over before is not what it is over now.
+        self.cursor_under_the_point = Prop::Unset;
+        self.pointer.rechecking = true;
+        self.dispatch(
+            root,
+            &crate::widgets::Event::MouseMove {
+                at: Some(at),
+                pointer: crate::widgets::PointerKind::Mouse,
+                recheck: true,
+            },
+        );
+        self.pointer.rechecking = false;
+        true
     }
 
     /// Owe `callback` the hover `id` just took on, until the dispatch carrying
@@ -2929,6 +3086,10 @@ impl Tree {
             && let Some((root, vacated)) = self.surface_relative_damage_and_root(id)
         {
             self.expand_damage_rect(root, vacated);
+            self.hover_moved_on(root);
+        } else if previous_size.is_none() {
+            // Something new where the pointer may be.
+            self.mark_hover_stale(id);
         }
         let idx = self.get_dense_index(id).expect("checked above");
         // A subtree answers the passes differently when something in it is in
@@ -3078,6 +3239,11 @@ impl Tree {
         }
         if let Some((root, vacated)) = self.surface_relative_damage_and_root(id) {
             self.expand_damage_rect(root, vacated);
+            // A slide is drawn, and hit, where it was: nothing moved under
+            // the pointer yet.
+            if !slides {
+                self.hover_moved_on(root);
+            }
         }
         let idx = self.get_dense_index(id).expect("checked above");
         self.dense[idx].origin = (x, y);
@@ -3349,6 +3515,10 @@ mod tests {
             };
             tree.pointer.last.push(entry);
             tree.pointer.pressed.push(entry);
+            tree.pointer
+                .at
+                .push((root, crate::widgets::Point::new(1.0, 1.0)));
+            tree.pointer.stale.push(root);
         }
 
         tree.unregister(closed);
@@ -3356,6 +3526,14 @@ mod tests {
         let roots = |list: &Vec<Offered>| list.iter().map(|e| e.root).collect::<Vec<_>>();
         assert_eq!(roots(&tree.pointer.last), [open]);
         assert_eq!(roots(&tree.pointer.pressed), [open]);
+        let points = tree
+            .pointer
+            .at
+            .iter()
+            .map(|(on, _)| *on)
+            .collect::<Vec<_>>();
+        assert_eq!(points, [open], "where the pointer was on it goes too");
+        assert_eq!(tree.pointer.stale.as_slice(), [open], "and its mark");
     }
 
     /// The record keeps what the root still leads to, and nothing an event

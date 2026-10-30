@@ -2203,6 +2203,7 @@ mod tests {
             &Event::MouseMove {
                 at: None,
                 pointer: PointerKind::Mouse,
+                recheck: false,
             },
         );
         assert_eq!(

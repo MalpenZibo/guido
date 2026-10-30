@@ -163,9 +163,15 @@ impl H {
         // reads trip the non-reactive-read diagnostic, which would be the
         // harness reporting on itself.
         crate::reactive::diagnostics::snapshot_zone(|| {
-            self.tree
+            let response = self
+                .tree
                 .dispatch(root, &event)
-                .expect("root is registered")
+                .expect("root is registered");
+            // As `dispatch_events` follows a release that ends a chord.
+            if self.tree.chord_ended() {
+                self.tree.recheck_hover(root);
+            }
+            response
         })
     }
 
@@ -8812,6 +8818,319 @@ fn a_hover_shadow_keeps_the_overshoot_of_the_transition_chosen_for_it() {
         "the spring has to carry the shadow past the hover's {}, got {deepest}",
         lifted.extent()
     );
+}
+
+// ---------------------------------------------------------------------------
+// The hover worked out again where a still pointer is (#842)
+// ---------------------------------------------------------------------------
+
+/// A 100×100 scroller over four 100×50 rows, with the pointer resting on row
+/// 0, and how many pointer moves the rows heard.
+fn rows_under_a_pointer() -> (H, HoverLog, std::rc::Rc<std::cell::Cell<u32>>) {
+    let heard: HoverLog = Default::default();
+    let moves = std::rc::Rc::new(std::cell::Cell::new(0));
+    let rows = (0..4).map(|n| {
+        let heard = heard.clone();
+        let moves = moves.clone();
+        container()
+            .width(100.0)
+            .height(50.0)
+            .on_hover(move |hovered| heard.borrow_mut().push((n, hovered)))
+            .on_pointer_move(move |_, _| moves.set(moves.get() + 1))
+            .into_any()
+    });
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(100.0)
+            .scroll(Scroll::vertical())
+            .child(container().layout(Flex::column()).children(rows)),
+    );
+    h.fit(100.0, 100.0);
+    h.send(Event::mouse_move(50.0, 25.0));
+    assert_eq!(heard.take(), [(0, true)], "the pointer rests on row 0");
+    (h, heard, moves)
+}
+
+fn recheck(h: &mut H) -> bool {
+    let root = h.root;
+    crate::reactive::diagnostics::snapshot_zone(|| h.tree.recheck_hover(root))
+}
+
+fn wheel_step(h: &mut H) {
+    h.send(Event::scroll(
+        50.0,
+        25.0,
+        0.0,
+        50.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+}
+
+/// A wheel step moves the content under the pointer; the re-check moves the
+/// hover, and is no pointer move. Once done, it is not done again until
+/// something else moves.
+#[test]
+fn a_recheck_after_a_wheel_step_moves_the_hover_and_no_pointer_move() {
+    let (mut h, heard, moves) = rows_under_a_pointer();
+    let before = moves.get();
+    assert!(before > 0, "the pointer's own move was heard");
+    wheel_step(&mut h);
+    assert!(heard.borrow().is_empty(), "the scroll itself says nothing");
+    assert!(recheck(&mut h), "the content moved under the pointer");
+    assert_eq!(heard.take(), [(0, false), (1, true)]);
+    assert_eq!(moves.get(), before, "the pointer did not move");
+    assert!(!recheck(&mut h), "nothing has moved since");
+}
+
+/// Where nothing moved, nothing is asked.
+#[test]
+fn a_recheck_where_nothing_moved_asks_nothing() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    assert!(!recheck(&mut h));
+    assert!(heard.take().is_empty());
+}
+
+/// With a button held, nothing is worked out again; the release that ends
+/// the chord does it, with no frame of its own.
+#[test]
+fn a_held_button_puts_the_recheck_off_until_its_release() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    h.send(Event::mouse_down(50.0, 25.0, MouseButton::Right));
+    wheel_step(&mut h);
+    assert!(!recheck(&mut h));
+    assert!(heard.take().is_empty(), "nothing with the button down");
+    h.send(Event::mouse_up(50.0, 25.0, MouseButton::Right));
+    assert_eq!(heard.take(), [(0, false), (1, true)], "the release did it");
+    assert!(!recheck(&mut h), "and it is done");
+}
+
+/// That a chord ended is said of the release, and of no event after it: a
+/// driver reading it after a key must not work out again what the release
+/// already did.
+#[test]
+fn a_key_after_the_release_ends_no_chord() {
+    let (mut h, _, _) = rows_under_a_pointer();
+    h.send(Event::mouse_down(50.0, 25.0, MouseButton::Right));
+    h.send(Event::mouse_up(50.0, 25.0, MouseButton::Right));
+    assert!(h.tree.chord_ended(), "the release ended it");
+    h.send(Event::KeyDown {
+        key: crate::widgets::Key::Down,
+        modifiers: crate::widgets::Modifiers::default(),
+        repeat: false,
+    });
+    assert!(!h.tree.chord_ended(), "the key did not");
+}
+
+/// A pointer that left, or that is over nothing, is not worked out again.
+#[test]
+fn a_recheck_after_the_pointer_left_asks_nothing() {
+    for gone in [
+        Event::MouseLeave,
+        Event::MouseMove {
+            at: None,
+            pointer: crate::widgets::widget::PointerKind::Mouse,
+            recheck: false,
+        },
+        Event::MouseEnter { at: None },
+    ] {
+        let (mut h, heard, _) = rows_under_a_pointer();
+        h.send(gone);
+        assert_eq!(heard.take(), [(0, false)], "row 0 lost the pointer");
+        let root = h.root;
+        h.tree.mark_hover_stale(root);
+        assert!(!recheck(&mut h));
+        assert!(heard.take().is_empty(), "and nothing hovers where it was");
+    }
+}
+
+/// Each surface keeps its own point: the pointer heard arriving on another
+/// before it is heard leaving this one leaves this one's where it was, and a
+/// surface it is not on has none.
+#[test]
+fn each_surface_keeps_where_the_pointer_is_on_it() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    let other = h
+        .tree
+        .register(Box::new(container().width(100.0).height(100.0)));
+    h.tree.mark_hover_stale(other);
+    assert!(!h.tree.recheck_hover(other), "the pointer is not on it");
+    crate::reactive::diagnostics::snapshot_zone(|| {
+        h.tree.dispatch(other, &Event::mouse_move(10.0, 80.0))
+    });
+    let root = h.root;
+    h.tree.mark_hover_stale(root);
+    assert!(recheck(&mut h), "still where it was on this one");
+    assert!(
+        heard.take().is_empty(),
+        "worked out at row 0, where it rests"
+    );
+}
+
+/// A touchpad's glide moves the content after the fingers lift, with no event
+/// at all: each frame it moves asks for the hover to be worked out again.
+#[test]
+fn a_glide_asks_for_the_hover_to_be_worked_out_again() {
+    let (mut h, _, _) = rows_under_a_pointer();
+    let mut at = std::time::Instant::now();
+    for _ in 0..6 {
+        h.tree.set_event_instant(Some(at));
+        h.send(Event::scroll(
+            50.0,
+            25.0,
+            0.0,
+            5.0,
+            crate::widgets::widget::ScrollSource::Finger,
+        ));
+        h.tree.set_event_instant(None);
+        at += std::time::Duration::from_millis(8);
+    }
+    h.tree.set_event_instant(Some(at));
+    h.send(Event::scroll_end(50.0, 25.0));
+    h.tree.set_event_instant(None);
+    recheck(&mut h);
+    assert!(!recheck(&mut h), "worked out where the fingers left it");
+    at += std::time::Duration::from_millis(16);
+    h.advance_at(at);
+    assert!(recheck(&mut h), "the glide moved it on");
+}
+
+/// The point is recorded before the widgets hear the event, so a wheel step
+/// arriving where the pointer was not yet known counts its own move.
+#[test]
+fn a_wheel_step_after_a_leave_still_asks_for_a_recheck() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    h.send(Event::MouseLeave);
+    assert_eq!(heard.take(), [(0, false)], "row 0 lost the pointer");
+    wheel_step(&mut h);
+    assert!(recheck(&mut h), "the step moved the content under it");
+    assert_eq!(heard.take(), [(1, true)]);
+}
+
+/// A re-check is no drag step: a scrollbar drag the press never let go of
+/// does not follow it, and keeps the pointer from the rows, as a step does.
+#[test]
+fn a_recheck_does_not_drag_the_scrollbar() {
+    use crate::widgets::widget::PointerKind;
+    let (mut h, heard, _) = rows_under_a_pointer();
+    let content = |h: &mut H| h.paint().children[0].local_transform.ty();
+    // The handle, 48 of the 96 track down the right edge.
+    h.send(Event::mouse_move(95.0, 10.0));
+    h.send(Event::mouse_down(95.0, 10.0, MouseButton::Left));
+    assert_eq!(content(&mut h), 0.0, "pressed on the handle, not the track");
+    h.send(Event::MouseMove {
+        at: Some(crate::widgets::widget::Point::new(95.0, 40.0)),
+        pointer: PointerKind::Mouse,
+        recheck: true,
+    });
+    assert_eq!(content(&mut h), 0.0, "the re-check did not drag it");
+    heard.take();
+    h.send(Event::MouseMove {
+        at: Some(crate::widgets::widget::Point::new(50.0, 60.0)),
+        pointer: PointerKind::Mouse,
+        recheck: true,
+    });
+    assert!(heard.take().is_empty(), "nor took the pointer to row 1");
+    h.send(Event::mouse_move(95.0, 40.0));
+    assert!(content(&mut h) < 0.0, "the pointer's own move does");
+}
+
+/// Whether a row under the pointer, pushed down by its parent's padding, asks
+/// for the hover to be worked out again — sliding there, or not.
+fn a_row_pushed_down_asks_for_a_recheck(slides: bool) -> bool {
+    use crate::animation::{TimingFunction, Transition};
+    let above = create_signal(0.0f32);
+    let row = container().width(100.0).height(50.0).on_hover(|_| {});
+    let row = if slides {
+        row.animate_position(Transition::new(200.0, TimingFunction::Linear))
+    } else {
+        row
+    };
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(200.0)
+            .padding(move || Padding::default().with_top(above.get()))
+            .child(row),
+    );
+    h.fit(100.0, 200.0);
+    h.send(Event::mouse_move(50.0, 25.0));
+    above.set(50.0);
+    frame_at(&mut h, std::time::Instant::now(), 100.0, 200.0);
+    recheck(&mut h)
+}
+
+/// A row pushed down asks for the hover to be worked out again.
+#[test]
+fn a_row_pushed_down_asks_for_a_recheck_where_it_lands() {
+    assert!(a_row_pushed_down_asks_for_a_recheck(false));
+}
+
+/// Its twin that slides there does not: it is drawn where it was, and hit
+/// there, until the slide lands.
+#[test]
+fn a_row_that_slides_asks_for_no_recheck_as_it_starts() {
+    assert!(!a_row_pushed_down_asks_for_a_recheck(true));
+}
+
+/// A measure places things where the layout after it puts them back: what it
+/// moves is moved nowhere, and asks for nothing to be worked out again.
+#[test]
+fn a_measure_asks_for_no_recheck() {
+    let mut h = H::new(
+        container()
+            .layout(Flex::column())
+            .child(container().width(fill()).height(20.0).on_hover(|_| {})),
+    );
+    h.fit(100.0, 100.0);
+    h.send(Event::mouse_move(50.0, 10.0));
+    h.measure(Constraints::new(0.0, 0.0, 40.0, 100.0));
+    assert!(!recheck(&mut h), "the measure moved nothing on screen");
+    h.fit(100.0, 100.0);
+}
+
+/// A move of the pointer itself works the hover out where it goes, and
+/// answers a mark made before it: the frame has nothing left to do.
+#[test]
+fn a_real_move_answers_a_mark() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    wheel_step(&mut h);
+    h.send(Event::mouse_move(50.0, 25.0));
+    assert_eq!(heard.take(), [(0, false), (1, true)], "the move did it");
+    assert!(!recheck(&mut h), "nothing is left for the frame");
+}
+
+/// A re-check over the scrollbar's handle brings the handle's hit-test place
+/// up to date, which moves nothing under the pointer: it is done once.
+#[test]
+fn a_recheck_over_the_handle_is_done_once() {
+    let (mut h, _, _) = rows_under_a_pointer();
+    h.send(Event::mouse_move(95.0, 10.0));
+    h.send(Event::scroll(
+        95.0,
+        10.0,
+        0.0,
+        50.0,
+        crate::widgets::widget::ScrollSource::Wheel,
+    ));
+    assert!(recheck(&mut h), "the step moved the content");
+    assert!(!recheck(&mut h), "and the re-check moved nothing");
+}
+
+/// A release a driver sends with no position says nothing of where the
+/// pointer is: it keeps its point, and the re-check the release owes is
+/// worked out there. Only a leave, or a move over nothing, forgets it.
+#[test]
+fn a_release_with_no_position_keeps_where_the_pointer_is() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    h.send(Event::mouse_down(50.0, 25.0, MouseButton::Right));
+    wheel_step(&mut h);
+    assert!(heard.borrow().is_empty(), "nothing with the button down");
+    h.send(Event::MouseUp {
+        at: None,
+        button: MouseButton::Right,
+    });
+    assert_eq!(heard.take(), [(0, false), (1, true)], "the release did it");
 }
 
 // ---------------------------------------------------------------------------

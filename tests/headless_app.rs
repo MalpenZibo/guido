@@ -5220,7 +5220,60 @@ fn a_container_that_takes_no_input_leaves_the_cursor_to_the_one_beneath_it() {
 /// not a shape to show — it used to reach the closure's corpse and panic.
 #[test]
 fn a_cursor_closure_whose_widget_is_gone_is_not_read_again() {
-    let Some(mut app) = headless() else { return };
+    let Some((mut app, _, shown, loading)) = a_cursor_closure_under_the_pointer() else {
+        return;
+    };
+
+    // Gone from under the still pointer, the frame works out what is there
+    // now, which declares nothing (#842).
+    shown.set(false);
+    app.step();
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer, CursorIcon::Default]
+    );
+    loading.set(true);
+    app.step();
+
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer, CursorIcon::Default],
+        "nothing is asked for a declaration that is no longer there"
+    );
+}
+
+/// The same, with a button held: the hover is not worked out again until the
+/// release, so the declaration that went is still the one the pointer was
+/// last over when the closure's signal is written.
+#[test]
+fn a_cursor_closure_whose_widget_went_under_a_held_button_is_not_read_again() {
+    let Some((mut app, surface, shown, loading)) = a_cursor_closure_under_the_pointer() else {
+        return;
+    };
+    app.event_at(
+        surface,
+        Event::mouse_down(10.0, 10.0, MouseButton::Right),
+        Instant::now(),
+    );
+    app.step();
+    shown.set(false);
+    app.step();
+    loading.set(true);
+    app.step();
+
+    assert_eq!(
+        app.cursors_asked(),
+        [CursorIcon::Pointer],
+        "nothing is asked for a declaration that is no longer there"
+    );
+}
+
+/// A widget filling a bar declares its cursor with a closure, and the
+/// pointer rests on it: `shown` takes the widget away, `loading` is what the
+/// closure reads.
+fn a_cursor_closure_under_the_pointer()
+-> Option<(Headless, SurfaceId, RwSignal<bool>, RwSignal<bool>)> {
+    let mut app = headless()?;
     let shown = create_signal(true);
     let loading = create_signal(false);
     let surface = app.surface(fixed_bar(), move || {
@@ -5242,17 +5295,7 @@ fn a_cursor_closure_whose_widget_is_gone_is_not_read_again() {
     pointer_enters(&mut app, surface);
     app.step();
     assert_eq!(app.cursors_asked(), [CursorIcon::Pointer]);
-
-    shown.set(false);
-    app.step();
-    loading.set(true);
-    app.step();
-
-    assert_eq!(
-        app.cursors_asked(),
-        [CursorIcon::Pointer],
-        "nothing is asked for a declaration that is no longer there"
-    );
+    Some((app, surface, shown, loading))
 }
 
 // ---------------------------------------------------------------------------

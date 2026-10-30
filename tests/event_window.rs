@@ -605,12 +605,19 @@ fn row_0_half_under_the_header(
             under_a_header(logged_rows(rows.clone(), ROWS))
         }
     });
+    // A wheel turns where the pointer is, and the frame after it works the
+    // hover out there (#842). The pointer goes again, so the moves each test
+    // makes arrive on rows it was never over.
     play(
         &mut app,
         id,
         &mut at,
-        [Event::scroll(50.0, 300.0, 0.0, 10.0, ScrollSource::Wheel)],
+        [
+            Event::scroll(50.0, 300.0, 0.0, 10.0, ScrollSource::Wheel),
+            Event::MouseLeave,
+        ],
     );
+    log.borrow_mut().hover.clear();
     (app, id, at)
 }
 

@@ -856,6 +856,7 @@ fn a_drag_that_loses_its_position_does_not_snap_the_offset() {
     h.dispatch(Event::MouseMove {
         at: None,
         pointer: PointerKind::Mouse,
+        recheck: false,
     });
 
     let after = h.handle_pos();

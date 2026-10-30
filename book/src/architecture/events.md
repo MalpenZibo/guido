@@ -18,12 +18,21 @@ Wayland → Platform → App → Widget Tree
 ### Mouse Movement
 
 ```text
-Event::MouseMove { at, pointer };
+Event::MouseMove { at, pointer, recheck };
 Event::MouseEnter { at };
 Event::MouseLeave
 ```
 
 Tracked for hover states. The platform layer determines which widget the cursor is over.
+
+A `MouseMove` is also what works the hover out again under a pointer that
+stayed still: once a frame has been drawn after something moved on the surface
+— a scroll, a widget's place or size — the loop dispatches one to the point the
+pointer rests at, with `recheck` set, so a widget that follows the pointer
+itself, as `on_pointer_move` does, can tell it did not move. With a button
+held it waits, and the release of the last mouse button dispatches it, frame
+or not, unless that click closes the surface.
+Blink and Gecko mark their synthetic moves the same way.
 
 ### Mouse Buttons
 
@@ -295,6 +304,7 @@ fn pointer_motion(x: f32, y: f32) {
     self.dispatch(Event::MouseMove {
         at: Some(Point::new(x, y)),
         pointer: PointerKind::Mouse,
+        recheck: false,
     });
 }
 
