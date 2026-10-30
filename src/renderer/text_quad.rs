@@ -81,16 +81,24 @@ struct CacheEntry {
     idle_anywhere: u32,
 }
 
-/// Everything that affects the rasterized pixels of a text texture: the text
-/// and how it is drawn, and the box it is drawn in.
+/// Everything that affects the rasterized pixels of a text texture: what is
+/// drawn, and the height it is shaped in.
 #[derive(PartialEq, Eq, Hash)]
 struct TextCacheKey {
-    look: TextLook,
-    tex_width: u32,
+    drawing: TextDrawing,
     /// The height it is shaped in, which decides which lines it keeps: the
     /// same for every box under glyphon's floor, so a box that animates there
-    /// is one texture.
+    /// is one texture. Above it, every height is a key of its own, and the
+    /// ones that keep the same lines share one texture.
     shaped_height_bits: u32,
+}
+
+/// A text, how it is drawn, and the width it is drawn across — everything
+/// about its pixels but which of its lines show.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TextDrawing {
+    look: TextLook,
+    tex_width: u32,
     /// The box's own width, which the texture's is only rounded from: it is
     /// what a line starting at the right is drawn against.
     box_width_bits: u32,
@@ -117,7 +125,7 @@ struct TextLook {
 pub struct TextQuadRenderer {
     // Rasterized text textures reused across frames
     text_cache: rustc_hash::FxHashMap<TextCacheKey, CacheEntry>,
-    /// The texts this frame rasterized, in whatever box.
+    /// The texts this frame cached in a box they had not been drawn in.
     rasterized: Vec<TextLook>,
     /// The glyphon side, built on the first texture rasterized and not before.
     shaper: Option<Shaper>,
@@ -175,7 +183,7 @@ impl TextQuadRenderer {
             }
             entry.idle_anywhere += 1;
             if entry.surface == surface {
-                if rasterized.contains(&key.look) {
+                if rasterized.contains(&key.drawing.look) {
                     return false;
                 }
                 entry.idle += 1;
@@ -248,27 +256,29 @@ impl TextQuadRenderer {
         let weight = super::text::drawn_weight(entry.font_weight);
 
         let cache_key = TextCacheKey {
-            look: TextLook {
-                text: entry.text.clone(),
-                font_size_bits: scaled_font_size.to_bits(),
-                weight: weight.0,
-                style: entry.font_style,
-                features: entry.font_features,
-                family: entry.font_family,
-                line_height: entry.line_height.key(),
-                letter_spacing_bits: entry.letter_spacing.to_bits(),
-                align: entry.align,
-                color: [
-                    (entry.color.r * 255.0) as u8,
-                    (entry.color.g * 255.0) as u8,
-                    (entry.color.b * 255.0) as u8,
-                    (entry.color.a * 255.0) as u8,
-                ],
+            drawing: TextDrawing {
+                look: TextLook {
+                    text: entry.text.clone(),
+                    font_size_bits: scaled_font_size.to_bits(),
+                    weight: weight.0,
+                    style: entry.font_style,
+                    features: entry.font_features,
+                    family: entry.font_family,
+                    line_height: entry.line_height.key(),
+                    letter_spacing_bits: entry.letter_spacing.to_bits(),
+                    align: entry.align,
+                    color: [
+                        (entry.color.r * 255.0) as u8,
+                        (entry.color.g * 255.0) as u8,
+                        (entry.color.b * 255.0) as u8,
+                        (entry.color.a * 255.0) as u8,
+                    ],
+                },
+                tex_width,
+                box_width_bits: entry.rect.width.to_bits(),
+                fit: entry.fit.map(|fit| fit.key()),
             },
-            tex_width,
             shaped_height_bits: shaped_height.to_bits(),
-            box_width_bits: entry.rect.width.to_bits(),
-            fit: entry.fit.map(|fit| fit.key()),
         };
 
         if let Some(kept) = self.text_cache.get_mut(&cache_key) {
@@ -298,11 +308,23 @@ impl TextQuadRenderer {
             entry.fit,
             effective_scale,
         );
-        let lines = buffer
+        let bottom = buffer
             .layout_runs()
             .map(|run| run.line_top + run.line_height)
             .fold(0.0, f32::max);
-        let tex_height = ((lines * TEXT_MARGIN + padding * 2.0).ceil() as u32).max(1);
+        let tex_height = ((bottom * TEXT_MARGIN + padding * 2.0).ceil() as u32).max(1);
+
+        // Another height that kept the same lines drew the same picture, in a
+        // texture as tall: which lines show is cosmic-text's to say, so it is
+        // asked rather than worked out again here.
+        let same_picture = self.text_cache.iter().find_map(|(key, kept)| {
+            (key.drawing == cache_key.drawing && kept.texture.size == (tex_width, tex_height))
+                .then(|| kept.texture.clone())
+        });
+        if let Some(cached) = same_picture {
+            self.cache(cache_key, cached.clone());
+            return self.build_quad(entry, cached, padding, scale_factor);
+        }
 
         // Create offscreen texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -364,18 +386,23 @@ impl TextQuadRenderer {
             bind_group,
             size: (tex_width, tex_height),
         });
-        self.rasterized.push(cache_key.look.clone());
+        self.cache(cache_key, cached.clone());
+        self.build_quad(entry, cached, padding, scale_factor)
+    }
+
+    /// Keep `texture` under `key`, as drawn by this frame.
+    fn cache(&mut self, key: TextCacheKey, texture: std::rc::Rc<CachedTextTexture>) {
+        self.rasterized.push(key.drawing.look.clone());
         self.text_cache.insert(
-            cache_key,
+            key,
             CacheEntry {
-                texture: cached.clone(),
+                texture,
                 drawn: true,
                 surface: 0,
                 idle: 0,
                 idle_anywhere: 0,
             },
         );
-        self.build_quad(entry, cached, padding, scale_factor)
     }
 
     /// Build the per-frame quad (vertices depend on position/transform, the
@@ -619,6 +646,46 @@ mod a_texture_nobody_draws_is_released {
             drop(quads);
             renderer.end_frame(BAR);
         }
+    }
+
+    /// Above the floor a box's height is the height the text is shaped in,
+    /// and decides which lines show; a height that shows the same lines is
+    /// the same picture, and one that shows another line is not.
+    #[test]
+    fn a_box_above_the_floor_is_rasterized_again_only_for_another_line() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let mut renderer = renderer(&gpu);
+        let paragraph = |height: f32| {
+            let mut entry = turned(height);
+            entry.text = "a\nb\nc".into();
+            entry.font_size = 40.0;
+            entry
+        };
+        let mut texture_at = |height: f32| {
+            renderer.begin_frame();
+            let mut quads = Vec::new();
+            let texts = [paragraph(height)];
+            renderer.prepare(&gpu.device, &gpu.queue, &texts, &[0], 1.0, &mut quads);
+            let texture = std::rc::Rc::clone(&quads[0].cached);
+            drop(quads);
+            renderer.end_frame(BAR);
+            texture
+        };
+
+        let two_lines = texture_at(60.0);
+        for height in 61..70 {
+            assert!(
+                std::rc::Rc::ptr_eq(&two_lines, &texture_at(height as f32)),
+                "a box {height} tall shows the lines one 60 tall does, and was rasterized again"
+            );
+        }
+        let three_lines = texture_at(140.0);
+        assert!(
+            !std::rc::Rc::ptr_eq(&two_lines, &three_lines),
+            "a box that shows a third line drew the texture of two"
+        );
     }
 
     /// Two boxes of one text above the floor, drawn in one frame, are both
