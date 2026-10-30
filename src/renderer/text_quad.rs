@@ -508,7 +508,7 @@ impl TextQuadRenderer {
     }
 
     /// How many texts are rasterized and kept.
-    #[cfg(feature = "testing")]
+    #[cfg(any(test, feature = "testing"))]
     pub(super) fn texture_count(&self) -> usize {
         self.text_cache.len()
     }
