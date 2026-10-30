@@ -2714,6 +2714,44 @@ fn text_is_cut_by_the_corners_of_its_card() {
     );
 }
 
+/// A label squeezed into a box shorter than itself is cut by its card, not by
+/// its box, whichever path draws it.
+///
+/// Each card holds a label 28 tall in a box 10 tall, as a panel that closes
+/// squeezes it. Left: square corners, so glyphon draws it and the card alone
+/// cuts it. Middle: corners that reach its letters, which send it to the quad
+/// path. Right: the card turned, which does too. The quad used to shape the
+/// label in its box's height and cut every letter at the box's bottom edge
+/// (#913); all three show the whole line.
+#[test]
+fn a_squeezed_label_is_cut_by_its_card_not_its_box() {
+    let card = |corners: f32, degrees: f32| {
+        box_of(120.0, 56.0)
+            .corners(Corners::rounded(corners))
+            .background(Color::rgb(0.18, 0.20, 0.28))
+            .overflow(Overflow::Hidden)
+            .rotate(degrees)
+            .padding(6.0)
+            .child(container().height(10.0).child(label("Mgyp", 28.0).nowrap()))
+    };
+
+    let view = container()
+        .background(BACKDROP)
+        .padding(24.0)
+        .layout(Flex::row().spacing(24.0))
+        .child(card(0.0, 0.0))
+        .child(card(20.0, 0.0))
+        .child(card(0.0, 8.0));
+
+    golden(
+        "a_squeezed_label_is_cut_by_its_card_not_its_box",
+        (456.0, 104.0),
+        1.0,
+        BACKDROP,
+        view,
+    );
+}
+
 /// Two cards over stripes, one upright and one turned, each filtering the
 /// surface's own content through its own shape.
 ///

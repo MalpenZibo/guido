@@ -79,12 +79,9 @@ pub(super) fn line_width(
     }
 }
 
-/// The height glyphon is given to shape an uncut text of this layout box in, in
-/// physical pixels — the box's, and never under 50 logical pixels.
-///
-/// The transformed path's is
-/// [`text_quad::buffer_height`](super::text_quad::buffer_height), and a frost
-/// is shaped in whichever of the two draws its letters.
+/// The height an uncut text of this layout box is shaped in, in physical
+/// pixels — the box's, and never under 50 logical pixels — by every path that
+/// draws it: glyphon, the quad, and the frost under either.
 pub(super) fn buffer_height(rect: Rect, scale: f32) -> f32 {
     rect.height.max(50.0) * scale
 }
@@ -1357,20 +1354,6 @@ mod line_width_tests {
         assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 10.0), 1.0), 50.0);
         assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 10.0), 2.0), 100.0);
         assert_eq!(buffer_height(Rect::new(0.0, 0.0, 50.0, 80.0), 0.5), 40.0);
-    }
-
-    /// The two paths give an uncut text different heights, which is why a
-    /// coverage mask has to pick one rather than assume. If this ever passes,
-    /// `text_mask` no longer has a choice to get wrong — and the comment saying
-    /// it does is stale. Their widths are one function's.
-    #[test]
-    fn the_transformed_shaper_asks_for_another_height() {
-        let rect = Rect::new(0.0, 0.0, 72.0, 30.0);
-        assert_ne!(
-            buffer_height(rect, 4.0),
-            super::super::text_quad::buffer_height(rect, 4.0),
-            "a 30-point box: 200 texels through this one and 132 through the other"
-        );
     }
 }
 

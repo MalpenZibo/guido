@@ -24,7 +24,7 @@ use super::textured_vertex::{NO_TINT, QuadClip, TexturedVertex};
 use super::tree::NodeId;
 use super::types::TextEntry;
 use crate::render_stats::Pipeline;
-use crate::widgets::{Rect, TextAlign};
+use crate::widgets::TextAlign;
 
 /// How many rasterized texts the cache holds before a frame keeps only its
 /// own, whatever their idle frames say.
@@ -32,30 +32,6 @@ const CACHE_BOUND: usize = 512;
 
 /// Margin multiplier is imported from constants
 const TEXT_MARGIN: f32 = TEXT_BUFFER_MARGIN_MULTIPLIER;
-
-/// The height a transformed text is shaped in when it is not cut, in texture
-/// pixels — `scale_factor * TEXT_SUPERSAMPLE` of them per logical pixel: the
-/// room its texture has, the box widened by [`TEXT_MARGIN`].
-///
-/// Its width is no business of this path's. A text is shaped in the width it
-/// was laid out in, as every path shapes it — see
-/// [`text::line_width`](super::text::line_width) — and placed in its box by
-/// [`text::paint_offset`](super::text::paint_offset). The untransformed path's
-/// height is [`text::buffer_height`](super::text::buffer_height), and a frosted
-/// text's mask is shaped in whichever of the two draws its letters — see
-/// [`text_mask`](super::text_mask).
-pub(super) fn buffer_height(rect: Rect, effective_scale: f32) -> f32 {
-    texture_room(rect, effective_scale).1
-}
-
-/// The room a transformed text is rasterized into, before padding: its box
-/// widened by [`TEXT_MARGIN`].
-fn texture_room(rect: Rect, effective_scale: f32) -> (f32, f32) {
-    (
-        rect.width * effective_scale * TEXT_MARGIN,
-        rect.height * effective_scale * TEXT_MARGIN,
-    )
-}
 
 /// A prepared text quad ready for rendering: the texture it samples, and
 /// where its corners are among the frame's quads.
@@ -85,6 +61,8 @@ struct CachedTextTexture {
     #[allow(dead_code)] // Kept alive for GPU usage
     texture: Texture,
     bind_group: std::rc::Rc<BindGroup>,
+    /// Its size in texels: a width from the box, a height from the lines.
+    size: (u32, u32),
 }
 
 /// A rasterized text in the cache, and how long it has waited for a frame to
@@ -109,7 +87,10 @@ struct CacheEntry {
 struct TextCacheKey {
     look: TextLook,
     tex_width: u32,
-    tex_height: u32,
+    /// The height it is shaped in, which decides which lines it keeps: the
+    /// same for every box under glyphon's floor, so a box that animates there
+    /// is one texture.
+    shaped_height_bits: u32,
     /// The box's own width, which the texture's is only rounded from: it is
     /// what a line starting at the right is drawn against.
     box_width_bits: u32,
@@ -254,12 +235,15 @@ impl TextQuadRenderer {
         // Scale font size for crisp rendering
         let scaled_font_size = entry.font_size * effective_scale;
 
-        // Texture dimensions are deterministic from the entry, so they can
+        // What the texture holds is deterministic from the entry, so it can
         // key the cache before any shaping happens
-        let (room_width, room_height) = texture_room(entry.rect, effective_scale);
         let padding = TEXT_TEXTURE_PADDING * effective_scale;
+        let room_width = entry.rect.width * effective_scale * TEXT_MARGIN;
         let tex_width = ((room_width + padding * 2.0).ceil() as u32).max(1);
-        let tex_height = ((room_height + padding * 2.0).ceil() as u32).max(1);
+        // The height glyphon shapes it in, not its box's: a box shorter than
+        // its text cuts its letters only where a clip does, as it does
+        // upright, and the texture is as tall as the lines that shaping kept.
+        let shaped_height = super::text::buffer_height(entry.rect, effective_scale);
 
         let weight = super::text::drawn_weight(entry.font_weight);
 
@@ -282,7 +266,7 @@ impl TextQuadRenderer {
                 ],
             },
             tex_width,
-            tex_height,
+            shaped_height_bits: shaped_height.to_bits(),
             box_width_bits: entry.rect.width.to_bits(),
             fit: entry.fit.map(|fit| fit.key()),
         };
@@ -290,7 +274,7 @@ impl TextQuadRenderer {
         if let Some(kept) = self.text_cache.get_mut(&cache_key) {
             kept.drawn = true;
             let cached = kept.texture.clone();
-            return self.build_quad(entry, cached, tex_width, tex_height, padding, scale_factor);
+            return self.build_quad(entry, cached, padding, scale_factor);
         }
 
         // Cache miss: shape and rasterize
@@ -310,13 +294,15 @@ impl TextQuadRenderer {
             entry.line_height,
             entry.letter_spacing,
             entry.align,
-            (
-                Some(box_width),
-                Some(buffer_height(entry.rect, effective_scale)),
-            ),
+            (Some(box_width), Some(shaped_height)),
             entry.fit,
             effective_scale,
         );
+        let lines = buffer
+            .layout_runs()
+            .map(|run| run.line_top + run.line_height)
+            .fold(0.0, f32::max);
+        let tex_height = ((lines * TEXT_MARGIN + padding * 2.0).ceil() as u32).max(1);
 
         // Create offscreen texture
         let texture = device.create_texture(&TextureDescriptor {
@@ -376,6 +362,7 @@ impl TextQuadRenderer {
         let cached = std::rc::Rc::new(CachedTextTexture {
             texture,
             bind_group,
+            size: (tex_width, tex_height),
         });
         self.rasterized.push(cache_key.look.clone());
         self.text_cache.insert(
@@ -388,18 +375,15 @@ impl TextQuadRenderer {
                 idle_anywhere: 0,
             },
         );
-        self.build_quad(entry, cached, tex_width, tex_height, padding, scale_factor)
+        self.build_quad(entry, cached, padding, scale_factor)
     }
 
     /// Build the per-frame quad (vertices depend on position/transform, the
     /// texture itself is cached).
-    #[allow(clippy::too_many_arguments)]
     fn build_quad(
         &mut self,
         entry: &TextEntry,
         cached: std::rc::Rc<CachedTextTexture>,
-        tex_width: u32,
-        tex_height: u32,
         padding: f32,
         scale_factor: f32,
     ) -> PreparedTextQuad {
@@ -415,6 +399,7 @@ impl TextQuadRenderer {
         // The texture is rendered at (scale_factor * TEXT_SUPERSAMPLE) resolution.
         // The transform's scale is applied by transform_point() on quad corners, not here.
         let total_scale = TEXT_SUPERSAMPLE;
+        let (tex_width, tex_height) = cached.size;
         let display_width = tex_width as f32 / total_scale;
         let display_height = tex_height as f32 / total_scale;
 
@@ -593,13 +578,15 @@ mod a_texture_nobody_draws_is_released {
         test_entry(Rect::new(0.0, 0.0, 20.0, height), Transform::scale(2.0))
     }
 
+    /// Above glyphon's floor of 50, where the box's height is the height the
+    /// text is shaped in and every frame of an animation is a new texture.
     #[test]
     fn a_text_whose_box_animates_holds_one_texture() {
         let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
             return;
         };
         let mut renderer = renderer(&gpu);
-        for height in 1..40 {
+        for height in 60..100 {
             frame(&gpu, &mut renderer, BAR, &[turned(height as f32)]);
             assert_eq!(
                 renderer.texture_count(),
@@ -609,17 +596,43 @@ mod a_texture_nobody_draws_is_released {
         }
     }
 
-    /// Two boxes of one text drawn in one frame are both drawn, and keep
-    /// theirs; and a box on another surface is not one this surface replaced.
+    /// Under the floor every box is shaped in the same height, so a box that
+    /// animates there is drawn from the texture its first frame rasterized.
+    #[test]
+    fn a_box_that_animates_under_the_floor_is_rasterized_once() {
+        let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
+            return;
+        };
+        let mut renderer = renderer(&gpu);
+        let mut first = None;
+        for height in 1..40 {
+            renderer.begin_frame();
+            let mut quads = Vec::new();
+            let texts = [turned(height as f32)];
+            renderer.prepare(&gpu.device, &gpu.queue, &texts, &[0], 1.0, &mut quads);
+            let texture = std::rc::Rc::as_ptr(&quads[0].cached);
+            assert_eq!(
+                *first.get_or_insert(texture),
+                texture,
+                "a box {height} tall was rasterized again"
+            );
+            drop(quads);
+            renderer.end_frame(BAR);
+        }
+    }
+
+    /// Two boxes of one text above the floor, drawn in one frame, are both
+    /// drawn and keep theirs; and a box on another surface is not one this
+    /// surface replaced.
     #[test]
     fn a_text_in_two_boxes_drawn_together_or_apart_keeps_both() {
         let Some(gpu) = crate::or_skip(GpuContext::try_new()) else {
             return;
         };
         let mut renderer = renderer(&gpu);
-        frame(&gpu, &mut renderer, BAR, &[turned(10.0), turned(20.0)]);
-        frame(&gpu, &mut renderer, PANEL, &[turned(30.0)]);
-        frame(&gpu, &mut renderer, BAR, &[turned(10.0), turned(20.0)]);
+        frame(&gpu, &mut renderer, BAR, &[turned(60.0), turned(70.0)]);
+        frame(&gpu, &mut renderer, PANEL, &[turned(80.0)]);
+        frame(&gpu, &mut renderer, BAR, &[turned(60.0), turned(70.0)]);
         assert_eq!(renderer.texture_count(), 3);
     }
 
@@ -732,25 +745,5 @@ mod nothing_turned_nothing_built {
             0,
             "three frames without a turned text, and an atlas was made for one"
         );
-    }
-}
-
-#[cfg(test)]
-mod buffer_height_tests {
-    use super::{TEXT_MARGIN, buffer_height};
-    use crate::widgets::Rect;
-
-    /// No floor on this path — a transformed text is rasterized into a texture
-    /// of its own size — and the margin is a factor on the box, not a border
-    /// added to it, so it grows with the text rather than mattering only to
-    /// small ones.
-    #[test]
-    fn the_margin_is_a_factor_on_the_box_and_the_scale_multiplies_both() {
-        let rect = Rect::new(0.0, 0.0, 100.0, 40.0);
-        assert_eq!(buffer_height(rect, 1.0), 40.0 * TEXT_MARGIN);
-        assert_eq!(buffer_height(rect, 4.0), 160.0 * TEXT_MARGIN);
-        // A short box stays short: nothing floors it up to 50 the way the
-        // untransformed path does.
-        assert!(buffer_height(Rect::new(0.0, 0.0, 10.0, 4.0), 1.0) < 10.0);
     }
 }

@@ -1348,14 +1348,9 @@ fn command_to_text_backdrop(cmd: &FlattenedCommand, scale: f32) -> Option<TextBa
             letter_spacing: *letter_spacing,
             fit: *fit,
             align: *align,
-            // The height of whichever path will draw the glyphs over the
-            // frost: the two give an uncut text different heights, and the
-            // frost has to keep the lines the letters keep.
-            buffer_height: if cmd.world_transform.is_translation_only() {
-                super::text::buffer_height(*rect, density)
-            } else {
-                super::text_quad::buffer_height(*rect, density)
-            },
+            // The height both paths shape the glyphs over the frost in, so
+            // the frost keeps the lines the letters keep.
+            buffer_height: super::text::buffer_height(*rect, density),
             box_width: rect.width * density,
             size: (width as u32, height as u32),
             offset: (slack * density, slack * density),
