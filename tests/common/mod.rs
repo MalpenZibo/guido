@@ -94,12 +94,20 @@ impl Harness {
     /// and must not subscribe to them. Outside one those reads trip the
     /// non-reactive-read diagnostic, which would be the harness reporting on
     /// itself.
+    ///
+    /// A release that ends a chord is followed, as in the loop, by the hover
+    /// worked out again where the held button put it off.
     pub fn send(&mut self, event: Event) -> EventResponse {
         let root = self.root;
         guido::reactive::diagnostics::snapshot_zone(|| {
-            self.tree
+            let response = self
+                .tree
                 .dispatch(root, &event)
-                .expect("the root is registered")
+                .expect("the root is registered");
+            if self.tree.chord_ended() {
+                self.tree.recheck_hover(root);
+            }
+            response
         })
     }
 
@@ -177,6 +185,18 @@ impl Harness {
         let mut node = RenderNode::new(root.as_u64());
         self.tree.paint_widget(root, &mut node, 1.0);
         self.tree.set_frame_instant(None);
+        node
+    }
+
+    /// Paint, then work the hover out again where the pointer is if something
+    /// moved under it, as the loop does once a frame has been drawn: at an
+    /// instant, inside a snapshot zone. Hands back what was drawn.
+    pub fn frame(&mut self) -> RenderNode {
+        let node = self.paint();
+        let root = self.root;
+        self.tree.set_event_instant(Some(std::time::Instant::now()));
+        guido::reactive::diagnostics::snapshot_zone(|| self.tree.recheck_hover(root));
+        self.tree.set_event_instant(None);
         node
     }
 

@@ -818,11 +818,19 @@ pub enum Key {
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Mouse/pointer moved
+    /// Mouse/pointer moved — or, with `recheck`, stayed still while what is
+    /// under it moved.
     MouseMove {
         at: Option<Point>,
         /// What is moving — see [`PointerKind`].
         pointer: PointerKind,
+        /// The pointer did not move: what is under it did, and this is the
+        /// hover and the cursor being worked out again where it rests, once a
+        /// frame has been drawn, or at the release that lets go of the last
+        /// mouse button held while it moved (#842). Blink and Gecko mark their synthetic
+        /// moves the same way. A widget that follows the pointer itself, as
+        /// `on_pointer_move` does, has nothing to hear in one.
+        recheck: bool,
     },
     /// Mouse button pressed
     MouseDown {
@@ -929,6 +937,7 @@ impl Event {
         Event::MouseMove {
             at: Some(Point::new(x, y)),
             pointer: PointerKind::Mouse,
+            recheck: false,
         }
     }
 
@@ -949,6 +958,7 @@ impl Event {
         Event::MouseMove {
             at: Some(Point::new(x, y)),
             pointer: PointerKind::Finger,
+            recheck: false,
         }
     }
 
@@ -1047,9 +1057,12 @@ impl Event {
     /// without a position, so every bounds test below answers no.
     pub fn with_coords(&self, at: Option<Point>) -> Self {
         match self {
-            Event::MouseMove { pointer, .. } => Event::MouseMove {
+            Event::MouseMove {
+                pointer, recheck, ..
+            } => Event::MouseMove {
                 at,
                 pointer: *pointer,
+                recheck: *recheck,
             },
             Event::MouseDown {
                 button,

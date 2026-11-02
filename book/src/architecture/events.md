@@ -18,12 +18,21 @@ Wayland → Platform → App → Widget Tree
 ### Mouse Movement
 
 ```text
-Event::MouseMove { at, pointer };
+Event::MouseMove { at, pointer, recheck };
 Event::MouseEnter { at };
 Event::MouseLeave
 ```
 
 Tracked for hover states. The platform layer determines which widget the cursor is over.
+
+A `MouseMove` is also what works the hover out again under a pointer that
+stayed still: once a frame has been drawn after something moved on the surface
+— a scroll, a widget's place or size — the loop dispatches one to the point the
+pointer rests at, with `recheck` set, so a widget that follows the pointer
+itself, as `on_pointer_move` does, can tell it did not move. With a button
+held it waits, and the release of the last mouse button dispatches it, frame
+or not, unless that click closes the surface.
+Blink and Gecko mark their synthetic moves the same way.
 
 ### Mouse Buttons
 
@@ -97,8 +106,10 @@ so a transformed child is found where it is drawn. Children in no order are
 tested one by one against the same reach.
 
 *The pointer record* keeps two sets of offers, as Flutter's `MouseTracker` and
-`GestureBinding` do. The last event's offers make a widget the pointer just
-left see the move that takes its hover away, however far the pointer went. The
+`GestureBinding` do. The last move's offers make a widget the pointer just
+left see the move that takes its hover away, however far the pointer went; a
+press, a release or a scroll since only adds its own, which the next of them
+replaces, as none of them works the hover out. The
 press's offers, kept until the release, make a drag reach the widget it started
 on wherever it goes. A mouse has one press route however many of its buttons
 are down: the first button pressed decides it, it is kept until the last one is
@@ -293,6 +304,7 @@ fn pointer_motion(x: f32, y: f32) {
     self.dispatch(Event::MouseMove {
         at: Some(Point::new(x, y)),
         pointer: PointerKind::Mouse,
+        recheck: false,
     });
 }
 

@@ -575,6 +575,20 @@ pub trait Stateful: Sized {
     fn push_state_style(&mut self, when: StateWhen, style: Self::Style);
 
     /// While the pointer is inside the control.
+    ///
+    /// A style that changes the widget's size, such as a text's `font_size`,
+    /// moves its edge, and under a pointer resting near that edge it
+    /// flickers: once a frame has drawn it hovered and smaller,
+    /// the hover is worked out again where the pointer rests (#842), the
+    /// pointer is outside, the widget goes back to its size, and the pointer is
+    /// inside again, every frame for as long as it rests there. A CSS `:hover`
+    /// that resizes its element does the same.
+    ///
+    /// A style that draws the widget elsewhere — `translate`, `scale` — moves
+    /// nothing, and does not flicker. But the hover is still worked out where
+    /// the widget is drawn: a layout elsewhere on the surface, after which it
+    /// is worked out again, can find a pointer resting in the strip a lift
+    /// uncovered outside the lifted widget, and the next can find it inside.
     fn when_hovered(mut self, f: impl FnOnce(Self::Style) -> Self::Style) -> Self {
         self.push_state_style(StateWhen::Hovered, f(Self::Style::default()));
         self

@@ -35,6 +35,9 @@ Per-surface rendering:
                                      present() commits the surface
 14. cache_paint_results()          → Rc-share rendered nodes into the cache,
                                      clear needs_paint flags
+15. Tree::recheck_hover()          → If something moved under a still pointer
+                                     on this surface, work the hover and the
+                                     cursor out again where it rests (#842)
 ```
 
 Rendering is paced by the compositor's `wl_surface.frame` callbacks: after each

@@ -883,11 +883,16 @@ fn dispatch_events(
         reactive::diagnostics::snapshot_zone(|| {
             let response = tree.dispatch(root, event);
 
+            // The release that ends a chord owes what the held button put
+            // off — unless the click it made asked for the surface to close.
+            let rechecked = tree.chord_ended() && !closing() && tree.recheck_hover(root);
+
             // The dispatch just asked every widget under the point, and the
             // innermost one that declares a cursor said so last — unless it
             // was a press or release inside a chord, which asked only the
-            // press route (#625).
-            if event.coords().is_some() && tree.asked_under_the_point() {
+            // press route (#625). A re-check asked them where the pointer
+            // rests, whatever the release said of where it was.
+            if (event.coords().is_some() || rechecked) && tree.asked_under_the_point() {
                 reactive::cursor::point_at(tree.cursor_under_the_point());
             }
 
@@ -2688,6 +2693,7 @@ fn render_surface<P: Platform>(
         return;
     }
 
+    let resized = geometry.needs_resize;
     // The size the frame is drawn at moves with a resize it asked for, so the
     // buffer it presents is the one that size is committed with.
     if let Some((width, height)) = layout_pass(ctx, &frame, has_pending_layouts, layout_roots) {
@@ -2696,11 +2702,43 @@ fn render_surface<P: Platform>(
         geometry = resolve_geometry(ctx.id, ctx.surface, &frame);
         geometry.scale_changed |= scale_changed;
     }
+    // A resize moves the surface itself — one anchored at its bottom grows
+    // upwards, in this same frame since #901 — and a point inside it may no
+    // longer be the pointer's.
+    if resized || geometry.needs_resize {
+        ctx.tree.forget_where_the_pointer_is(root);
+    }
     paint_and_present(ctx, &frame, geometry);
     // The frame is over, and so is its instant. Leaving it set would let a
     // later call read a time that has nothing to do with it, silently — the
     // failure a stale clock always has.
     ctx.tree.set_frame_instant(None);
+
+    // A surface that asked to close takes no more input (#675), and this is
+    // input of a kind.
+    if !close_requested(&*ctx.wayland_state, ctx.id) {
+        recheck_hover(ctx.tree, root, at);
+    }
+}
+
+/// Work the hover and the cursor out again where the pointer is, once a frame
+/// has been drawn, if something moved under a pointer that stayed still: a
+/// wheel step, a glide, a layout — a row that grew, a child built in another's
+/// place (#842, #844). See [`Tree::recheck_hover`].
+///
+/// After the frame rather than inside it, as Chromium's `BeginMainFrame`,
+/// Gecko's refresh tick and Flutter's post-frame `MouseTracker` update have
+/// it: a hover that changes asks for the next frame, and nothing is asked
+/// where nothing marked the surface, so a pointer at rest lets the loop
+/// sleep.
+fn recheck_hover(tree: &mut Tree, root: WidgetId, at: std::time::Instant) {
+    tree.set_event_instant(Some(at));
+    reactive::diagnostics::snapshot_zone(|| {
+        if tree.recheck_hover(root) {
+            reactive::cursor::point_at(tree.cursor_under_the_point());
+        }
+    });
+    tree.set_event_instant(None);
 }
 
 /// The application: the loop, its surfaces and the reactive state they run on.

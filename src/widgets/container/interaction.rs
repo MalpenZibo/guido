@@ -170,7 +170,8 @@ impl Container {
     /// that belongs to a press somewhere else (#716). Each child the pointer
     /// record owes an event is told the pointer left, and passes it on down
     /// the same way, so the walk is the record's and not the subtree's. A
-    /// hover is told once; a press is told again on each event until its
+    /// hover is told until the next move or enter, the events that settle
+    /// what a move offered; a press is told again on each event until its
     /// button comes up, because the record holds it that long, and every
     /// `MouseLeave` arm is change-guarded. After that, the events that keep
     /// arriving over a switched-off container ask one search of the record and
@@ -282,7 +283,7 @@ impl Container {
                     tree.hover_changed(id, true, callback);
                 }
             }
-            Event::MouseMove { at, .. } => {
+            Event::MouseMove { at, recheck, .. } => {
                 // A pressed container keeps receiving moves that leave it —
                 // that implicit capture is what makes dragging work. A move
                 // with no position is not one of those: there is nowhere to
@@ -291,7 +292,10 @@ impl Container {
                 // One question, asked once and answered twice below.
                 let inside = hit.contains(*at);
 
+                // Not for a frame working the hover out again: the pointer
+                // did not move.
                 if let Some(ref callback) = ix.on_pointer_move
+                    && !recheck
                     && (inside || ix.is_pressed())
                     && let Some(at) = at
                 {
@@ -505,6 +509,7 @@ impl Container {
                         // animation pass to advance — it begins on the
                         // end-of-gesture, which asks for its own frames.
                         request_job(id, JobRequest::Paint);
+                        tree.mark_hover_stale(id);
                         return EventResponse::Handled;
                     }
 
@@ -526,6 +531,7 @@ impl Container {
                 }
                 if tree.routing_the_focus_path() && self.scroll_by_key(*key, *modifiers, now) {
                     request_job(id, JobRequest::Paint);
+                    tree.mark_hover_stale(id);
                     return EventResponse::Handled;
                 }
             }

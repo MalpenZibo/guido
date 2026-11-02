@@ -354,6 +354,8 @@ pub(crate) fn cancel_scheduled_jobs(widget_id: WidgetId) {
 /// requests target already-removed ids and no-op; stale queued jobs no-op
 /// too via the tree's generation check.
 pub(crate) fn teardown_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
+    // Whatever it covered is under the pointer now.
+    tree.mark_hover_stale(root);
     for id in tree.collect_subtree_post_order(root) {
         clear_widget_subscribers(id);
         cancel_scheduled_jobs(id);
@@ -398,6 +400,8 @@ fn owned_scope(tree: &crate::tree::Tree, id: WidgetId) -> Option<crate::reactive
 /// was made in the first place. The effects the detach paused are not read
 /// again but resumed: one a write reached while it was paused runs now, once.
 pub(crate) fn reattach_widget_subtree(tree: &mut crate::tree::Tree, root: WidgetId) {
+    // Taking events again, it is what is under the pointer where it covers.
+    tree.mark_hover_stale(root);
     // One batch, so what missed a run runs once the whole subtree is resumed.
     crate::reactive::runtime::batch(|| reattach_each(tree, root));
 }

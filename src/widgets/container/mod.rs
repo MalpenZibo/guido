@@ -1427,6 +1427,20 @@ impl Container {
         self
     }
 
+    /// Called with `true` when the pointer comes over the container and
+    /// `false` when it leaves — including when a scroll or a layout moves
+    /// what is under a still pointer, once the frame that moved it has been
+    /// drawn (#842). An animation that only draws a box elsewhere — a
+    /// transform, a slide — is followed at the next pointer event; one that
+    /// changes a size is a layout, and is followed as one.
+    ///
+    /// A callback that takes the container from under a pointer resting on it
+    /// — makes it smaller, or shows something on top of it — is answered once
+    /// the frame has drawn that: the pointer is off it, the callback undoes
+    /// it, and the pointer is on it again, every frame for as long as it
+    /// rests there. As with
+    /// [`when_hovered`](crate::widgets::Stateful::when_hovered) and a style
+    /// that changes the size.
     pub fn on_hover<F: Fn(bool) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_hover = Some(Rc::new(callback));
         self
@@ -1437,6 +1451,11 @@ impl Container {
         self
     }
 
+    /// Called with the pointer's position, in this container's coordinates,
+    /// each time it moves inside the container, or anywhere while a press on
+    /// the container is held. Not when what is under a still pointer moves —
+    /// a scroll, a layout — though the hover is worked out again then: the
+    /// pointer did not move.
     pub fn on_pointer_move<F: Fn(f32, f32) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_pointer_move = Some(Rc::new(callback));
         self
@@ -1980,7 +1999,12 @@ impl Widget for Container {
             let has_scroll_velocity =
                 sd.scroll_state.velocity_x.abs() > 0.5 || sd.scroll_state.velocity_y.abs() > 0.5;
             if has_scroll_velocity {
+                let was = (sd.scroll_state.offset_x, sd.scroll_state.offset_y);
                 let scroll_animating = sd.scroll_state.advance_momentum(now);
+                // A glide moves the content under a pointer that stays put.
+                if (sd.scroll_state.offset_x, sd.scroll_state.offset_y) != was {
+                    tree.mark_hover_stale(id);
+                }
                 if scroll_animating {
                     // Kinetic scroll is paint-only, request animation continuation with paint
                     request_job(id, JobRequest::Animation(RequiredJob::Paint));
@@ -2193,7 +2217,14 @@ impl Widget for Container {
             sd.scroll_state.content_height = content_size.height + padding.vertical_total();
             sd.scroll_state.viewport_width = child.seen_through.width;
             sd.scroll_state.viewport_height = child.seen_through.height;
+            let was = (sd.scroll_state.offset_x, sd.scroll_state.offset_y);
             sd.scroll_state.clamp_offsets();
+            // Content that shrank under the end it was scrolled to pulls what
+            // is left under the pointer, though no row need move within it:
+            // its padding can be what shrank.
+            if (sd.scroll_state.offset_x, sd.scroll_state.offset_y) != was {
+                ctx.tree().mark_hover_stale(id);
+            }
         }
 
         let size = self.resolve_size(ctx, &lengths, constraints, content_size, in_flight);

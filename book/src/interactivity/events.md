@@ -95,7 +95,37 @@ A container hidden or disabled while the pointer is on it ends the hover and
 the press of everything in it, itself included: `on_hover(false)` is called,
 and a press that was being held is dropped without a click, so nothing comes
 back hovered or pressed when it is shown or enabled again. That happens at the
-next pointer event to reach it, not at the instant it is hidden.
+next pointer event to reach it, or once a frame has been drawn after hiding it
+moved something on the surface, as the next paragraph says — not at the instant
+it is hidden.
+
+What is under a pointer that stays still can change: a wheel step, a touchpad's
+glide or the keyboard scrolls a list, a row above grows, a child is built in
+place of the one that was there. Once a frame has been drawn after something
+like that, the hover and the cursor are worked out again where the pointer is,
+so the row that went hears `on_hover(false)` and the one now under the pointer
+`on_hover(true)`, without waiting for the pointer to move. It is worked out once
+a frame, where the pointer is then: a row that a single wheel step carries
+right past the pointer is never under it when the hover is worked out, and
+hears nothing. A child removed with no exit hears nothing as it goes; what it uncovers does.
+`on_pointer_move` hears none of this: the pointer did not move. Nor does a
+hover style that draws the box elsewhere count — `when_hovered` drawing it
+lifted or scaled — or a box near the pointer's edge would take its hover back
+on one frame and give it back on the next. It is still worked out where the
+box is drawn, so a layout elsewhere on the surface can take the hover from a
+lifted box whose pointer rests in the strip the lift uncovered. One that
+changes the size does count, as any layout does, and under a pointer resting
+near the edge it flickers that way: a label whose `font_size` shrinks on hover,
+or an `on_hover` that makes its container smaller or shows something on top of
+it. A CSS `:hover` that resizes its element does the same. An animation that
+only draws a box elsewhere is not followed either: a box that slides, or that
+moves or enters by a transform, takes the hover when the pointer next moves,
+and so does a sibling that only comes to be drawn on top. One that changes a
+size is a layout, and is followed as one. With a button held nothing is
+worked out again, since a move then would carry on as a drag; the release of
+the mouse button does it, unless its click closes the surface. A finger lifted
+is over nothing. A surface that changed size works nothing out again until the
+next pointer event says where the pointer is.
 
 ### Hover with State Layer
 

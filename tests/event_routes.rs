@@ -21,16 +21,19 @@ use common::headless;
 
 const ROWS: usize = 1000;
 
-/// A row that counts every event it is offered.
-struct Counted(Rc<Cell<u32>>);
+/// A row that counts every event it is offered, and apart from them the moves
+/// a frame works the hover out again with.
+struct Counted(Rc<Cell<u32>>, Rc<Cell<u32>>);
 
 impl Widget for Counted {
     fn layout(&mut self, _ctx: &mut LayoutCtx, _constraints: Constraints) -> Size {
         Size::new(200.0, 20.0)
     }
 
-    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, _event: &Event) -> EventResponse {
-        self.0.set(self.0.get() + 1);
+    fn event(&mut self, _tree: &mut Tree, _id: WidgetId, event: &Event) -> EventResponse {
+        let recheck = matches!(event, Event::MouseMove { recheck: true, .. });
+        let count = if recheck { &self.1 } else { &self.0 };
+        count.set(count.get() + 1);
         EventResponse::Ignored
     }
 
@@ -42,39 +45,44 @@ fn no_event_visits_a_row_outside_its_route() {
     let Some(mut app) = headless() else { return };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
+    let rechecks = Rc::new(Cell::new(0));
+    let recheck_counter = rechecks.clone();
     let typed = create_signal(String::new());
-    let id =
-        app.surface(
-            SurfaceConfig::new()
-                .width(200)
-                .height(600)
-                .anchor(Anchor::TOP | Anchor::LEFT),
-            move || {
-                let counter = counter.clone();
-                container()
-                    .layout(Flex::column())
-                    // A field to hold the focus, and a container listening for
-                    // the keys it lets through.
-                    .child(
-                        container()
-                            .height(30.0)
-                            .width(fill())
-                            .on_key_down(|_, _, _| EventResponse::Handled)
-                            .child(text_input(typed)),
-                    )
-                    // And one hearing keys before what is inside it: the
-                    // way down to it stops at it.
-                    .child(
-                        container()
-                            .scroll(Scroll::vertical())
-                            .height(570.0)
-                            .on_key_down_capture(|_, _, _| EventResponse::Ignored)
-                            .child(container().layout(Flex::column()).children((0..ROWS).map(
-                                move |_| Box::new(Counted(counter.clone())) as Box<dyn Widget>,
-                            ))),
-                    )
-            },
-        );
+    let id = app.surface(
+        SurfaceConfig::new()
+            .width(200)
+            .height(600)
+            .anchor(Anchor::TOP | Anchor::LEFT),
+        move || {
+            let counter = counter.clone();
+            let recheck_counter = recheck_counter.clone();
+            container()
+                .layout(Flex::column())
+                // A field to hold the focus, and a container listening for
+                // the keys it lets through.
+                .child(
+                    container()
+                        .height(30.0)
+                        .width(fill())
+                        .on_key_down(|_, _, _| EventResponse::Handled)
+                        .child(text_input(typed)),
+                )
+                // And one hearing keys before what is inside it: the
+                // way down to it stops at it.
+                .child(
+                    container()
+                        .scroll(Scroll::vertical())
+                        .height(570.0)
+                        .on_key_down_capture(|_, _, _| EventResponse::Ignored)
+                        .child(container().layout(Flex::column()).children((0..ROWS).map(
+                            move |_| {
+                                Box::new(Counted(counter.clone(), recheck_counter.clone()))
+                                    as Box<dyn Widget>
+                            },
+                        ))),
+                )
+        },
+    );
     app.configure(id, 200, 600, 1.0);
     let mut at = Instant::now();
     app.step_at(at);
@@ -130,6 +138,7 @@ fn no_event_visits_a_row_outside_its_route() {
 
     for (index, (what, event)) in every_kind.into_iter().enumerate() {
         visits.set(0);
+        rechecks.set(0);
         send(event);
         if index == 0 {
             // The first is a move over the list: it reaches the rows under it,
@@ -142,6 +151,16 @@ fn no_event_visits_a_row_outside_its_route() {
             visits.get() <= 6,
             "{what} was offered to {} of {ROWS} rows",
             visits.get()
+        );
+        // And the hover worked out again after the frame it moved is a move:
+        // the same window, no more.
+        if what == "a wheel" {
+            assert!(rechecks.get() > 0, "the wheel's frame worked the hover out");
+        }
+        assert!(
+            rechecks.get() <= 6,
+            "the frame after {what} worked the hover out with {} of {ROWS} rows",
+            rechecks.get()
         );
     }
     assert_eq!(
