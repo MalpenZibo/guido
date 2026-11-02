@@ -2548,8 +2548,8 @@ impl Tree {
     }
 
     /// Whether the point being dispatched is one a container above clipped
-    /// away: a widget given it anyway is given it for a press it holds, and
-    /// the pointer is not over it.
+    /// away, or one a sibling drawn on top covers: a widget given it anyway
+    /// is given it for a press it holds, and the pointer is not over it.
     pub(crate) fn withholding(&self) -> bool {
         self.pointer.withholding
     }
