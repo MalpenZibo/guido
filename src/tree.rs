@@ -2547,6 +2547,13 @@ impl Tree {
         self.pointer.withholding = was;
     }
 
+    /// Whether the point being dispatched is one a container above clipped
+    /// away: a widget given it anyway is given it for a press it holds, and
+    /// the pointer is not over it.
+    pub(crate) fn withholding(&self) -> bool {
+        self.pointer.withholding
+    }
+
     /// The widest reach among this widget's children.
     pub(crate) fn children_reach(&self, id: WidgetId) -> f32 {
         self.get_dense_index(id)

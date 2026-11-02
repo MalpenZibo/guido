@@ -137,7 +137,7 @@ lets the point through to the layers beneath it. This is Flutter's rule; the
 DOM, GTK and Qt hit every box under the point and make passing through
 something to declare. A sibling the point is covered from is told what a point
 clipped away tells it: its hover falls, and a press it holds keeps the
-position. The cursor and the hover follow the same walk, so they agree with the
+position for its drag and its release, without the hover. The cursor and the hover follow the same walk, so they agree with the
 click about which widget is under the pointer.
 
 ## Hit Testing

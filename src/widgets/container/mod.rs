@@ -2294,6 +2294,7 @@ impl Widget for Container {
             corners: self.animated_corners(id),
             transform: placed.transform,
             pivot: placed.pivot,
+            withheld: tree.withholding(),
         };
 
         // Undo our own transform before hit testing against the laid-out
