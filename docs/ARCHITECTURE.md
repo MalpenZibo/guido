@@ -737,7 +737,8 @@ lays out lets the point through. A disabled container that draws answers
 `Hit` without asking its children, and a `TextInput` answers `Hit` for a point
 inside it that it did not take. What the walk stopped above is offered the
 event as a point clipped away is — under `Tree::begin_withholding`, so a hover
-it had falls and a press it holds keeps the position.
+it had falls and a press it holds keeps the position, for its drag and its
+release but not for its hover (#915).
 
 A positioned event is not offered to every child. A container whose children
 are ordered along an axis offers it to the ones that can be under the point —

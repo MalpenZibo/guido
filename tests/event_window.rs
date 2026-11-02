@@ -734,3 +734,151 @@ fn a_list_below_a_list_is_not_withheld_by_the_one_above() {
         "the lower list's row 2 is under the pointer"
     );
 }
+
+/// Ten rows in a 100-tall list under a 50-pixel header, on a 100×150 surface,
+/// scrolled 80 under a pointer resting on row 4: row 3 is drawn from 30 to 50,
+/// behind the header and outside the list's clip (#915).
+fn ten_rows_scrolled_under_a_header(log: Rc<RefCell<Log>>) -> (Headless, SurfaceId, Instant) {
+    let mut app = headless().expect("checked by the caller");
+    let rows = log.clone();
+    let id = app.surface(
+        SurfaceConfig::new()
+            .width(100)
+            .height(150)
+            .anchor(Anchor::TOP | Anchor::LEFT),
+        move || {
+            container()
+                .layout(Flex::column())
+                .child(container().height(50.0).width(fill()))
+                .child(list(logged_rows(rows.clone(), 10)).height(100.0))
+        },
+    );
+    app.configure(id, 100, 150, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [
+            Event::mouse_move(50.0, 60.0),
+            Event::scroll(50.0, 60.0, 0.0, 80.0, ScrollSource::Wheel),
+            Event::mouse_move(50.0, 60.0),
+        ],
+    );
+    (app, id, at)
+}
+
+/// The rows whose last word was that they are hovered.
+fn hovered(log: &Log) -> Vec<usize> {
+    let mut last = std::collections::BTreeMap::new();
+    for &(row, on) in &log.hover {
+        last.insert(row, on);
+    }
+    last.into_iter()
+        .filter(|&(_, on)| on)
+        .map(|(row, _)| row)
+        .collect()
+}
+
+#[test]
+fn a_drag_onto_the_header_hovers_no_row_the_list_clipped_away() {
+    if headless().is_none() {
+        return;
+    }
+    for y in [5.0, 25.0, 40.0, 49.0, 120.0] {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let (mut app, id, mut at) = ten_rows_scrolled_under_a_header(log.clone());
+        play(
+            &mut app,
+            id,
+            &mut at,
+            [
+                Event::mouse_down(50.0, 60.0, MouseButton::Left),
+                Event::mouse_move(50.0, y),
+                Event::mouse_up(50.0, y, MouseButton::Left),
+            ],
+        );
+        let expected: &[usize] = if y > 50.0 { &[7] } else { &[] };
+        assert_eq!(
+            hovered(&log.borrow()),
+            expected,
+            "released at y {y}: the header is over what the clip hides"
+        );
+        play(&mut app, id, &mut at, [Event::MouseLeave]);
+        assert_eq!(
+            hovered(&log.borrow()),
+            [] as [usize; 0],
+            "released at y {y}, and the pointer left"
+        );
+    }
+}
+
+#[test]
+fn a_drag_over_the_header_still_reaches_the_row_it_pressed() {
+    if headless().is_none() {
+        return;
+    }
+    let log = Rc::new(RefCell::new(Log::default()));
+    let (mut app, id, mut at) = ten_rows_scrolled_under_a_header(log.clone());
+    log.borrow_mut().moves.clear();
+    play(
+        &mut app,
+        id,
+        &mut at,
+        [
+            Event::mouse_down(50.0, 60.0, MouseButton::Left),
+            Event::mouse_move(50.0, 40.0),
+            Event::mouse_up(50.0, 40.0, MouseButton::Left),
+        ],
+    );
+    let log = log.borrow();
+    assert_eq!(log.down, [4]);
+    assert_eq!(
+        log.moves,
+        [4],
+        "the drag is the pressed row's, wherever it goes"
+    );
+    assert_eq!(log.up, [4]);
+}
+
+#[test]
+fn a_press_released_on_the_half_of_its_row_the_header_hides_clicks_nothing() {
+    if headless().is_none() {
+        return;
+    }
+    for direct in [false, true] {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let (mut app, id, mut at) = row_0_half_under_the_header(log.clone(), direct);
+
+        // Pressed on the half of row 0 that shows, let go on the header over
+        // the half that does not.
+        play(
+            &mut app,
+            id,
+            &mut at,
+            [
+                Event::mouse_down(50.0, 55.0, MouseButton::Left),
+                Event::mouse_move(50.0, 45.0),
+                Event::mouse_up(50.0, 45.0, MouseButton::Left),
+            ],
+        );
+
+        let log = log.borrow();
+        assert_eq!(
+            log.up,
+            [0],
+            "rows held directly: {direct}. The release is the press's"
+        );
+        assert!(
+            log.clicks.is_empty(),
+            "rows held directly: {direct}. Let go over the header, which is \
+             what is under the pointer"
+        );
+        assert_eq!(
+            hovered(&log),
+            [] as [usize; 0],
+            "rows held directly: {direct}"
+        );
+    }
+}

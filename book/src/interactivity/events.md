@@ -16,7 +16,9 @@ container()
 # }
 ```
 
-Click events fire when the mouse button is pressed and released within the container bounds.
+Click events fire when the mouse button is pressed and released within the container bounds, where
+it shows: a release over a sibling drawn on top of it, or over a part a scrolling parent clips away,
+clicks nothing.
 
 ### Double Clicks
 

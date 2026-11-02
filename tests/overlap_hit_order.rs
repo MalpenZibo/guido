@@ -343,6 +343,41 @@ fn a_drag_begun_beneath_keeps_its_position_under_the_sibling_on_top() {
     );
 }
 
+/// A press on the sibling beneath, let go over the one drawn on top, is let
+/// go over that one: the card beneath hears its release, and takes neither
+/// the click nor the hover at a point it is covered at.
+#[test]
+fn a_press_begun_beneath_and_let_go_under_the_sibling_on_top_clicks_nothing() {
+    let (clicks, bump) = counter();
+    let (hovered, on_hover) = hover_flag();
+    let released = Rc::new(Cell::new(0));
+    let ups = Rc::clone(&released);
+    let mut h = Harness::laid_out(
+        stack([
+            container()
+                .width(80.0)
+                .height(40.0)
+                .background(Color::RED)
+                .on_click(bump)
+                .on_hover(on_hover)
+                .on_mouse_up(move |_, _| ups.set(ups.get() + 1)),
+            container().width(16.0).height(16.0).background(Color::BLUE),
+        ]),
+        400.0,
+        200.0,
+    );
+
+    h.send(Event::mouse_down(60.0, 30.0, MouseButton::Left));
+    h.send(Event::mouse_move(8.0, 8.0));
+    h.send(Event::mouse_up(8.0, 8.0, MouseButton::Left));
+    assert_eq!(released.get(), 1, "the release is the press's");
+    assert_eq!(clicks.get(), 0, "let go over the card on top");
+    assert!(
+        !hovered.get(),
+        "the card on top is what is under the pointer"
+    );
+}
+
 /// A disabled card that draws still covers what is beneath it: its handlers
 /// and its children are not asked, and neither is the button under it (Qt's
 /// answer — the event goes to the enabled parent, never to a sibling).

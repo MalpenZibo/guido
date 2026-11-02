@@ -31,6 +31,11 @@ pub(super) struct HitContext {
     pub corners: crate::widgets::Corners,
     pub transform: Transform,
     pub pivot: Pivot,
+    /// The point is one a container above clipped away, or a sibling drawn
+    /// over this one covers: it reaches this container only because a press
+    /// holds it, for its drag and its release, and the pointer is not on it
+    /// there whatever its box says (#915).
+    pub withheld: bool,
 }
 
 impl HitContext {
@@ -40,10 +45,11 @@ impl HitContext {
     /// An event with no position is inside nothing. That is the whole of
     /// #227: a container collapsed to a line has no inverse to undo, so the
     /// point that reaches it is `None`, and every bounds test below it answers
-    /// no without any of them having to know why.
+    /// no without any of them having to know why. A point withheld is inside
+    /// nothing either, for the same reason.
     #[inline]
     pub(super) fn contains(&self, at: Option<Point>) -> bool {
-        self.bounds.contains_shape_at(at, self.corners)
+        !self.withheld && self.bounds.contains_shape_at(at, self.corners)
     }
 
     /// A surface-space point expressed relative to the container's own origin
