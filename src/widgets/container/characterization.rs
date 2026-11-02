@@ -8905,6 +8905,22 @@ fn a_held_button_puts_the_recheck_off_until_its_release() {
     assert!(!recheck(&mut h), "and it is done");
 }
 
+/// Another surface's leave is not this chord's (#906): the button is still
+/// held here, so nothing is worked out again until its release.
+#[test]
+fn a_leave_from_another_surface_keeps_the_recheck_put_off() {
+    let (mut h, heard, _) = rows_under_a_pointer();
+    let other = h
+        .tree
+        .register(Box::new(container().width(100.0).height(100.0)));
+    h.send(Event::mouse_down(50.0, 25.0, MouseButton::Left));
+    crate::reactive::diagnostics::snapshot_zone(|| h.tree.dispatch(other, &Event::MouseLeave));
+    let root = h.root;
+    h.tree.mark_hover_stale(root);
+    assert!(!recheck(&mut h), "the button is still down here");
+    assert!(heard.take().is_empty());
+}
+
 /// That a chord ended is said of the release, and of no event after it: a
 /// driver reading it after a key must not work out again what the release
 /// already did.
