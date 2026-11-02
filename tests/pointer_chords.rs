@@ -352,6 +352,30 @@ fn a_leave_during_a_chord_drops_the_route_and_the_held_buttons() {
     assert_eq!(presses_and_releases(&logs[4]), ["down Left 460"]);
 }
 
+/// Each surface's input is delivered as a batch of its own, so the pointer's
+/// leave from one surface can be dispatched after its press on another
+/// (#906). That leave is not this chord's: the route and the held button
+/// stay with the surface the press landed on.
+#[test]
+fn a_leave_from_another_surface_keeps_the_route() {
+    let (mut h, logs) = row_of_recorders();
+    let other = h
+        .tree
+        .register(Box::new(container().width(100.0).height(20.0)));
+
+    h.send(Event::mouse_down(10.0, 10.0, MouseButton::Left));
+    guido::reactive::diagnostics::snapshot_zone(|| h.tree.dispatch(other, &Event::MouseLeave));
+    h.send(Event::mouse_move(450.0, 10.0));
+    h.send(Event::mouse_move(460.0, 10.0));
+    h.send(Event::mouse_up(460.0, 10.0, MouseButton::Left));
+
+    assert_eq!(
+        *logs[0].borrow(),
+        ["down Left 10", "move 450", "move 460", "up Left 460"],
+        "the drag keeps reaching the widget it began on"
+    );
+}
+
 #[test]
 fn a_custom_widget_keeps_its_right_button_route_outside_its_bounds() {
     let (mut h, logs) = row_of_recorders();

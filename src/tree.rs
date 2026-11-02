@@ -1936,8 +1936,16 @@ impl Tree {
             }
             Event::MouseUp { .. } if after == 0 => record.pressed.clear(),
             Event::MouseLeave => {
-                record.pressed.clear();
-                record.chord = None;
+                // Only the chord's own surface ends it: each surface's input
+                // is a batch of its own, so another's leave can come after
+                // this chord's press (#906).
+                if record
+                    .chord
+                    .is_none_or(|(chord_root, _)| chord_root == root)
+                {
+                    record.pressed.clear();
+                    record.chord = None;
+                }
                 record.last.retain(|entry| entry.root != root);
             }
             _ => {}
