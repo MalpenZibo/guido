@@ -869,6 +869,9 @@ struct Merged {
     // whether the fold smoothed anywhere here: where it did, the distance is
     // not one, and changes more slowly than the position does
     smoothed: bool,
+    // the member whose distance is the smallest so far, whose sides with the
+    // next one's hold what the fold takes off
+    nearest: u32,
 }
 
 // The way `rounded_rect_sdf` grows at `pos`, from the same pieces: a corner's
@@ -886,7 +889,7 @@ fn rounded_rect_normal(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32
     let d_box = abs(rel) - half_size;
     if (r <= 0.0) {
         // Past a square corner the distance is the larger side's, but the
-        // way out is the corner's own.
+        // way out is the corner's own, and it leans towards both sides.
         if (d_box.x > 0.0 && d_box.y > 0.0) {
             return side * d_box;
         }
@@ -904,6 +907,93 @@ fn rounded_rect_normal(pos: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>, k: f32
     return side * select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), d_box.x > d_box.y);
 }
 
+// `at`, in physical world pixels, in the member's own space.
+fn member_space(r: MergeRecord, at: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
+        r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
+    );
+}
+
+// The member's normal at `q`, a point of its own space, as a unit vector in
+// world space: its own, through the transpose of the map into its space.
+fn member_normal(r: MergeRecord, q: vec2<f32>) -> vec2<f32> {
+    let g = rounded_rect_normal(q, r.rect, r.radii, r.curvature);
+    let world = vec2<f32>(
+        r.inverse[0] * g.x + r.inverse[3] * g.y,
+        r.inverse[1] * g.x + r.inverse[4] * g.y
+    );
+    return world / max(length(world), 1e-6);
+}
+
+// How far the member reaches in the world direction `u`: its support
+// function, the most `dot(u, x)` takes over the member. A rounded rect's is
+// its box's, less each corner's radius along both axes and plus the corner's
+// own reach, the dual norm of its superellipse: `max` for a bevel, the
+// Euclidean length for a circle, the sum for a square. A scoop's is its box's,
+// which is the hull of it.
+fn member_support(r: MergeRecord, u: vec2<f32>) -> f32 {
+    let det = r.inverse[0] * r.inverse[4] - r.inverse[1] * r.inverse[3];
+    // `u` in the member's own space: the transpose of the map out of it.
+    let w = vec2<f32>(
+        r.inverse[4] * u.x - r.inverse[3] * u.y,
+        r.inverse[0] * u.y - r.inverse[1] * u.x
+    ) / det;
+    let center = vec2<f32>(r.rect.x + r.rect.z * 0.5, r.rect.y + r.rect.w * 0.5);
+    let half_size = vec2<f32>(r.rect.z * 0.5, r.rect.w * 0.5);
+    let top = select(vec2<f32>(r.radii.y, r.radii.z), vec2<f32>(r.radii.x, r.radii.w), w.x < 0.0);
+    let radius = select(top.y, top.x, w.y < 0.0);
+    var rad = max(min(radius, min(half_size.x, half_size.y)), 0.0);
+    let a = abs(w);
+    var reach = 0.0;
+    if (r.curvature < 0.0) {
+        rad = 0.0;
+    } else if (rad > 0.0) {
+        let n = k_to_n(r.curvature);
+        let m = max(a.x, a.y);
+        if (abs(n - 1.0) < 0.01 || m <= 0.0) {
+            reach = m;
+        } else {
+            let dual = n / (n - 1.0);
+            let t = min(a.x, a.y) / m;
+            reach = m * pow(1.0 + pow(t, dual), 1.0 / dual);
+        }
+    }
+    let local = dot(center, w) + dot(a, half_size - rad) + rad * reach;
+    return local - dot(w, vec2<f32>(r.inverse[2], r.inverse[5]));
+}
+
+// How far `at` lies past the reach of `a` and `b` along the four sides of
+// `r`, and which way that is.
+fn past_sides_of(r: MergeRecord, a: MergeRecord, b: MergeRecord, at: vec2<f32>) -> vec3<f32> {
+    var most = vec3<f32>(-1e30, 0.0, 0.0);
+    for (var side = 0u; side < 4u; side = side + 1u) {
+        let toward = select(1.0, -1.0, side >= 2u);
+        let axis = select(vec2<f32>(0.0, toward), vec2<f32>(toward, 0.0), side % 2u == 0u);
+        let world = vec2<f32>(
+            r.inverse[0] * axis.x + r.inverse[3] * axis.y,
+            r.inverse[1] * axis.x + r.inverse[4] * axis.y
+        );
+        let u = world / max(length(world), 1e-6);
+        let past = dot(at, u) - max(member_support(a, u), member_support(b, u));
+        if (past > most.x) {
+            most = vec3<f32>(past, u);
+        }
+    }
+    return most;
+}
+
+// How far `at` lies beyond every side of `a` and `b` — the box they make
+// together, for two that stand upright — and the way out. What a smooth
+// minimum adds past it was a bulge: a member inside another pushing the
+// other's edge out, or two side by side lifting the line their tops share
+// (#918). Taking all four sides of each keeps it continuous.
+fn beyond_sides(a: MergeRecord, b: MergeRecord, at: vec2<f32>) -> vec3<f32> {
+    let from_a = past_sides_of(a, a, b, at);
+    let from_b = past_sides_of(b, a, b, at);
+    return select(from_b, from_a, from_a.x >= from_b.x);
+}
+
 // How far inside a smooth minimum's `reach` two distances `gap` apart are.
 fn within_reach(gap: f32, reach: f32) -> f32 {
     if (reach <= 0.0) {
@@ -915,41 +1005,51 @@ fn within_reach(gap: f32, reach: f32) -> f32 {
 // The merged distance at `at`, in physical pixels, and what the members give
 // the fragment there — colours still premultiplied.
 fn merged_shape(at: vec2<f32>, first: u32) -> Merged {
-    var m = Merged(1e30, vec2<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), 0.0, false);
+    var m = Merged(1e30, vec2<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), 0.0, false, NO_MERGE);
     var i = first;
     for (var n = 0u; n < MAX_MERGED && i != NO_MERGE; n = n + 1u) {
         let r = merge_records[i];
-        let p = vec2<f32>(
-            r.inverse[0] * at.x + r.inverse[1] * at.y + r.inverse[2],
-            r.inverse[3] * at.x + r.inverse[4] * at.y + r.inverse[5]
-        );
+        let p = member_space(r, at);
         let d = rounded_rect_sdf(p, r.rect, r.radii, r.curvature) * r.to_pixels;
-        let gap = abs(m.dist - d);
         let further_is_new = m.dist < d;
         // The quadratic smooth minimum (Inigo Quilez, "smooth minimum"): `h`
         // is how far inside each other's reach the two distances are, and
-        // `q` the share the further one keeps.
-        let h = within_reach(gap, r.smoothing);
+        // `q` the share the further one keeps — over the whole reach, so
+        // fills blend across an overlap as they always did. The distance is
+        // smoothed over the reach scaled by how far the two normals turn
+        // apart, as liquid_glass_renderer does after Gourmel et al. (2013),
+        // so edges that face the same way are not pushed out; and what it
+        // takes off is held inside the sides of this member and the nearest
+        // so far, which the angle alone does not do where a corner of one
+        // meets the other's edge (#918; docs/RENDERER.md).
+        let h = within_reach(abs(m.dist - d), r.smoothing);
+        let q = h * h * 0.5;
+        let share = select(1.0 - q, q, further_is_new);
+        let nearer = min(m.dist, d);
+        var dist = nearer;
         var h_dist = 0.0;
-        var reach = 0.0;
         if (r.smoothing > 0.0) {
-            // The member's normal in world space: its own, through the
-            // transpose of the map into its space.
-            let g = rounded_rect_normal(p, r.rect, r.radii, r.curvature);
-            let world = vec2<f32>(
-                r.inverse[0] * g.x + r.inverse[3] * g.y,
-                r.inverse[1] * g.x + r.inverse[4] * g.y
-            );
-            let normal = world / max(length(world), 1e-6);
-            reach = r.smoothing;
-            h_dist = within_reach(gap, reach);
+            let normal = member_normal(r, p);
+            let reach = r.smoothing * 0.5 * length(m.normal - normal);
+            h_dist = within_reach(abs(m.dist - d), reach);
             // The further side's part of the smoothed distance's gradient.
             let pull = select(1.0 - h_dist * 0.5, h_dist * 0.5, further_is_new);
             m.normal = mix(m.normal, normal, pull);
+            if (h_dist > 0.0) {
+                dist = nearer - h_dist * h_dist * reach * 0.25;
+                let sides = beyond_sides(merge_records[m.nearest], r, at);
+                if (sides.x > dist) {
+                    // Held, the distance changes as fast as a member's own,
+                    // one pixel a pixel, along the side that holds it.
+                    dist = min(sides.x, nearer);
+                    m.normal = sides.yz;
+                }
+            }
         }
-        let q = h * h * 0.5;
-        let share = select(1.0 - q, q, further_is_new);
-        m.dist = min(m.dist, d) - h_dist * h_dist * reach * 0.25;
+        if (!further_is_new) {
+            m.nearest = i;
+        }
+        m.dist = dist;
         m.fill = mix(m.fill, r.fill, share);
         m.border_color = mix(m.border_color, r.border_color, share);
         m.border_width = mix(m.border_width, r.border_width, share);
@@ -986,9 +1086,10 @@ fn fs_merged(in: VertexOutput) -> @location(0) vec4<f32> {
     // neck (#885). So there the depth is scaled by how fast the distance
     // changes, which is the length of the gradient the fold carries. Not by
     // `dpdx`, a whole pixel wide, which notched the border where the outline
-    // turns within a few; nor by the fold read either side, which is four
-    // more folds. Only where the fold smoothed: a member's own distance is
-    // already in pixels.
+    // turns within a few; nor by the fold read either side, which across the
+    // diagonal inside a square corner, where a member's normal flips, read
+    // the reach's jump as a slope and drew the border along it. Only where
+    // the fold smoothed: a member's own distance is already in pixels.
     var depth = merged.border_width;
     if (merged.smoothed) {
         depth = depth * length(merged.normal);

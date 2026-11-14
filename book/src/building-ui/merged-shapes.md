@@ -36,6 +36,13 @@ gap is half the distance a neck joins them and thickens as they close in. `0.0` 
 overlapping children merge with no seam, and nothing grows between children that
 do not overlap. The distance takes a signal like any other property.
 
+The merge only ever fills the space between children; it never pushes an
+outline out past them. A child inside another, whatever its corners, leaves the
+outer one's outline as it is, and children side by side with their tops on one
+line keep that line straight across the gap. A child growing out of the bar it
+sits in keeps the bar's edge straight until it crosses it, and from then on is
+joined to it by round shoulders that never rise past the child's own top.
+
 ## What merges
 
 Each **direct** child's own box: its fill and its border, with its corners and
