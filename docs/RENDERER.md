@@ -971,11 +971,17 @@ which leaves two distances further apart than its reach exactly as `min` leaves
 them — a member that moves away splits off by itself — and gives, beside the
 distance, the share of the fragment each side keeps. The fill, the border
 colour and the border width blend by that share, so the border follows the
-merged outline and fades along a neck towards a member without one. Where the
-fold smoothed, the merged distance is no longer in pixels — it changes more
-slowly than one across a neck — so the border's depth there is scaled by how
-fast it does change, read from the fold a quarter of a pixel either side, and
-the border is as wide through a neck as along an edge (#885). The fold says
+merged outline and fades along a neck towards a member without one.
+
+Where the fold smoothed, the merged distance is no longer in pixels — it
+changes more slowly than one across a neck — so the border's depth there is
+scaled by how fast it does change, and the border is as wide through a neck as
+along an edge (#885). That rate is the length of the gradient the fold
+carries: the members' normals, mixed by the smooth minimum's own weights, which
+is a smooth minimum's gradient. Each member's normal is worked out beside its
+distance from the same pieces, through the transpose of the map into its
+space. Reading the rate from the fold either side instead took four more folds
+per fragment. The fold says
 where it smoothed, so a member's own distance, already in pixels, is left as
 it is. One case it does not reach: outside a square corner a member's
 distance is the larger of the two sides' rather than the distance to the
