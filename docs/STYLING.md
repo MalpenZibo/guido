@@ -297,7 +297,10 @@ container()
 The direct children's boxes — fill, border, corners, transform — are drawn as one
 shape by a polynomial smooth minimum: two closer than the distance lean towards
 each other and are joined by a neck once the gap is half of it, overlapping ones
-are one outline, and ones further apart are left exactly as they were. `0.0` is a plain union. Fills, border colours and border
+are one outline, and ones further apart are left exactly as they were. The
+merge fills the space between children and never pushes an edge out past them,
+so a child inside another, whatever its corners, or two in a row with their
+tops on one line, leave the outer line straight. `0.0` is a plain union. Fills, border colours and border
 widths blend across a neck by the share the smooth minimum gives each child, so
 the border follows the merged outline. The container's own `border` and
 outer shadows are the merged shape's; its inset shadows stay on its own box.

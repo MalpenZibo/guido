@@ -69,6 +69,7 @@
 //! three images (expected, actual, and a map of what moved) are written to
 //! `target/golden-failures/` and uploaded as a CI artifact.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -5281,18 +5282,234 @@ fn pill_row(gap: f32, merge: bool) -> Container {
 /// shape with no seam; closer than the distance, a concave neck joins them;
 /// further apart, they are two shapes. That last row is held to the scene
 /// without a merge, pixel for pixel, by the test after this one.
+///
+/// The overlapping pills' top and bottom edges are one line, and the merged
+/// outline stays on it: edges that face the same way are not smoothed, or
+/// the outline bulges past both by up to a quarter of the distance (#918).
 #[test]
 fn merged_pills_at_three_gaps() {
-    golden(
-        "merged_pills_at_three_gaps",
-        (220.0, 188.0),
-        1.0,
-        BACKDROP,
+    const NAME: &str = "merged_pills_at_three_gaps";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let pixels = render_with_own_renderer(
+        ctx,
         container()
             .padding(20.0)
             .layout(Flex::column().spacing(20.0))
             .children([-12.0, 6.0, 30.0].map(|gap| pill_row(gap, true))),
+        (220.0, 188.0),
+        1.0,
+        BACKDROP,
     );
+    // The first row spans x 20..124 and y 20..56.
+    let bulge = "the overlapping pills' outline bulges past their edges";
+    nothing_drawn_in(&pixels, 20..124, 8..18, bulge);
+    nothing_drawn_in(&pixels, 20..124, 58..68, bulge);
+    // The second row's pills are 6 px apart, at x 100..106.
+    assert_ne!(
+        rgba(&pixels, 103, 94),
+        rgba(&pixels, 0, 0),
+        "pills 6 px apart are not joined by a neck"
+    );
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// Every pixel in `xs` × `ys` is the one at the origin, which every scenario
+/// using this leaves as its backdrop; or `what` happened.
+fn nothing_drawn_in(pixels: &Pixels, xs: Range<u32>, ys: Range<u32>, what: &str) {
+    let drawn: Vec<_> = ys
+        .flat_map(|y| xs.clone().map(move |x| (x, y)))
+        .filter(|&(x, y)| rgba(pixels, x, y) != rgba(pixels, 0, 0))
+        .collect();
+    assert!(
+        drawn.is_empty(),
+        "{what}: {} pixels, first at {:?}, {:?} over {:?}",
+        drawn.len(),
+        drawn[0],
+        rgba(pixels, drawn[0].0, drawn[0].1),
+        rgba(pixels, 0, 0)
+    );
+}
+
+/// A 160 × 36 bar, merged at 32 with `member` centred inside it — the case of
+/// a details pill going back into the bar it came out of (#918).
+fn bar_holding(member: Container) -> Container {
+    container()
+        .layout(ZStack::new().align(Alignment::CENTER))
+        .merge_children(32.0)
+        .border(1.5, Color::rgb(0.95, 0.95, 0.95))
+        .child(
+            container()
+                .width(160.0)
+                .height(36.0)
+                .corners(18.0)
+                .background(PILL),
+        )
+        .child(member.background(Color::rgb(0.30, 0.55, 0.90)))
+}
+
+/// `members` in bars stacked 24 px apart, and not a pixel drawn past any bar's
+/// top or bottom edge.
+fn bars_keep_their_edges(name: &str, members: Vec<Container>) {
+    let Some((ctx, adapter)) = rasterizer(name) else {
+        return;
+    };
+    let rows = members.len() as u32;
+    let pixels = render_with_own_renderer(
+        ctx,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(24.0))
+            .children(members.into_iter().map(bar_holding)),
+        (200.0, 40.0 + 36.0 * rows as f32 + 24.0 * (rows - 1) as f32),
+        1.0,
+        BACKDROP,
+    );
+    for row in 0..rows {
+        let top = 20 + 60 * row;
+        let bulge = format!("the member in row {row} bulges its bar's outline");
+        nothing_drawn_in(&pixels, 20..180, top - 12..top, &bulge);
+        nothing_drawn_in(&pixels, 20..180, top + 36..top + 48, &bulge);
+    }
+    assert_golden(name, adapter, pixels);
+}
+
+/// A pill inside a bar as it shrinks to nothing at the bar's middle: flush
+/// with the bar's top and bottom edges, then 9, 15 and 18 px inside them. The
+/// bar's outline is the bar's at every height, so the pill's going takes
+/// nothing off it. A plain smooth minimum pushed it out by `(k - d)² / 4k`
+/// for edges `d` apart — 8 px at the first height, and still 1.5 px at the
+/// last.
+#[test]
+fn a_member_inside_another_leaves_its_edges_where_they_are() {
+    bars_keep_their_edges(
+        "a_member_inside_another_leaves_its_edges_where_they_are",
+        [36.0, 18.0, 6.0, 0.0]
+            .map(|height| container().width(64.0).height(height).corners(height / 2.0))
+            .into(),
+    );
+}
+
+/// The same for a member whose corners are a squircle, a bevel and a scoop,
+/// flush with the bar's edges. Where a corner meets the edge the two outlines'
+/// normals part, as they do in a fillet, so the angle between them alone let
+/// the outline rise there — by 2, 3 and 6 px. What tells the two apart is
+/// that the member's outline there is inside the bar.
+#[test]
+fn a_member_of_every_curvature_inside_another_leaves_its_edges_where_they_are() {
+    bars_keep_their_edges(
+        "a_member_of_every_curvature_inside_another_leaves_its_edges_where_they_are",
+        [
+            Corners::squircle(12.0),
+            Corners::bevel(12.0),
+            Corners::scoop(12.0),
+        ]
+        .map(|corners| container().width(64.0).height(36.0).corners(corners))
+        .into(),
+    );
+}
+
+/// A pill rising 2, 6 and 12 px out of the top of a bar, as a details pill
+/// does on its way out of it. The shoulders that join it to the bar stay round,
+/// and nothing rises past the pill's own top: a smooth minimum bulged it by up
+/// to 7 px, and holding the outline inside the members' sides alone cut that
+/// bulge off flat, wider than the pill, with a corner where it met the
+/// shoulder.
+#[test]
+fn a_member_rising_out_of_another_keeps_round_shoulders() {
+    const NAME: &str = "a_member_rising_out_of_another_keeps_round_shoulders";
+    const RISES: [f32; 3] = [2.0, 6.0, 12.0];
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let pixels = render_with_own_renderer(
+        ctx,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(36.0))
+            .children(RISES.map(|rise| {
+                bar_holding(
+                    container()
+                        .width(64.0)
+                        .height(36.0)
+                        .corners(18.0)
+                        .translate((0.0, -rise)),
+                )
+            })),
+        (200.0, 220.0),
+        1.0,
+        BACKDROP,
+    );
+    for (row, rise) in RISES.iter().enumerate() {
+        let top = 20 + 72 * row as u32 - *rise as u32;
+        let bulge = format!("a pill {rise} px out bulges past its own top");
+        nothing_drawn_in(&pixels, 20..180, top - 12..top, &bulge);
+        // Its top row is its own, x 82 to 118 with the caps' antialiasing:
+        // cut flat at the top, it ran to 65 and 135. Two pixels out, the
+        // shoulders reach that row themselves.
+        if *rise >= 6.0 {
+            let flat = format!("a pill {rise} px out is cut flat past its own top");
+            nothing_drawn_in(&pixels, 20..79, top..top + 1, &flat);
+            nothing_drawn_in(&pixels, 121..180, top..top + 1, &flat);
+        }
+    }
+    assert_golden(NAME, adapter, pixels);
+}
+
+/// Two boxes side by side, merged at 24 with their tops and bottoms on one
+/// line and a border round them: square ones touching and 3 and 6 px apart,
+/// and round-cornered ones touching. The gap between them fills, the line they
+/// share stays where it is — a smooth minimum lifted it where their corners
+/// meet, by up to 6 px — and the border runs along it across the gap as wide
+/// as along either box.
+#[test]
+fn members_side_by_side_keep_the_line_they_share() {
+    const NAME: &str = "members_side_by_side_keep_the_line_they_share";
+    let Some((ctx, adapter)) = rasterizer(NAME) else {
+        return;
+    };
+    let pair = |gap: f32, corners: f32| {
+        container()
+            .layout(Flex::row().spacing(gap))
+            .merge_children(24.0)
+            .border(2.0, Color::rgb(0.95, 0.95, 0.95))
+            .children([0, 1].map(|_| box_of(70.0, 30.0).corners(corners).background(PILL)))
+    };
+    let pixels = render_with_own_renderer(
+        ctx,
+        container()
+            .padding(20.0)
+            .layout(Flex::column().spacing(24.0))
+            .child(pair(0.0, 0.0))
+            .child(pair(3.0, 0.0))
+            .child(pair(6.0, 0.0))
+            .child(pair(0.0, 9.0)),
+        (186.0, 232.0),
+        1.0,
+        BACKDROP,
+    );
+    // Over the pair's own span: a merged square corner antialiases the pixel
+    // diagonally out from it, which a box drawn alone does not, on main as
+    // here.
+    for (row, gap) in [0, 3, 6, 0].into_iter().enumerate() {
+        let top = 20 + 54 * row as u32;
+        let span = 20..160 + gap;
+        let bulge = format!("the pair in row {row} lifts the line it shares");
+        nothing_drawn_in(&pixels, span.clone(), top - 12..top, &bulge);
+        nothing_drawn_in(&pixels, span, top + 30..top + 42, &bulge);
+        // The border runs across the gap as it runs along either box: the
+        // same three rows from the top over the gap as over the first box.
+        let over_gap = 90 + gap / 2;
+        for y in top..top + 3 {
+            assert_eq!(
+                rgba(&pixels, over_gap, y),
+                rgba(&pixels, 55, y),
+                "the border over the gap in row {row} differs from the box's at y {y}"
+            );
+        }
+    }
+    assert_golden(NAME, adapter, pixels);
 }
 
 /// Further apart than the distance, two merged pills are the two pills drawn

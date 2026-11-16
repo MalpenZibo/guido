@@ -971,17 +971,47 @@ which leaves two distances further apart than its reach exactly as `min` leaves
 them — a member that moves away splits off by itself — and gives, beside the
 distance, the share of the fragment each side keeps. The fill, the border
 colour and the border width blend by that share, so the border follows the
-merged outline and fades along a neck towards a member without one. Where the
-fold smoothed, the merged distance is no longer in pixels — it changes more
-slowly than one across a neck — so the border's depth there is scaled by how
-fast it does change, read from the fold a quarter of a pixel either side, and
-the border is as wide through a neck as along an edge (#885). The fold says
+merged outline and fades along a neck towards a member without one.
+
+A smooth minimum of two distances cannot tell flush parallel edges from the
+diagonal of a corner, so on its own it pushed out every edge two members share
+a line along: a member inside another bulged the other's edge by up to a
+quarter of the reach, two side by side lifted the line their tops share, and a
+pill rising out of a bar bulged past its own top (#918). Two things hold it.
+
+The distance is smoothed over the reach scaled by how far apart the two
+members' normals turn, half the distance between the two unit vectors, as
+Flutter's liquid_glass_renderer does after Gourmel et al., "A Gradient-Based
+Implicit Blend" (2013). Edges that face each other across a gap take all of
+it, so a neck forms as before; a corner where two members meet square takes
+about seven tenths; edges that face the same way take none. The fill blends
+over the full reach still. That leaves the corner of one member meeting
+another's edge, where the normals part as they do in a fillet — the outline
+rose there by 1 px for a pill's round end and 6 for a scoop.
+
+So what it takes off is also held inside the sides of the member and the
+nearest so far: no further past any side of either than the other reaches —
+for two upright members, the box they make together. A rounded rect's reach
+along a direction is its support function, which is closed-form: its box's,
+less the corner radius along both axes, plus the dual norm of the corner's
+superellipse — `max` for a bevel, the Euclidean length for a circle, the sum
+for a square; a scoop's is its box's. All four sides of each are taken, which
+keeps the bound continuous; two chosen by the normal jumped where it flipped
+and notched the antialiasing. The sides alone are not enough either: without
+the angle, a pill rising out of a bar was cut flat at its top, wider than the
+pill, with a corner where the cut met the shoulder.
+
+Where the fold smoothed, the merged distance is no longer in pixels — it
+changes more slowly than one across a neck — so the border's depth there is
+scaled by how fast it does change, and the border is as wide through a neck as
+along an edge (#885). That rate is the length of the gradient the fold
+carries: the members' normals, mixed by the smooth minimum's own weights, which
+is a smooth minimum's gradient where its reach holds still, or the side that
+holds it where one does. Each member's normal is worked out beside its distance from the same
+pieces, through the transpose of the map into its space; reading the rate from
+the fold either side instead took four more folds per fragment. The fold says
 where it smoothed, so a member's own distance, already in pixels, is left as
-it is. One case it does not reach: outside a square corner a member's
-distance is the larger of the two sides' rather than the distance to the
-corner, which has a crease along the diagonal, and where two members' sides
-line up and the fold crosses that crease the border dips by most of a pixel
-for a pixel. The shadow
+it is. The shadow
 is evaluated over the merged distance: the same SDF through the same
 `smoothstep` a lone shape's shadow uses, and it is left out from under the
 merged shape as a lone shape's is from under that shape. The merging
