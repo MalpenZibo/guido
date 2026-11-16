@@ -110,11 +110,11 @@ mdbook build book                  # the user documentation
 mdbook serve book                  # ... with live reload
 
 # The book's samples are compiled by rustdoc, which needs the library and a
-# search path holding exactly one copy of it. Unset WAYLAND_DISPLAY: `mdbook
+# search path holding exactly one build of it. Unset WAYLAND_DISPLAY: `mdbook
 # test` runs what it compiles, and a sample that starts an application would
 # open a surface on your screen.
 cargo build --all-features --target-dir target/book
-env -u WAYLAND_DISPLAY mdbook test book -L target/book/debug/deps
+env -u WAYLAND_DISPLAY mdbook test book -L "$(book/library-path.sh)"
 ```
 
 The golden images need a software rasterizer, because a golden is only

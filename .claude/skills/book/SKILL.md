@@ -15,15 +15,17 @@ mdbook serve book       # live reload while writing
 
 # and what CI runs, which is rustdoc over every sample
 cargo build --all-features --target-dir target/book
-env -u WAYLAND_DISPLAY mdbook test book -L target/book/debug/deps
+env -u WAYLAND_DISPLAY mdbook test book -L "$(book/library-path.sh)"
 ```
 
-The `-L` points at a directory holding exactly one copy of the library:
-`mdbook test` gives rustdoc no `--extern`, so `extern crate guido` resolves by
-searching that path, and a shared `target/debug/deps` holds one artifact per
-feature set. `WAYLAND_DISPLAY` is unset because **`mdbook test` runs what it
-compiles** — a sample that starts an application will otherwise open a surface
-on your screen.
+The `-L` points into a target directory holding exactly one build of the
+library: `mdbook test` gives rustdoc no `--extern`, so `extern crate guido`
+resolves by searching, and a shared `target` holds one artifact per feature
+set. `book/library-path.sh` lists the directories in it that hold a crate,
+because Cargo 1.100 stopped putting them all in `debug/deps`.
+`WAYLAND_DISPLAY` is unset because **`mdbook test` runs what it compiles** — a
+sample that starts an application will otherwise open a surface on your
+screen.
 
 ## Writing a sample that compiles
 
