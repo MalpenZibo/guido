@@ -1933,54 +1933,44 @@ mod tests {
     /// alignments, a spacing one as CSS places a lone item, or by its own.
     #[test]
     fn an_out_of_flow_child_is_placed_as_the_only_child() {
+        use crate::layout::Alignment;
+        let cases = [
+            (Flex::row().center(), None, (60.0, 10.0)),
+            (Flex::row(), None, (0.0, 0.0)),
+            (
+                Flex::row().main_alignment(MainAlignment::SpaceBetween),
+                None,
+                (0.0, 0.0),
+            ),
+            (
+                Flex::row().main_alignment(MainAlignment::SpaceAround),
+                None,
+                (60.0, 0.0),
+            ),
+            (
+                Flex::column().cross_alignment(CrossAlignment::End),
+                None,
+                (120.0, 0.0),
+            ),
+            (Flex::row(), Some(Alignment::BOTTOM_END), (120.0, 20.0)),
+        ];
         let mut tree = Tree::new();
-        let out_at = |tree: &mut Tree, flex: Flex, out: Container| {
+        for (n, (flex, own, at)) in cases.into_iter().enumerate() {
+            let mut out = container().width(80.0).height(40.0).out_of_flow(true);
+            if let Some(own) = own {
+                out = out.align_self(own);
+            }
             let root = laid_out_once(
-                tree,
+                &mut tree,
                 container()
                     .width(200.0)
                     .height(60.0)
                     .layout(flex)
                     .child(container().width(50.0).height(20.0))
-                    .child(out.width(80.0).height(40.0).out_of_flow(true)),
+                    .child(out),
             );
-            origins(tree, root)[1]
-        };
-        let out = || container();
-        assert_eq!(out_at(&mut tree, Flex::row().center(), out()), (60.0, 10.0));
-        assert_eq!(out_at(&mut tree, Flex::row(), out()), (0.0, 0.0));
-        assert_eq!(
-            out_at(
-                &mut tree,
-                Flex::row().main_alignment(MainAlignment::SpaceBetween),
-                out()
-            ),
-            (0.0, 0.0)
-        );
-        assert_eq!(
-            out_at(
-                &mut tree,
-                Flex::row().main_alignment(MainAlignment::SpaceAround),
-                out()
-            ),
-            (60.0, 0.0)
-        );
-        assert_eq!(
-            out_at(
-                &mut tree,
-                Flex::column().cross_alignment(CrossAlignment::End),
-                out()
-            ),
-            (120.0, 0.0)
-        );
-        assert_eq!(
-            out_at(
-                &mut tree,
-                Flex::row(),
-                out().align_self(crate::layout::Alignment::BOTTOM_END)
-            ),
-            (120.0, 20.0)
-        );
+            assert_eq!(origins(&tree, root)[1], at, "case {n}");
+        }
     }
 
     /// In a wrapping row it takes no place on a line either.

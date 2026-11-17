@@ -1119,9 +1119,8 @@ pub struct LayoutHints {
     /// its own alignment, and a [`Flex`](crate::layout::Flex) reads the half
     /// across its axis in place of its cross alignment.
     pub align_self: Option<crate::layout::Alignment>,
-    /// Out of flow, as CSS's `position: absolute`: laid out, placed and drawn,
-    /// but taking no room among its siblings and no part in its parent's
-    /// size.
+    /// [Out of flow](crate::widgets::Container::out_of_flow): the container
+    /// lays it out and places it itself, and its layout never sees it.
     pub out_of_flow: bool,
 }
 

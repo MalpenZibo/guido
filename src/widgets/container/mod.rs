@@ -1659,12 +1659,14 @@ impl Container {
     /// siblings and no part in its parent's size, so it can overflow the
     /// parent without moving anything.
     ///
-    /// It is offered what its parent was offered, and on an axis it
-    /// [`fill()`](crate::layout::fill)s it takes the parent's size there.
-    /// It is placed as if it were the parent's only child: by its own
-    /// [`align_self`](Self::align_self) where it declares one, by the
-    /// parent's alignment where it does not. It is cut only if the parent
-    /// [clips](Self::overflow).
+    /// The parent takes it out before its layout sees the children, so this
+    /// holds in every layout, one written outside the crate too. It is
+    /// offered what the parent's content was offered, and on an axis it
+    /// [`fill()`](crate::layout::fill)s it takes the content's size there.
+    /// It is placed by its own [`align_self`](Self::align_self) where it
+    /// declares one, and otherwise where the layout would put its only
+    /// child: [`Layout::lone_child`]. It
+    /// is cut only if the parent [clips](Self::overflow).
     ///
     /// ```
     /// use guido::prelude::*;
