@@ -52,7 +52,9 @@
 //!     .children([button_a, button_b, button_c]);
 //! ```
 
-use super::{Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size, share};
+use super::{
+    Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment, Meet, Size, share,
+};
 use crate::{
     reactive::{IntoSignal, Prop},
     tree::{LayoutCtx, Tree, WidgetId},
@@ -100,9 +102,9 @@ enum Across {
     Stretch,
     /// On the line's shared baseline.
     Baseline,
-    /// At its own depth, this share of the free space in: `-1.0` at the
-    /// start, `1.0` at the end.
-    At(f32),
+    /// At its own depth, with this point of it on this point across the
+    /// line.
+    At(Meet),
 }
 
 impl Across {
@@ -115,7 +117,7 @@ impl Across {
             (None, CrossAlignment::Stretch) => Self::Stretch,
             // A column has no shared line to sit on.
             (None, CrossAlignment::Baseline) if axis == Axis::Horizontal => Self::Baseline,
-            (None, align) => Self::At(bias(align)),
+            (None, align) => Self::At(Meet::same(bias(align))),
         }
     }
 }
@@ -678,7 +680,7 @@ impl Flex {
                     Across::Baseline => {
                         max_baseline - baseline_of(ctx.tree_ref(), child_id, child_cross)
                     }
-                    Across::At(bias) => share(bias, cross_size - child_cross),
+                    Across::At(meet) => meet.offset(cross_size, child_cross),
                 };
 
             let (x, y) = match axis {
@@ -2047,6 +2049,26 @@ mod tests {
                 ),
         );
         assert_eq!(origins(&tree, root)[1], (80.0, 30.0));
+    }
+
+    /// Across a row, a child's own point meets the row's: its top on the
+    /// row's centre line, and below the row's bottom edge.
+    #[test]
+    fn a_row_meets_the_childs_point_with_its_own() {
+        use crate::layout::Alignment;
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .layout(Flex::row())
+                .child(container().width(20.0).height(40.0))
+                .child(ten_tall().align_self(Alignment::CENTER.to(Alignment::TOP_CENTER)))
+                .child(ten_tall().align_self(Alignment::BOTTOM_START.to(Alignment::TOP_START))),
+        );
+        assert_eq!(
+            origins(&tree, root),
+            [(0.0, 0.0), (20.0, 20.0), (40.0, 40.0)]
+        );
     }
 
     /// In a row aligned on baselines, a child that aligns itself sits where

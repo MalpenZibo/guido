@@ -478,19 +478,29 @@ pub enum CrossAlignment {
     Baseline,
 }
 
-/// Where a child sits inside a box larger or smaller than itself, on both
-/// axes at once: what a [`ZStack`] places its children by.
+/// Where a child sits against a box, on both axes at once: what a
+/// [`ZStack`] places its children by, and what a child's own
+/// [`align_self`](crate::widgets::Container::align_self) asks for.
 ///
-/// Each axis is a share of the free space — the box's size less the child's
-/// — from `-1.0` at the start to `1.0` at the end, as Flutter's `Alignment`
-/// and Compose's `BiasAlignment` spell it. Start is the left and the top.
-/// A child larger than the box leaves negative free space, and the same share
-/// of it is an overhang: `CENTER` puts a child 40 pixels too wide 20 past
-/// each side, `CENTER_END` all 40 past the start.
+/// It names a point on the box and a point on the child, and the child is
+/// placed so that the two meet. Each is a share along its own box, from
+/// `-1.0` at the start to `1.0` at the end, as Flutter's `Alignment` and
+/// Compose's `BiasAlignment` spell it; start is the left and the top.
+///
+/// The constants name the same point on both, which is a share of the free
+/// space — the box's size less the child's. A child larger than the box
+/// leaves negative free space, and the same share of it is an overhang:
+/// `CENTER` puts a child 40 pixels too wide 20 past each side, `CENTER_END`
+/// all 40 past the start.
+///
+/// [`to`](Self::to) names a different point on the child, which is how a
+/// child hangs against the outside of an edge rather than inside it, as
+/// SwiftUI's alignment guides and Flutter's `targetAnchor` and
+/// `followerAnchor` do.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Alignment {
-    x: f32,
-    y: f32,
+    x: Meet,
+    y: Meet,
 }
 
 impl Alignment {
@@ -505,16 +515,80 @@ impl Alignment {
     pub const BOTTOM_END: Self = Self::new(1.0, 1.0);
 
     const fn new(x: f32, y: f32) -> Self {
-        Self { x, y }
+        Self {
+            x: Meet::same(x),
+            y: Meet::same(y),
+        }
+    }
+
+    /// This alignment's point on the box, met by the point `child` names on
+    /// the child.
+    ///
+    /// `child` is read as a point, the one it names on the box, so a `to`
+    /// already on it is ignored.
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// // A menu under its button, their start edges together.
+    /// container()
+    ///     .layout(ZStack::new())
+    ///     .child(container().width(80).height(24))
+    ///     .child(
+    ///         container()
+    ///             .width(160)
+    ///             .height(120)
+    ///             .out_of_flow(true)
+    ///             .align_self(Alignment::BOTTOM_START.to(Alignment::TOP_START)),
+    ///     );
+    /// ```
+    pub const fn to(self, child: Alignment) -> Self {
+        Self {
+            x: self.x.to(child.x),
+            y: self.y.to(child.y),
+        }
     }
 
     /// How far from the box's origin a child of `child` size sits in a box
     /// of `outer` size.
     pub(crate) fn offset(self, outer: Size, child: Size) -> (f32, f32) {
         (
-            share(self.x, outer.width - child.width),
-            share(self.y, outer.height - child.height),
+            self.x.offset(outer.width, child.width),
+            self.y.offset(outer.height, child.height),
         )
+    }
+}
+
+/// One axis of an [`Alignment`]: the share along the box of the point the
+/// child is placed at, and the share along the child of the point placed
+/// there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Meet {
+    parent: f32,
+    child: f32,
+}
+
+impl Meet {
+    /// The same share along both.
+    pub(crate) const fn same(bias: f32) -> Self {
+        Self {
+            parent: bias,
+            child: bias,
+        }
+    }
+
+    /// This point on the box, met by the point `child` names on the box.
+    const fn to(self, child: Meet) -> Self {
+        Self {
+            parent: self.parent,
+            child: child.parent,
+        }
+    }
+
+    /// How far from the start of a box `outer` long a child `inner` long
+    /// starts.
+    pub(crate) fn offset(self, outer: f32, inner: f32) -> f32 {
+        share(self.parent, outer) - share(self.child, inner)
     }
 }
 
@@ -543,6 +617,53 @@ crate::reactive::converts!(
     u32 => Length,
     u16 => Length,
 );
+
+#[cfg(test)]
+mod an_alignment_meets_two_points {
+    use super::*;
+
+    const ISLAND: Size = Size::new(100.0, 30.0);
+    const PANEL: Size = Size::new(300.0, 200.0);
+
+    /// The parent's point first, the child's after: each of the cases #925
+    /// names, against the outside of the parent's edge and across it.
+    #[test]
+    fn the_parents_point_meets_the_childs() {
+        assert_eq!(
+            Alignment::CENTER.to(Alignment::CENTER),
+            Alignment::CENTER,
+            "naming the same point twice is the plain alignment"
+        );
+        assert_eq!(
+            Alignment::BOTTOM_CENTER
+                .to(Alignment::TOP_CENTER)
+                .offset(ISLAND, PANEL),
+            (-100.0, 30.0),
+            "hung below, centred"
+        );
+        assert_eq!(
+            Alignment::BOTTOM_START
+                .to(Alignment::TOP_START)
+                .offset(ISLAND, PANEL),
+            (0.0, 30.0),
+            "hung below, start edges together"
+        );
+        assert_eq!(
+            Alignment::TOP_END
+                .to(Alignment::BOTTOM_END)
+                .offset(ISLAND, PANEL),
+            (-200.0, -200.0),
+            "standing above, end edges together"
+        );
+        assert_eq!(
+            Alignment::TOP_END
+                .to(Alignment::CENTER)
+                .offset(ISLAND, Size::new(8.0, 8.0)),
+            (96.0, -4.0),
+            "a badge centred on the top end corner"
+        );
+    }
+}
 
 #[cfg(test)]
 mod a_length_is_what_it_carries {
