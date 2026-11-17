@@ -6764,6 +6764,79 @@ fn outlines() -> Container {
         ))
 }
 
+/// A child out of flow hangs against the outside of its parent's edge, its
+/// own point on the parent's (#925): a panel under an island, centred on it
+/// and wider than it; a menu under a button, their start edges together; a
+/// tip above a field, their end edges together; a badge centred on a card's
+/// top end corner. Nothing pushes anything aside, and nothing is translated.
+#[test]
+fn a_child_hangs_from_its_parents_edge() {
+    let hung = |holder: (f32, f32), child: (f32, f32), meet: Alignment, colour: Color| {
+        container()
+            .layout(ZStack::new())
+            .child(swatch(holder.0, holder.1, Color::rgb(0.36, 0.38, 0.46)).corners(6.0))
+            .child(
+                swatch(child.0, child.1, colour)
+                    .corners(4.0)
+                    .out_of_flow(true)
+                    .align_self(meet),
+            )
+    };
+    let column = |child: Container, top: f32| {
+        container()
+            .width(120.0)
+            .height(fill())
+            .padding([top, 0.0, 0.0, 0.0])
+            .layout(Flex::column().cross_alignment(CrossAlignment::Center))
+            .child(child)
+    };
+    golden(
+        "a_child_hangs_from_its_parents_edge",
+        (480.0, 140.0),
+        1.0,
+        BACKDROP,
+        container()
+            .background(BACKDROP)
+            .layout(Flex::row())
+            .child(column(
+                hung(
+                    (60.0, 24.0),
+                    (100.0, 70.0),
+                    Alignment::BOTTOM_CENTER.to(Alignment::TOP_CENTER),
+                    Color::rgb(0.30, 0.55, 0.85),
+                ),
+                20.0,
+            ))
+            .child(column(
+                hung(
+                    (60.0, 24.0),
+                    (90.0, 70.0),
+                    Alignment::BOTTOM_START.to(Alignment::TOP_START),
+                    Color::rgb(0.40, 0.70, 0.45),
+                ),
+                20.0,
+            ))
+            .child(column(
+                hung(
+                    (80.0, 24.0),
+                    (50.0, 60.0),
+                    Alignment::TOP_END.to(Alignment::BOTTOM_END),
+                    Color::rgb(0.95, 0.65, 0.25),
+                ),
+                90.0,
+            ))
+            .child(column(
+                hung(
+                    (60.0, 60.0),
+                    (16.0, 16.0),
+                    Alignment::TOP_END.to(Alignment::CENTER),
+                    Color::rgb(0.90, 0.30, 0.30),
+                ),
+                40.0,
+            )),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A text's box trimmed to its capitals
 // ---------------------------------------------------------------------------

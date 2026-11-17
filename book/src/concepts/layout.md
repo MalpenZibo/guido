@@ -635,11 +635,43 @@ There are nine: `TOP_START`, `TOP_CENTER`, `TOP_END`, `CENTER_START`,
 `CENTER`, `CENTER_END`, `BOTTOM_START`, `BOTTOM_CENTER` and `BOTTOM_END`.
 Start is the left and the top.
 
+Each names a point, and the child is placed so that the point on the stack
+and the same point on the child meet. `.to(..)` names a different point on
+the child, which is how a child sits against the *outside* of an edge rather
+than inside it, as SwiftUI's alignment guides do:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn card() -> Container { container().width(60.0).height(60.0) }
+# fn main() {
+container()
+    .layout(ZStack::new())
+    .child(card())
+    // The badge's centre on the card's top end corner, half outside it
+    .child(
+        container()
+            .width(16)
+            .height(16)
+            .corners(8)
+            .background(Color::RED)
+            .align_self(Alignment::TOP_END.to(Alignment::CENTER))
+    )
+# ;
+# }
+```
+
+`BOTTOM_START.to(TOP_START)` hangs a child under the stack with their start
+edges together, `TOP_END.to(BOTTOM_END)` stands it above with their end edges
+together. It works wherever an alignment does: across a row or a column too,
+where `CENTER.to(TOP_CENTER)` puts a child's top on the row's centre line.
+
 An alignment places a child in the room the stack has left over. Every
 leader is offered up to the stack's size and held to none of it, as Flutter's
 `Stack` does by default, so even in a stack with an exact size a child that
 sizes to its content keeps that size, and the alignment shares out the rest. A
-follower that fills the stack on an axis has none there and stays put: a
+follower that fills the stack on an axis has none there, and a plain alignment
+leaves it put: a
 background behind a centred label is still exactly the stack's size. A child
 larger than the stack is shared out the same way and overhangs instead —
 `CENTER` by the same amount on both sides. A child is only larger than the
@@ -677,8 +709,12 @@ container()
     .layout(ZStack::new().align(Alignment::TOP_CENTER))
     // Leads: the stack is the island's size
     .child(island())
-    // Its own size, centred on the island and overflowing it
-    .child(panel().out_of_flow(true))
+    // Its own size, hung under the island and centred on it
+    .child(
+        panel()
+            .out_of_flow(true)
+            .align_self(Alignment::BOTTOM_CENTER.to(Alignment::TOP_CENTER)),
+    )
 # ;
 # }
 ```
@@ -689,7 +725,10 @@ parent's size. It is offered what the parent was offered, so a fixed width
 wider than the parent keeps its width; on an axis it `fill()`s it takes the
 parent's size. It is placed as if it were the only child, by its own
 `align_self` or by the parent's alignment, and it is cut only if the parent
-clips.
+clips. That is worked out on every layout from the sizes as they are then, so
+the panel above stays under the island while the island grows, with no
+`translate` to keep up to date; a `translate` on the panel is left to carry
+its own motion, a gap or a slide out.
 
 It means the same in any layout, because the container takes the child out
 before the layout sees it. In a row or a column it takes no room and no gap,
@@ -756,7 +795,9 @@ Alignment::CENTER;
 Alignment::CENTER_END;
 Alignment::BOTTOM_START;
 Alignment::BOTTOM_CENTER;
-Alignment::BOTTOM_END
+Alignment::BOTTOM_END;
+// The stack's point, then the child's that meets it
+Alignment::BOTTOM_CENTER.to(Alignment::TOP_CENTER)
 # ;
 # }
 ```

@@ -1631,6 +1631,7 @@ impl Container {
     /// the axis it stays where the row puts it, as CSS has no `justify-self`
     /// in a flex container. A child [out of flow](Self::out_of_flow) is
     /// placed by all of it in either.
+    /// [`Alignment::to`] places it outside an edge rather than inside.
     ///
     /// ```
     /// use guido::prelude::*;
@@ -1665,8 +1666,8 @@ impl Container {
     /// [`fill()`](crate::layout::fill)s it takes the content's size there.
     /// It is placed by its own [`align_self`](Self::align_self) where it
     /// declares one, and otherwise where the layout would put its only
-    /// child: [`Layout::lone_child`]. It
-    /// is cut only if the parent [clips](Self::overflow).
+    /// child: [`Layout::lone_child`], and [`Alignment::to`] hangs it outside
+    /// an edge. It is cut only if the parent [clips](Self::overflow).
     ///
     /// ```
     /// use guido::prelude::*;
