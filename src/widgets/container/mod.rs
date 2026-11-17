@@ -1620,9 +1620,17 @@ impl Container {
         self
     }
 
-    /// Where this container sits in a [`ZStack`](crate::layout::ZStack), in
-    /// place of the alignment the stack gives every child — CSS's
-    /// `align-self`.
+    /// Where this container sits in its parent, in place of the alignment
+    /// the parent gives every child — CSS's `align-self`.
+    ///
+    /// A [`ZStack`](crate::layout::ZStack) reads all of it. A
+    /// [`Flex`] reads the half across its axis — the
+    /// vertical half in a row, the horizontal in a column — in place of its
+    /// [cross alignment](crate::layout::Flex::cross_alignment), and the
+    /// container keeps its own size across instead of being stretched; along
+    /// the axis it stays where the row puts it, as CSS has no `justify-self`
+    /// in a flex container. A child [out of flow](Self::out_of_flow) is
+    /// placed by all of it in either.
     ///
     /// ```
     /// use guido::prelude::*;
@@ -1640,9 +1648,6 @@ impl Container {
     ///             .align_self(Alignment::TOP_END),
     ///     );
     /// ```
-    ///
-    /// Only a `ZStack` reads it; any other layout places the container as it
-    /// always does.
     pub fn align_self<M>(mut self, alignment: impl IntoSignal<Alignment, M>) -> Self {
         self.decoration_mut().align_self = alignment.into_prop();
         self

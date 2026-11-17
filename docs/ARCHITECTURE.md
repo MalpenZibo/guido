@@ -131,7 +131,9 @@ pub trait Layout {
 ```
 
 Built-in implementations:
-- `Flex` - Flexbox-style row/column layout with spacing and alignment
+- `Flex` - Flexbox-style row/column layout with spacing and alignment; a
+  child's own `align_self` places it across the axis in place of the cross
+  alignment
 - `ZStack` - Children stack along the Z axis, each placed by an `Alignment` —
   the stack's, or the child's own `align_self`. Children that don't `fill()`
   an axis lead it (the stack takes their size); children that do fill it

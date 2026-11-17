@@ -177,6 +177,38 @@ Stretch:  ┌───┐┌─┐┌──┐
           └───┘└─┘└──┘
 ```
 
+### One Child Aligning Itself
+
+A child can say where it sits across the row with `.align_self(..)`, the way
+CSS's `align-self` overrides `align-items`. A row reads the vertical half of
+the alignment and a column the horizontal half; along the axis the child
+stays where the row puts it. A child that aligns itself keeps its own size
+across, so in a stretching row it is not stretched, and in a `Baseline` row
+it sits where its alignment says rather than on the shared line.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn avatar() -> Container { container() }
+# fn main() {
+container()
+    .height(40.0)
+    .layout(Flex::row().spacing(8.0))
+    // Stretched to the row's 40
+    .child(avatar())
+    // 12 tall, centred in the 40
+    .child(
+        container()
+            .width(12.0)
+            .height(12.0)
+            .corners(6.0)
+            .background(Color::RED)
+            .align_self(Alignment::CENTER),
+    )
+# ;
+# }
+```
+
 ## Centring
 
 `center()` centres the children on both axes. It is shorthand for
