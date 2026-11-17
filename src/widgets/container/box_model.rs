@@ -433,11 +433,12 @@ impl Container {
         // What the children answered, where that is also where they are
         // heading. A measure already reads where everything is heading, and a
         // box with no transition on a size that follows its content has no
-        // target to take from one. Where the last layout below said it was in
+        // target to take from one, nor does a read for a size alone, which
+        // points no target. Where the last layout below said it was in
         // flight, it is asked where it is heading first; where this one says
         // so, the motion starts on this frame, and the layout that found it
         // is where the content is, not where it is going.
-        let measures = !ctx.measuring() && self.animates_to_its_content(lengths);
+        let measures = !ctx.measuring() && !ctx.sizing() && self.animates_to_its_content(lengths);
         let settled = if !measures {
             Some(self.lay_out_children(ctx, child))
         } else if ctx.last_layout_depended_on_the_pass() {

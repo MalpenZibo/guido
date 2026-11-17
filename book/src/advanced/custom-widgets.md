@@ -265,6 +265,14 @@ follows a setting), read them straight from `layout`: the container runs it
 inside its own tracking scope, so those reads are attributed correctly without
 you opening one.
 
+A layout that needs a child's size before it decides the room to give it — a
+row that centres its middle child between two ends of whatever length — asks
+with `ctx.measure_child(child_id, constraints)`, and then places the child with
+`layout_child` as usual. The two answers are cached apart, so a settled child
+is laid out by neither. Asking twice through `layout_child` works too, but each
+answer replaces the other, and the child and everything in it are laid out
+twice every time the layout runs.
+
 `ctx.tree_ref().with_widget(child_id, |w| w.layout_hints())` reports whether a child
 wants to fill an axis, which is what lets a layout give the remaining space to
 the children that asked for it, whether it is hidden, which takes no space

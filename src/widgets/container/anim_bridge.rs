@@ -78,8 +78,11 @@ impl Container {
         ];
         // Leaving, nothing follows the content: a size with an exit goes where
         // removal sent it, and one without stays where it was rather than
-        // follow a measure of content whose item may be gone.
-        if self.is_leaving() {
+        // follow a measure of content whose item may be gone. Nor under a read
+        // for a size alone, laid out in other room than the placement after
+        // it: pointed by both, a size would be sent toward the read's content
+        // and back on every layout, and enter from it the first time.
+        if self.is_leaving() || ctx.sizing() {
             return;
         }
         let frame_instant = ctx.tree_ref().frame_instant();
