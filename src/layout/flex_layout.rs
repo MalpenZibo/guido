@@ -735,9 +735,11 @@ impl Flex {
     /// Break `children` into lines no longer than the main axis and lay each
     /// out with [`layout_line`](Self::layout_line), one after another across.
     ///
-    /// Every child is measured first at its natural length: a `fill()` child
-    /// at its content's, as on an axis with no maximum, since what it fills is
-    /// only known once its line is. A child that measures nothing joins the
+    /// Every child is read first at its natural length, with
+    /// `measure_child`: a `fill()` child at its content's, as on an axis with
+    /// no maximum, since what it fills is only known once its line is. The
+    /// read is cached apart from the placement, so a settled child is laid
+    /// out by neither. A child that measures nothing joins the
     /// line it comes after and takes no gap, as placement gives it none —
     /// except a `fill()` child, which placement always gives one, so one that
     /// cannot have its gap starts a line.
@@ -781,7 +783,7 @@ impl Flex {
             let is_fill = fills_along(&self.hints[i], axis);
             fills |= is_fill;
             let main = ctx
-                .layout_child(child, natural)
+                .measure_child(child, natural)
                 .map_or(0.0, |size| size.main_axis(axis));
             if !is_fill && !takes_a_gap(main) {
                 continue;

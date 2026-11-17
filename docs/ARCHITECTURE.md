@@ -686,8 +686,9 @@ is not cut off in its first frame. Until then each content axis keeps the
 size it last asked for, `ManagedSurface::content_size`.
 
 A third entry, one per pass, is for a layout that reads a child's size before
-it decides the room it gives it — a bar row reading its ends unbounded, then
-placing them in what is left. `LayoutCtx::measure_child` lays the child out in the pass that is
+it decides the room it gives it — a bar row reading its ends unbounded, a
+wrapping `Flex` reading each child at its natural length before it breaks the
+lines. `LayoutCtx::measure_child` lays the child out in the pass that is
 running, reading what it reads, but as a read: everything run under it keeps
 its answer in that entry, places nothing that stands — its `placed_by` is
 cleared, so the `layout_child` that places it afterwards, in the same pass,

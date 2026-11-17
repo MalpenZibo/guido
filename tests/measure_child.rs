@@ -239,6 +239,31 @@ fn a_size_below_a_read_child_follows_its_content() {
     assert_eq!(width(), 20.0, "once its transition has had the time");
 }
 
+/// A wrapping row reads each child at its natural length before it breaks
+/// the lines, then places it in its line: laid out again with nothing below
+/// it changed, it lays none of them out again.
+#[test]
+fn a_settled_wrapping_row_does_not_lay_its_children_out_again() {
+    let runs = Rc::new(Cell::new(0));
+    let chip = |runs: &Rc<Cell<u32>>| {
+        container()
+            .width(fill())
+            .layout(Counted(runs.clone()))
+            .child(container().width(100.0).height(10.0))
+    };
+    let row = container()
+        .width(250.0)
+        .layout(Flex::row().spacing(4.0).wrap(true))
+        .children((0..3).map(|_| chip(&runs)).collect::<Vec<_>>());
+    let mut h = Harness::laid_out(row, 400.0, 100.0);
+    assert!(runs.get() > 0, "laid out at least once");
+
+    runs.set(0);
+    h.tree.mark_needs_layout(h.root);
+    h.lay_out(400.0, 100.0);
+    assert_eq!(runs.get(), 0, "a settled chip was laid out again");
+}
+
 /// What is below a child read first stands where the measure's placement put
 /// it, after a measure as after a layout: a read that ran under other room
 /// than last time moved it, and the placement answered from the measure's
