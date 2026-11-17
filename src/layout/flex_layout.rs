@@ -56,6 +56,7 @@ use super::{Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment,
 use crate::{
     reactive::{IntoSignal, Prop},
     tree::{LayoutCtx, Tree, WidgetId},
+    widgets::LayoutHints,
 };
 
 /// Children with main-axis size at or below this threshold are treated as
@@ -84,10 +85,57 @@ pub struct Flex {
 
     child_sizes: Vec<Size>,
     fill_indices: Vec<usize>,
-    /// Where each child of the line being laid out sits across it, by index,
-    /// where it says so itself: the half of its `align_self` across the axis,
-    /// from -1 at the start to 1 at the end.
-    aligns: Vec<Option<f32>>,
+    /// Every child's hints, read once per layout and kept to be reused.
+    hints: Vec<LayoutHints>,
+    /// How each child of the line being laid out sits across it, by index.
+    across: Vec<Across>,
+}
+
+/// How a child sits across its line: the flex's cross alignment, or the half
+/// of its own [`align_self`](crate::widgets::Container::align_self) across
+/// the axis, as CSS's `align-self` replaces `align-items`.
+#[derive(Clone, Copy, PartialEq)]
+enum Across {
+    /// Laid out at the line's depth.
+    Stretch,
+    /// On the line's shared baseline.
+    Baseline,
+    /// At its own depth, this share of the free space in: `-1.0` at the
+    /// start, `1.0` at the end.
+    At(f32),
+}
+
+impl Across {
+    fn of(hints: &LayoutHints, align: CrossAlignment, axis: Axis) -> Self {
+        match (hints.align_self, align) {
+            (Some(own), _) => Self::At(match axis {
+                Axis::Horizontal => own.y,
+                Axis::Vertical => own.x,
+            }),
+            (None, CrossAlignment::Stretch) => Self::Stretch,
+            // A column has no shared line to sit on.
+            (None, CrossAlignment::Baseline) if axis == Axis::Horizontal => Self::Baseline,
+            (None, align) => Self::At(bias(align)),
+        }
+    }
+}
+
+/// What a line offers a child: `stretched` to one it stretches, and to any
+/// other the same with nothing held across but the line's maximum.
+#[derive(Clone, Copy)]
+struct Offer {
+    stretched: Constraints,
+    own: Constraints,
+}
+
+impl Offer {
+    fn to(self, across: Across) -> Constraints {
+        if across == Across::Stretch {
+            self.stretched
+        } else {
+            self.own
+        }
+    }
 }
 
 /// One child an overflow can take room from.
@@ -117,7 +165,8 @@ impl Flex {
             line_spacing: Prop::Unset,
             child_sizes: Vec::with_capacity(8),
             fill_indices: Vec::new(),
-            aligns: Vec::new(),
+            hints: Vec::new(),
+            across: Vec::new(),
         }
     }
 
@@ -240,10 +289,9 @@ impl Flex {
         &mut self,
         ctx: &mut LayoutCtx,
         children: &[WidgetId],
-        offered: Constraints,
+        offer: Offer,
         axis: Axis,
         room: f32,
-        cross_max: f32,
     ) -> Vec<f32> {
         let mut shares = Vec::new();
         let mut held = 0.0f32;
@@ -296,8 +344,8 @@ impl Flex {
         }
 
         let whole = match axis {
-            Axis::Horizontal => offered.max_width,
-            Axis::Vertical => offered.max_height,
+            Axis::Horizontal => offer.own.max_width,
+            Axis::Vertical => offer.own.max_height,
         };
         let mut kept = vec![whole; children.len()];
         for share in &shares {
@@ -305,7 +353,7 @@ impl Flex {
                 continue;
             }
             kept[share.index] = share.target;
-            let offered = self.offered_to(share.index, offered, axis, cross_max);
+            let offered = offer.to(self.across[share.index]);
             let constraints = match axis {
                 Axis::Horizontal => Constraints {
                     max_width: share.target,
@@ -323,33 +371,6 @@ impl Flex {
         kept
     }
 
-    /// What child `index` of the line is offered: `constraints`, but free
-    /// across the axis up to the line's `cross_max` if the child aligns itself, which
-    /// CSS's `align-self` does to a stretch.
-    fn offered_to(
-        &self,
-        index: usize,
-        constraints: Constraints,
-        axis: Axis,
-        cross_max: f32,
-    ) -> Constraints {
-        if self.aligns.get(index).is_none_or(Option::is_none) {
-            return constraints;
-        }
-        match axis {
-            Axis::Horizontal => Constraints {
-                min_height: 0.0,
-                max_height: cross_max,
-                ..constraints
-            },
-            Axis::Vertical => Constraints {
-                min_width: 0.0,
-                max_width: cross_max,
-                ..constraints
-            },
-        }
-    }
-
     /// The main-axis length of the children laid out so far, how many of them
     /// keep a gap, and the longest across.
     fn tally(&self, axis: Axis) -> (f32, usize, f32) {
@@ -364,11 +385,13 @@ impl Flex {
             })
     }
 
-    /// Lay `children` out as one line along `axis`.
+    /// Lay `children` out as one line along `axis`; their hints are
+    /// `self.hints` from `first` on.
     fn layout_line(
         &mut self,
         ctx: &mut LayoutCtx,
         children: &[WidgetId],
+        first: usize,
         constraints: Constraints,
         origin: (f32, f32),
         axis: Axis,
@@ -403,19 +426,41 @@ impl Flex {
         let stretch_cross = (stretches && cross_min >= cross_max).then_some(cross_min);
         let cross_cap = stretch_cross.unwrap_or(cross_max);
 
-        let child_constraints = match axis {
-            Axis::Horizontal => Constraints {
-                min_width: 0.0,
-                min_height: cross_floor,
-                max_width: main_max,
-                max_height: cross_cap,
-            },
-            Axis::Vertical => Constraints {
-                min_width: cross_floor,
-                min_height: 0.0,
-                max_width: cross_cap,
-                max_height: main_max,
-            },
+        // A child that keeps its own depth is held by nothing across but
+        // the line's maximum.
+        let offer = match axis {
+            Axis::Horizontal => {
+                let stretched = Constraints {
+                    min_width: 0.0,
+                    min_height: cross_floor,
+                    max_width: main_max,
+                    max_height: cross_cap,
+                };
+                Offer {
+                    stretched,
+                    own: Constraints {
+                        min_height: 0.0,
+                        max_height: cross_max,
+                        ..stretched
+                    },
+                }
+            }
+            Axis::Vertical => {
+                let stretched = Constraints {
+                    min_width: cross_floor,
+                    min_height: 0.0,
+                    max_width: cross_cap,
+                    max_height: main_max,
+                };
+                Offer {
+                    stretched,
+                    own: Constraints {
+                        min_width: 0.0,
+                        max_width: cross_max,
+                        ..stretched
+                    },
+                }
+            }
         };
 
         // Pre-allocate child_sizes
@@ -424,25 +469,15 @@ impl Flex {
 
         // Pass 1: layout non-fill children and collect fill child indices
         self.fill_indices.clear();
-        self.aligns.clear();
+        self.across.clear();
 
         for (i, &child_id) in children.iter().enumerate() {
-            let hints = ctx
-                .tree_ref()
-                .with_widget(child_id, |w| w.layout_hints())
-                .unwrap_or_default();
-            let (is_fill, align) = match axis {
-                Axis::Horizontal => (hints.fill_width, hints.align_self.map(|a| a.y)),
-                Axis::Vertical => (hints.fill_height, hints.align_self.map(|a| a.x)),
-            };
-            self.aligns.push(align);
-
-            if is_fill {
+            let hints = self.hints[first + i];
+            let across = Across::of(&hints, cross_align, axis);
+            self.across.push(across);
+            if fills_along(&hints, axis) {
                 self.fill_indices.push(i);
-            } else if let Some(size) = ctx.layout_child(
-                child_id,
-                self.offered_to(i, child_constraints, axis, cross_max),
-            ) {
+            } else if let Some(size) = ctx.layout_child(child_id, offer.to(across)) {
                 self.child_sizes[i] = size;
             }
         }
@@ -466,14 +501,7 @@ impl Flex {
         // always did.
         let mut kept = Vec::new();
         if bounded && non_fill_main + total_spacing > main_max {
-            kept = self.share_overflow(
-                ctx,
-                children,
-                child_constraints,
-                axis,
-                main_max - total_spacing,
-                cross_max,
-            );
+            kept = self.share_overflow(ctx, children, offer, axis, main_max - total_spacing);
             (non_fill_main, non_fill_kept, max_cross) = self.tally(axis);
             total_spacing = gaps(spacing, self.fill_indices.len() + non_fill_kept);
         }
@@ -487,27 +515,23 @@ impl Flex {
         let fill_max = if bounded { per_fill } else { f32::INFINITY };
 
         // Pass 2: layout fill children with tight main-axis constraints
-        if !self.fill_indices.is_empty() {
+        for &i in &self.fill_indices {
+            let offered = offer.to(self.across[i]);
             let fill_constraints = match axis {
                 Axis::Horizontal => Constraints {
                     min_width: per_fill,
                     max_width: fill_max,
-                    ..child_constraints
+                    ..offered
                 },
                 Axis::Vertical => Constraints {
                     min_height: per_fill,
                     max_height: fill_max,
-                    ..child_constraints
+                    ..offered
                 },
             };
-
-            for &i in &self.fill_indices {
-                let child_id = children[i];
-                let offered = self.offered_to(i, fill_constraints, axis, cross_max);
-                if let Some(size) = ctx.layout_child(child_id, offered) {
-                    max_cross = max_cross.max(size.cross_axis(axis));
-                    self.child_sizes[i] = size;
-                }
+            if let Some(size) = ctx.layout_child(children[i], fill_constraints) {
+                max_cross = max_cross.max(size.cross_axis(axis));
+                self.child_sizes[i] = size;
             }
         }
 
@@ -523,8 +547,7 @@ impl Flex {
             let mut max_depth = 0.0f32;
             let mut max_baseline = 0.0f32;
             for (i, &id) in children.iter().enumerate() {
-                // A child that aligns itself is not on the baseline.
-                if self.aligns[i].is_some() {
+                if self.across[i] != Across::Baseline {
                     continue;
                 }
                 let child_cross = self.child_sizes[i].cross_axis(axis);
@@ -551,8 +574,7 @@ impl Flex {
             children_main = 0.0;
             let mut fill_cursor = 0;
             for (i, &child_id) in children.iter().enumerate() {
-                // A child that aligns itself keeps its own size across.
-                if self.aligns[i].is_some()
+                if self.across[i] != Across::Stretch
                     || (self.child_sizes[i].cross_axis(axis) - cross_size).abs() < 0.5
                 {
                     children_main += self.child_sizes[i].main_axis(axis);
@@ -650,32 +672,14 @@ impl Flex {
                 Axis::Horizontal => origin.1,
                 Axis::Vertical => origin.0,
             };
-            let cross_pos = match (self.aligns[i], cross_align) {
-                (Some(bias), _) => cross_origin + (cross_size - child_cross) * (bias + 1.0) / 2.0,
-                (None, CrossAlignment::Start) => match axis {
-                    Axis::Horizontal => origin.1,
-                    Axis::Vertical => origin.0,
-                },
-                (None, CrossAlignment::Center) => match axis {
-                    Axis::Horizontal => origin.1 + (cross_size - child_cross) / 2.0,
-                    Axis::Vertical => origin.0 + (cross_size - child_cross) / 2.0,
-                },
-                (None, CrossAlignment::End) => match axis {
-                    Axis::Horizontal => origin.1 + cross_size - child_cross,
-                    Axis::Vertical => origin.0 + cross_size - child_cross,
-                },
-                (None, CrossAlignment::Stretch) => match axis {
-                    Axis::Horizontal => origin.1,
-                    Axis::Vertical => origin.0,
-                },
-                (None, CrossAlignment::Baseline) => match axis {
-                    Axis::Horizontal => {
-                        origin.1 + max_baseline - baseline_of(ctx.tree_ref(), child_id, child_cross)
+            let cross_pos = cross_origin
+                + match self.across[i] {
+                    Across::Stretch => 0.0,
+                    Across::Baseline => {
+                        max_baseline - baseline_of(ctx.tree_ref(), child_id, child_cross)
                     }
-                    // A column has no shared line to sit on.
-                    Axis::Vertical => origin.0,
-                },
-            };
+                    Across::At(bias) => share(bias, cross_size - child_cross),
+                };
 
             let (x, y) = match axis {
                 Axis::Horizontal => (main_pos, cross_pos),
@@ -709,11 +713,17 @@ impl Flex {
             Axis::Horizontal => constraints.max_width,
             Axis::Vertical => constraints.max_height,
         };
+        self.hints.clear();
+        self.hints.extend(children.iter().map(|&child| {
+            ctx.tree_ref()
+                .with_widget(child, |w| w.layout_hints())
+                .unwrap_or_default()
+        }));
         let (size, least) = if wraps && main_max.is_finite() {
             let size = self.layout_lines(ctx, children, constraints, origin, axis);
             (size, Self::least_wrapped(ctx.tree_ref(), children, axis))
         } else {
-            let size = self.layout_line(ctx, children, constraints, origin, axis);
+            let size = self.layout_line(ctx, children, 0, constraints, origin, axis);
             (size, Self::least(ctx.tree_ref(), children, axis, spacing))
         };
         ctx.set_minimum(least);
@@ -766,13 +776,7 @@ impl Flex {
         // Whether the current line holds a child that keeps a gap yet.
         let mut opened = false;
         for (i, &child) in children.iter().enumerate() {
-            let is_fill = ctx
-                .tree_ref()
-                .with_widget(child, |w| match axis {
-                    Axis::Horizontal => w.layout_hints().fill_width,
-                    Axis::Vertical => w.layout_hints().fill_height,
-                })
-                .unwrap_or(false);
+            let is_fill = fills_along(&self.hints[i], axis);
             fills |= is_fill;
             let main = ctx
                 .layout_child(child, natural)
@@ -819,7 +823,15 @@ impl Flex {
                 Axis::Horizontal => Constraints::new(line_main, 0.0, main_max, cross_max),
                 Axis::Vertical => Constraints::new(0.0, line_main, cross_max, main_max),
             };
-            let size = self.layout_line(ctx, &children[line], line_constraints, line_origin, axis);
+            let first = line.start;
+            let size = self.layout_line(
+                ctx,
+                &children[line],
+                first,
+                line_constraints,
+                line_origin,
+                axis,
+            );
             across += size.cross_axis(axis);
         }
 
@@ -886,17 +898,30 @@ impl Layout for Flex {
 
     fn lone_child(&self) -> Alignment {
         let along = lone_along(self.main_alignment.get_or(MainAlignment::Start));
-        // Neither a stretch nor a baseline moves a child laid out at its own
-        // size from the start.
-        let across = match self.cross_alignment.get_or(CrossAlignment::Stretch) {
-            CrossAlignment::Start | CrossAlignment::Stretch | CrossAlignment::Baseline => -1.0,
-            CrossAlignment::Center => 0.0,
-            CrossAlignment::End => 1.0,
-        };
+        let across = bias(self.cross_alignment.get_or(CrossAlignment::Stretch));
         match self.direction.get_or(Axis::Vertical) {
             Axis::Horizontal => Alignment::new(along, across),
             Axis::Vertical => Alignment::new(across, along),
         }
+    }
+}
+
+/// Where `align` puts a child that keeps its own depth across the line, from
+/// `-1.0` at the start to `1.0` at the end. Neither a stretch nor a baseline
+/// moves such a child from the start.
+fn bias(align: CrossAlignment) -> f32 {
+    match align {
+        CrossAlignment::Start | CrossAlignment::Stretch | CrossAlignment::Baseline => -1.0,
+        CrossAlignment::Center => 0.0,
+        CrossAlignment::End => 1.0,
+    }
+}
+
+/// Whether a child of these hints fills the axis.
+fn fills_along(hints: &LayoutHints, axis: Axis) -> bool {
+    match axis {
+        Axis::Horizontal => hints.fill_width,
+        Axis::Vertical => hints.fill_height,
     }
 }
 
