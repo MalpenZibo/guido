@@ -104,3 +104,120 @@ fn a_user_written_layout_leaves_a_child_out_of_flow_alone() {
         (0.0, 0.0, 300.0, 90.0)
     );
 }
+
+/// The panel #925 hangs under an island: its top centre on the island's
+/// bottom centre.
+fn hung_panel() -> Container {
+    container()
+        .width(300.0)
+        .height(200.0)
+        .out_of_flow(true)
+        .align_self(Alignment::BOTTOM_CENTER.to(Alignment::TOP_CENTER))
+}
+
+/// A child out of flow hangs against the outside of its parent's edge: its
+/// top on the island's bottom, centred across it.
+#[test]
+fn an_out_of_flow_child_hangs_from_its_parents_edge() {
+    let h = Harness::laid_out(
+        container()
+            .layout(ZStack::new().align(Alignment::TOP_CENTER))
+            .child(container().width(100.0).height(30.0))
+            .child(hung_panel()),
+        400.0,
+        400.0,
+    );
+    let root = h.tree.get_bounds(h.root).expect("laid out");
+    assert_eq!((root.width, root.height), (100.0, 30.0), "the island's box");
+    let panel = h.tree.get_children(h.root)[1];
+    let Rect { x, y, .. } = h.tree.get_bounds(panel).expect("laid out");
+    assert_eq!((x, y), (-100.0, 30.0), "under the island, centred on it");
+}
+
+/// The island grows while the panel slides out of it on its own transition:
+/// on every frame the panel's box starts where the island's ends, and what
+/// the panel's own translate adds only ever grows — the island's layout
+/// never restarts it (#925).
+#[cfg(feature = "testing")]
+#[test]
+fn a_hung_child_follows_its_growing_parent_without_restarting_its_own_motion() {
+    use std::time::{Duration, Instant};
+
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let tall = create_signal(30.0f32);
+    let slid = create_signal(Translate::NONE);
+    let island = create_widget_ref();
+    let panel = create_widget_ref();
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(400)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .width(fill())
+                .layout(ZStack::new().align(Alignment::TOP_CENTER))
+                .child(
+                    container()
+                        .layout(ZStack::new().align(Alignment::TOP_CENTER))
+                        .child(
+                            container()
+                                .width(100.0)
+                                .height(
+                                    (move || tall.get())
+                                        .transition(Transition::new(400.0, TimingFunction::Linear)),
+                                )
+                                .widget_ref(island),
+                        )
+                        .child(
+                            hung_panel()
+                                .background(Color::WHITE)
+                                .translate(
+                                    slid.transition(Transition::new(600.0, TimingFunction::Linear)),
+                                )
+                                .widget_ref(panel),
+                        ),
+                )
+        },
+    );
+    app.configure(surface, 400, 400, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+
+    tall.set(60.0);
+    slid.set(Translate::new(0.0, 8.0));
+    let mut frames = Vec::new();
+    let start = at;
+    while at < start + Duration::from_millis(700) {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+        let island = island.layout_rect().get_untracked();
+        let laid = panel.layout_rect().get_untracked();
+        let drawn = panel.rect().get_untracked();
+        frames.push((
+            (at - start).as_millis(),
+            island.y + island.height,
+            laid.y,
+            drawn.y - laid.y,
+        ));
+    }
+    let growing = frames
+        .iter()
+        .filter(|&&(_, bottom, ..)| bottom > 31.0 && bottom < 59.0)
+        .count();
+    assert!(growing > 10, "the island grows over the frames: {frames:?}");
+    let mut slide = 0.0f32;
+    for &(ms, bottom, top, moved) in &frames {
+        assert_eq!(
+            top, bottom,
+            "at {ms} ms the panel's box starts at {top}, the island ends at {bottom}: {frames:?}"
+        );
+        assert!(
+            moved >= slide,
+            "at {ms} ms the panel's slide went back from {slide} to {moved}: {frames:?}"
+        );
+        slide = moved;
+    }
+    assert_eq!(slide, 8.0, "and the slide finishes: {frames:?}");
+}

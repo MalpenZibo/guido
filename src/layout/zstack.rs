@@ -232,7 +232,7 @@ impl Layout for ZStack {
         }
 
         // A follower was laid out at the stack's size on the axes it fills,
-        // so there is no free space for its alignment to share there.
+        // so there is no free space for a plain alignment to share there.
         //
         // The children are drawn over one another, so each needs all of its
         // own: the stack is as small as the largest of them can be.

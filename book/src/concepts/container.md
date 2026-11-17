@@ -486,7 +486,7 @@ fn create_button(label: &str, on_click: impl Fn() + 'static) -> Container {
 - `.layout(Flex::row())` - Horizontal layout
 - `.layout(Flex::column())` - Vertical layout
 - `.layout(ZStack::new().align(Alignment::CENTER))` - Children stacked, centred
-- `.align_self(Alignment::TOP_END)` - Where this one sits in its parent: all of it in a `ZStack`, the half across the axis in a `Flex`
+- `.align_self(Alignment::TOP_END)` - Where this one sits in its parent: all of it in a `ZStack`, the half across the axis in a `Flex`; `Alignment::BOTTOM_CENTER.to(Alignment::TOP_CENTER)` hangs it under the parent's edge
 - `.out_of_flow(true)` - Placed and drawn, but no part in the parent's size, as CSS's `position: absolute`
 
 ### Events
