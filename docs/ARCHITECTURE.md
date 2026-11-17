@@ -685,6 +685,24 @@ the pass (`Tree::depended_on_the_pass`), so a close or a collapsing exit
 is not cut off in its first frame. Until then each content axis keeps the
 size it last asked for, `ManagedSurface::content_size`.
 
+A third entry, one per pass, is for a layout that reads a child's size before
+it decides the room it gives it — a bar row reading its ends unbounded, then
+placing them in what is left. `LayoutCtx::measure_child` lays the child out in the pass that is
+running, reading what it reads, but as a read: everything run under it keeps
+its answer in that entry, places nothing that stands — its `placed_by` is
+cleared, so the `layout_child` that places it afterwards, in the same pass,
+runs it again, and a measure does not take its own answer while that stands —
+and points no size that follows its content, since the placement is laid out
+in other room and a size pointed by both was sent toward the read's content
+and back. On a pass where the read runs, what it moves is damaged as any move
+is; on a settled pass it does not run. A read is answered from its pass's entry, the other pass's where nothing
+below is in flight, or any answer that places the widget, so a settled child is
+laid out by neither (#927). One per pass because a content-sized surface
+measures with no maximum on its content axis and lays out with one, so a read
+asks other constraints in each. Flutter keeps a box's dry layouts apart from
+its layout in the same way; a measure would not do, since it reads where an
+animation is going.
+
 ### Widgets written outside the crate
 
 The trait is implementable from anywhere, and a leaf needs only `layout` and

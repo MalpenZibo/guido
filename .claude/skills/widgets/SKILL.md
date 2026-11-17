@@ -114,7 +114,10 @@ Two methods are required, the rest default:
   when there is nothing to redo, the tracking scope, which pass is running and
   the cache write all belong to that call, which is the only way a layout is
   ever reached. `ctx.measuring()` says whether this is the measure a
-  content-sized surface is configured from
+  content-sized surface is configured from. A custom `Layout` that reads a
+  child's size before deciding its room asks `ctx.measure_child`, then places
+  it with `layout_child`: the answers are cached apart, where two
+  `layout_child` calls evict each other and run the child twice a pass
 - `paint(&self, ctx)` — draw into the `PaintContext`, which carries the tree
   and the widget id (`ctx.tree()`, `ctx.id()`). Called through
   `PaintContext::paint_child`, which opens the widget's own Paint scope, so a
