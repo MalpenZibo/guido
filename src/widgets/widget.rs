@@ -1118,6 +1118,10 @@ pub struct LayoutHints {
     /// `align-self`. A [`ZStack`](crate::layout::ZStack) reads it in place of
     /// its own alignment.
     pub align_self: Option<crate::layout::Alignment>,
+    /// Out of flow, as CSS's `position: absolute`: laid out, placed and drawn,
+    /// but taking no room among its siblings and no part in its parent's
+    /// size.
+    pub out_of_flow: bool,
 }
 
 /// Where a widget draws itself and its children, against where it was laid

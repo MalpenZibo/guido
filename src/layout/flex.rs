@@ -81,6 +81,21 @@ impl Constraints {
         }
     }
 
+    /// What a child is offered beside siblings that came to `size`: exactly
+    /// that on an axis it fills, and up to `open` on one it does not.
+    pub(crate) fn following(hints: crate::widgets::LayoutHints, size: Size, open: Size) -> Self {
+        let along =
+            |fills: bool, size: f32, open: f32| if fills { (size, size) } else { (0.0, open) };
+        let (min_width, max_width) = along(hints.fill_width, size.width, open.width);
+        let (min_height, max_height) = along(hints.fill_height, size.height, open.height);
+        Self {
+            min_width,
+            min_height,
+            max_width,
+            max_height,
+        }
+    }
+
     pub fn unbounded() -> Self {
         Self {
             min_width: 0.0,
