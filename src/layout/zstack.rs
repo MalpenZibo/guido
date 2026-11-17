@@ -43,7 +43,9 @@ use super::{Alignment, Constraints, Layout, Size};
 ///
 /// A hidden child takes no part in any of this, as it takes no space in a
 /// [`Flex`](super::Flex): a stack whose only leader is hidden has nothing to
-/// follow either.
+/// follow either. Nor does a child
+/// [out of flow](crate::widgets::Container::out_of_flow), which is how a
+/// panel wider than its island comes out of it without widening the stack.
 ///
 /// A child on its way out — removed from a dynamic children list and playing
 /// the exit it declared with
@@ -226,13 +228,7 @@ impl Layout for ZStack {
             if leads_an_axis && !followed_size_changed {
                 continue;
             }
-            let child_constraints = Constraints {
-                min_width: if hints.fill_width { size.width } else { 0.0 },
-                min_height: if hints.fill_height { size.height } else { 0.0 },
-                max_width: size.width,
-                max_height: size.height,
-            };
-            ctx.layout_child(child_id, child_constraints);
+            ctx.layout_child(child_id, Constraints::following(hints, size, size));
         }
 
         // A follower was laid out at the stack's size on the axes it fills,
@@ -264,6 +260,10 @@ impl Layout for ZStack {
         ctx.set_minimum(least);
 
         size
+    }
+
+    fn lone_child(&self) -> Alignment {
+        self.align.get_or(Alignment::default())
     }
 }
 
@@ -718,15 +718,23 @@ mod tests {
     }
 
     /// Lay `root` out at 400×400 a frame at a time, pumping what a write
-    /// scheduled, and answer where its first child is.
-    fn first_child_per_frame(root: crate::widgets::Container) -> impl FnMut() -> (f32, f32) {
+    /// scheduled, and answer its size and where its `index`th child is.
+    fn per_frame(
+        root: crate::widgets::Container,
+        index: usize,
+    ) -> impl FnMut() -> (Size, (f32, f32)) {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(root));
         tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
         move || {
-            crate::jobs::pump_and_layout(&mut tree, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
-                .expect("the root is registered");
-            tree.get_origin(tree.get_children(id)[0]).expect("laid out")
+            let size = crate::jobs::pump_and_layout(
+                &mut tree,
+                id,
+                Constraints::new(0.0, 0.0, 400.0, 400.0),
+            )
+            .expect("the root is registered");
+            let child = tree.get_children(id)[index];
+            (size, tree.get_origin(child).expect("laid out"))
         }
     }
 
@@ -735,31 +743,123 @@ mod tests {
     #[test]
     fn a_child_moves_when_its_own_alignment_changes() {
         let alignment = crate::reactive::create_signal(Alignment::TOP_START);
-        let mut frame = first_child_per_frame(
+        let mut frame = per_frame(
             container()
                 .width(100)
                 .height(60)
                 .layout(ZStack::new())
                 .child(container().width(40).height(20).align_self(alignment)),
+            0,
         );
-        assert_eq!(frame(), (0.0, 0.0));
+        assert_eq!(frame().1, (0.0, 0.0));
         alignment.set(Alignment::BOTTOM_END);
-        assert_eq!(frame(), (60.0, 40.0));
+        assert_eq!(frame().1, (60.0, 40.0));
     }
 
     /// And so is the stack's.
     #[test]
     fn a_stack_moves_its_children_when_its_alignment_changes() {
         let alignment = crate::reactive::create_signal(Alignment::TOP_START);
-        let mut frame = first_child_per_frame(
+        let mut frame = per_frame(
             container()
                 .width(100)
                 .height(60)
                 .layout(ZStack::new().align(alignment))
                 .child(container().width(40).height(20)),
+            0,
         );
-        assert_eq!(frame(), (0.0, 0.0));
+        assert_eq!(frame().1, (0.0, 0.0));
         alignment.set(Alignment::CENTER);
-        assert_eq!(frame(), (30.0, 20.0));
+        assert_eq!(frame().1, (30.0, 20.0));
+    }
+
+    /// Being out of flow is a property like any other: a write takes the
+    /// child out of the stack's size on the next frame, and puts it back.
+    #[test]
+    fn a_stack_resizes_when_a_child_goes_out_of_flow() {
+        let out = crate::reactive::create_signal(false);
+        let mut frame = per_frame(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(100).height(30))
+                .child(container().width(300).height(200).out_of_flow(out)),
+            1,
+        );
+        assert_eq!(frame().0, Size::new(300.0, 200.0));
+        out.set(true);
+        assert_eq!(frame().0, Size::new(100.0, 30.0));
+        out.set(false);
+        assert_eq!(frame().0, Size::new(300.0, 200.0));
+    }
+
+    /// The island and the panel that comes out of it, in a stack offered
+    /// 400×400: the island leads, the panel is out of flow.
+    fn island_and_panel(island: crate::widgets::Container) -> crate::widgets::Container {
+        container()
+            .layout(ZStack::new().align(Alignment::TOP_CENTER))
+            .child(island)
+            .child(container().width(300).height(200).out_of_flow(true))
+    }
+
+    /// An out-of-flow child takes no part in the stack's size or minimum: the
+    /// stack is the island's, and the panel keeps its own size, centred over
+    /// it and overflowing both sides.
+    #[test]
+    fn an_out_of_flow_child_takes_no_part_in_the_size() {
+        let (tree, id) = layout_root(
+            island_and_panel(container().width(100).height(30)),
+            Constraints::new(0.0, 0.0, 400.0, 400.0),
+        );
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
+        assert_eq!(tree.minimum(id), Some(Size::new(100.0, 30.0)));
+        assert_eq!(child_size(&tree, id, 1), Size::new(300.0, 200.0));
+        assert_eq!(
+            tree.get_origin(tree.get_children(id)[1]),
+            Some((-100.0, 0.0))
+        );
+    }
+
+    /// The stack follows the island in the layout that changes it, with no
+    /// size read back from a frame before.
+    #[test]
+    fn the_stack_follows_its_island_in_one_layout() {
+        let width = crate::reactive::create_signal(100.0f32);
+        let mut frame = per_frame(
+            island_and_panel(container().width(move || width.get()).height(30)),
+            1,
+        );
+        assert_eq!(frame(), (Size::new(100.0, 30.0), (-100.0, 0.0)));
+        width.set(200.0);
+        assert_eq!(frame(), (Size::new(200.0, 30.0), (-50.0, 0.0)));
+    }
+
+    /// An out-of-flow child that fills an axis takes the stack's size there,
+    /// as a follower does, and still leads nothing.
+    #[test]
+    fn an_out_of_flow_child_that_fills_follows_the_stack() {
+        let (tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(100).height(30))
+                .child(container().width(fill()).height(120).out_of_flow(true)),
+            Constraints::new(0.0, 0.0, 400.0, 400.0),
+        );
+        assert_eq!(tree.cached_size(id), Some(Size::new(100.0, 30.0)));
+        assert_eq!(child_size(&tree, id, 1), Size::new(100.0, 120.0));
+    }
+
+    /// With nothing in flow, an axis with no maximum has nothing to measure:
+    /// the stack is empty there, as a box holding only absolutely positioned
+    /// children is in CSS.
+    #[test]
+    fn a_stack_of_nothing_in_flow_is_empty_on_an_unbounded_axis() {
+        let (tree, id) = layout_root(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(300).height(200).out_of_flow(true)),
+            Constraints::new(0.0, 0.0, f32::INFINITY, f32::INFINITY),
+        );
+        assert_eq!(tree.cached_size(id), Some(Size::new(0.0, 0.0)));
+        assert_eq!(child_size(&tree, id, 0), Size::new(300.0, 200.0));
     }
 }

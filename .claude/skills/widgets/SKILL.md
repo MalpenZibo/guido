@@ -150,7 +150,11 @@ child in a `fill()` container with a `Flex` of its own: the wrapper becomes the
 child the stack sees, and an exit, a widget ref or a hit test then belongs to
 it. A child's own alignment reaches the stack in `LayoutHints`, read untracked;
 `Container::layout` reads it tracked, which is what lays the stack out again
-when it changes.
+when it changes. A `Flex` reads the half of it across its axis.
+`out_of_flow` travels the same way, but no layout reads it: the container
+takes such a child out before its layout runs (`lay_out_children`), so it
+holds in every layout, a user-written one too. A property a child declares
+to its parent means something in every layout, not in one.
 
 A child playing its exit (`Widget::is_exiting`) reaches the stack as
 `LayoutHints::leaving`, and leads only an axis no staying child leads — so a

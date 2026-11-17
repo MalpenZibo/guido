@@ -192,8 +192,8 @@ pub(super) struct LayerProps {
 /// half at 12 bytes, so it stays where it is. `merge_children` is small and
 /// rarer than either, and lives here because `Container` has no room left for
 /// a field of any size. The outline's three halves are here for the same
-/// reason: a focus ring is declared on a control or two per screen, and so is
-/// `align_self`, which only a stack's badge or overlay declares.
+/// reason: a focus ring is declared on a control or two per screen, and so are
+/// `align_self` and `out_of_flow`, which a badge or an overlay declares.
 #[derive(Default)]
 pub(super) struct DecorationProps {
     pub(super) gradient: Prop<Option<LinearGradient>>,
@@ -203,6 +203,7 @@ pub(super) struct DecorationProps {
     pub(super) outline_color: Prop<Color>,
     pub(super) outline_offset: Prop<f32>,
     pub(super) align_self: Prop<Alignment>,
+    pub(super) out_of_flow: Prop<bool>,
 }
 
 bitflags::bitflags! {
@@ -751,6 +752,12 @@ impl Container {
         self.decoration
             .as_deref()
             .map_or(Prop::Unset, |d| d.align_self)
+    }
+
+    pub(super) fn out_of_flow_prop(&self) -> Prop<bool> {
+        self.decoration
+            .as_deref()
+            .map_or(Prop::Unset, |d| d.out_of_flow)
     }
 
     pub(super) fn merge_children_prop(&self) -> Prop<f32> {
@@ -1613,9 +1620,17 @@ impl Container {
         self
     }
 
-    /// Where this container sits in a [`ZStack`](crate::layout::ZStack), in
-    /// place of the alignment the stack gives every child — CSS's
-    /// `align-self`.
+    /// Where this container sits in its parent, in place of the alignment
+    /// the parent gives every child — CSS's `align-self`.
+    ///
+    /// A [`ZStack`](crate::layout::ZStack) reads all of it. A
+    /// [`Flex`] reads the half across its axis — the
+    /// vertical half in a row, the horizontal in a column — in place of its
+    /// [cross alignment](crate::layout::Flex::cross_alignment), and the
+    /// container keeps its own size across instead of being stretched; along
+    /// the axis it stays where the row puts it, as CSS has no `justify-self`
+    /// in a flex container. A child [out of flow](Self::out_of_flow) is
+    /// placed by all of it in either.
     ///
     /// ```
     /// use guido::prelude::*;
@@ -1633,11 +1648,38 @@ impl Container {
     ///             .align_self(Alignment::TOP_END),
     ///     );
     /// ```
-    ///
-    /// Only a `ZStack` reads it; any other layout places the container as it
-    /// always does.
     pub fn align_self<M>(mut self, alignment: impl IntoSignal<Alignment, M>) -> Self {
         self.decoration_mut().align_self = alignment.into_prop();
+        self
+    }
+
+    /// Take this container out of its parent's flow, as CSS's
+    /// `position: absolute` does: it is laid out, placed, drawn and answers
+    /// the pointer as any child does, but it takes no room among its
+    /// siblings and no part in its parent's size, so it can overflow the
+    /// parent without moving anything.
+    ///
+    /// The parent takes it out before its layout sees the children, so this
+    /// holds in every layout, one written outside the crate too. It is
+    /// offered what the parent's content was offered, and on an axis it
+    /// [`fill()`](crate::layout::fill)s it takes the content's size there.
+    /// It is placed by its own [`align_self`](Self::align_self) where it
+    /// declares one, and otherwise where the layout would put its only
+    /// child: [`Layout::lone_child`]. It
+    /// is cut only if the parent [clips](Self::overflow).
+    ///
+    /// ```
+    /// use guido::prelude::*;
+    ///
+    /// // As wide as the island; the wider panel overflows it, centred,
+    /// // without pushing whatever stands beside the stack.
+    /// container()
+    ///     .layout(ZStack::new().align(Alignment::TOP_CENTER))
+    ///     .child(container().width(100).height(30))
+    ///     .child(container().width(300).height(200).out_of_flow(true));
+    /// ```
+    pub fn out_of_flow<M>(mut self, out_of_flow: impl IntoSignal<bool, M>) -> Self {
+        self.decoration_mut().out_of_flow = out_of_flow.into_prop();
         self
     }
 
@@ -2141,6 +2183,7 @@ impl Widget for Container {
             hidden: false,
             leaving: self.is_exiting(),
             align_self: self.align_self_prop().get_untracked(),
+            out_of_flow: self.out_of_flow_prop().get_or_untracked(false),
         }
     }
 
@@ -2151,10 +2194,11 @@ impl Widget for Container {
             ctx.tree().set_relayout_boundary(id, true);
             return Size::zero();
         }
-        // The parent places this container by it, through `layout_hints`,
-        // which subscribes to nothing: this read is what lays the parent out
-        // again when it changes.
+        // The parent places and sizes itself by these, through
+        // `layout_hints`, which subscribes to nothing: these reads are what
+        // lay the parent out again when they change.
         let _ = self.align_self_prop().get();
+        let _ = self.out_of_flow_prop().get();
         let declared = self.declared_lengths();
         let constraints = Self::own_constraints(declared, constraints);
 

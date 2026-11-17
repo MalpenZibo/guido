@@ -177,6 +177,38 @@ Stretch:  ┌───┐┌─┐┌──┐
           └───┘└─┘└──┘
 ```
 
+### One Child Aligning Itself
+
+A child can say where it sits across the row with `.align_self(..)`, the way
+CSS's `align-self` overrides `align-items`. A row reads the vertical half of
+the alignment and a column the horizontal half; along the axis the child
+stays where the row puts it. A child that aligns itself keeps its own size
+across, so in a stretching row it is not stretched, and in a `Baseline` row
+it sits where its alignment says rather than on the shared line.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn avatar() -> Container { container() }
+# fn main() {
+container()
+    .height(40.0)
+    .layout(Flex::row().spacing(8.0))
+    // Stretched to the row's 40
+    .child(avatar())
+    // 12 tall, centred in the 40
+    .child(
+        container()
+            .width(12.0)
+            .height(12.0)
+            .corners(6.0)
+            .background(Color::RED)
+            .align_self(Alignment::CENTER),
+    )
+# ;
+# }
+```
+
 ## Centring
 
 `center()` centres the children on both axes. It is shorthand for
@@ -627,6 +659,44 @@ container()
 # ;
 # }
 ```
+
+### Taking a Child Out of Flow
+
+Sometimes a stack has to stay the size of one child while another comes out
+of it, wider: an island with a panel that opens out of it, which must not
+push the island's neighbours away. `.out_of_flow(true)` takes a child out of
+its parent's flow, as CSS's `position: absolute` does:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn island() -> Container { container().width(100.0).height(30.0) }
+# fn panel() -> Container { container().width(300.0).height(200.0) }
+# fn main() {
+container()
+    .layout(ZStack::new().align(Alignment::TOP_CENTER))
+    // Leads: the stack is the island's size
+    .child(island())
+    // Its own size, centred on the island and overflowing it
+    .child(panel().out_of_flow(true))
+# ;
+# }
+```
+
+A child out of flow is laid out, placed, drawn and answers clicks like any
+other, including where it overflows its parent, but it takes no part in the
+parent's size. It is offered what the parent was offered, so a fixed width
+wider than the parent keeps its width; on an axis it `fill()`s it takes the
+parent's size. It is placed as if it were the only child, by its own
+`align_self` or by the parent's alignment, and it is cut only if the parent
+clips.
+
+It means the same in any layout, because the container takes the child out
+before the layout sees it. In a row or a column it takes no room and no gap,
+and sits where the row would put it alone — `SpaceBetween` at the start,
+`SpaceAround` and `SpaceEvenly` in the middle, `Stretch` and `Baseline` at
+the start. In a [layout you write](../advanced/custom-widgets.md#a-layout) it
+sits at the top start, unless the layout's `lone_child` says otherwise.
 
 ## API Reference
 
