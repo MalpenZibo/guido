@@ -33,6 +33,18 @@
 //! §9.7 resolves flexible lengths. Children that fit are laid out at their
 //! natural sizes, once.
 //!
+//! ## Children Out of Flow
+//!
+//! A child [out of flow](crate::widgets::Container::out_of_flow) takes no
+//! room, no gap and no part in the row's size or minimum, as CSS's
+//! `position: absolute` takes none. It is laid out against what the row was
+//! offered, takes the row's size on an axis it fills, and is placed as if it
+//! were the row's only child: by its own
+//! [`align_self`](crate::widgets::Container::align_self) where it declares
+//! one, otherwise by the row's alignments — `SpaceBetween` as `Start`,
+//! `SpaceAround` and `SpaceEvenly` as `Center`, and `Stretch` and
+//! `Baseline` as `Start`, as CSS places a lone item.
+//!
 //! ## Usage
 //!
 //! ```no_run
@@ -43,7 +55,7 @@
 //!     .children([button_a, button_b, button_c]);
 //! ```
 
-use super::{Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
+use super::{Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
 use crate::{
     reactive::{IntoSignal, Prop},
     tree::{LayoutCtx, Tree, WidgetId},
@@ -75,6 +87,9 @@ pub struct Flex {
 
     child_sizes: Vec<Size>,
     fill_indices: Vec<usize>,
+    /// The children in flow, when some are not: what the row is laid out
+    /// from. Kept to be reused, and untouched while every child is in flow.
+    in_flow: Vec<WidgetId>,
 }
 
 /// One child an overflow can take room from.
@@ -104,6 +119,7 @@ impl Flex {
             line_spacing: Prop::Unset,
             child_sizes: Vec::with_capacity(8),
             fill_indices: Vec::new(),
+            in_flow: Vec::new(),
         }
     }
 
@@ -771,6 +787,59 @@ impl Flex {
         }
     }
 
+    /// Lay out the children out of flow and place them in a flex of `size`,
+    /// each as if it were the only child: CSS's static position for an
+    /// absolutely positioned child of a flex container. Each is offered what
+    /// the flex was, and the flex's size on an axis it fills.
+    fn place_out_of_flow(
+        &self,
+        ctx: &mut LayoutCtx,
+        children: &[WidgetId],
+        constraints: Constraints,
+        origin: (f32, f32),
+        axis: Axis,
+        size: Size,
+    ) {
+        let alone = self.alone(axis);
+        for &child in children {
+            let hints = ctx
+                .tree_ref()
+                .with_widget(child, |w| w.layout_hints())
+                .unwrap_or_default();
+            if !hints.out_of_flow {
+                continue;
+            }
+            let offered = Constraints::following(hints, size, constraints.max_size());
+            let Some(child_size) = ctx.layout_child(child, offered) else {
+                continue;
+            };
+            let (dx, dy) = hints.align_self.unwrap_or(alone).offset(size, child_size);
+            ctx.tree().set_origin(child, origin.0 + dx, origin.1 + dy);
+        }
+    }
+
+    /// Where this flex's alignments put a child alone in it, as one alignment
+    /// on both axes. CSS places a lone item at the start under
+    /// `space-between` and in the middle under `space-around` and
+    /// `space-evenly`; neither a stretch nor a baseline moves a child laid
+    /// out at its own size from the start.
+    fn alone(&self, axis: Axis) -> Alignment {
+        let along = match self.main_alignment.get_or(MainAlignment::Start) {
+            MainAlignment::Start | MainAlignment::SpaceBetween => -1.0,
+            MainAlignment::Center | MainAlignment::SpaceAround | MainAlignment::SpaceEvenly => 0.0,
+            MainAlignment::End => 1.0,
+        };
+        let across = match self.cross_alignment.get_or(CrossAlignment::Stretch) {
+            CrossAlignment::Start | CrossAlignment::Stretch | CrossAlignment::Baseline => -1.0,
+            CrossAlignment::Center => 0.0,
+            CrossAlignment::End => 1.0,
+        };
+        match axis {
+            Axis::Horizontal => Alignment::new(along, across),
+            Axis::Vertical => Alignment::new(across, along),
+        }
+    }
+
     /// The least a wrapping flex can be: as long as its longest child's
     /// minimum, since every other can go to a line of its own, and as deep as
     /// its deepest. A lower bound, as [`least`](Self::least) is.
@@ -822,7 +891,26 @@ impl Layout for Flex {
     ) -> Size {
         // Never unset — `new` always gives one — so the default is a formality.
         let direction = self.direction.get_or(Axis::Vertical);
-        self.layout_axis(ctx, children, constraints, origin, direction)
+        let tree = ctx.tree_ref();
+        let out_of_flow =
+            |id: WidgetId| tree.with_widget(id, |w| w.layout_hints().out_of_flow) == Some(true);
+        if !children.iter().any(|&child| out_of_flow(child)) {
+            return self.layout_axis(ctx, children, constraints, origin, direction);
+        }
+        // The row is laid out from the children in flow alone, so one out of
+        // flow takes no room, no gap and no part in the minimum.
+        let mut in_flow = std::mem::take(&mut self.in_flow);
+        in_flow.clear();
+        in_flow.extend(
+            children
+                .iter()
+                .copied()
+                .filter(|&child| !out_of_flow(child)),
+        );
+        let size = self.layout_axis(ctx, &in_flow, constraints, origin, direction);
+        self.in_flow = in_flow;
+        self.place_out_of_flow(ctx, children, constraints, origin, direction, size);
+        size
     }
 }
 
@@ -1796,5 +1884,98 @@ mod tests {
         wraps.set(true);
         frame(&mut tree, root);
         assert_eq!(origins(&tree, root)[3], (0.0, 14.0));
+    }
+
+    /// An out-of-flow child takes no room and no gap in a row, and no part in
+    /// its size or minimum: the row is its two boxes and the gap between them.
+    #[test]
+    fn an_out_of_flow_child_takes_no_room_in_a_row() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .layout(Flex::row().spacing(10.0))
+                .child(container().width(50.0).height(20.0))
+                .child(container().width(80.0).height(40.0).out_of_flow(true))
+                .child(container().width(50.0).height(20.0)),
+        );
+        assert_eq!(bounds_of(&tree, root).width, 110.0);
+        assert_eq!(bounds_of(&tree, root).height, 20.0);
+        assert_eq!(tree.minimum(root), Some(Size::new(110.0, 20.0)));
+        assert_eq!(origins(&tree, root), [(0.0, 0.0), (0.0, 0.0), (60.0, 0.0)]);
+        let out = tree.get_children(root)[1];
+        assert_eq!(bounds_of(&tree, out).height, 40.0, "not cut to the row");
+    }
+
+    /// It is placed as the row's only child would be: by the row's
+    /// alignments, a spacing one as CSS places a lone item, or by its own.
+    #[test]
+    fn an_out_of_flow_child_is_placed_as_the_only_child() {
+        let mut tree = Tree::new();
+        let out_at = |tree: &mut Tree, flex: Flex, out: Container| {
+            let root = laid_out_once(
+                tree,
+                container()
+                    .width(200.0)
+                    .height(60.0)
+                    .layout(flex)
+                    .child(container().width(50.0).height(20.0))
+                    .child(out.width(80.0).height(40.0).out_of_flow(true)),
+            );
+            origins(tree, root)[1]
+        };
+        let out = || container();
+        assert_eq!(out_at(&mut tree, Flex::row().center(), out()), (60.0, 10.0));
+        assert_eq!(out_at(&mut tree, Flex::row(), out()), (0.0, 0.0));
+        assert_eq!(
+            out_at(
+                &mut tree,
+                Flex::row().main_alignment(MainAlignment::SpaceBetween),
+                out()
+            ),
+            (0.0, 0.0)
+        );
+        assert_eq!(
+            out_at(
+                &mut tree,
+                Flex::row().main_alignment(MainAlignment::SpaceAround),
+                out()
+            ),
+            (60.0, 0.0)
+        );
+        assert_eq!(
+            out_at(
+                &mut tree,
+                Flex::column().cross_alignment(CrossAlignment::End),
+                out()
+            ),
+            (120.0, 0.0)
+        );
+        assert_eq!(
+            out_at(
+                &mut tree,
+                Flex::row(),
+                out().align_self(crate::layout::Alignment::BOTTOM_END)
+            ),
+            (120.0, 20.0)
+        );
+    }
+
+    /// In a wrapping row it takes no place on a line either.
+    #[test]
+    fn an_out_of_flow_child_takes_no_place_on_a_line() {
+        let mut tree = Tree::new();
+        let root = laid_out_once(
+            &mut tree,
+            container()
+                .width(220.0)
+                .layout(Flex::row().wrap(true))
+                .child(container().width(100.0).height(10.0))
+                .child(container().width(100.0).height(10.0))
+                .child(container().width(100.0).height(10.0).out_of_flow(true))
+                .child(container().width(100.0).height(10.0)),
+        );
+        assert_eq!(origins(&tree, root)[3], (0.0, 10.0));
+        assert_eq!(bounds_of(&tree, root).height, 20.0);
     }
 }

@@ -137,6 +137,9 @@ Built-in implementations:
   an axis lead it (the stack takes their size); children that do fill it
   follow, laid out against the size the others established
 
+In either, a child `out_of_flow` takes no part in the parent's size and is
+placed as if it were the only child, as CSS's `position: absolute`.
+
 ### `renderer/` - GPU Rendering
 
 Hardware-accelerated rendering using wgpu.

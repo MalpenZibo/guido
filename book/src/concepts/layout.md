@@ -628,6 +628,42 @@ container()
 # }
 ```
 
+### Taking a Child Out of Flow
+
+Sometimes a stack has to stay the size of one child while another comes out
+of it, wider: an island with a panel that opens out of it, which must not
+push the island's neighbours away. `.out_of_flow(true)` takes a child out of
+its parent's flow, as CSS's `position: absolute` does:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn island() -> Container { container().width(100.0).height(30.0) }
+# fn panel() -> Container { container().width(300.0).height(200.0) }
+# fn main() {
+container()
+    .layout(ZStack::new().align(Alignment::TOP_CENTER))
+    // Leads: the stack is the island's size
+    .child(island())
+    // Its own size, centred on the island and overflowing it
+    .child(panel().out_of_flow(true))
+# ;
+# }
+```
+
+A child out of flow is laid out, placed, drawn and answers clicks like any
+other, including where it overflows its parent, but it takes no part in the
+parent's size. It is offered what the parent was offered, so a fixed width
+wider than the parent keeps its width; on an axis it `fill()`s it takes the
+parent's size. It is placed as if it were the only child, by its own
+`align_self` or by the parent's alignment, and it is cut only if the parent
+clips.
+
+It means the same in a row or a column: the child takes no room and no gap,
+and sits where the row would put it alone — `SpaceBetween` at the start,
+`SpaceAround` and `SpaceEvenly` in the middle, `Stretch` and `Baseline` at
+the start.
+
 ## API Reference
 
 ### Flex Builder
