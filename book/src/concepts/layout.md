@@ -691,10 +691,12 @@ parent's size. It is placed as if it were the only child, by its own
 `align_self` or by the parent's alignment, and it is cut only if the parent
 clips.
 
-It means the same in a row or a column: the child takes no room and no gap,
+It means the same in any layout, because the container takes the child out
+before the layout sees it. In a row or a column it takes no room and no gap,
 and sits where the row would put it alone — `SpaceBetween` at the start,
 `SpaceAround` and `SpaceEvenly` in the middle, `Stretch` and `Baseline` at
-the start.
+the start. In a [layout you write](../advanced/custom-widgets.md#a-layout) it
+sits at the top start, unless the layout's `lone_child` says otherwise.
 
 ## API Reference
 

@@ -420,6 +420,9 @@ pub trait Layout {
     /// Perform layout on children and return the total size.
     ///
     /// Children are identified by WidgetId and accessed via the passed Tree.
+    /// A child [out of flow](crate::widgets::Container::out_of_flow) is never
+    /// among them: the container lays it out and places it itself, by
+    /// [`lone_child`](Self::lone_child).
     fn layout(
         &mut self,
         ctx: &mut LayoutCtx,
@@ -427,6 +430,15 @@ pub trait Layout {
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size;
+
+    /// Where this layout would put a child that was its only one, in the
+    /// box [`layout`](Self::layout) answered: where a child out of flow sits
+    /// unless it declares its own
+    /// [`align_self`](crate::widgets::Container::align_self). The top start
+    /// unless the layout says otherwise.
+    fn lone_child(&self) -> Alignment {
+        Alignment::TOP_START
+    }
 }
 
 /// Direction for flex layout
@@ -499,12 +511,17 @@ impl Alignment {
     /// How far from the box's origin a child of `child` size sits in a box
     /// of `outer` size.
     pub(crate) fn offset(self, outer: Size, child: Size) -> (f32, f32) {
-        let share = |bias: f32, free: f32| free * (bias + 1.0) / 2.0;
         (
             share(self.x, outer.width - child.width),
             share(self.y, outer.height - child.height),
         )
     }
+}
+
+/// How far into `free` space a share of `bias` reaches: none of it at
+/// `-1.0`, half at `0.0`, all of it at `1.0`.
+pub(crate) fn share(bias: f32, free: f32) -> f32 {
+    free * (bias + 1.0) / 2.0
 }
 
 /// Top start, which is where a box's content sits until something says

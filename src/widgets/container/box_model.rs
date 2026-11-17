@@ -350,13 +350,51 @@ impl Container {
     /// alignment, whatever a user-written `Layout` declares — and those reads
     /// belong to this container, which is whose scope the call is already
     /// inside.
+    ///
+    /// The layout is handed only the children in flow. One
+    /// [out of flow](Container::out_of_flow) is laid out here once the
+    /// content's size is known, and placed in it as the layout would place
+    /// its only child, so every layout, a user-written one too, leaves it out
+    /// of its size without knowing it exists.
     pub(super) fn lay_out_children(&mut self, ctx: &mut LayoutCtx, child: &ChildLayout) -> Size {
         let children = self.children_source.get();
         if children.is_empty() {
             return Size::zero();
         }
-        self.layout
-            .layout(ctx, children, child.constraints, child.origin)
+        let hints = |ctx: &LayoutCtx, id: WidgetId| {
+            ctx.tree_ref()
+                .with_widget(id, |w| w.layout_hints())
+                .unwrap_or_default()
+        };
+        let Some(first) = children.iter().position(|&id| hints(ctx, id).out_of_flow) else {
+            return self
+                .layout
+                .layout(ctx, children, child.constraints, child.origin);
+        };
+        let mut in_flow = children[..first].to_vec();
+        let mut out_of_flow = smallvec::SmallVec::<[_; 2]>::new();
+        for &id in &children[first..] {
+            let hints = hints(ctx, id);
+            if hints.out_of_flow {
+                out_of_flow.push((id, hints));
+            } else {
+                in_flow.push(id);
+            }
+        }
+        let size = self
+            .layout
+            .layout(ctx, &in_flow, child.constraints, child.origin);
+        let lone = self.layout.lone_child();
+        let open = child.constraints.max_size();
+        for (id, hints) in out_of_flow {
+            let Some(own) = ctx.layout_child(id, Constraints::following(hints, size, open)) else {
+                continue;
+            };
+            let (dx, dy) = hints.align_self.unwrap_or(lone).offset(size, own);
+            ctx.tree()
+                .set_origin(id, child.origin.0 + dx, child.origin.1 + dy);
+        }
+        size
     }
 
     /// Lay the children out, set the size targets from where they are

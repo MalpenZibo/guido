@@ -39,17 +39,8 @@
 //! §9.7 resolves flexible lengths. Children that fit are laid out at their
 //! natural sizes, once.
 //!
-//! ## Children Out of Flow
-//!
 //! A child [out of flow](crate::widgets::Container::out_of_flow) takes no
-//! room, no gap and no part in the row's size or minimum, as CSS's
-//! `position: absolute` takes none. It is laid out against what the row was
-//! offered, takes the row's size on an axis it fills, and is placed as if it
-//! were the row's only child: by its own
-//! [`align_self`](crate::widgets::Container::align_self) where it declares
-//! one, otherwise by the row's alignments — `SpaceBetween` as `Start`,
-//! `SpaceAround` and `SpaceEvenly` as `Center`, and `Stretch` and
-//! `Baseline` as `Start`, as CSS places a lone item.
+//! room in a row, and sits where the row's alignments would put it alone.
 //!
 //! ## Usage
 //!
@@ -61,7 +52,7 @@
 //!     .children([button_a, button_b, button_c]);
 //! ```
 
-use super::{Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size};
+use super::{Alignment, Axis, Constraints, CrossAlignment, Layout, MainAlignment, Size, share};
 use crate::{
     reactive::{IntoSignal, Prop},
     tree::{LayoutCtx, Tree, WidgetId},
@@ -97,9 +88,6 @@ pub struct Flex {
     /// where it says so itself: the half of its `align_self` across the axis,
     /// from -1 at the start to 1 at the end.
     aligns: Vec<Option<f32>>,
-    /// The children in flow, when some are not: what the row is laid out
-    /// from. Kept to be reused, and untouched while every child is in flow.
-    in_flow: Vec<WidgetId>,
 }
 
 /// One child an overflow can take room from.
@@ -130,7 +118,6 @@ impl Flex {
             child_sizes: Vec::with_capacity(8),
             fill_indices: Vec::new(),
             aligns: Vec::new(),
-            in_flow: Vec::new(),
         }
     }
 
@@ -215,27 +202,23 @@ impl Flex {
         free_space: f32,
         child_count: usize,
     ) -> (f32, f32) {
+        // With at most one child that keeps a gap — every other hidden or half
+        // a pixel or less along the axis — there is nothing to space, and
+        // what the row holds goes where a lone child would.
+        if child_count <= 1 {
+            return (share(lone_along(main_align), free_space), spacing);
+        }
         match main_align {
             MainAlignment::Start => (0.0, spacing),
             MainAlignment::Center => (free_space / 2.0, spacing),
             MainAlignment::End => (free_space, spacing),
-            MainAlignment::SpaceBetween => {
-                if child_count > 1 {
-                    (0.0, free_space / (child_count - 1) as f32 + spacing)
-                } else {
-                    (0.0, spacing)
-                }
-            }
-            // With no child that keeps a gap — no child at all, or every child
-            // hidden or half a pixel or less along the axis — `SpaceAround`
-            // and `SpaceEvenly` divide as if there were one, so what they hold
-            // is centred in the free space, as CSS centres a lone item (#697).
+            MainAlignment::SpaceBetween => (0.0, free_space / (child_count - 1) as f32 + spacing),
             MainAlignment::SpaceAround => {
-                let space = free_space / child_count.max(1) as f32;
+                let space = free_space / child_count as f32;
                 (space / 2.0, space + spacing)
             }
             MainAlignment::SpaceEvenly => {
-                let space = free_space / (child_count.max(1) + 1) as f32;
+                let space = free_space / (child_count + 1) as f32;
                 (space, space + spacing)
             }
         }
@@ -847,59 +830,6 @@ impl Flex {
         }
     }
 
-    /// Lay out the children out of flow and place them in a flex of `size`,
-    /// each as if it were the only child: CSS's static position for an
-    /// absolutely positioned child of a flex container. Each is offered what
-    /// the flex was, and the flex's size on an axis it fills.
-    fn place_out_of_flow(
-        &self,
-        ctx: &mut LayoutCtx,
-        children: &[WidgetId],
-        constraints: Constraints,
-        origin: (f32, f32),
-        axis: Axis,
-        size: Size,
-    ) {
-        let alone = self.alone(axis);
-        for &child in children {
-            let hints = ctx
-                .tree_ref()
-                .with_widget(child, |w| w.layout_hints())
-                .unwrap_or_default();
-            if !hints.out_of_flow {
-                continue;
-            }
-            let offered = Constraints::following(hints, size, constraints.max_size());
-            let Some(child_size) = ctx.layout_child(child, offered) else {
-                continue;
-            };
-            let (dx, dy) = hints.align_self.unwrap_or(alone).offset(size, child_size);
-            ctx.tree().set_origin(child, origin.0 + dx, origin.1 + dy);
-        }
-    }
-
-    /// Where this flex's alignments put a child alone in it, as one alignment
-    /// on both axes. CSS places a lone item at the start under
-    /// `space-between` and in the middle under `space-around` and
-    /// `space-evenly`; neither a stretch nor a baseline moves a child laid
-    /// out at its own size from the start.
-    fn alone(&self, axis: Axis) -> Alignment {
-        let along = match self.main_alignment.get_or(MainAlignment::Start) {
-            MainAlignment::Start | MainAlignment::SpaceBetween => -1.0,
-            MainAlignment::Center | MainAlignment::SpaceAround | MainAlignment::SpaceEvenly => 0.0,
-            MainAlignment::End => 1.0,
-        };
-        let across = match self.cross_alignment.get_or(CrossAlignment::Stretch) {
-            CrossAlignment::Start | CrossAlignment::Stretch | CrossAlignment::Baseline => -1.0,
-            CrossAlignment::Center => 0.0,
-            CrossAlignment::End => 1.0,
-        };
-        match axis {
-            Axis::Horizontal => Alignment::new(along, across),
-            Axis::Vertical => Alignment::new(across, along),
-        }
-    }
-
     /// The least a wrapping flex can be: as long as its longest child's
     /// minimum, since every other can go to a line of its own, and as deep as
     /// its deepest. A lower bound, as [`least`](Self::least) is.
@@ -951,26 +881,33 @@ impl Layout for Flex {
     ) -> Size {
         // Never unset — `new` always gives one — so the default is a formality.
         let direction = self.direction.get_or(Axis::Vertical);
-        let tree = ctx.tree_ref();
-        let out_of_flow =
-            |id: WidgetId| tree.with_widget(id, |w| w.layout_hints().out_of_flow) == Some(true);
-        if !children.iter().any(|&child| out_of_flow(child)) {
-            return self.layout_axis(ctx, children, constraints, origin, direction);
+        self.layout_axis(ctx, children, constraints, origin, direction)
+    }
+
+    fn lone_child(&self) -> Alignment {
+        let along = lone_along(self.main_alignment.get_or(MainAlignment::Start));
+        // Neither a stretch nor a baseline moves a child laid out at its own
+        // size from the start.
+        let across = match self.cross_alignment.get_or(CrossAlignment::Stretch) {
+            CrossAlignment::Start | CrossAlignment::Stretch | CrossAlignment::Baseline => -1.0,
+            CrossAlignment::Center => 0.0,
+            CrossAlignment::End => 1.0,
+        };
+        match self.direction.get_or(Axis::Vertical) {
+            Axis::Horizontal => Alignment::new(along, across),
+            Axis::Vertical => Alignment::new(across, along),
         }
-        // The row is laid out from the children in flow alone, so one out of
-        // flow takes no room, no gap and no part in the minimum.
-        let mut in_flow = std::mem::take(&mut self.in_flow);
-        in_flow.clear();
-        in_flow.extend(
-            children
-                .iter()
-                .copied()
-                .filter(|&child| !out_of_flow(child)),
-        );
-        let size = self.layout_axis(ctx, &in_flow, constraints, origin, direction);
-        self.in_flow = in_flow;
-        self.place_out_of_flow(ctx, children, constraints, origin, direction, size);
-        size
+    }
+}
+
+/// Where `align` puts a lone child along the axis, from `-1.0` at the start
+/// to `1.0` at the end. CSS puts one at the start under `space-between` and
+/// in the middle under `space-around` and `space-evenly` (#697).
+fn lone_along(align: MainAlignment) -> f32 {
+    match align {
+        MainAlignment::Start | MainAlignment::SpaceBetween => -1.0,
+        MainAlignment::Center | MainAlignment::SpaceAround | MainAlignment::SpaceEvenly => 0.0,
+        MainAlignment::End => 1.0,
     }
 }
 

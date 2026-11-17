@@ -64,6 +64,11 @@ pub trait Layout {
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size;
+
+    // Where a child placed on its own goes; the top start by default.
+    fn lone_child(&self) -> Alignment {
+        Alignment::TOP_START
+    }
 }
 ```
 

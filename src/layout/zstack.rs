@@ -43,25 +43,9 @@ use super::{Alignment, Constraints, Layout, Size};
 ///
 /// A hidden child takes no part in any of this, as it takes no space in a
 /// [`Flex`](super::Flex): a stack whose only leader is hidden has nothing to
-/// follow either.
-///
-/// Nor does a child [out of flow](crate::widgets::Container::out_of_flow),
-/// which is how something comes out of a shape wider than it: the stack is
-/// as big as the island, and the panel over it keeps its own size and
-/// overflows it. Such a child is laid out against what the stack was offered,
-/// takes the stack's size on an axis it fills, and is placed by its alignment
-/// as every child is.
-///
-/// ```
-/// use guido::prelude::*;
-///
-/// container()
-///     .layout(ZStack::new().align(Alignment::TOP_CENTER))
-///     // Leads: the stack is 100 wide
-///     .child(container().width(100).height(30))
-///     // 300 wide all the same, 100 past each side of the stack
-///     .child(container().width(300).height(200).out_of_flow(true));
-/// ```
+/// follow either. Nor does a child
+/// [out of flow](crate::widgets::Container::out_of_flow), which is how a
+/// panel wider than its island comes out of it without widening the stack.
 ///
 /// A child on its way out — removed from a dynamic children list and playing
 /// the exit it declared with
@@ -181,13 +165,9 @@ impl Layout for ZStack {
         // An axis with no maximum and nothing to lead it has no space to take
         // either, and the stack is as big as its children there — so a child
         // that fills both axes has to be measured after all. A hidden child
-        // leads nothing, and nor does one out of flow.
+        // leads nothing.
         let unled = |max: f32, leads: fn(&LayoutHints) -> bool| {
-            !max.is_finite()
-                && !self
-                    .hints
-                    .iter()
-                    .any(|h| !h.hidden && !h.out_of_flow && leads(h))
+            !max.is_finite() && !self.hints.iter().any(|h| !h.hidden && leads(h))
         };
         let measure_followers = unled(constraints.max_width, |h| !h.fill_width)
             || unled(constraints.max_height, |h| !h.fill_height);
@@ -204,10 +184,8 @@ impl Layout for ZStack {
                 continue;
             };
             // Laid out all the same, so it hears its visibility change; but
-            // hidden is `display: none`, and it leads nothing. Nor does a
-            // child out of flow, which is laid out at its own size and only
-            // placed by the stack's.
-            if hints.hidden || hints.out_of_flow {
+            // hidden is `display: none`, and it leads nothing.
+            if hints.hidden {
                 continue;
             }
             largest.width = largest.width.max(child_size.width);
@@ -250,15 +228,7 @@ impl Layout for ZStack {
             if leads_an_axis && !followed_size_changed {
                 continue;
             }
-            // On an axis it does not fill, a child out of flow is offered what
-            // the stack was, as in pass 1: the stack's size is not its to keep
-            // to.
-            let open = if hints.out_of_flow {
-                constraints.max_size()
-            } else {
-                size
-            };
-            ctx.layout_child(child_id, Constraints::following(hints, size, open));
+            ctx.layout_child(child_id, Constraints::following(hints, size, size));
         }
 
         // A follower was laid out at the stack's size on the axes it fills,
@@ -277,10 +247,7 @@ impl Layout for ZStack {
             ctx.tree()
                 .set_origin(child_id, origin.0 + dx, origin.1 + dy);
             // Nor does a leaving child hold open the least it can be, where
-            // something staying leads, nor any child out of flow.
-            if self.hints[i].out_of_flow {
-                continue;
-            }
+            // something staying leads.
             let child = ctx.tree_ref().minimum(child_id).unwrap_or_default();
             let leaving = self.hints[i].leaving;
             if !(leaving && staying.width.is_some()) {
@@ -293,6 +260,10 @@ impl Layout for ZStack {
         ctx.set_minimum(least);
 
         size
+    }
+
+    fn lone_child(&self) -> Alignment {
+        self.align.get_or(Alignment::default())
     }
 }
 
@@ -747,15 +718,23 @@ mod tests {
     }
 
     /// Lay `root` out at 400×400 a frame at a time, pumping what a write
-    /// scheduled, and answer where its first child is.
-    fn first_child_per_frame(root: crate::widgets::Container) -> impl FnMut() -> (f32, f32) {
+    /// scheduled, and answer its size and where its `index`th child is.
+    fn per_frame(
+        root: crate::widgets::Container,
+        index: usize,
+    ) -> impl FnMut() -> (Size, (f32, f32)) {
         let mut tree = Tree::new();
         let id = tree.register(Box::new(root));
         tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
         move || {
-            crate::jobs::pump_and_layout(&mut tree, id, Constraints::new(0.0, 0.0, 400.0, 400.0))
-                .expect("the root is registered");
-            tree.get_origin(tree.get_children(id)[0]).expect("laid out")
+            let size = crate::jobs::pump_and_layout(
+                &mut tree,
+                id,
+                Constraints::new(0.0, 0.0, 400.0, 400.0),
+            )
+            .expect("the root is registered");
+            let child = tree.get_children(id)[index];
+            (size, tree.get_origin(child).expect("laid out"))
         }
     }
 
@@ -764,32 +743,53 @@ mod tests {
     #[test]
     fn a_child_moves_when_its_own_alignment_changes() {
         let alignment = crate::reactive::create_signal(Alignment::TOP_START);
-        let mut frame = first_child_per_frame(
+        let mut frame = per_frame(
             container()
                 .width(100)
                 .height(60)
                 .layout(ZStack::new())
                 .child(container().width(40).height(20).align_self(alignment)),
+            0,
         );
-        assert_eq!(frame(), (0.0, 0.0));
+        assert_eq!(frame().1, (0.0, 0.0));
         alignment.set(Alignment::BOTTOM_END);
-        assert_eq!(frame(), (60.0, 40.0));
+        assert_eq!(frame().1, (60.0, 40.0));
     }
 
     /// And so is the stack's.
     #[test]
     fn a_stack_moves_its_children_when_its_alignment_changes() {
         let alignment = crate::reactive::create_signal(Alignment::TOP_START);
-        let mut frame = first_child_per_frame(
+        let mut frame = per_frame(
             container()
                 .width(100)
                 .height(60)
                 .layout(ZStack::new().align(alignment))
                 .child(container().width(40).height(20)),
+            0,
         );
-        assert_eq!(frame(), (0.0, 0.0));
+        assert_eq!(frame().1, (0.0, 0.0));
         alignment.set(Alignment::CENTER);
-        assert_eq!(frame(), (30.0, 20.0));
+        assert_eq!(frame().1, (30.0, 20.0));
+    }
+
+    /// Being out of flow is a property like any other: a write takes the
+    /// child out of the stack's size on the next frame, and puts it back.
+    #[test]
+    fn a_stack_resizes_when_a_child_goes_out_of_flow() {
+        let out = crate::reactive::create_signal(false);
+        let mut frame = per_frame(
+            container()
+                .layout(ZStack::new())
+                .child(container().width(100).height(30))
+                .child(container().width(300).height(200).out_of_flow(out)),
+            1,
+        );
+        assert_eq!(frame().0, Size::new(300.0, 200.0));
+        out.set(true);
+        assert_eq!(frame().0, Size::new(100.0, 30.0));
+        out.set(false);
+        assert_eq!(frame().0, Size::new(300.0, 200.0));
     }
 
     /// The island and the panel that comes out of it, in a stack offered
@@ -824,20 +824,13 @@ mod tests {
     #[test]
     fn the_stack_follows_its_island_in_one_layout() {
         let width = crate::reactive::create_signal(100.0f32);
-        let mut tree = Tree::new();
-        let id = tree.register(Box::new(island_and_panel(
-            container().width(move || width.get()).height(30),
-        )));
-        tree.with_widget_mut(id, |w, id, t| w.register_children(t, id));
-        let offered = Constraints::new(0.0, 0.0, 400.0, 400.0);
-        crate::jobs::pump_and_layout(&mut tree, id, offered);
-        width.set(200.0);
-        let size = crate::jobs::pump_and_layout(&mut tree, id, offered);
-        assert_eq!(size, Some(Size::new(200.0, 30.0)));
-        assert_eq!(
-            tree.get_origin(tree.get_children(id)[1]),
-            Some((-50.0, 0.0))
+        let mut frame = per_frame(
+            island_and_panel(container().width(move || width.get()).height(30)),
+            1,
         );
+        assert_eq!(frame(), (Size::new(100.0, 30.0), (-100.0, 0.0)));
+        width.set(200.0);
+        assert_eq!(frame(), (Size::new(200.0, 30.0), (-50.0, 0.0)));
     }
 
     /// An out-of-flow child that fills an axis takes the stack's size there,

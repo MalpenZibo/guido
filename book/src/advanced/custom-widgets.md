@@ -181,8 +181,10 @@ Paths](../building-ui/arcs-and-paths.md) has the vocabulary.
 
 ## A layout
 
-`Layout` has one method: given the children and the constraints, place them and
-report the size the parent should use.
+`Layout` has one method to write: given the children and the constraints, place
+them and report the size the parent should use. A second, `lone_child`, says
+where a child [out of flow](../concepts/layout.md#taking-a-child-out-of-flow) sits; it is the top start
+unless you say otherwise, and such a child is never among `children`.
 
 ```rust
 # extern crate guido;

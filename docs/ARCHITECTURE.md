@@ -127,8 +127,17 @@ pub trait Layout {
         constraints: Constraints,
         origin: (f32, f32),
     ) -> Size;
+
+    fn lone_child(&self) -> Alignment {
+        Alignment::TOP_START
+    }
 }
 ```
+
+`layout` is handed only the children in flow: the container lays out each
+child `out_of_flow` itself once the content's size is known, and places it by
+its `align_self` or by `lone_child`, so it takes no part in any layout's size,
+a user-written one's included (`Container::lay_out_children`).
 
 Built-in implementations:
 - `Flex` - Flexbox-style row/column layout with spacing and alignment; a
@@ -138,9 +147,6 @@ Built-in implementations:
   the stack's, or the child's own `align_self`. Children that don't `fill()`
   an axis lead it (the stack takes their size); children that do fill it
   follow, laid out against the size the others established
-
-In either, a child `out_of_flow` takes no part in the parent's size and is
-placed as if it were the only child, as CSS's `position: absolute`.
 
 ### `renderer/` - GPU Rendering
 
