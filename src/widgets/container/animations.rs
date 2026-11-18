@@ -219,6 +219,25 @@ impl<T: Animatable> AnimationState<T> {
         self.exiting = false;
     }
 
+    /// Where the first placement puts this property, placed now with
+    /// `target`: where its enter starts, when one is declared, or the target
+    /// itself. The one definition [`begin_enter`](Self::begin_enter) places
+    /// by, and what a read for a size alone answers for a property nothing has
+    /// placed, since the read must not spend the appearance.
+    ///
+    /// A measure pass is not an appearance, so it places at the target. It
+    /// runs before the surface exists — `measure_natural_size` sizes a popup
+    /// so the compositor can be told how big to make it — and it reads targets
+    /// rather than in-flight values for exactly this reason. Starting the enter
+    /// there would play it against a surface that is not yet mapped, and there
+    /// is no frame instant to play it against either.
+    pub(crate) fn placed_at(&self, ctx: &LayoutCtx, target: T) -> T {
+        match &self.enter_from {
+            Some(from) if !ctx.measuring() => **from,
+            _ => target,
+        }
+    }
+
     /// Begin the enter this property declared, if it declared one, and answer
     /// whether it did.
     ///
@@ -226,7 +245,7 @@ impl<T: Animatable> AnimationState<T> {
     /// enter reach every animatable property rather than the ones whose
     /// initialiser remembered to ask. Taken and not read: an enter happens
     /// once, so the first initialisation is the appearance and every one after
-    /// it is not.
+    /// it is not — and a measure, which is not one, leaves it where it is.
     ///
     /// The instant is a closure because the overwhelmingly common answer is
     /// "no enter was declared", and asking a `Tree` for the time outside a
@@ -237,19 +256,10 @@ impl<T: Animatable> AnimationState<T> {
         target: T,
         now: impl FnOnce() -> FrameInstant,
     ) -> bool {
-        // A measure pass is not an appearance. It runs before the surface
-        // exists — `measure_natural_size` sizes a popup so the compositor can
-        // be told how big to make it — and it reads targets rather than
-        // in-flight values for exactly this reason. Consuming the enter there
-        // would play it against a surface that is not yet mapped, and there is
-        // no frame instant to play it against either.
-        if ctx.measuring() {
+        let from = self.placed_at(ctx, target);
+        if ctx.measuring() || self.enter_from.take().is_none() {
             return false;
         }
-        let Some(from) = self.enter_from.take() else {
-            return false;
-        };
-        let from = *from;
         if from == target {
             // Declared, but nowhere to travel from. Placing it is what every
             // property without an enter does, and it costs no frame.
@@ -734,6 +744,20 @@ impl<T: Animatable + Copy> AnimationState<T> {
         } else {
             *self.current()
         }
+    }
+
+    /// The same, and whether it is moving — for a property that may not have
+    /// been placed yet, which is placed at `target` when it is. Placed, it is
+    /// where [`displayed_in`](Self::displayed_in) has it. Not yet — read for a
+    /// size alone before any layout placed it — it has no value of its own,
+    /// and is where its first placement puts it: where its enter starts it,
+    /// moving from there, or at `target` (#930).
+    pub(crate) fn displayed_or_placed(&self, ctx: &mut LayoutCtx, target: T) -> (T, bool) {
+        if self.is_initial() {
+            let at = self.placed_at(ctx, target);
+            return (at, at != target);
+        }
+        (self.displayed_in(ctx), self.is_animating())
     }
 }
 

@@ -1,6 +1,6 @@
 //! A layout that reads a child's natural size before it places it (#927).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use guido::prelude::*;
@@ -24,10 +24,7 @@ impl Layout for HalfOfNatural {
     ) -> Size {
         let child = children[0];
         let natural = ctx
-            .measure_child(
-                child,
-                Constraints::new(0.0, 0.0, f32::INFINITY, constraints.max_height),
-            )
+            .measure_child(child, unbounded(constraints))
             .unwrap_or_default();
         let half = Constraints::new(0.0, 0.0, natural.width / 2.0, constraints.max_height);
         let size = ctx.layout_child(child, half).unwrap_or_default();
@@ -411,4 +408,170 @@ fn a_read_does_not_restart_a_slide() {
         80.0,
         "arrived once its 160 ms had passed"
     );
+}
+
+/// No maximum on the width, the height `constraints` allow.
+fn unbounded(constraints: Constraints) -> Constraints {
+    Constraints::new(0.0, 0.0, f32::INFINITY, constraints.max_height)
+}
+
+/// What a layout read, one answer per run of its layout.
+type Reads = Rc<RefCell<Vec<Size>>>;
+
+/// Reads its first child unbounded and records what it answered — with
+/// `layout_child` instead of `measure_child` when `twin` says so, which is
+/// what a read answers like — then places it in `room`, or all there is.
+/// Lays out the rest, if any, as they ask.
+struct ReadsThenPlaces {
+    reads: Reads,
+    room: Option<f32>,
+    twin: bool,
+}
+
+impl ReadsThenPlaces {
+    fn new(reads: &Reads) -> Self {
+        Self {
+            reads: reads.clone(),
+            room: None,
+            twin: false,
+        }
+    }
+}
+
+impl Layout for ReadsThenPlaces {
+    fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx,
+        children: &[WidgetId],
+        constraints: Constraints,
+        _origin: (f32, f32),
+    ) -> Size {
+        let child = children[0];
+        let read = if self.twin {
+            ctx.layout_child(child, unbounded(constraints))
+        } else {
+            ctx.measure_child(child, unbounded(constraints))
+        };
+        self.reads.borrow_mut().push(read.unwrap_or_default());
+        let room = match self.room {
+            Some(width) => Constraints::new(0.0, 0.0, width, constraints.max_height),
+            None => constraints,
+        };
+        let size = ctx.layout_child(child, room).unwrap_or_default();
+        for &rest in &children[1..] {
+            ctx.layout_child(rest, constraints);
+        }
+        size
+    }
+}
+
+/// A box that clips its content and eases a size that follows it — an
+/// island — read before anything has placed it answers its content, as
+/// `layout_child` does, and goes on answering it once settled (#930).
+#[test]
+fn a_read_before_the_first_placement_answers_the_content() {
+    let reads = Reads::default();
+    let row = container().layout(ReadsThenPlaces::new(&reads)).child(
+        container()
+            .width(at_least(0.0).transition(200.0))
+            .height(at_least(0.0).transition(200.0))
+            .overflow(Overflow::Hidden)
+            .child(container().width(40.0).height(10.0)),
+    );
+    let mut h = Harness::laid_out(row, 400.0, 100.0);
+    h.tree.mark_needs_layout(h.root);
+    h.lay_out(400.0, 100.0);
+    assert_eq!(
+        *reads.borrow(),
+        vec![Size::new(40.0, 10.0); 2],
+        "the first read, and the settled one after it"
+    );
+}
+
+/// A box that eases its width in from an enter, read before anything has
+/// placed it, answers where that placement starts it: the enter's `from`.
+#[test]
+fn a_read_before_the_first_placement_answers_where_the_enter_starts() {
+    let reads = Reads::default();
+    let row = container().layout(ReadsThenPlaces::new(&reads)).child(
+        container()
+            .width(
+                at_least(0.0)
+                    .transition(200.0)
+                    .entering_from(Length::exact(12.0)),
+            )
+            .height(10.0)
+            .overflow(Overflow::Hidden)
+            .child(container().width(40.0).height(10.0)),
+    );
+    let _h = Harness::laid_out(row, 400.0, 100.0);
+    assert_eq!(reads.borrow().first(), Some(&Size::new(12.0, 10.0)));
+}
+
+/// On every pass, a read of a filling row of islands — boxes that clip what
+/// they hold and ease a width that follows it — answers what `layout_child`
+/// answers under the same constraints, though the row is then placed
+/// narrower: from the first frame, while one island's content grows and the
+/// island eases after it, and once it has settled (#930).
+#[cfg(feature = "testing")]
+#[test]
+fn a_read_answers_what_layout_child_does_frame_after_frame() {
+    use std::time::{Duration, Instant};
+
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let grows = create_signal(20.0f32);
+    let island = |content: RwSignal<f32>| {
+        container()
+            .width(natural().transition(200.0))
+            .height(36.0)
+            .overflow(Overflow::Hidden)
+            .child(container().width(content).height(36.0))
+    };
+    let end = move |reads: &Reads, twin: bool| {
+        container()
+            .height(40.0)
+            .layout(ReadsThenPlaces {
+                room: Some(100.0),
+                twin,
+                ..ReadsThenPlaces::new(reads)
+            })
+            .child(
+                container()
+                    .width(fill())
+                    .layout(Flex::row().spacing(4.0))
+                    .child(island(create_signal(30.0)))
+                    .child(island(grows))
+                    .child(island(create_signal(40.0))),
+            )
+    };
+    let (reads, twin) = (Reads::default(), Reads::default());
+    let (a, b) = (reads.clone(), twin.clone());
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(80)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .layout(Flex::column())
+                .child(end(&a, false))
+                .child(end(&b, true))
+        },
+    );
+    app.configure(surface, 400, 80, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    for _ in 0..3 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    grows.set(60.0);
+    for _ in 0..30 {
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+
+    let (reads, twin) = (reads.borrow(), twin.borrow());
+    assert_eq!(*reads, *twin, "pass by pass");
 }
