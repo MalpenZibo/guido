@@ -52,6 +52,48 @@ impl RegionRect {
             height,
         })
     }
+
+    /// This rectangle grown outward to the logical pixels that fall on whole
+    /// physical ones at `scale`, and held inside `within`.
+    ///
+    /// A buffer placed in logical pixels at a fractional scale lands between
+    /// physical pixels wherever its origin does not fall on one, and its
+    /// physical size is then not the size it is shown at: everything drawn
+    /// into it moves by a pixel against where the same layout puts it in a
+    /// buffer that starts on one (#933). At `n/120` every
+    /// [`physical_step`] logical pixels are whole physical ones, so the origin
+    /// is rounded down to a step and the far edge up. An edge of `within` off
+    /// the grid stays where it is: the surface's own buffer ends there too.
+    pub(crate) fn on_the_physical_grid(self, scale: f32, within: Self) -> Self {
+        let step = physical_step(scale);
+        let down = |at: i32| at.div_euclid(step) * step;
+        let up = |at: i32| down(at + step - 1);
+        let x = down(self.x).max(within.x);
+        let y = down(self.y).max(within.y);
+        let right = up(self.x + self.width).min(within.x + within.width);
+        let bottom = up(self.y + self.height).min(within.y + within.height);
+        Self {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+}
+
+/// How many logical pixels make a whole number of physical ones at `scale`,
+/// which `wp_fractional_scale_v1` names in 120ths: `120 / gcd(n, 120)` — two at
+/// 1.5, four at 1.25, eight at 1.125, one at any whole scale.
+fn physical_step(scale: f32) -> i32 {
+    let n = (scale * 120.0).round() as i32;
+    if n <= 0 {
+        return 1;
+    }
+    let (mut a, mut b) = (n, 120);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    120 / a
 }
 
 /// Approximate a placed rounded rectangle as a union of axis-aligned rects that
@@ -377,6 +419,62 @@ pub(crate) fn base_rects(declared: Option<&[Rect]>, width: f32, height: f32) -> 
 mod tests {
     use super::*;
     use crate::transform::Transform;
+
+    #[test]
+    fn a_step_of_logical_pixels_is_whole_physical_ones() {
+        for (scale, step) in [(1.5, 2), (1.25, 4), (1.125, 8), (1.0, 1), (2.0, 1)] {
+            assert_eq!(super::physical_step(scale), step, "at {scale}");
+        }
+    }
+
+    #[test]
+    fn a_rectangle_on_the_physical_grid_grows_out_to_a_step() {
+        let within = RegionRect {
+            x: 0,
+            y: 0,
+            width: 400,
+            height: 301,
+        };
+        let odd = RegionRect {
+            x: 3,
+            y: 269,
+            width: 15,
+            height: 31,
+        };
+        let at = |scale| odd.on_the_physical_grid(scale, within);
+        // 2..18 and 268..300 at 1.5; 0..20 and 268..300 at 1.25; 0..24 and
+        // 264..301 at 1.125, the bottom held at the surface's edge; and as it
+        // was at a whole scale.
+        assert_eq!(
+            at(1.5),
+            RegionRect {
+                x: 2,
+                y: 268,
+                width: 16,
+                height: 32
+            }
+        );
+        assert_eq!(
+            at(1.25),
+            RegionRect {
+                x: 0,
+                y: 268,
+                width: 20,
+                height: 32
+            }
+        );
+        assert_eq!(
+            at(1.125),
+            RegionRect {
+                x: 0,
+                y: 264,
+                width: 24,
+                height: 37
+            }
+        );
+        assert_eq!(at(1.0), odd);
+        assert_eq!(at(2.0), odd);
+    }
 
     fn covers(rects: &[RegionRect], x: i32, y: i32) -> bool {
         rects.iter().any(|r| r.contains(x, y))
