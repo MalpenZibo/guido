@@ -433,3 +433,61 @@ fn a_layer_lands_where_it_is_in_a_moved_buffer() {
         [r, g, b, a]
     );
 }
+
+/// At a fractional scale the buffer stands on the physical grid: its origin and
+/// its size are whole physical pixels, whatever the content's logical extent,
+/// so what does not move is drawn on the same physical rows on every frame
+/// (#933). At 1.5 a step of two logical pixels is three physical ones.
+#[test]
+fn a_content_buffer_at_a_fractional_scale_stands_on_the_physical_grid() {
+    let Some(mut app) = headless() else { return };
+    let panel = create_signal(11.0f32);
+    let bar = app.surface(stretched_bar(), move || {
+        container()
+            .width(fill())
+            .height(fill())
+            .layout(Flex::column().main_alignment(MainAlignment::End))
+            .child(container().width(fill()).background(BLUE).height(panel))
+            .child(container().width(fill()).height(20.0).background(RED))
+    });
+    app.configure(bar, 400, 300, 1.5);
+    app.step();
+    app.step();
+
+    // Growths by odd and even numbers of logical pixels: an odd top of what
+    // is drawn is half a physical pixel, an even one is whole.
+    let mut rows = Vec::new();
+    for height in [11.0, 20.0, 31.0, 40.0, 51.0] {
+        panel.set(height);
+        app.step();
+        app.step();
+        let (_, top) = *app.buffer_origins(bar).last().unwrap();
+        let (_, logical_height) = *app.viewport_destinations(bar).last().unwrap();
+        assert_eq!(top % 2, 0, "a {height} tall panel puts the buffer at {top}");
+        assert_eq!(
+            logical_height % 2,
+            0,
+            "a {height} tall panel makes the buffer {logical_height} tall"
+        );
+        // The bar's first row in the buffer, and so in the surface.
+        let (_, physical_height) = app.physical_size(bar);
+        let first = (0..physical_height)
+            .find(|&y| app.read_pixel(bar, 10, y) == [255, 0, 0, 255])
+            .expect("the bar is drawn");
+        rows.push(top as f32 * 1.5 + first as f32);
+    }
+    // Every buffer it was given, not only the last of each height.
+    for &(x, y) in app.buffer_origins(bar).iter() {
+        assert!(x % 2 == 0 && y % 2 == 0, "a buffer at {x}, {y}");
+    }
+    for &(width, height) in app.viewport_destinations(bar).iter() {
+        assert!(
+            width % 2 == 0 && height % 2 == 0,
+            "a buffer {width}x{height}"
+        );
+    }
+    assert!(
+        rows.iter().all(|&row| row == rows[0]),
+        "the bar's first physical row moved: {rows:?}"
+    );
+}

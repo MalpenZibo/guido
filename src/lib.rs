@@ -2066,7 +2066,8 @@ fn content_floor(
 
 /// The box a buffer that covers only the content needs for the frame just
 /// flattened — what it drew, and the floor the layout left — in whole logical
-/// pixels and inside the surface, if that is not the box it has.
+/// pixels that are whole physical ones too, inside the surface, if that is not
+/// the box it has.
 fn fitted_content_buffer(surface: &ManagedSurface, frame: &Frame) -> Option<widgets::Rect> {
     let buffer = surface.content_buffer?;
     let drawn = surface
@@ -2075,12 +2076,19 @@ fn fitted_content_buffer(surface: &ManagedSurface, frame: &Frame) -> Option<widg
         .drawn_extent(frame.scale_factor)
         .map(|drawn| drawn.offset(buffer.x, buffer.y));
     let whole = widgets::Rect::new(0.0, 0.0, frame.width as f32, frame.height as f32);
+    let surface_box = region::RegionRect {
+        x: 0,
+        y: 0,
+        width: frame.width as i32,
+        height: frame.height as i32,
+    };
     let fitted = [drawn, surface.content_floor]
         .into_iter()
         .flatten()
         .reduce(renderer::union_of)
         .and_then(|needed| needed.intersection(&whole))
         .and_then(region::RegionRect::covering)
+        .map(|needed| needed.on_the_physical_grid(frame.scale_factor, surface_box))
         .map_or(surface_manager::ONE_PIXEL, |needed| {
             widgets::Rect::new(
                 needed.x as f32,
