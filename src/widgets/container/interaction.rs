@@ -12,9 +12,10 @@
 //! children have had their turn ([`handle_own_event`]), so the innermost
 //! interested widget wins.
 //!
-//! The hover *state* changes where the walk finds it; `on_hover` waits for the
-//! dispatch to return, which says every leave before any enter
-//! ([`Tree::hover_changed`]).
+//! The hover *state* changes where the walk finds it; `on_hover` and
+//! `on_pointer_move` wait for the dispatch to return, which says every leave
+//! before any enter and the moves after them all ([`Tree::hover_changed`],
+//! [`Tree::pointer_moved`]).
 //!
 //! [`track_pointer`]: Container::track_pointer
 //! [`handle_own_event`]: Container::handle_own_event
@@ -239,7 +240,7 @@ impl Container {
                 || self.draws_its_own_surface(id))
     }
 
-    /// Update hover state and fire the pointer-move callback, before children
+    /// Update hover state and owe the pointer-move callback, before children
     /// get the event: a child that handles a `MouseMove` must not stop its
     /// ancestors from tracking their own hover.
     pub(super) fn track_pointer(
@@ -306,7 +307,7 @@ impl Container {
                     && let Some(at) = at
                 {
                     let local = hit.rebase(*at);
-                    callback(local.x, local.y);
+                    tree.pointer_moved(local.x, local.y, callback);
                 }
 
                 let was_hovered = ix.is_hovered();

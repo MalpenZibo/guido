@@ -557,7 +557,7 @@ impl Rows<'_> {
             self.tree.with_widget_mut(id, |widget, id, tree| {
                 widget.event(tree, id, &Event::MouseLeave)
             });
-            self.tree.deliver_hover_changes();
+            self.tree.deliver_pointer_calls();
         });
         // Leaving, it takes no events: whatever it covered is under the
         // pointer now.

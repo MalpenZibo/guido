@@ -812,6 +812,9 @@ neither order a hover is owed in. `Tree::hover_changed` holds each call, and
 innermost first, then every enter, outermost first, as the DOM, Chromium's
 boundary dispatcher, Flutter's `MouseTracker`, GTK and Qt do (#657). A container
 whose hover flipped and flipped back within the one event hears nothing.
+`on_pointer_move` waits the same way, in `Tree::pointer_moved`, and is said
+after them all, so a widget hears the pointer enter it before it hears it move
+over it, as the DOM sends its boundary events before the move (#932).
 
 A key goes down the focus path — the focused widget has it first, then each
 ancestor up to the root — and, if nobody on it took it, down to the containers

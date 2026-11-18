@@ -90,6 +90,10 @@ container holding both, which the pointer never left, hears nothing. The order
 is the same whichever way the pointer moved and whichever sibling is drawn on
 top, and it is the one browsers, Flutter, GTK and Qt give.
 
+`on_pointer_move` is called after all of them, so a container hears the
+pointer enter it before it hears the pointer move over it, and the container
+the pointer left has already heard so, as in a browser.
+
 The hover *state* that `when_hovered` reads has already changed by the time
 any of these callbacks runs.
 

@@ -198,3 +198,87 @@ fn a_key_through_a_container_disabled_under_the_pointer_says_its_hover_went() {
     });
     assert_eq!(heard.take(), [("A", false)]);
 }
+
+/// What the hovers and the moves said, in the order they said it (#932).
+#[derive(Clone, Default)]
+struct Log(Rc<RefCell<Vec<String>>>);
+
+impl Log {
+    fn hover(&self, name: &'static str) -> impl Fn(bool) + 'static {
+        let log = self.0.clone();
+        move |hovered| {
+            let word = if hovered { "enter" } else { "leave" };
+            log.borrow_mut().push(format!("{name} {word}"));
+        }
+    }
+
+    fn moved(&self, name: &'static str) -> impl Fn(f32, f32) + 'static {
+        let log = self.0.clone();
+        move |_, _| log.borrow_mut().push(format!("{name} move"))
+    }
+
+    fn take(&self) -> Vec<String> {
+        self.0.take()
+    }
+}
+
+/// A 40×40 square that says when it is hovered and when the pointer moves
+/// over it.
+fn tracked(log: &Log, name: &'static str, color: Color) -> Container {
+    container()
+        .width(40.0)
+        .height(40.0)
+        .background(color)
+        .on_hover(log.hover(name))
+        .on_pointer_move(log.moved(name))
+}
+
+/// A widget hears the pointer enter it before it hears the pointer move over
+/// it, and the widget the pointer left hears so before either (#932): the
+/// order of the DOM's boundary events.
+#[test]
+fn a_move_into_a_sibling_is_heard_after_the_leave_and_the_enter_it_causes() {
+    let log = Log::default();
+    let mut h = Harness::laid_out(
+        container().layout(Flex::row()).children([
+            tracked(&log, "A", Color::RED),
+            tracked(&log, "B", Color::BLUE),
+        ]),
+        200.0,
+        100.0,
+    );
+
+    h.send(Event::mouse_move(20.0, 20.0));
+    assert_eq!(log.take(), ["A enter", "A move"], "the setup starts over A");
+
+    h.send(Event::mouse_move(60.0, 20.0));
+    assert_eq!(log.take(), ["A leave", "B enter", "B move"], "A to B");
+
+    h.send(Event::mouse_move(70.0, 20.0));
+    assert_eq!(log.take(), ["B move"], "a move inside B");
+}
+
+/// Moving into a child of a container both declare a move handler: both
+/// enters come first, outermost in, then both moves.
+#[test]
+fn a_move_into_a_child_is_heard_after_both_enters() {
+    let log = Log::default();
+    let mut h = Harness::laid_out(
+        container()
+            .padding(10.0)
+            .background(Color::rgb(0.2, 0.2, 0.2))
+            .on_hover(log.hover("parent"))
+            .on_pointer_move(log.moved("parent"))
+            .child(tracked(&log, "child", Color::RED)),
+        400.0,
+        100.0,
+    );
+
+    h.send(Event::mouse_move(30.0, 30.0));
+    // Which of the two moves comes first is the walk's, not this test's.
+    let heard = log.take();
+    assert_eq!(heard[..2], ["parent enter", "child enter"]);
+    let mut moves = heard[2..].to_vec();
+    moves.sort();
+    assert_eq!(moves, ["child move", "parent move"]);
+}
