@@ -693,16 +693,19 @@ running, reading what it reads, but as a read: everything run under it keeps
 its answer in that entry, places nothing that stands — its `placed_by` is
 cleared, so the `layout_child` that places it afterwards, in the same pass,
 runs it again, and a measure does not take its own answer while that stands —
-and points no size that follows its content, since the placement is laid out
-in other room and a size pointed by both was sent toward the read's content
-and back. On a pass where the read runs, what it moves is damaged as any move
-is; on a settled pass it does not run. A read is answered from its pass's entry, the other pass's where nothing
-below is in flight, or any answer that places the widget, so a settled child is
-laid out by neither (#927). One per pass because a content-sized surface
-measures with no maximum on its content axis and lays out with one, so a read
-asks other constraints in each. Flutter keeps a box's dry layouts apart from
-its layout in the same way; a measure would not do, since it reads where an
-animation is going.
+and points no size that follows its content, since the placement is laid out in
+other room and a size pointed by both was sent toward the read's content and
+back. A size nothing has placed yet is read where its first placement puts it —
+where an enter starts it, or where the content puts it — and a placement in
+other room that puts it elsewhere asks for the read to be laid out again
+(#930). On a pass where the read runs, what it moves is damaged as any move is;
+on a settled pass it does not run. A read is answered from its pass's entry,
+the other pass's where nothing below is in flight, or any answer that places
+the widget, so a settled child is laid out by neither (#927). One per pass
+because a content-sized surface measures with no maximum on its content axis
+and lays out with one, so a read asks other constraints in each. Flutter keeps
+a box's dry layouts apart from its layout in the same way; a measure would not
+do, since it reads where an animation is going.
 
 ### Widgets written outside the crate
 

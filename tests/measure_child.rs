@@ -575,3 +575,60 @@ fn a_read_answers_what_layout_child_does_frame_after_frame() {
     let (reads, twin) = (reads.borrow(), twin.borrow());
     assert_eq!(*reads, *twin, "pass by pass");
 }
+
+/// What a read answers for a size nothing has placed is where the
+/// placement would put it in the read's room; a placement in other room puts
+/// it elsewhere, and the read is laid out again: from the next frame on it
+/// reads the size where the placement put it, though a sibling lays the row
+/// out on every frame and nothing below it changes (#930).
+#[cfg(feature = "testing")]
+#[test]
+fn a_read_after_the_first_placement_reads_where_it_put_the_size() {
+    use std::time::{Duration, Instant};
+
+    let Some(mut app) = common::headless() else {
+        return;
+    };
+    let reads = Reads::default();
+    let recorded = reads.clone();
+    let tick = create_signal(1.0f32);
+    let surface = app.surface(
+        SurfaceConfig::new()
+            .height(20)
+            .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT),
+        move || {
+            container()
+                .layout(ReadsThenPlaces {
+                    room: Some(100.0),
+                    ..ReadsThenPlaces::new(&recorded)
+                })
+                .child(
+                    container()
+                        .width(at_least(0.0).transition(200.0))
+                        .height(10.0)
+                        .overflow(Overflow::Hidden)
+                        .child(container().width(fill()).height(10.0)),
+                )
+                .child(container().width(tick).height(10.0))
+        },
+    );
+    app.configure(surface, 400, 20, 1.0);
+    let mut at = Instant::now();
+    app.step_at(at);
+    for i in 0..4 {
+        tick.set(2.0 + i as f32);
+        at += Duration::from_millis(16);
+        app.step_at(at);
+    }
+    let reads = reads.borrow();
+    assert_eq!(
+        reads.first(),
+        Some(&Size::new(0.0, 10.0)),
+        "before: {reads:?}"
+    );
+    assert_eq!(
+        reads.last(),
+        Some(&Size::new(100.0, 10.0)),
+        "after: {reads:?}"
+    );
+}

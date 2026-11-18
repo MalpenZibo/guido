@@ -82,20 +82,25 @@ impl Container {
             return;
         };
         let mut retargeted = false;
+        // What a read before this placement answered, which it answered for a
+        // size nothing had placed yet: see below.
+        let read = ctx.read_answer(id);
         let inset = lengths.inset();
 
         // The two size slots, and whichever of them was declared.
         for slot in anims.slots_mut() {
-            let (anim, length, extent) = match slot {
+            let (anim, length, extent, was_read) = match slot {
                 AnimSlot::width(anim) => (
                     anim,
                     &lengths.width,
                     content.width + inset.horizontal_total(),
+                    read.map(|size| size.width),
                 ),
                 AnimSlot::height(anim) => (
                     anim,
                     &lengths.height,
                     content.height + inset.vertical_total(),
+                    read.map(|size| size.height),
                 ),
                 _ => continue,
             };
@@ -112,6 +117,12 @@ impl Container {
                     retargeted = true;
                 } else {
                     anim.set_immediate(ctx, target);
+                    // A read before this placement answered where the
+                    // placement would put the size in the read's room, and
+                    // this one put it somewhere else without marking
+                    // anything: laid out again, the read answers where it is.
+                    retargeted |= !ctx.measuring()
+                        && was_read.is_some_and(|read| (read - target).abs() > 0.001);
                 }
             } else if !(measured && length.exact_size().is_none())
                 && (target - *anim.target()).abs() > 0.001
