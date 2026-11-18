@@ -42,7 +42,7 @@
 //! [`resync_animation_targets`]: Container::resync_animation_targets
 //! [`update_size_targets`]: Container::update_size_targets
 
-use super::box_model::BoxLengths;
+use super::box_model::{BoxLengths, size_target};
 use super::*;
 use crate::tree::LayoutCtx;
 
@@ -62,20 +62,6 @@ impl Container {
         lengths: &BoxLengths,
         content: Size,
     ) {
-        let targets = [
-            (
-                lengths.width.exact_size(),
-                lengths.width.min(),
-                lengths.width.max(),
-                content.width + lengths.inset().horizontal_total(),
-            ),
-            (
-                lengths.height.exact_size(),
-                lengths.height.min(),
-                lengths.height.max(),
-                content.height + lengths.inset().vertical_total(),
-            ),
-        ];
         // Leaving, nothing follows the content: a size with an exit goes where
         // removal sent it, and one without stays where it was rather than
         // follow a measure of content whose item may be gone. Nor under a read
@@ -96,25 +82,29 @@ impl Container {
             return;
         };
         let mut retargeted = false;
+        // What a read before this placement answered, which it answered for a
+        // size nothing had placed yet: see below.
+        let read = ctx.read_answer(id);
+        let inset = lengths.inset();
 
-        // The two size slots, in the order the targets above are written, and
-        // whichever of them was declared.
+        // The two size slots, and whichever of them was declared.
         for slot in anims.slots_mut() {
-            let (anim, (exact, min, max, content_extent)) = match slot {
-                AnimSlot::width(anim) => (anim, targets[0]),
-                AnimSlot::height(anim) => (anim, targets[1]),
+            let (anim, length, extent, was_read) = match slot {
+                AnimSlot::width(anim) => (
+                    anim,
+                    &lengths.width,
+                    content.width + inset.horizontal_total(),
+                    read.map(|size| size.width),
+                ),
+                AnimSlot::height(anim) => (
+                    anim,
+                    &lengths.height,
+                    content.height + inset.vertical_total(),
+                    read.map(|size| size.height),
+                ),
                 _ => continue,
             };
-            // The target is where the size is heading, so it obeys the same
-            // bounds the size does. An unclamped one animates toward a value
-            // `resolve_size` will cap anyway: frames spent going nowhere.
-            let target = exact.unwrap_or_else(|| {
-                let grown = content_extent.max(min.unwrap_or(0.0));
-                match max {
-                    Some(max) => grown.min(max),
-                    None => grown,
-                }
-            });
+            let target = size_target(length, extent);
 
             if anim.is_initial() {
                 // Mark initialized at the first *real* layout whatever the
@@ -127,8 +117,16 @@ impl Container {
                     retargeted = true;
                 } else {
                     anim.set_immediate(ctx, target);
+                    // A read before this placement answered where the
+                    // placement would put the size in the read's room, and
+                    // this one put it somewhere else without marking
+                    // anything: laid out again, the read answers where it is.
+                    retargeted |= !ctx.measuring()
+                        && was_read.is_some_and(|read| (read - target).abs() > 0.001);
                 }
-            } else if !(measured && exact.is_none()) && (target - *anim.target()).abs() > 0.001 {
+            } else if !(measured && length.exact_size().is_none())
+                && (target - *anim.target()).abs() > 0.001
+            {
                 anim.animate_to(target, frame_instant);
                 retargeted = true;
             }

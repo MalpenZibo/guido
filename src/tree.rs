@@ -5901,6 +5901,16 @@ impl LayoutCtx<'_> {
         self.tree.pass_dependent = true;
     }
 
+    /// What a read for a size alone, [`measure_child`](Self::measure_child),
+    /// last answered for `id` in the pass that is running, where nothing has
+    /// marked it since: what the placement of a size the read found unplaced
+    /// compares its own with.
+    pub(crate) fn read_answer(&self, id: WidgetId) -> Option<Size> {
+        let slot = &self.tree.dense[self.tree.get_dense_index(id)?];
+        slot.entry(Kept::size(self.tree.pass))
+            .map(|entry| entry.size)
+    }
+
     /// Whether this pass reads where animations are going rather than where
     /// they are — true while a natural size is being measured.
     pub fn measuring(&self) -> bool {

@@ -607,17 +607,29 @@ impl Container {
     /// content, padding and border, the rule [`resolve_axis`](Self::resolve_axis)
     /// holds it to. A size in flight, or held while the box is, is where the
     /// animation has it.
+    ///
+    /// `measured` is what the content measured, which is where a size nothing
+    /// has placed yet is placed from, as [`resolve_axis`](Self::resolve_axis)
+    /// places it.
     pub(super) fn least_size(
         &self,
+        ctx: &mut LayoutCtx,
         lengths: &BoxLengths,
+        measured: Size,
         content: Size,
         size: Size,
         in_flight: bool,
     ) -> Size {
-        let least = |axis: Axis, length: &Length, padding: f32, content: f32, size: f32| {
-            if self.size_anim(axis).is_some_and(|a| a.is_animating())
-                || in_flight && self.held_anim(axis, length).is_some()
-            {
+        let mut least = |axis: Axis, length: &Length, padding: f32, content: f32, size: f32| {
+            let measured = match axis {
+                Axis::Horizontal => measured.width,
+                Axis::Vertical => measured.height,
+            };
+            let moving = self.size_anim(axis).is_some_and(|a| {
+                a.displayed_or_placed(ctx, size_target(length, measured + padding))
+                    .1
+            });
+            if moving || in_flight && self.held_anim(axis, length).is_some() {
                 return size;
             }
             if let Some(exact) = length.exact_size() {
@@ -686,8 +698,9 @@ impl Container {
         parent_max: f32,
         in_flight: bool,
     ) -> f32 {
-        let anim = self.size_anim(axis);
-        let animating = anim.is_some_and(|a| a.is_animating());
+        let declared = self.size_anim(axis);
+        let anim = declared.map(|a| a.displayed_or_placed(ctx, size_target(length, content)));
+        let animating = anim.is_some_and(|(_, moving)| moving);
         let has_exact = length.exact_size().is_some();
         // While the box is in flight a content-sized axis is where its
         // animation has it, even one going nowhere: the content was laid out
@@ -700,8 +713,7 @@ impl Container {
         let allow_shrink =
             self.content_may_overflow(axis, overflow) || animating || held || has_exact;
 
-        let mut size = if let Some(anim) = anim {
-            let animated = anim.displayed_in(ctx);
+        let mut size = if let Some((animated, _)) = anim {
             if allow_shrink {
                 animated
             } else {
@@ -731,9 +743,14 @@ impl Container {
         // eases to a bound that moved past it, rather than landing on it the
         // frame it moves (#884), and a spring still stops at a bound it
         // overshoots.
-        size = match anim.filter(|_| animating) {
-            Some(anim) => {
-                let from = *anim.start();
+        size = match declared.zip(anim).filter(|_| animating) {
+            Some((declared, (at, _))) => {
+                // Not yet placed, it sets out from where its placement puts it.
+                let from = if declared.is_initial() {
+                    at
+                } else {
+                    *declared.start()
+                };
                 let floor = length.min().map_or(f32::NEG_INFINITY, |min| min.min(from));
                 let ceiling = length.max().map_or(f32::INFINITY, |max| max.max(from));
                 size.max(floor).min(ceiling)
@@ -755,4 +772,13 @@ impl Container {
 /// offered this and the parent is told it, and the two must not disagree.
 fn exact_within(length: &Length, size: f32, parent_max: f32) -> f32 {
     length.clamp(size).min(parent_max)
+}
+
+/// Where a size that follows its content heads, once that content measures
+/// `content` along it, padding included: the length's own value where it has
+/// one, else the content held within its bounds — as an unclamped target
+/// animates toward a value [`exact_within`] and `resolve_axis` cap anyway:
+/// frames spent going nowhere.
+pub(super) fn size_target(length: &Length, content: f32) -> f32 {
+    length.exact_size().unwrap_or_else(|| length.clamp(content))
 }

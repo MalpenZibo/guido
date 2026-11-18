@@ -2276,7 +2276,8 @@ impl Widget for Container {
         // What the layout recorded its children can be arranged in, or — a
         // layout that says nothing — the size they were.
         let content_least = ctx.minimum().unwrap_or(content_size);
-        ctx.set_minimum(self.least_size(&lengths, content_least, size, in_flight));
+        let least = self.least_size(ctx, &lengths, content_size, content_least, size, in_flight);
+        ctx.set_minimum(least);
 
         self.layout_scrollbar_containers(ctx, id, size, lengths.border);
 
