@@ -147,7 +147,11 @@ jobs:
   # file and nothing else: what gates a merge is that job's `needs:`.
   golden:
     name: Everything, on a rasterizer
-    runs-on: ubuntu-latest
+    # Pinned, not `ubuntu-latest`: a golden holds only against the rasterizer
+    # it was blessed on, and the image chooses that rasterizer. 26.04's Mesa
+    # 26.0.8 draws every gradient on a rounded shape as its first stop (#937);
+    # these goldens were blessed on 24.04's Mesa 25.2 and hold on Mesa 26.2.
+    runs-on: ubuntu-24.04
     env:
       # Without an adapter every test that needs one skips itself, which would
       # report green here for the one reason that matters. In CI a skip is a
@@ -228,7 +232,8 @@ jobs:
     # suite passes first: this job runs the same tests, with every feature and
     # the same adapter.
     needs: [golden]
-    runs-on: ubuntu-latest
+    # The `golden` job's image, for the reason given there.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       # Four shards mutating in place instead of `-j` copies each built from
