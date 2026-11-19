@@ -49,6 +49,25 @@ container().corners(8.0)  // 8px radius on all corners
 # }
 ```
 
+### Per-Corner Radii
+
+Each corner takes its own radius. Four values go clockwise from the top-left,
+as CSS writes them; two values are the top pair and the bottom pair:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+container().corners([12.0, 0.0, 0.0, 0.0]);     // top-left only
+container().corners([12.0, 12.0, 0.0, 12.0]);   // all but the bottom-right
+container().corners([12.0, 0.0]);               // the top pair only
+container().corners(CornerRadii::bottom(12.0)); // the bottom pair only
+# }
+```
+
+The two-value form is not CSS's: CSS pairs the diagonals, which is rarely
+what a row in a list wants. There is no three-value form — write all four.
+
 ### Corner Curvature
 
 Control corner shape using CSS K-values:
@@ -57,12 +76,12 @@ Control corner shape using CSS K-values:
 # extern crate guido;
 # use guido::prelude::*;
 # fn main() {
-container().corners(Corners::squircle(12.0));  // iOS-style (K=2)
-container().corners(Corners::scoop(12.0));              // Circular (K=1, default)
-container().corners(Corners::bevel(12.0));      // Diagonal (K=0)
-container().corners(Corners::superellipse(12.0, 1.5));      // Concave (K=-1)
-container().corners(12.0)  // Custom
-# ;
+container().corners(12.0);                             // circular (K=1, default)
+container().corners(Corners::squircle(12.0));          // iOS-style (K=2)
+container().corners(Corners::bevel(12.0));             // diagonal cut (K=0)
+container().corners(Corners::scoop(12.0));             // concave (K=-1)
+container().corners(Corners::superellipse(12.0, 1.5)); // anything between
+container().corners(Corners::squircle([12.0, 0.0]));   // any shape, per corner
 # }
 ```
 
