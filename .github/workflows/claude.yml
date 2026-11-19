@@ -23,7 +23,8 @@ jobs:
       vars.CLAUDE_ENABLED == 'true' &&
       (contains(github.event.comment.body, '@claude') ||
        github.event.label.name == 'agent-ready')
-    runs-on: ubuntu-latest
+    # The image ci.yml's `golden` job runs on, so the goldens hold here too.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
