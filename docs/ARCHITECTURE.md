@@ -461,10 +461,10 @@ State nothing passes: a `thread_local!` cell; a `static` `GlobalSignal`, which
 is a thread's signal reached through a `static`; or a process-wide `static`
 with interior mutability — behind a lock or an atomic. The last is usually what
 a background thread writes into, having no reach into either of the other two,
-but the kind is the declaration and not the reason: `WRITE_EPOCH` below is
-written on the main thread alone and is a row all the same. It reaches whoever
-reads it without appearing in any signature, and it outlives the `App` that
-filled it unless `App::drop` resets it. Each has a row saying why neither the
+but the kind is the declaration and not the reason: `NEXT_WRITE_ROUTE` below
+is written only by threads that hold a runtime, never by a background one, and
+is a row all the same. Each reaches whoever reads it without appearing in any
+signature, and outlives the `App` that filled it unless `App::drop` resets it. Each has a row saying why neither the
 `Tree`, a pass nor an existing struct carries it, and
 `tests/ambient_state_inventory.rs` fails on one without.
 
@@ -516,8 +516,8 @@ register is of. Sweeping either in would make the register noise.
 | `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `AppState::lock` |
 | `FOCUS` | `src/reactive/focus.rs` | `GlobalSignal`: the focused widget and its ancestors, so resolving a `when_focused` subscribes to it |
 | `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `AppState::live_popups` reactive, owned by the application rather than by whichever popup opened first |
-| `WRITE_QUEUE` | `src/reactive/runtime.rs` | Process-wide: the writes a `Send` `WriteSignal` made off the main thread, pushed by whichever thread holds the writer and drained by the loop. The one place it cannot be is a thread's cell, `REACTIVE` and `APP` included — the producer would push into its own and the loop would drain an empty one |
-| `WRITE_EPOCH` | `src/reactive/runtime.rs` | Process-wide: the number each queued write is tagged with, so writers an `App` left behind cannot write into the next one. It has to outlive what it retires, which a field of `ReactiveState` cannot: `reset` takes every field back to its default, and an epoch that returns to zero revives the writers the increment was there to discard |
+| `WRITE_QUEUES` | `src/reactive/runtime.rs` | Process-wide: the writes a `Send` `WriteSignal` made off its signal's thread, one queue per reactive runtime, pushed by whichever thread holds the writer and drained by the runtime it names. The one place it cannot be is a thread's cell, `REACTIVE` and `APP` included — the producer would push into its own and the loop would drain an empty one. One queue per runtime because a signal id is a slot in one thread's storage, and a test binary runs a `Headless` on every thread (#943); which queue is a runtime's is `ReactiveState::write_route`, closed by its reset so the writers an `App` left behind find nowhere to write |
+| `NEXT_WRITE_ROUTE` | `src/reactive/runtime.rs` | Process-wide: the number the next route takes. Two runtimes, or one before and after a reset, must never share one, which a counter in either of them cannot promise |
 | `INGRESS_SENDER` | `src/ingress.rs` | Process-wide: the loop's calloop channel, reached from whichever thread sends on it — a service queues a write from its own; a selection reader takes its handle on the main thread and sends from the reader's, seconds later. `with_app_state` on a worker mints that thread its own empty `AppState`, so a field there would read back as "no loop" and silently take the fallback |
 | `EXIT_REQUEST` | `src/jobs.rs` | Process-wide: `restart_app` is documented as callable from any thread and `quit_app` sets the same flag, which the main loop reads once a pass. A thread's cell would record the request on the thread that made it and leave the loop running |
 | `WAKE_REQUESTED` | `src/jobs.rs` | Process-wide: "someone poked the loop, make a pass", raised by whoever queued the work and taken by the loop. `ingress::notify` falls back to `wake_loop` when there is no channel to send on, and that fallback runs on the background thread that queued the write |

@@ -4,8 +4,8 @@ use super::diagnostics::{check_reactive_scope, snapshot_zone};
 use super::invalidation::{notify_signal_change, record_signal_read, suspend_widget_tracking};
 use super::owner::register_signal;
 use super::runtime::{
-    SignalId, current_write_epoch, notify_write, queue_bg_write, record_effect_read,
-    suspend_effect_tracking, with_runtime,
+    SignalId, WriteRoute, is_own_route, notify_write, queue_bg_write, record_effect_read,
+    suspend_effect_tracking, with_runtime, write_route,
 };
 use super::storage::{
     call_derived, compare_and_set_signal_value, compare_and_update_signal_value,
@@ -425,7 +425,7 @@ impl<T: Clone + Send + 'static> RwSignal<T> {
     pub fn writer(&self) -> WriteSignal<T> {
         WriteSignal {
             id: self.id,
-            epoch: current_write_epoch(),
+            route: write_route(),
             _marker: PhantomData,
         }
     }
@@ -461,9 +461,8 @@ impl<T: Clone + 'static> From<RwSignal<T>> for Signal<T> {
 /// ```
 pub struct WriteSignal<T> {
     id: SignalId,
-    /// Write epoch captured when the writer was created. Writes queued from
-    /// a stale epoch (after App restart) are silently discarded.
-    epoch: u64,
+    /// The runtime the signal lives in, whichever thread this is used from.
+    route: WriteRoute,
     _marker: PhantomData<T>,
 }
 
@@ -474,55 +473,47 @@ impl<T> Clone for WriteSignal<T> {
 }
 impl<T> Copy for WriteSignal<T> {}
 
+impl<T> WriteSignal<T> {
+    /// Apply `write` now if this thread is the signal's, or queue it for the
+    /// runtime that is.
+    fn write_or_queue(&self, write: impl FnOnce(SignalId) + Send + 'static) {
+        let id = self.id;
+        // The signal may have been disposed by the time this runs (e.g. a
+        // service outliving a removed dynamic child). That race is inherent to
+        // background writers, so drop the write instead of panicking the loop.
+        let guarded = move || {
+            if has_signal(id) {
+                write(id);
+            } else {
+                log::debug!("dropping background write to disposed signal {id}");
+            }
+        };
+        if is_own_route(self.route) {
+            guarded();
+        } else {
+            queue_bg_write(self.route, guarded);
+        }
+    }
+}
+
 impl<T: Clone + PartialEq + Send + 'static> WriteSignal<T> {
     /// Sets the signal's value, only triggering updates if the value actually changed.
     ///
-    /// If the signal exists in the current thread's storage: applies immediately.
-    /// Otherwise (background threads): queued for next frame with the epoch
-    /// captured when this writer was created.
+    /// On the signal's own thread: applies immediately. Anywhere else: queued
+    /// for that thread's next frame.
     pub fn set(&self, value: T) {
-        if has_signal(self.id) {
-            write_and_notify(self.id, value);
-        } else {
-            let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
-                // The signal may have been disposed between queueing and this
-                // flush (e.g. a service outliving a removed dynamic child).
-                // That race is inherent to background writers, so drop the
-                // write instead of panicking the main loop.
-                if has_signal(id) {
-                    write_and_notify(id, value);
-                } else {
-                    log::debug!("dropping background write to disposed signal {id}");
-                }
-            });
-        }
+        self.write_or_queue(move |id| write_and_notify(id, value));
     }
 
     /// Updates the signal's value using a closure, only triggering updates if the value changed.
     ///
-    /// If the signal exists in the current thread's storage: applies immediately.
-    /// Otherwise (background threads): queued for next frame with the epoch
-    /// captured when this writer was created.
+    /// On the signal's own thread: applies immediately. Anywhere else: queued
+    /// for that thread's next frame.
     pub fn update<F>(&self, f: F)
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
-        if has_signal(self.id) {
-            update_and_notify(self.id, f);
-        } else {
-            let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
-                // See `set()`: disposal can race a queued write; drop it.
-                if has_signal(id) {
-                    update_and_notify(id, f);
-                } else {
-                    log::debug!("dropping background update to disposed signal {id}");
-                }
-            });
-        }
+        self.write_or_queue(move |id| update_and_notify(id, f));
     }
 }
 
@@ -534,20 +525,7 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     /// (immediate on the main thread, queued for the next frame from
     /// background threads).
     pub fn set_always(&self, value: T) {
-        if has_signal(self.id) {
-            write_and_notify_always(self.id, value);
-        } else {
-            let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
-                // See `set()`: disposal can race a queued write; drop it.
-                if has_signal(id) {
-                    write_and_notify_always(id, value);
-                } else {
-                    log::debug!("dropping background write to disposed signal {id}");
-                }
-            });
-        }
+        self.write_or_queue(move |id| write_and_notify_always(id, value));
     }
 
     /// Updates the signal's value using a closure, notifying unconditionally.
@@ -555,19 +533,7 @@ impl<T: Clone + Send + 'static> WriteSignal<T> {
     where
         F: FnOnce(&mut T) + Send + 'static,
     {
-        if has_signal(self.id) {
-            update_and_notify_always(self.id, f);
-        } else {
-            let id = self.id;
-            let epoch = self.epoch;
-            queue_bg_write(epoch, move || {
-                if has_signal(id) {
-                    update_and_notify_always(id, f);
-                } else {
-                    log::debug!("dropping background update to disposed signal {id}");
-                }
-            });
-        }
+        self.write_or_queue(move |id| update_and_notify_always(id, f));
     }
 }
 
