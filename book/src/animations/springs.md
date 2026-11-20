@@ -243,6 +243,10 @@ it only ever sees the last of them and the spring is never sent anywhere.
 Timed transitions have no momentum to keep: a retarget there starts from the
 current value at whatever the curve says, as it always has.
 
+Either way a target that moves on every frame is chased: each change starts
+from where the last one had got to by then. A delay starts over at each change,
+so a value retargeted more often than its delay stays where it is.
+
 ### What it carries, and what it does not
 
 The momentum that crosses into the new segment is the part of the old motion
