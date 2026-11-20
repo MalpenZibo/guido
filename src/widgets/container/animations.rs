@@ -398,12 +398,17 @@ impl<T: Animatable> AnimationState<T> {
             return AdvanceResult::NoChange;
         };
         let elapsed = now.duration_since(started).as_secs_f32() * 1000.0;
-        let adjusted_elapsed = (elapsed - delay_ms).max(0.0);
-
-        if adjusted_elapsed <= 0.0 {
-            // Still in delay period
+        // Only a delay holds the value back: a segment is live at the instant
+        // it starts.
+        if elapsed < delay_ms {
             return AdvanceResult::NoChange;
         }
+        let adjusted_elapsed = elapsed - delay_ms;
+        let t = if adjusted_elapsed >= duration_ms {
+            1.0
+        } else {
+            adjusted_elapsed / duration_ms
+        };
 
         // Calculate eased value based on timing function type
         let eased_t = if let Some(ref mut spring_state) = self.spring_state {
@@ -414,11 +419,9 @@ impl<T: Animatable> AnimationState<T> {
                 spring_state.step(elapsed_secs, config)
             } else {
                 // Fallback: shouldn't happen, but use normalized time
-                adjusted_elapsed / duration_ms
+                t
             }
         } else {
-            // For non-spring animations: use normalized time 0..1
-            let t = (adjusted_elapsed / duration_ms).min(1.0);
             // Safe to borrow self again — spring_state mutable borrow ended above
             self.transition.timing.evaluate(t)
         };
@@ -448,8 +451,6 @@ impl<T: Animatable> AnimationState<T> {
                 self.progress = 0.5;
             }
         } else {
-            // For non-spring animations, use time-based progress
-            let t = (adjusted_elapsed / duration_ms).min(1.0);
             self.progress = t;
         }
 
