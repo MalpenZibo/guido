@@ -317,6 +317,10 @@ impl<T: Animatable> AnimationState<T> {
         self.begin_segment(self.current, carried, now);
     }
 
+    fn sequence_playing(&self) -> bool {
+        self.timeline.as_ref().is_some_and(|t| t.playing.is_some())
+    }
+
     /// Start a fresh run toward the current target, from rest.
     fn begin_segment_from(&mut self, from: T, now: FrameInstant) {
         self.begin_segment(from, 0.0, now);
@@ -377,8 +381,26 @@ impl<T: Animatable> AnimationState<T> {
         if let Some(result) = self.advance_timeline(now) {
             return result;
         }
-        if self.progress >= 1.0 && self.spring_state.is_none() {
+        if !self.step_segment(now) {
             return AdvanceResult::NoChange;
+        }
+        self.report()
+    }
+
+    /// Whether `current` differs from what was last reported, recording it.
+    fn report(&mut self) -> AdvanceResult<T> {
+        if self.prev_value.replace(self.current) == Some(self.current) {
+            AdvanceResult::NoChange
+        } else {
+            AdvanceResult::Changed(self.current)
+        }
+    }
+
+    /// Bring the running segment to `now`, and answer whether it ran. What
+    /// was last reported is left to [`advance`](Self::advance).
+    fn step_segment(&mut self, now: FrameInstant) -> bool {
+        if self.progress >= 1.0 && self.spring_state.is_none() {
+            return false;
         }
         let was_running = self.is_animating();
 
@@ -395,13 +417,13 @@ impl<T: Animatable> AnimationState<T> {
 
         // No segment has begun, so no time has passed in one.
         let Some(started) = self.start_time else {
-            return AdvanceResult::NoChange;
+            return false;
         };
         let elapsed = now.duration_since(started).as_secs_f32() * 1000.0;
         // Only a delay holds the value back: a segment is live at the instant
         // it starts.
         if elapsed < delay_ms {
-            return AdvanceResult::NoChange;
+            return false;
         }
         let adjusted_elapsed = elapsed - delay_ms;
         let t = if adjusted_elapsed >= duration_ms {
@@ -458,10 +480,7 @@ impl<T: Animatable> AnimationState<T> {
             self.spring_state = None;
         }
 
-        // Check if value actually changed
-        let changed = self.prev_value.as_ref() != Some(&new_value);
         self.current = new_value;
-        self.prev_value = Some(new_value);
 
         // Completion edge: fire the transition's callback once per run.
         // The callback may write signals or push surface commands; it must
@@ -475,12 +494,7 @@ impl<T: Animatable> AnimationState<T> {
             // event handler — it is not a place to subscribe from.
             crate::reactive::diagnostics::snapshot_zone(|| cb());
         }
-
-        if changed {
-            AdvanceResult::Changed(new_value)
-        } else {
-            AdvanceResult::NoChange
-        }
+        true
     }
 
     /// How far a sequence declared on this property can reach, or zero where
@@ -504,7 +518,7 @@ impl<T: Animatable> AnimationState<T> {
 
     /// Check if animation is still running
     pub fn is_animating(&self) -> bool {
-        self.timeline.as_ref().is_some_and(|t| t.playing.is_some())
+        self.sequence_playing()
             || self.progress < 1.0
             || (self.spring_state.is_some() && self.progress < 0.99)
     }
@@ -620,14 +634,8 @@ impl<T: Animatable> AnimationState<T> {
             return None;
         };
 
-        let changed = self.prev_value.as_ref() != Some(&value);
         self.current = value;
-        self.prev_value = Some(value);
-        Some(if changed {
-            AdvanceResult::Changed(value)
-        } else {
-            AdvanceResult::NoChange
-        })
+        Some(self.report())
     }
 
     /// Get current value
