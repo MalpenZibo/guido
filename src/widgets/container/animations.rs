@@ -176,6 +176,7 @@ impl<T: Animatable> AnimationState<T> {
         // Read for the moment of removal, like an event handler reads — not a
         // place to subscribe from.
         let to = crate::reactive::diagnostics::snapshot_zone(exit_to);
+        self.catch_up(now);
         self.exiting = true;
         if let Some(timeline) = self.timeline.as_deref_mut() {
             timeline.playing = None;
@@ -299,6 +300,7 @@ impl<T: Animatable> AnimationState<T> {
             return;
         }
 
+        self.catch_up(now);
         self.choose_transition(new_target, SegmentKind::Retarget);
 
         // Check if active transition is spring before mutating other fields
@@ -315,6 +317,14 @@ impl<T: Animatable> AnimationState<T> {
 
         self.target = new_target;
         self.begin_segment(self.current, carried, now);
+    }
+
+    /// Step a segment about to be replaced to `now`, so the next one starts
+    /// from where it is then — unless a sequence is speaking for the property.
+    fn catch_up(&mut self, now: FrameInstant) {
+        if !self.sequence_playing() {
+            self.step_segment(now);
+        }
     }
 
     fn sequence_playing(&self) -> bool {
@@ -484,8 +494,8 @@ impl<T: Animatable> AnimationState<T> {
 
         // Completion edge: fire the transition's callback once per run.
         // The callback may write signals or push surface commands; it must
-        // not touch the widget tree synchronously (it runs inside
-        // advance_animations).
+        // not touch the widget tree synchronously (it runs inside a frame's
+        // advance, or inside a layout or reconciliation that retargets).
         if was_running
             && !self.is_animating()
             && let Some(cb) = self.transition.on_complete.clone()
@@ -1160,9 +1170,10 @@ mod tests {
         let here = *moving.current();
         assert!(moving.is_animating(), "in flight");
         let mut moving = moving.with_exit_to(Some(Box::new(move || here)));
-        // Removed on the next frame after the last one it was stepped to.
+        // Removed at the instant it was last stepped to: an exit starts from
+        // where the spring is at removal.
         let started = moving.start_time.expect("in flight");
-        let removed = started + std::time::Duration::from_millis(48);
+        let removed = started + std::time::Duration::from_millis(40);
         assert!(moving.begin_exit(removed));
         assert!(!moving.is_animating(), "in flight, but already there");
         assert_eq!(*moving.current(), here, "and left where it was");
@@ -1170,13 +1181,70 @@ mod tests {
         // it stays at rest: no spring left in flight to step. A spring left
         // in flight would be stepped from its last frame here, and report
         // itself moving again.
-        at(&mut moving, 56);
+        at(&mut moving, 48);
         assert!(!moving.is_animating(), "and stays at rest");
         assert_eq!(*moving.current(), here);
     }
 
+    /// An exit starts from where the property is at removal, not from where
+    /// the last frame left it: removed a frame after that, a spring has
+    /// travelled on, so an exit back to the last frame's value has somewhere
+    /// to go.
+    #[test]
+    fn an_exit_starts_from_where_it_is_at_removal() {
+        use crate::animation::SpringConfig;
+
+        let mut moving = AnimationState::new(0.0_f32, spring(SpringConfig::BOUNCY));
+        moving.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        moving.animate_to(1.0, FrameInstant::from(Instant::now()));
+        run(&mut moving, 40);
+        let last_frame = *moving.current();
+        let mut moving = moving.with_exit_to(Some(Box::new(move || last_frame)));
+        let started = moving.start_time.expect("in flight");
+        assert!(moving.begin_exit(started + std::time::Duration::from_millis(48)));
+        assert!(moving.is_animating(), "it has moved since, so it plays");
+        assert!(
+            *moving.current() > last_frame,
+            "and starts from where it got to by removal, past {last_frame}, \
+             got {}",
+            moving.current()
+        );
+    }
+
     fn linear(ms: f32) -> Transition {
         Transition::new(ms, TimingFunction::Linear)
+    }
+
+    /// A run that ended between the last frame and a retarget has completed:
+    /// the catch-up fires its callback, once, and the run that replaces it
+    /// fires its own when it lands.
+    #[test]
+    fn a_run_the_catch_up_completes_fires_its_callback_once() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use std::time::Duration;
+
+        let fired = Rc::new(Cell::new(0));
+        let counter = fired.clone();
+        let mut anim = AnimationState::new(
+            0.0_f32,
+            linear(20.0).on_complete(move || counter.set(counter.get() + 1)),
+        );
+        anim.set_immediate(&mut laying_out(&mut Tree::new()), 0.0);
+        let t0 = FrameInstant::from(Instant::now());
+
+        anim.animate_to(1.0, t0);
+        anim.advance(t0 + Duration::from_millis(8));
+        assert_eq!(fired.get(), 0, "in flight");
+
+        let retarget = t0 + Duration::from_millis(24);
+        anim.animate_to(2.0, retarget);
+        assert_eq!(fired.get(), 1, "the catch-up landed the first run");
+        anim.advance(retarget);
+        assert_eq!(fired.get(), 1, "and its frame does not fire it again");
+
+        anim.advance(retarget + Duration::from_millis(20));
+        assert_eq!(fired.get(), 2, "the second run fires its own");
     }
 
     /// A transition read from the application's state is read when a segment
