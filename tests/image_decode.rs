@@ -5,30 +5,20 @@
 //! nothing in it; the decode runs on a worker, and the loop draws the image on
 //! a later frame with nothing from the application to prompt it.
 //!
-//! A binary of its own rather than a part of `tests/headless_app.rs`, and its
-//! tests taken one at a time: the decode lands through the background-write
-//! queue, which is process-wide. Every `Headless::step` drains it on whichever
-//! thread steps — so beside tests that step in parallel, a decode written by
-//! one test's worker would be applied to another test's thread. An application
-//! has one loop in its process; a test binary has as many as it has threads.
+//! The decode lands through the background-write queue of the application
+//! that asked for it, so these tests run side by side like any others (#943).
 
 use std::cell::Cell;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use guido::prelude::*;
 use guido::testing::Headless;
 
 mod common;
 use common::headless;
-
-/// One test at a time; see the module docs for why.
-fn serial() -> MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
 
 const BACKDROP: Color = Color::rgb(0.0, 0.0, 1.0);
 
@@ -128,7 +118,6 @@ fn limit_raster(width: u32, height: u32, encoded: bool) -> ImageSource {
 
 #[test]
 fn strongly_shrunk_rasters_keep_thin_translucent_lines() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         for (width, height) in [(limit * 5, 1), (1, limit * 5)] {
@@ -178,7 +167,6 @@ fn strongly_shrunk_rasters_keep_thin_translucent_lines() {
 
 #[test]
 fn nearly_unscaled_rasters_keep_distinct_rows_and_columns() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         for (width, height) in [(limit, 2), (limit + 1, 2), (2, limit), (2, limit + 1)] {
@@ -235,7 +223,6 @@ fn nearly_unscaled_rasters_keep_distinct_rows_and_columns() {
 /// Oversized width must not panic (#603).
 #[test]
 fn rasters_wider_than_the_texture_limit_draw_without_redecoding() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         upload_limit_image(limit_raster(limit + 1, 1, encoded), ContentFit::Fill);
@@ -248,7 +235,6 @@ fn rasters_wider_than_the_texture_limit_draw_without_redecoding() {
 /// Oversized height must not panic (#603).
 #[test]
 fn rasters_taller_than_the_texture_limit_draw_without_redecoding() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         upload_limit_image(limit_raster(1, limit + 1, encoded), ContentFit::Fill);
@@ -261,7 +247,6 @@ fn rasters_taller_than_the_texture_limit_draw_without_redecoding() {
 /// Both axes allow the exact limit (#603).
 #[test]
 fn rasters_exactly_at_the_texture_limit_still_draw() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for (width, height) in [(limit, 1), (1, limit)] {
         for encoded in [false, true] {
@@ -281,7 +266,6 @@ fn limit_svg(width: u32, height: u32) -> ImageSource {
 #[cfg(feature = "svg")]
 #[test]
 fn svgs_wider_than_the_texture_limit_draw_at_intrinsic_size() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     upload_limit_image(limit_svg(limit + 1, 1), ContentFit::None);
 }
@@ -290,7 +274,6 @@ fn svgs_wider_than_the_texture_limit_draw_at_intrinsic_size() {
 #[cfg(feature = "svg")]
 #[test]
 fn svgs_taller_than_the_texture_limit_draw_at_intrinsic_size() {
-    let _serial = serial();
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     upload_limit_image(limit_svg(1, limit + 1), ContentFit::None);
 }
@@ -299,7 +282,6 @@ fn svgs_taller_than_the_texture_limit_draw_at_intrinsic_size() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_clamped_svg_can_be_shared_and_fitted_again() {
-    let _serial = serial();
     for (width, height) in [(8193, 1), (1, 8193)] {
         let Some(mut app) = headless() else { return };
         let source = limit_svg(width, height);
@@ -394,7 +376,6 @@ fn is_backdrop(pixel: [u8; 4]) -> bool {
 /// Red before #507: the renderer decoded inside the frame, so the first frame
 /// already held the image, and held the frame until it had it.
 fn a_pending_image_is_drawn_on_a_later_frame(source: ImageSource, side: u32) {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let hold = app.hold_image_decodes();
     let (surface, ready) = surface(&mut app, vec![source], side);
@@ -503,7 +484,6 @@ fn sideways_photo() -> Vec<u8> {
 ///
 /// Red before #814: laid out 32×16, and drawn as stored.
 fn a_sideways_photo_is_drawn_upright(source: ImageSource) {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let surface = app.surface(
         SurfaceConfig::new()
@@ -542,7 +522,6 @@ fn sideways_photo_bytes_are_drawn_upright() {
 
 #[test]
 fn unreadable_raster_files_stay_failed() {
-    let _serial = serial();
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let corrupt = root.join("corrupt-image.png");
     std::fs::write(&corrupt, b"not an image").unwrap();
@@ -562,7 +541,6 @@ fn unreadable_raster_files_stay_failed() {
 
 #[test]
 fn a_corrupt_raster_payload_never_becomes_ready() {
-    let _serial = serial();
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("corrupt-payload.png");
     let mut bytes = png([255, 0, 0]);
     bytes.truncate(bytes.len() / 2);
@@ -584,7 +562,6 @@ fn a_corrupt_raster_payload_never_becomes_ready() {
 
 /// Two images of one source share one decode, and both are drawn by it.
 fn two_images_of_one_source_decode_it_once(first: ImageSource, second: ImageSource, side: u32) {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let (surface, _) = surface(&mut app, vec![first, second], side);
 
@@ -630,7 +607,6 @@ fn two_images_of_equal_bytes_decode_them_once() {
 /// first frame — which is what `Rgba` is for.
 #[test]
 fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let _hold = app.hold_image_decodes();
     let red: Vec<u8> = [255, 0, 0, 255].repeat(20 * 20);
@@ -659,7 +635,6 @@ fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
 /// it, 19 MB for a 2912×1632 wallpaper, next to the texture holding the same.
 #[test]
 fn the_pixels_go_once_the_renderer_has_uploaded_them() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let path = png_file("uploaded-then-dropped.png", [255, 0, 0]);
     let (surface, ready) = surface(&mut app, vec![ImageSource::Path(path)], 20);
@@ -688,7 +663,6 @@ fn the_pixels_go_once_the_renderer_has_uploaded_them() {
 /// second one started a decode of its own and drew nothing until it landed.
 #[test]
 fn an_image_mounted_after_the_upload_is_drawn_from_the_texture() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let path = png_file("mounted-after-upload.png", [255, 0, 0]);
     let generation = create_signal(0u32);
@@ -734,7 +708,6 @@ fn an_image_mounted_after_the_upload_is_drawn_from_the_texture() {
 /// pixels left to draw from.
 #[test]
 fn an_image_whose_texture_is_gone_is_decoded_again() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let path = png_file("texture-gone.png", [255, 0, 0]);
     let backdrop = create_signal(BACKDROP);
@@ -805,7 +778,6 @@ const LARGE: u32 = 100;
 #[cfg(feature = "svg")]
 #[test]
 fn a_small_svg_is_drawn_on_its_first_frame() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let _hold = app.hold_image_decodes();
     let (surface, ready) = surface(
@@ -835,7 +807,6 @@ fn a_small_svg_is_drawn_on_its_first_frame() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_large_document_drawn_as_an_icon_becomes_ready() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let (surface, ready) = surface(
         &mut app,
@@ -867,7 +838,6 @@ fn a_large_document_drawn_as_an_icon_becomes_ready() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_small_document_drawn_large_is_not_ready_until_its_raster_lands() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let hold = app.hold_image_decodes();
     let (surface, ready) = surface(
@@ -935,7 +905,6 @@ fn two_svgs_of_one_source_rasterize_it_once() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     // Both sides: a raster is fitted to its box with the aspect kept, so a
     // square SVG in a box only wider needs no raster of its own.
@@ -999,7 +968,6 @@ fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
 #[cfg(feature = "svg")]
 #[test]
 fn one_svg_at_two_sizes_rasterizes_each_once() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let source = ImageSource::SvgBytes(svg("#f00", LARGE).into());
     let (small, large) = (LARGE, LARGE * 3 / 2);
@@ -1134,7 +1102,6 @@ fn sources(count: u8, green: u8) -> Vec<ImageSource> {
 #[test]
 fn small_images_off_screen_stay_cached_while_under_the_budget() {
     const IMAGES: u8 = 200;
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0), Vec::new()]);
     switcher.show(&mut app, 0);
@@ -1162,7 +1129,6 @@ fn small_images_off_screen_stay_cached_while_under_the_budget() {
 /// under `budget`. Returns how many decodes it took to bring A back, after
 /// checking that B — on screen throughout — was never evicted.
 fn decodes_to_bring_back_an_idle_image(budget: usize) -> Option<u64> {
-    let _serial = serial();
     let mut app = headless()?;
     guido::set_image_cache_budget(budget);
     let switcher = Switcher::new(&mut app, vec![sources(1, 0), sources(1, 100)]);
@@ -1221,7 +1187,6 @@ fn the_budget_the_application_sets_is_the_one_used() {
 #[test]
 fn images_on_screen_over_the_budget_stay_drawn() {
     const IMAGES: u8 = 70;
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     guido::set_image_cache_budget(IMAGE_BYTES * 10);
     let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0)]);
@@ -1263,7 +1228,6 @@ fn images_on_screen_over_the_budget_stay_drawn() {
 fn a_decoded_image_is_premultiplied_like_raw_pixels() {
     const SIDE: u32 = 80;
     const FILL: [u8; 3] = [242, 115, 64];
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let disc = ::image::RgbaImage::from_fn(SIDE, SIDE, |x, y| {
         let centre = SIDE as f32 / 2.0;
@@ -1416,7 +1380,6 @@ fn bytes(source: &ImageSource) -> &[u8] {
 /// drawn as itself, and from a texture of its own.
 fn two_sources_are_two_images(red: ImageSource, green: ImageSource) {
     assert_differ_off_the_samples(bytes(&red), bytes(&green));
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let (surface, _) = surface(&mut app, vec![red, green], 40);
 
@@ -1458,7 +1421,6 @@ fn svgs_alike_where_sampled_are_two_images() {
 /// contents, not the buffer.
 #[test]
 fn raw_pixels_equal_in_two_buffers_share_a_texture() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let (first, second) = (one_pixel_rgba([255, 0, 0]), one_pixel_rgba([255, 0, 0]));
     assert!(!std::ptr::eq(bytes(&first), bytes(&second)));
@@ -1476,7 +1438,6 @@ fn raw_pixels_equal_in_two_buffers_share_a_texture() {
 /// one (#606).
 #[test]
 fn a_replaced_source_alike_where_sampled_is_drawn_as_itself() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let source = create_signal(one_pixel_rgba([255, 0, 0]));
     let surface = swappable(&mut app, source.into(), 40);
@@ -1498,7 +1459,6 @@ fn a_replaced_source_alike_where_sampled_is_drawn_as_itself() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_new_svg_does_not_borrow_another_sources_raster() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let (red, green) = (one_pixel_svg("#f00", LARGE), one_pixel_svg("#0f0", LARGE));
     assert_differ_off_the_samples(bytes(&red), bytes(&green));
@@ -1539,7 +1499,6 @@ fn a_new_svg_does_not_borrow_another_sources_raster() {
 /// alone would keep a replaced buffer alive until its texture was evicted.
 #[test]
 fn replaced_raw_pixels_are_not_kept_by_the_cache() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let red = one_pixel_rgba([255, 0, 0]);
     let ImageSource::Rgba { pixels, .. } = &red else {
@@ -1576,7 +1535,6 @@ fn replaced_raw_pixels_are_not_kept_by_the_cache() {
 /// the image would never see the new buffer.
 #[test]
 fn equal_raw_pixels_in_a_new_buffer_keep_their_texture() {
-    let _serial = serial();
     let Some(mut app) = headless() else { return };
     let source = create_signal(one_pixel_rgba([255, 0, 0]));
     let surface = swappable(&mut app, source.into(), 40);
