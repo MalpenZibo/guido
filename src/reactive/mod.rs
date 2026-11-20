@@ -74,7 +74,7 @@ pub mod __internal {
     }
 }
 pub use callback::{Callback, IntoHandler};
-pub(crate) use runtime::{flush_bg_writes, reset_bg_writes};
+pub(crate) use runtime::flush_bg_writes;
 pub use service::{Service, ServiceContext, create_service, create_task};
 pub use signal::{RwSignal, Signal, WriteSignal, create_derived, create_signal, create_stored};
 pub use timer::{TimerHandle, set_interval, set_timeout};
@@ -83,12 +83,7 @@ pub use timer::{TimerHandle, set_interval, set_timeout};
 ///
 /// Called through `reset_thread_state` by `App::drop` and `Headless::drop` to
 /// wipe the thread's reactive state, so the next application on the thread
-/// starts clean.
-///
-/// The background-write queue is not here: it is the process's, not the
-/// thread's, and [`reset_bg_writes`] is for `App::drop` alone. `Headless` runs
-/// this too, beside other `Headless` on other threads, and retiring the queue
-/// from here threw their writes away.
+/// starts clean — background writes queued for this one included.
 pub(crate) fn reset_reactive() {
     state::reset();
     diagnostics::reset();

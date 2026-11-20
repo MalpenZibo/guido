@@ -20,6 +20,7 @@
 //! Most code should use the higher-level APIs in the `reactive` module rather than
 //! interacting with the runtime directly.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,17 +35,65 @@ use super::state::with_reactive;
 /// so SmallVec avoids heap allocation in the common case.
 pub(crate) type EffectReads = SmallVec<[SignalId; 4]>;
 
-/// Epoch counter for write filtering. Incremented on each runtime reset (App restart).
-/// Writes tagged with a stale epoch are silently discarded in `flush_bg_writes()`.
-static WRITE_EPOCH: AtomicU64 = AtomicU64::new(0);
+/// The reactive runtime a background write is for.
+///
+/// A signal id names a slot in one thread's storage, and another runtime in
+/// the process hands out the same ids, so a queued write carries the runtime
+/// it belongs to as well. A runtime opens its route the first time it hands
+/// out a writer and closes it when it is reset or its thread ends; a reset
+/// opens a new one, so a writer left behind by the last application finds its
+/// route closed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct WriteRoute(u64);
 
-/// A queued background write: (epoch at queue time, closure to execute).
-type EpochWrite = (u64, Box<dyn FnOnce() + Send>);
+/// Where the next route's number comes from.
+static NEXT_WRITE_ROUTE: AtomicU64 = AtomicU64::new(0);
 
-/// Background write queue: closures that perform signal writes, queued from bg threads.
-/// Each entry is tagged with the epoch at queue time. Writes from a previous epoch
-/// are discarded during flush.
-static WRITE_QUEUE: Mutex<Vec<EpochWrite>> = Mutex::new(Vec::new());
+type QueuedWrite = Box<dyn FnOnce() + Send>;
+
+/// The queued writes of each open route. A write for a route that is not here
+/// is dropped as it is queued.
+static WRITE_QUEUES: Mutex<Vec<(WriteRoute, Vec<QueuedWrite>)>> = Mutex::new(Vec::new());
+
+/// A runtime's own route, open or not yet.
+#[derive(Default)]
+pub(crate) struct OwnRoute(Cell<Option<WriteRoute>>);
+
+impl OwnRoute {
+    fn open(&self) -> WriteRoute {
+        if let Some(route) = self.0.get() {
+            return route;
+        }
+        let route = WriteRoute(NEXT_WRITE_ROUTE.fetch_add(1, Ordering::Relaxed));
+        if let Ok(mut queues) = WRITE_QUEUES.lock() {
+            queues.push((route, Vec::new()));
+        }
+        self.0.set(Some(route));
+        route
+    }
+
+    fn current(&self) -> Option<WriteRoute> {
+        self.0.get()
+    }
+
+    /// Drop the writes queued on this route, and those queued on it later.
+    pub(crate) fn close(&self) {
+        let Some(route) = self.0.take() else { return };
+        let closed = WRITE_QUEUES.lock().ok().and_then(|mut queues| {
+            let at = queues.iter().position(|(open, _)| *open == route)?;
+            Some(queues.swap_remove(at))
+        });
+        // Dropped with the lock released: a write's captures run their own
+        // `Drop`, which may queue another.
+        drop(closed);
+    }
+}
+
+impl Drop for OwnRoute {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
 
 /// Unique identifier for a signal.
 ///
@@ -165,22 +214,30 @@ where
     f()
 }
 
-/// Return the current write epoch. Captured by `WriteSignal` at creation
-/// time so that writes queued after a restart carry the old epoch.
-pub(crate) fn current_write_epoch() -> u64 {
-    WRITE_EPOCH.load(Ordering::Acquire)
+/// This thread's route, opened if it is not yet: what a `WriteSignal` is
+/// stamped with when it is made.
+pub(crate) fn write_route() -> WriteRoute {
+    with_reactive(|reactive| reactive.write_route.open())
 }
 
-/// Queue a closure for execution on the main thread (next frame).
+/// Whether `route` is this thread's runtime.
+pub(crate) fn is_own_route(route: WriteRoute) -> bool {
+    with_reactive(|reactive| reactive.write_route.current() == Some(route))
+}
+
+/// Queue a write for the runtime `route` names, to run on its thread at its
+/// next flush. A route that has closed takes nothing.
 /// Used by `WriteSignal::set()`/`update()` from background threads.
-///
-/// The write is tagged with the caller-supplied epoch (captured when the
-/// `WriteSignal` was created). If the runtime resets before this write is
-/// flushed (e.g. App restart), the epoch will be stale and the write is
-/// silently discarded.
-pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
-    if let Ok(mut q) = WRITE_QUEUE.lock() {
-        q.push((epoch, Box::new(f)));
+pub(crate) fn queue_bg_write(route: WriteRoute, f: impl FnOnce() + Send + 'static) {
+    {
+        let Ok(mut queues) = WRITE_QUEUES.lock() else {
+            return;
+        };
+        let Some((_, queue)) = queues.iter_mut().find(|(open, _)| *open == route) else {
+            log::debug!("dropping a background write for a runtime that has gone");
+            return;
+        };
+        queue.push(Box::new(f));
     }
     // Queueing and waking are one gesture here too — this is the cross-thread
     // one, so the wakeup goes through the calloop ingress channel rather than
@@ -189,37 +246,21 @@ pub fn queue_bg_write(epoch: u64, f: impl FnOnce() + Send + 'static) {
     crate::ingress::notify(crate::ingress::IngressMessage::BgWritesQueued);
 }
 
-/// Drain queued background writes and execute them on the main thread.
-/// Called from the main event loop before processing widget jobs.
-///
-/// Writes tagged with a stale epoch (from a previous App run) are silently
-/// discarded. This prevents old service tasks from corrupting the new app's
-/// reactive state after a restart.
+/// Run the background writes queued for this thread's runtime, and only
+/// those. Called from the main event loop before processing widget jobs.
 pub fn flush_bg_writes() {
-    let current_epoch = WRITE_EPOCH.load(Ordering::Acquire);
+    let Some(route) = with_reactive(|reactive| reactive.write_route.current()) else {
+        return;
+    };
     loop {
-        let writes: Vec<(u64, Box<dyn FnOnce() + Send>)> = match WRITE_QUEUE.lock() {
-            Ok(mut q) if !q.is_empty() => q.drain(..).collect(),
-            _ => return,
-        };
-        let mut executed = 0usize;
-        let mut stale = 0usize;
-        for (epoch, write_fn) in writes {
-            if epoch == current_epoch {
-                write_fn();
-                executed += 1;
-            } else {
-                stale += 1;
-            }
-        }
-        if stale > 0 {
-            log::debug!(
-                "flush_bg_writes: dropped {} stale writes (old epoch), executed {}",
-                stale,
-                executed
-            );
-        } else if executed > 0 {
-            log::trace!("flush_bg_writes: processed {} queued writes", executed);
+        let writes = WRITE_QUEUES.lock().ok().and_then(|mut queues| {
+            let (_, queue) = queues.iter_mut().find(|(open, _)| *open == route)?;
+            (!queue.is_empty()).then(|| std::mem::take(queue))
+        });
+        let Some(writes) = writes else { return };
+        log::trace!("flush_bg_writes: processed {} queued writes", writes.len());
+        for write in writes {
+            write();
         }
     }
 }
@@ -734,23 +775,6 @@ where
     F: FnOnce(&mut Runtime) -> R,
 {
     with_reactive(|reactive| f(&mut reactive.runtime.borrow_mut()))
-}
-
-/// Retire the background writes an `App` left behind.
-///
-/// Not part of [`crate::reactive::state::reset`]: the queue and its epoch are
-/// `static`s rather than a thread's, because the thread that queues a write is
-/// not the one that owns the reactive state.
-///
-/// Increments the write epoch so that any in-flight background writes from
-/// old service tasks are automatically discarded by `flush_bg_writes()`.
-pub(crate) fn reset_bg_writes() {
-    // Increment epoch BEFORE clearing — writes queued between now and the next
-    // flush_bg_writes() will carry the old epoch and be discarded.
-    WRITE_EPOCH.fetch_add(1, Ordering::Release);
-    if let Ok(mut q) = WRITE_QUEUE.lock() {
-        q.clear();
-    }
 }
 
 /// Batch multiple signal writes so that shared effects run only once.

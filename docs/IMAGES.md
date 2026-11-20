@@ -287,8 +287,7 @@ container()
 first frame.
 
 `tests/image_decode.rs` holds the worker (`Headless::hold_image_decodes`) to
-make "not yet decoded" deterministic, and is a binary of its own because the
-background-write queue is process-wide.
+make "not yet decoded" deterministic.
 
 ## Orientation
 

@@ -3256,11 +3256,10 @@ fn iterate<P: Platform>(
 /// list of calls and the font was the line somebody missed.
 ///
 /// What is deliberately *not* here is the state that belongs to the process
-/// rather than the thread: the wake flag and the ping in [`jobs`], the ingress
-/// sender, the background-write queue and its epoch. `App` clears those below,
-/// because a program has one; `Headless` must not, because a test binary runs
-/// several of them at once and clearing them reaches into somebody else's
-/// application.
+/// rather than the thread: the wake flag and the ping in [`jobs`] and the
+/// ingress sender. `App` clears those below, because a program has one;
+/// `Headless` must not, because a test binary runs several of them at once and
+/// clearing them reaches into somebody else's application.
 pub(crate) fn reset_thread_state(tree: &mut Tree) {
     // The tree BEFORE the queues. Dropping widgets triggers
     // ChildrenSource::drop() which pushes Unregister jobs; reset the queues
@@ -3282,11 +3281,9 @@ impl Drop for App {
         reset_thread_state(&mut self.tree);
 
         // And the process-wide half, which only a program that owns the process
-        // may clear. Retiring the background writes is what stops the next
-        // application receiving the ones this one's services queued.
+        // may clear.
         jobs::reset_wakeup();
         ingress::reset_ingress();
-        reactive::reset_bg_writes();
     }
 }
 

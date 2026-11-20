@@ -1219,15 +1219,11 @@ mod the_two_refusals_the_loop_cannot_reach {
 /// next application's widgets are handed the same ids, and answer to them. Its
 /// list of two hundred rows painted two children a frame.
 ///
-/// What it does *not* do is clear the process-wide half — the wake flag, the
-/// ingress sender, the background-write queue. `App::drop` may, because a
-/// program has one application; this must not, because a test binary runs
-/// several at once and clearing them reaches into somebody else's. So a write
-/// this application's workers queued and nobody applied outlives it, and the
-/// next application in the binary to step applies it on its own thread. A test
-/// whose workers write applies what they wrote before it ends — waits for them,
-/// then steps — as every test in `tests/image_decode.rs` does; the lock there
-/// is for the other half, two tests stepping at once.
+/// What it does *not* do is clear the process-wide half — the wake flag and
+/// the ingress sender. `App::drop` may, because a program has one application;
+/// this must not, because a test binary runs several at once and clearing them
+/// reaches into somebody else's. The background writes this application's
+/// workers queued are its own, and go with it.
 impl Drop for Headless {
     fn drop(&mut self) {
         // The surfaces first. Each disposes its reactive owner as it goes, and

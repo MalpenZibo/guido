@@ -1022,8 +1022,7 @@ mod tests {
     /// goes with the last one.
     ///
     /// A file that is not there, so the header fails where the entry is made
-    /// and no worker is started: what a worker writes lands in the
-    /// process-wide queue, which every other test in this binary drains.
+    /// and no worker is started.
     #[test]
     fn an_entry_goes_with_the_last_image_that_holds_it() {
         let source = ImageSource::Path("not-there/decode-entry.png".into());

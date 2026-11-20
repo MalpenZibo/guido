@@ -22,9 +22,10 @@
 //! over the whole struct would make every one of those a panic.
 //!
 //! What stays out of it: the diagnostics, which are debug-build counters that
-//! outlive an `App` on purpose, and the background-write queue, which is a
+//! outlive an `App` on purpose, and the background-write queues, which are a
 //! `static` rather than a thread's, because the thread that queues a write is
-//! the one this state cannot reach.
+//! the one this state cannot reach. Which of those queues is this runtime's is
+//! here, as `write_route`.
 
 use std::any::TypeId;
 use std::cell::{Cell, RefCell};
@@ -33,7 +34,7 @@ use rustc_hash::FxHashMap;
 
 use super::invalidation::{SignalTrackingContext, SubscriberRegistry};
 use super::owner::{OwnerArena, OwnerId};
-use super::runtime::{EffectId, EffectReads, Runtime, SignalId};
+use super::runtime::{EffectId, EffectReads, OwnRoute, Runtime, SignalId};
 use super::storage::SignalStorage;
 use crate::deferred::DeferredQueue;
 
@@ -87,6 +88,9 @@ pub(crate) struct ReactiveState {
     /// its `static` and tagged with the type it was declared as: a `static`
     /// cannot hold a thread's signal.
     pub(crate) globals: RefCell<FxHashMap<usize, (SignalId, TypeId)>>,
+    /// Which background-write queue is this runtime's: a writer is `Send`,
+    /// and the thread it writes from has no other way to name this one.
+    pub(crate) write_route: OwnRoute,
 
     // --- Guards that nest across calls sharing no argument -----------------
     /// `batch()` nesting: above zero, a write collects pending effects and
@@ -134,6 +138,7 @@ pub(crate) fn reset() {
             effect_tracking,
             subscribers,
             globals,
+            write_route,
             batch_depth,
             flushing,
         } = reactive;
@@ -151,6 +156,9 @@ pub(crate) fn reset() {
         pending_disposals.clear();
         subscribers.take();
         globals.take();
+        // Writes queued for the application going away do not reach the next
+        // one, which opens a route of its own.
+        write_route.close();
         effect_tracking.take();
         tracking_context.take();
 
