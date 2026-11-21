@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/MalpenZibo/guido/compare/v0.13.0...v0.14.0) - 2026-11-21
+
+### Other
+
+- :new_or_skip says when a missing GPU skips a test and when it fails one ([#946](https://github.com/MalpenZibo/guido/pull/946))
+- A background write reaches the runtime that owns its signal, and no other ([#944](https://github.com/MalpenZibo/guido/pull/944))
+- A retarget starts from where the running segment is on the frame of the change ([#942](https://github.com/MalpenZibo/guido/pull/942))
+- A segment with no delay makes progress at the instant it starts ([#941](https://github.com/MalpenZibo/guido/pull/941))
+- The book shows corners rounded one by one, and names each curvature right ([#936](https://github.com/MalpenZibo/guido/pull/936))
+- The jobs that run the goldens choose their rasterizer by name ([#938](https://github.com/MalpenZibo/guido/pull/938))
+- A content-sized buffer stands on whole physical pixels at a fractional scale ([#935](https://github.com/MalpenZibo/guido/pull/935))
+- A widget hears the pointer enter it before it hears the pointer move over it ([#934](https://github.com/MalpenZibo/guido/pull/934))
+- A read of a size nothing has placed answers what its first placement gives it ([#931](https://github.com/MalpenZibo/guido/pull/931))
+- A layout can read a child's size before it places it, without laying it out twice ([#929](https://github.com/MalpenZibo/guido/pull/929))
+- An alignment is a point on the parent and a point on the child that meet ([#928](https://github.com/MalpenZibo/guido/pull/928))
+- A child out of flow takes no part in its parent's size ([#924](https://github.com/MalpenZibo/guido/pull/924))
+- Merged members are not smoothed past each other's edges ([#919](https://github.com/MalpenZibo/guido/pull/919))
+- The book's samples find their crates wherever Cargo put them ([#920](https://github.com/MalpenZibo/guido/pull/920))
+
 ## [0.13.0](https://github.com/MalpenZibo/guido/compare/v0.12.0...v0.13.0) - 2026-11-02
 
 ### Other
