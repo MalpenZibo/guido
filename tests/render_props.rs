@@ -8,8 +8,7 @@
 #![cfg(feature = "testing")]
 
 use guido::prelude::*;
-mod common;
-use common::headless;
+use guido::testing::Headless;
 
 const RED: Color = Color::rgb(1.0, 0.0, 0.0);
 const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
@@ -49,7 +48,7 @@ fn by_argument(v: u32) -> Color {
 
 /// The colour in the middle of a surface built from `view`.
 fn painted<W: Widget + 'static>(view: impl Fn() -> W + 'static) -> Option<[u8; 4]> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(40)

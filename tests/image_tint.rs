@@ -4,8 +4,7 @@
 
 use guido::prelude::*;
 
-mod common;
-use common::headless;
+use guido::testing::Headless;
 
 const BACKDROP: Color = Color::rgb(0.0, 0.0, 1.0);
 
@@ -28,7 +27,9 @@ fn tinted(tint: Signal<Color>) -> Container {
 
 #[test]
 fn a_tinted_svg_is_drawn_in_its_tint() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tint = create_signal(Color::rgb(1.0, 0.0, 0.0));
     let surface = app.surface(
         SurfaceConfig::new().height(20).background_color(BACKDROP),
@@ -57,7 +58,9 @@ fn untinted_circle() -> Container {
 /// from is the one the second draws from.
 #[test]
 fn a_new_tint_is_drawn_from_the_same_texture() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tint = create_signal(Color::rgb(1.0, 0.0, 0.0));
     let surface = app.surface(
         SurfaceConfig::new().height(20).background_color(BACKDROP),
@@ -87,7 +90,9 @@ fn a_new_tint_is_drawn_from_the_same_texture() {
 /// row's hover the icon follows and not its own.
 #[test]
 fn an_icon_is_drawn_in_the_tint_its_state_declares() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let enabled = create_signal(true);
     let surface = app.surface(
         SurfaceConfig::new().height(40).background_color(BACKDROP),

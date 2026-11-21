@@ -28,7 +28,7 @@ static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
 
 fn play() -> Option<scripted::Run> {
     let _alone = common::one_play_at_a_time();
-    let mut app = common::headless()?;
+    let mut app = guido::testing::Headless::new_or_skip()?;
     Some(scripted::play(
         &mut app,
         scene::VIEWPORT,

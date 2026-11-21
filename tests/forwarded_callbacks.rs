@@ -9,8 +9,7 @@
 use std::cell::Cell;
 
 use guido::prelude::*;
-mod common;
-use common::headless;
+use guido::testing::Headless;
 
 thread_local! {
     /// Whether the inner picker was built holding a callback: `None` until it
@@ -43,7 +42,9 @@ fn bar() -> SurfaceConfig {
 
 #[test]
 fn a_click_in_the_inner_component_reaches_the_outer_callers_closure() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let seen = create_signal(0u32);
     let surface = app.surface(bar(), move || panel().on_change(move |v: u32| seen.set(v)));
     app.configure(surface, 200, 40, 1.0);
@@ -61,7 +62,9 @@ fn a_click_in_the_inner_component_reaches_the_outer_callers_closure() {
 
 #[test]
 fn forwarding_none_leaves_the_inner_prop_unset() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     PICKER_HELD_ONE.with(|held| held.set(None));
     let surface = app.surface(bar(), panel);
     app.configure(surface, 200, 40, 1.0);
@@ -80,7 +83,9 @@ fn forwarding_none_leaves_the_inner_prop_unset() {
 /// reaches the closure through a trait, so it has to say `|v: u32|`.)
 #[test]
 fn a_closure_still_goes_in_as_it_did() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let seen = create_signal(0u32);
     let surface = app.surface(bar(), move || picker().on_change(move |v| seen.set(v + 1)));
     app.configure(surface, 200, 40, 1.0);

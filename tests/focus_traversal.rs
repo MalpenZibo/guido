@@ -19,9 +19,6 @@ use guido::reactive::focus::{clear_focus, focus_path, focused_widget, request_fo
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
-mod common;
-use common::headless;
-
 fn surface(app: &mut Headless, view: impl Fn() -> Container + 'static) -> (SurfaceId, Instant) {
     let id = app.surface(
         SurfaceConfig::new()
@@ -112,7 +109,9 @@ fn three_fields(app: &mut Headless) -> ([WidgetRef; 3], SurfaceId, Instant) {
 
 #[test]
 fn tab_and_shift_tab_walk_the_fields_in_order() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (fields, id, mut at) = three_fields(&mut app);
 
     click(&mut app, id, &mut at, 10.0, 10.0);
@@ -128,7 +127,9 @@ fn tab_and_shift_tab_walk_the_fields_in_order() {
 
 #[test]
 fn the_ends_wrap() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (fields, id, mut at) = three_fields(&mut app);
 
     click(&mut app, id, &mut at, 10.0, 70.0);
@@ -149,7 +150,9 @@ fn the_ends_wrap() {
 
 #[test]
 fn with_nothing_focused_tab_takes_the_first_and_shift_tab_the_last() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (fields, id, mut at) = three_fields(&mut app);
 
     assert_eq!(focused_widget(), None);
@@ -165,7 +168,9 @@ fn with_nothing_focused_tab_takes_the_first_and_shift_tab_the_last() {
 /// is a shortcut of somebody else's, as Flutter's `SingleActivator` reads it.
 #[test]
 fn tab_with_another_modifier_does_not_move_the_focus() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (fields, id, mut at) = three_fields(&mut app);
 
     click(&mut app, id, &mut at, 10.0, 10.0);
@@ -199,7 +204,9 @@ fn tab_with_another_modifier_does_not_move_the_focus() {
 
 #[test]
 fn tab_says_the_focus_came_from_the_keyboard() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (fields, id, mut at) = three_fields(&mut app);
 
     click(&mut app, id, &mut at, 10.0, 10.0);
@@ -219,7 +226,9 @@ fn tab_says_the_focus_came_from_the_keyboard() {
 
 #[test]
 fn hidden_and_disabled_fields_are_passed_over() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<4>();
     let shown = create_signal(true);
     let (id, mut at) = surface(&mut app, move || {
@@ -250,7 +259,9 @@ fn hidden_and_disabled_fields_are_passed_over() {
 
 #[test]
 fn a_field_playing_its_exit_is_passed_over() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<3>();
     let shown = create_signal(true);
     let (id, mut at) = surface(&mut app, move || {
@@ -284,7 +295,9 @@ fn a_field_playing_its_exit_is_passed_over() {
 
 #[test]
 fn reading_order_is_where_the_fields_are_not_where_they_were_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let [left, right] = refs::<2>();
     let fields = [left, right];
     let (id, mut at) = surface(&mut app, move || {
@@ -310,7 +323,7 @@ fn reading_order_is_where_the_fields_are_not_where_they_were_declared() {
 /// Which of two focusable boxes Tab takes first and second, each box given as
 /// `(x, y, width, height)` on a stack.
 fn first_two(boxes: [(f32, f32, f32, f32); 2]) -> Option<[Option<usize>; 2]> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let stops = refs::<2>();
     let (id, mut at) = surface(&mut app, move || {
         container()
@@ -390,7 +403,9 @@ fn slot(r: WidgetRef, shown: RwSignal<bool>) -> Container {
 
 #[test]
 fn many_fields_leaving_and_joining_keep_reading_order() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<40>();
     let shown: [RwSignal<bool>; 40] = std::array::from_fn(|_| create_signal(true));
     let (id, mut at) = surface(&mut app, move || {
@@ -435,7 +450,9 @@ fn many_fields_leaving_and_joining_keep_reading_order() {
 
 #[test]
 fn fields_in_one_place_go_in_the_order_they_joined() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<6>();
     let shown: [RwSignal<bool>; 6] = std::array::from_fn(|_| create_signal(true));
     let (id, mut at) = surface(&mut app, move || {
@@ -497,7 +514,9 @@ impl Widget for TakesTab {
 
 #[test]
 fn a_focused_widget_that_takes_tab_keeps_the_focus() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<2>();
     let (id, mut at) = surface(&mut app, move || {
         container()
@@ -533,19 +552,25 @@ fn around_the_middle(app: &mut Headless, answer: EventResponse) -> Option<usize>
 
 #[test]
 fn a_listener_around_the_focus_that_lets_tab_through_lets_it_move() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     assert_eq!(around_the_middle(&mut app, EventResponse::Ignored), Some(2));
 }
 
 #[test]
 fn a_listener_around_the_focus_that_takes_tab_keeps_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     assert_eq!(around_the_middle(&mut app, EventResponse::Handled), Some(1));
 }
 
 #[test]
 fn a_popup_keeps_tab_among_its_own_fields() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let outside = refs::<2>();
     let inside = refs::<2>();
     let (parent, mut at) = surface(&mut app, move || {
@@ -609,7 +634,9 @@ fn a_focusable_between(
 
 #[test]
 fn a_focusable_container_is_a_stop() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (stops, _, id, mut at) = a_focusable_between(&mut app, false);
 
     click(&mut app, id, &mut at, 10.0, 10.0);
@@ -623,7 +650,9 @@ fn a_focusable_container_is_a_stop() {
 
 #[test]
 fn a_press_inside_a_focusable_container_focuses_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     for in_a_row in [false, true] {
         let (stops, clicks, id, mut at) = a_focusable_between(&mut app, in_a_row);
 
@@ -649,7 +678,9 @@ fn a_press_inside_a_focusable_container_focuses_it() {
 /// in, as a click focuses the innermost focusable element on the web.
 #[test]
 fn a_press_focuses_the_innermost_focusable_container() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let [outer, inner] = refs::<2>();
     let stops = [outer, inner];
     let (id, mut at) = surface(&mut app, move || {
@@ -704,7 +735,9 @@ impl Widget for FocusedByPress {
 /// to the next stop after it, and Shift+Tab to the one before.
 #[test]
 fn from_a_widget_that_is_not_a_stop_tab_goes_on_from_where_it_stands() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let fields = refs::<2>();
     let (id, mut at) = surface(&mut app, move || {
         container()

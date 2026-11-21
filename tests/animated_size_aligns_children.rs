@@ -13,9 +13,8 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
+use guido::testing::Headless;
 use guido::widgets::Rect;
-
-mod common;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -58,7 +57,7 @@ impl Shape {
     }
 
     fn build(aligner: Aligner, extent: f32, view_animates: bool) -> Option<Self> {
-        let mut app = common::headless()?;
+        let mut app = Headless::new_or_skip()?;
         let w = create_signal(extent);
         let shape = create_widget_ref();
         let view = create_widget_ref();
@@ -300,7 +299,7 @@ impl TwoAxes {
     }
 
     fn build(words: f32, nested: bool, outer: Transition) -> Option<Self> {
-        let mut app = common::headless()?;
+        let mut app = Headless::new_or_skip()?;
         let w = create_signal(words);
         let shape = create_widget_ref();
         let inner = create_widget_ref();
@@ -478,7 +477,7 @@ impl Widget for Probe {
 /// and a frame lays the view out only in the box it has then.
 #[test]
 fn a_box_in_flight_measures_what_it_holds_once() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let width = create_signal(300.0f32);
@@ -609,7 +608,7 @@ fn a_view_that_only_paints_in_flight_costs_no_measure() {
 #[cfg(feature = "render-stats")]
 fn layouts_while_the_height_changes(fading: bool) -> Option<(u64, u64)> {
     use guido::render_stats::{get_stats, reset_stats};
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let shown = create_signal(true);
     let height = create_signal(31.0f32);
     let surface = app.surface(
@@ -836,7 +835,7 @@ fn a_box_in_a_springing_box_shrinks_at_its_own_pace() {
 /// rather than half of 180, and ran out of the track and the view (#839).
 #[test]
 fn a_bar_in_a_view_that_arrived_in_flight_stays_in_its_track() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let arrived = create_signal(false);

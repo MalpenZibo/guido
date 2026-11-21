@@ -10,8 +10,7 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-
-mod common;
+use guido::testing::Headless;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -51,7 +50,7 @@ fn moved(app: &mut guido::testing::Headless, at: &mut Instant, placed: WidgetRef
 /// The target set on each of ten frames, 3 px further each time, and where the
 /// box is drawn on that frame — or `None` without an adapter.
 fn chased(transition: Transition) -> Option<Vec<(f32, f32)>> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let offset = create_signal(0.0_f32);
     let placed = translated(&mut app, offset, transition);
     let mut at = Instant::now();
@@ -117,7 +116,7 @@ fn a_delay_retargeted_on_every_frame_holds_the_value() {
 /// What still holds a value back is a delay, and only for as long as it says.
 #[test]
 fn a_delay_holds_a_zero_duration_transition_until_it_has_passed() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let offset = create_signal(0.0_f32);
@@ -145,7 +144,7 @@ fn a_delay_holds_a_zero_duration_transition_until_it_has_passed() {
 /// still waiting out its own delay.
 #[test]
 fn a_retarget_inside_the_next_delay_draws_where_the_last_segment_got_to() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let offset = create_signal(0.0_f32);

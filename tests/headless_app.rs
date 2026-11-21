@@ -59,24 +59,13 @@ fn measuring_24() -> Container {
     container().height(24.0).child(container().height(24.0))
 }
 
-fn headless() -> Option<Headless> {
-    match Headless::new() {
-        Some(app) => Some(app),
-        None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
-            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
-        }
-        None => {
-            eprintln!("no GPU adapter; skipping");
-            None
-        }
-    }
-}
-
 /// The frame ran: the tree was measured against the size the compositor
 /// confirmed, at the scale it confirmed.
 #[test]
 fn a_configured_surface_lays_out_at_the_size_it_was_given() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let surface = app.surface(fixed_bar().exclusive_zone(ExclusiveZone::Auto), move || {
         bar(clicks)
@@ -113,7 +102,9 @@ fn a_configured_surface_lays_out_at_the_size_it_was_given() {
 /// 2560x32 surface on the fourth.
 #[test]
 fn a_buffer_and_the_destination_that_declares_it_never_disagree() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
 
     // The logical size and scale the compositor confirms, the buffer the
@@ -154,7 +145,9 @@ fn a_buffer_and_the_destination_that_declares_it_never_disagree() {
 /// The event reached the widget under it, and only that one.
 #[test]
 fn a_click_inside_runs_the_handler_and_one_outside_does_not() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let surface = app.surface(fixed_bar(), move || bar(clicks));
     app.configure(surface, 200, 50, 2.0);
@@ -178,7 +171,9 @@ fn a_click_inside_runs_the_handler_and_one_outside_does_not() {
 /// the test below.
 #[test]
 fn a_bar_reserving_automatically_declares_its_height_when_it_is_created() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let surface = app.surface(fixed_bar().exclusive_zone(ExclusiveZone::Auto), move || {
         bar(clicks)
@@ -203,7 +198,9 @@ fn a_bar_reserving_automatically_declares_its_height_when_it_is_created() {
 /// reservation follows it.
 #[test]
 fn a_content_sized_surface_reserves_only_once_a_frame_has_measured_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(content_bar(), measuring_24);
 
     assert_eq!(
@@ -244,7 +241,9 @@ fn stretched_bar() -> SurfaceConfig {
 /// The zone and the edge it applies to are declared together, at creation.
 #[test]
 fn a_stretched_bar_reserves_its_zone_at_the_edge_it_names() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let bar = app.surface(stretched_bar(), move || self::bar(clicks));
     app.configure(bar, 1440, 892, 1.0);
@@ -258,7 +257,9 @@ fn a_stretched_bar_reserves_its_zone_at_the_edge_it_names() {
 /// extent is the screen's: nothing a bar means to keep for itself.
 #[test]
 fn auto_reserves_nothing_on_an_axis_the_compositor_stretches() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let bar = app.surface(
         stretched_bar().exclusive_zone(ExclusiveZone::Auto),
@@ -274,7 +275,9 @@ fn auto_reserves_nothing_on_an_axis_the_compositor_stretches() {
 /// as it would anchored to the edge alone: a corner bar reserving its height.
 #[test]
 fn auto_follows_the_named_edge_in_a_corner() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let corner = SurfaceConfig::new()
         .width(300)
@@ -294,7 +297,9 @@ fn auto_follows_the_named_edge_in_a_corner() {
 /// the axis the compositor stretches is the other one.
 #[test]
 fn auto_follows_the_named_edge_across_the_stretched_axis() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let top_bar = fixed_bar()
         .exclusive_zone(ExclusiveZone::Auto)
@@ -310,7 +315,9 @@ fn auto_follows_the_named_edge_across_the_stretched_axis() {
 /// anchor.
 #[test]
 fn an_edge_the_surface_is_not_anchored_to_is_never_sent() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let top_bar = fixed_bar().exclusive_zone(52).exclusive_edge(Edge::Bottom);
     let bar = app.surface(top_bar, move || self::bar(clicks));
@@ -332,7 +339,9 @@ fn an_edge_the_surface_is_not_anchored_to_is_never_sent() {
 /// Set at runtime, like the zone, and sent with it.
 #[test]
 fn a_handle_moves_the_edge_the_zone_applies_to() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let bar = app.surface(stretched_bar(), move || self::bar(clicks));
     app.configure(bar, 1440, 892, 1.0);
@@ -357,7 +366,9 @@ fn a_handle_moves_the_edge_the_zone_applies_to() {
 /// throughout, for the reason `surface::honour_owned_axes` gives.
 #[test]
 fn a_surface_configured_taller_than_its_content_asks_to_shrink_to_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(content_bar(), measuring_24);
 
     assert_eq!(
@@ -380,7 +391,9 @@ fn a_surface_configured_taller_than_its_content_asks_to_shrink_to_it() {
 /// reservation the compositor already has is not sent again for it.
 #[test]
 fn a_reservation_that_did_not_move_is_not_sent_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let width = create_signal(40.0f32);
     let bar = app.surface(content_bar(), move || {
         container()
@@ -414,7 +427,9 @@ fn a_reservation_that_did_not_move_is_not_sent_again() {
 /// offset can be wrong and still land on the right bytes.
 #[test]
 fn the_frame_that_was_drawn_can_be_read_back() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(
         SurfaceConfig::new()
             .height(32)
@@ -446,7 +461,9 @@ fn filling(height: RwSignal<f32>) -> Container {
 /// map rather than one id is the whole of what makes this expressible.
 #[test]
 fn two_surfaces_lay_out_at_their_own_sizes_and_one_signal_reaches_both() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(20.0);
 
     let top = app.surface(fixed_bar(), move || filling(height));
@@ -477,7 +494,9 @@ fn two_surfaces_lay_out_at_their_own_sizes_and_one_signal_reaches_both() {
 /// output stayed off.
 #[test]
 fn work_waiting_on_a_frame_callback_does_not_keep_the_loop_polling() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(20.0);
     let surface = app.surface(fixed_bar(), move || filling(height));
     app.configure(surface, 200, 50, 1.0);
@@ -516,7 +535,9 @@ fn work_waiting_on_a_frame_callback_does_not_keep_the_loop_polling() {
 /// through either would leave it undrawn until something else woke it.
 #[test]
 fn work_the_loop_can_run_keeps_it_polling() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(20.0);
     let surface = app.surface(fixed_bar(), move || filling(height));
     app.configure(surface, 200, 50, 1.0);
@@ -546,7 +567,9 @@ fn work_the_loop_can_run_keeps_it_polling() {
 /// full every 16 ms for as long as either stayed unsaid.
 #[test]
 fn a_surface_that_never_hears_a_frame_callback_stops_repainting_after_its_first_present() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
     app.hold_frame_callbacks(surface);
     app.configure(surface, 200, 50, 1.0);
@@ -573,7 +596,9 @@ fn a_surface_that_never_hears_a_frame_callback_stops_repainting_after_its_first_
 /// loop draining the command it queued.
 #[test]
 fn a_surface_spawned_at_runtime_reaches_the_compositor_and_the_last_close_ends_the_loop() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let first = app.surface(content_bar(), measuring_24);
     app.configure(first, 200, 24, 1.0);
     app.step();
@@ -624,7 +649,9 @@ fn corner_panel() -> SurfaceConfig {
 
 #[test]
 fn every_surface_tree_holds_the_handle_of_its_own_surface() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let seen = Rc::new(RefCell::new(Vec::new()));
     let first = app.surface(corner_panel(), self_resizing_panel(seen.clone()));
     let second = app.surface(corner_panel(), self_resizing_panel(seen.clone()));
@@ -669,7 +696,9 @@ fn every_surface_tree_holds_the_handle_of_its_own_surface() {
 /// factory: each build reads the cover it is building.
 #[test]
 fn every_lock_cover_holds_the_handle_of_its_own_surface() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
     let external = app.connect_output("DP-2");
     let seen = Rc::new(RefCell::new(HashMap::new()));
@@ -713,7 +742,9 @@ fn lock_keeping_the_cover_handle(app: &mut Headless) -> (OutputId, SurfaceHandle
 /// locked when the client holding it dies.
 #[test]
 fn closing_a_lock_cover_leaves_it_covering_its_output() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (laptop, handle) = lock_keeping_the_cover_handle(&mut app);
     let cover = cover_of(&app, laptop);
 
@@ -733,7 +764,9 @@ fn closing_a_lock_cover_leaves_it_covering_its_output() {
 /// that dismisses itself on its first run — is a cover already, and stays.
 #[test]
 fn a_lock_cover_closed_while_it_is_built_still_covers_its_output() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
     lock_session(|_: OutputInfo| {
         expect_context::<SurfaceHandle>().close();
@@ -752,7 +785,9 @@ fn a_lock_cover_closed_while_it_is_built_still_covers_its_output() {
 /// surfaces were covers idles after unlocking, as it would without the close.
 #[test]
 fn closing_a_lock_cover_after_the_unlock_is_harmless() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (laptop, handle) = lock_keeping_the_cover_handle(&mut app);
     let cover = cover_of(&app, laptop);
     unlock_session();
@@ -792,7 +827,9 @@ fn note(reads: &Reads, name: &'static str) {
 /// frame's jobs rather than its layout, and that run reads the same.
 #[test]
 fn a_dynamic_child_reads_what_its_surface_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let reads: Reads = Rc::default();
     let log = reads.clone();
     let rerun = create_signal(0u32);
@@ -833,7 +870,9 @@ fn a_dynamic_child_reads_what_its_surface_declared() {
 /// what it returned and everything under it.
 #[test]
 fn a_dynamic_child_forgets_what_its_earlier_runs_read() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let runs = Rc::new(Cell::new(0u32));
     let flag = create_signal(false);
     let other = create_signal(0u32);
@@ -870,7 +909,9 @@ fn a_dynamic_child_forgets_what_its_earlier_runs_read() {
 /// reads, not those of the dynamic child beside it in the same container.
 #[test]
 fn a_dynamic_child_forgets_only_its_own_reads() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let runs = Rc::new(Cell::new((0u32, 0u32)));
     let first = create_signal(0u32);
     let second = create_signal(0u32);
@@ -906,7 +947,9 @@ fn a_dynamic_child_forgets_only_its_own_reads() {
 /// same scope — and a list inside a row reads it through the row.
 #[test]
 fn a_keyed_row_reads_what_its_surface_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let reads: Reads = Rc::default();
     let log = reads.clone();
     let surface = app.surface(SurfaceConfig::new().width(100).height(100), move || {
@@ -947,7 +990,9 @@ fn a_keyed_row_reads_what_its_surface_declared() {
 /// make, with no row laying out around it.
 #[test]
 fn a_list_inside_a_row_reads_what_the_row_declared_when_it_runs_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let reads: Reads = Rc::default();
     let log = reads.clone();
     let rerun = create_signal(0u32);
@@ -985,7 +1030,9 @@ fn a_list_inside_a_row_reads_what_the_row_declared_when_it_runs_again() {
 /// declared — over the bar it hangs from, and with its own handle.
 #[test]
 fn a_popup_s_dynamic_child_reads_what_the_popup_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), || {
         provide_context(Marker(7));
         measuring_24()
@@ -1043,7 +1090,9 @@ fn declaring(marker: u32) -> impl Widget {
 /// whether it was placed as a plain child, in a dynamic one or in a keyed row.
 #[test]
 fn a_component_reads_what_the_scope_it_was_made_in_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let shown = create_signal(false);
     let surface = app.surface(SurfaceConfig::new().width(200).height(100), move || {
         provide_context(Marker(7));
@@ -1072,7 +1121,9 @@ fn a_component_reads_what_the_scope_it_was_made_in_declared() {
 /// was made in.
 #[test]
 fn a_component_inside_a_component_reads_what_the_outer_one_declared() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(SurfaceConfig::new().width(200).height(100), || {
         provide_context(Marker(7));
         container().child(declaring().marker(3u32))
@@ -1088,7 +1139,9 @@ fn a_component_inside_a_component_reads_what_the_outer_one_declared() {
 
 #[test]
 fn replacing_the_last_surface_in_one_step_keeps_the_loop_running() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let first = app.surface(content_bar(), measuring_24);
     app.configure(first, 200, 24, 1.0);
     app.step();
@@ -1172,7 +1225,9 @@ fn enter_up() -> Event {
 /// still waits for the command pass, as it did.
 #[test]
 fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_keys() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let dialog = ClosingDialog::new();
     let id = dialog.open(&mut app);
 
@@ -1192,7 +1247,9 @@ fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_keys() {
 /// surface acts once.
 #[test]
 fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_clicks() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let dialog = ClosingDialog::new();
     let id = dialog.open(&mut app);
 
@@ -1215,7 +1272,9 @@ fn a_surface_that_asked_to_close_takes_no_more_of_its_queued_clicks() {
 /// every surface's input would have silenced.
 #[test]
 fn a_surface_closing_does_not_stop_the_input_of_another() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let first = ClosingDialog::new();
     let second = ClosingDialog::new();
     let a = first.open(&mut app);
@@ -1237,7 +1296,9 @@ fn a_surface_closing_does_not_stop_the_input_of_another() {
 /// item is not a second pick.
 #[test]
 fn a_popup_whose_menu_asked_to_close_takes_no_more_of_its_queued_clicks() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), measuring_24);
     app.configure(parent, 200, 24, 1.0);
     app.step();
@@ -1271,7 +1332,9 @@ fn a_popup_whose_menu_asked_to_close_takes_no_more_of_its_queued_clicks() {
 /// a layer surface takes too.
 #[test]
 fn an_app_that_outlives_its_last_surface_can_show_another() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.quit_on_last_surface(false);
 
     let asked = create_signal(true);
@@ -1309,7 +1372,9 @@ fn an_app_that_outlives_its_last_surface_can_show_another() {
 /// puts a bar on the one that comes back.
 #[test]
 fn a_bar_per_output_outlives_its_last_monitor() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.quit_on_last_surface(false);
     let bars = a_bar_per_output();
 
@@ -1333,7 +1398,9 @@ fn a_bar_per_output_outlives_its_last_monitor() {
 /// again straight away finds them, and go once it has passed.
 #[test]
 fn the_device_outlives_the_last_surface_by_a_grace_period_and_no_more() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.quit_on_last_surface(false);
     app.own_gpu();
     assert!(!app.holds_gpu(), "nothing asked for one yet");
@@ -1379,7 +1446,9 @@ fn the_device_outlives_the_last_surface_by_a_grace_period_and_no_more() {
 /// leave the user locked out behind a process that is gone.
 #[test]
 fn a_lock_without_a_gpu_is_refused_before_it_is_asked_for() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.without_gpu();
     app.connect_output("eDP-1");
 
@@ -1403,7 +1472,9 @@ fn a_lock_without_a_gpu_is_refused_before_it_is_asked_for() {
 /// tell a teardown order from its reverse.
 #[test]
 fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), measuring_24);
     app.configure(parent, 200, 24, 1.0);
     app.step();
@@ -1440,7 +1511,9 @@ fn a_popup_is_destroyed_before_the_surface_it_hangs_from() {
 /// iteration are three different answers, and only one of them is the stack.
 #[test]
 fn a_branching_popup_tree_comes_down_newest_first() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), measuring_24);
     app.configure(parent, 200, 24, 1.0);
     app.step();
@@ -1484,7 +1557,9 @@ impl Drop for DropFlag {
 /// dynamic child reads `poke` from outside and a signal of its own. Once `poke`
 /// is written, the child must not have run again and the content must be gone.
 fn a_refused_popup_is_taken_down(config: PopupConfig) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), measuring_24);
     app.configure(parent, 200, 30, 1.0);
     app.step();
@@ -1547,7 +1622,9 @@ fn a_refused_popup_of_a_fixed_height_leaves_the_tree() {
 /// and answered `conflicting_grab_popups` with the trait's empty default.
 #[test]
 fn a_new_grab_tears_down_the_chain_it_cannot_nest_under() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(content_bar(), measuring_24);
     app.configure(bar, 200, 24, 1.0);
     app.step();
@@ -1594,7 +1671,9 @@ fn bar_with_a_field(field: WidgetRef, value: RwSignal<String>) -> Container {
 /// routed the way the compositor's would be.
 #[test]
 fn a_click_outside_the_field_takes_the_keyboard_off_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let field = create_widget_ref();
     let value = create_signal(String::new());
     let surface = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
@@ -1627,7 +1706,9 @@ fn a_click_outside_the_field_takes_the_keyboard_off_it() {
 /// across a window blur, are for.
 #[test]
 fn a_field_has_the_focus_back_when_a_grabbing_popup_closes() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let field = create_widget_ref();
     let value = create_signal(String::new());
     let bar = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
@@ -1728,7 +1809,9 @@ fn an_autofocus_popup_over_a_focused_field(
 /// enter here, which a compositor may also do.
 #[test]
 fn a_popups_autofocus_field_takes_the_focus_from_the_bar_when_the_keyboard_reaches_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let AutofocusPopup {
         bar,
         field,
@@ -1777,7 +1860,9 @@ fn a_popups_autofocus_field_takes_the_focus_from_the_bar_when_the_keyboard_reach
 /// and the enter it would wait for has already happened.
 #[test]
 fn an_autofocus_field_shown_on_a_popup_holding_the_keyboard_takes_the_focus() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let shown = create_signal(false);
     let AutofocusPopup {
         bar,
@@ -1815,7 +1900,9 @@ fn an_autofocus_field_shown_on_a_popup_holding_the_keyboard_takes_the_focus() {
 /// there land in it (#731).
 #[test]
 fn a_lock_over_two_monitors_focuses_the_field_on_the_one_with_the_keyboard() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
     let external = app.connect_output("DP-2");
     let fields = lock_with_an_autofocus_field_per_output();
@@ -1864,7 +1951,9 @@ fn lock_with_an_autofocus_field_per_output() -> Rc<RefCell<HashMap<OutputId, Loc
 /// cover's field has the focus when the keyboard comes to it (#731).
 #[test]
 fn a_lock_cover_built_mid_lock_does_not_take_the_focus_from_the_one_being_typed_into() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
     let fields = lock_with_an_autofocus_field_per_output();
     app.step();
@@ -1955,7 +2044,9 @@ fn queue_keys(app: &mut Headless, surface: SurfaceId, keys: impl IntoIterator<It
 /// cleared field, not the text that was submitted (#725).
 #[test]
 fn a_key_queued_behind_a_submit_that_clears_the_field_edits_the_cleared_field() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, value) = a_focused_field_holding(&mut app, "hi", |value| {
         text_input(value).on_submit(move |_| value.set(String::new()))
     });
@@ -1969,7 +2060,9 @@ fn a_key_queued_behind_a_submit_that_clears_the_field_edits_the_cleared_field() 
 /// the whole word and the next letter in one batch, keeps only the letter.
 #[test]
 fn a_key_queued_behind_an_on_change_that_clears_the_field_edits_the_cleared_field() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, value) = a_focused_field_holding(&mut app, "", |value| {
         text_input(value).on_change(move |text| {
             if text.ends_with(',') {
@@ -1986,7 +2079,9 @@ fn a_key_queued_behind_an_on_change_that_clears_the_field_edits_the_cleared_fiel
 /// field pastes it: one read, and the text lands in the field that asked.
 #[test]
 fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let field = create_widget_ref();
     let value = create_signal(String::new());
     let surface = app.surface(fixed_bar(), move || bar_with_a_field(field, value));
@@ -2027,7 +2122,9 @@ fn a_clipboard_offer_is_read_only_when_the_field_pastes() {
 /// new selection to every client, so a paste after a copy brings the copy.
 #[test]
 fn a_copy_is_what_the_next_paste_brings() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), container);
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -2051,7 +2148,9 @@ fn a_copy_is_what_the_next_paste_brings() {
 /// asked for in one iteration share one read.
 #[test]
 fn pastes_asked_together_share_one_read() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), container);
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -2083,7 +2182,9 @@ fn island(w: f32, h: f32) -> Container {
 
 #[test]
 fn an_island_is_where_input_reaches_a_click_through_surface() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || island(80.0, 20.0));
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -2097,7 +2198,9 @@ fn an_island_is_where_input_reaches_a_click_through_surface() {
 
 #[test]
 fn a_hole_passes_clicks_through_a_surface_that_otherwise_takes_them() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container()
             .width(fill())
@@ -2123,7 +2226,9 @@ fn a_hole_passes_clicks_through_a_surface_that_otherwise_takes_them() {
 /// box belong to whatever is underneath again.
 #[test]
 fn a_turned_island_takes_input_where_it_is_drawn() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2169,7 +2274,9 @@ fn a_turned_island_takes_input_where_it_is_drawn() {
 /// became one type.
 #[test]
 fn a_bevelled_island_takes_input_inside_its_cut() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2209,7 +2316,9 @@ fn a_bevelled_island_takes_input_inside_its_cut() {
 /// bevel must not reach past its cut, a squircle must reach out to its own.
 #[test]
 fn a_squircled_island_takes_input_out_to_its_curve() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2256,7 +2365,9 @@ fn a_squircled_island_takes_input_out_to_its_curve() {
 /// either way.
 #[test]
 fn a_scooped_island_keeps_the_horns_the_bite_leaves_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2293,7 +2404,9 @@ fn a_scooped_island_keeps_the_horns_the_bite_leaves_it() {
 /// widget was laid out in, which is why the region could never follow one.
 #[test]
 fn a_transformed_island_declares_where_it_draws_not_where_it_was_laid_out() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().click_through(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2316,7 +2429,9 @@ fn a_transformed_island_declares_where_it_draws_not_where_it_was_laid_out() {
 /// stale. The frame is the register.
 #[test]
 fn an_island_that_stops_painting_stops_taking_input() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let shown = create_signal(true);
     let surface = app.surface(fixed_bar().click_through(), move || {
         container().width(fill()).height(fill()).child(
@@ -2347,7 +2462,9 @@ fn an_island_that_stops_painting_stops_taking_input() {
 /// still while the frames go up.
 #[test]
 fn a_frame_that_repaints_without_moving_the_region_publishes_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let shade = create_signal(Color::rgb(0.1, 0.1, 0.1));
     let surface = app.surface(fixed_bar().click_through(), move || {
         container()
@@ -2394,7 +2511,9 @@ const PILL: Rect = Rect {
 /// without anything in the tree saying a word.
 #[test]
 fn a_surface_declared_with_a_region_asks_for_it_at_birth() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar().input_region([PILL]), container);
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -2407,7 +2526,9 @@ fn a_surface_declared_with_a_region_asks_for_it_at_birth() {
 /// are applied on top of it.
 #[test]
 fn a_region_set_by_hand_is_the_base_the_tree_declares_against() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || island(80.0, 20.0));
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -2434,7 +2555,9 @@ fn a_region_set_by_hand_is_the_base_the_tree_declares_against() {
 /// hole around it does not, and the bar around that still does.
 #[test]
 fn a_declaration_inside_a_hole_is_an_island_in_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -2480,7 +2603,9 @@ impl Widget for Stamps {
 /// with either: the widget can only have been told.
 #[test]
 fn each_queued_event_arrives_at_the_moment_it_was_queued_for() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let seen = Rc::new(RefCell::new(Vec::new()));
     let spy = seen.clone();
     let surface = app.surface(fixed_bar(), move || Stamps(spy));
@@ -2526,7 +2651,7 @@ impl Widget for PressCounts {
 /// The counts the presses among `events` reach a widget with, each event
 /// queued the given number of milliseconds after the first.
 fn press_counts(events: impl IntoIterator<Item = (u64, Event)>) -> Option<Vec<u32>> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let seen = Rc::new(RefCell::new(Vec::new()));
     let spy = seen.clone();
     let surface = app.surface(fixed_bar(), move || PressCounts(spy));
@@ -2633,7 +2758,9 @@ fn a_right_click_after_a_left_click_counts_one() {
 /// click and nothing more. `on_click` fires for every one of them.
 #[test]
 fn a_double_click_fires_on_the_second_release_and_every_click_still_clicks() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let doubles = create_signal(0u32);
     let surface = app.surface(fixed_bar(), move || {
@@ -2687,7 +2814,9 @@ fn a_double_click_fires_on_the_second_release_and_every_click_still_clicks() {
 /// reaches it.
 #[test]
 fn a_double_click_alone_is_heard() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let doubles = create_signal(0u32);
     let surface = app.surface(fixed_bar(), move || {
         container().width(fill()).height(fill()).child(
@@ -2787,7 +2916,9 @@ fn coast(app: &mut Headless, surface: SurfaceId, at: &mut Instant) -> f32 {
 /// routing, the frame's phases and the paint.
 #[test]
 fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     for _ in 0..6 {
@@ -2813,7 +2944,9 @@ fn a_flick_played_through_the_application_coasts_past_its_last_sample() {
 /// A handle grab stops the queued glide; later application frames used to move the content.
 #[test]
 fn a_scrollbar_grab_stops_the_glide_in_the_application() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, || {
         scroll_over_an_edge().scroll(Scroll::vertical())
     });
@@ -2889,7 +3022,9 @@ fn pressed(app: &Headless, surface: SurfaceId) -> bool {
 /// a fast swipe can cross the slop and a hundred pixels at once.
 #[test]
 fn a_finger_dragging_the_content_scrolls_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     drag_up(&mut app, surface, &mut at, 300.0);
@@ -2911,7 +3046,9 @@ fn a_finger_dragging_the_content_scrolls_it() {
 /// those cancelled would coast for exactly no frames.
 #[test]
 fn a_finger_lifted_mid_drag_hands_the_content_to_its_momentum() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     app.event_at(surface, Event::finger_down(50.0, 500.0), at);
@@ -2952,7 +3089,9 @@ fn a_finger_lifted_mid_drag_hands_the_content_to_its_momentum() {
 /// contrived one.
 #[test]
 fn a_drag_after_another_gesture_is_flung_by_its_own_speed() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     // Scrolled downward, fast, and never terminated.
@@ -2998,7 +3137,9 @@ fn a_drag_after_another_gesture_is_flung_by_its_own_speed() {
 /// below the slop would never stop it at all.
 #[test]
 fn a_finger_on_a_coasting_list_stops_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     for _ in 0..6 {
@@ -3036,7 +3177,9 @@ fn a_finger_on_a_coasting_list_stops_it() {
 /// first event, so nothing under the finger lights up and nothing fires.
 #[test]
 fn a_finger_that_stops_a_coasting_list_activates_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
 
@@ -3071,7 +3214,9 @@ fn a_finger_that_stops_a_coasting_list_activates_nothing() {
 /// 18px rather than one.
 #[test]
 fn a_finger_that_moves_less_than_the_slop_still_clicks_what_it_pressed() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
 
@@ -3099,7 +3244,9 @@ fn a_finger_that_moves_less_than_the_slop_still_clicks_what_it_pressed() {
 /// arm, which is the mechanism #429's comment found already here.
 #[test]
 fn a_drag_that_crosses_the_slop_takes_the_press_back_from_the_child() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 2000.0));
 
@@ -3129,7 +3276,9 @@ fn a_drag_that_crosses_the_slop_takes_the_press_back_from_the_child() {
 /// child's press has already been cancelled.
 #[test]
 fn a_list_that_fits_does_not_take_the_tap_it_cannot_scroll() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicks = create_signal(0u32);
     let (surface, mut at) = scroller(&mut app, move || scroll_over_a_button(clicks, 100.0));
 
@@ -3153,7 +3302,9 @@ fn a_list_that_fits_does_not_take_the_tap_it_cannot_scroll() {
 /// cost. A mouse scrolls by the wheel and by the scrollbar, as it always has.
 #[test]
 fn a_mouse_dragging_the_same_content_does_not_scroll_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, scroll_over_an_edge);
 
     app.event_at(
@@ -3217,7 +3368,9 @@ fn scroll_under_a_greedy_child(app: &mut Headless) -> (SurfaceId, Instant, Rc<Ce
 /// tracks a drag of its own — a text input being the one in the crate.
 #[test]
 fn a_child_that_takes_every_move_does_not_take_the_drag() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at, _) = scroll_under_a_greedy_child(&mut app);
 
     drag_up(&mut app, surface, &mut at, 300.0);
@@ -3239,7 +3392,9 @@ fn a_child_that_takes_every_move_does_not_take_the_drag() {
 /// cannot change anything.
 #[test]
 fn a_drag_the_list_has_won_is_not_offered_to_the_list_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at, moves) = scroll_under_a_greedy_child(&mut app);
 
     drag_up(&mut app, surface, &mut at, 300.0);
@@ -3339,7 +3494,9 @@ fn page_and_list(app: &Headless, surface: SurfaceId) -> (f32, f32) {
 /// its `Handled` ends the dispatch before an ancestor is asked.
 #[test]
 fn a_finger_in_a_list_inside_a_page_drags_the_list() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
     assert_eq!(
         page_and_list(&app, surface),
@@ -3373,7 +3530,9 @@ fn a_finger_in_a_list_inside_a_page_drags_the_list() {
 /// used to stop at the page's edge.
 #[test]
 fn a_drag_that_leaves_the_page_does_not_become_the_pages() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
 
     drag_up(&mut app, surface, &mut at, 480.0);
@@ -3396,7 +3555,9 @@ fn a_drag_that_leaves_the_page_does_not_become_the_pages() {
 /// the rule innermost-*under-the-finger* rather than innermost-ever.
 #[test]
 fn a_finger_on_the_page_outside_the_list_drags_the_page() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(800.0));
 
     // 300 rows of the page above the list, and the finger stays in them.
@@ -3422,7 +3583,9 @@ fn a_finger_on_the_page_outside_the_list_drags_the_page() {
 /// cost.
 #[test]
 fn a_list_that_runs_out_mid_drag_does_not_hand_the_rest_to_the_page() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     // 50 rows of room in the list, against 400 in the page under it.
     let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(250.0));
 
@@ -3442,7 +3605,9 @@ fn a_list_that_runs_out_mid_drag_does_not_hand_the_rest_to_the_page() {
 /// already gives a tap, now that an ancestor depends on it.
 #[test]
 fn a_finger_in_a_list_that_fits_drags_the_page_around_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, mut at) = scroller(&mut app, || a_list_inside_a_page(200.0));
 
     drag_up(&mut app, surface, &mut at, 480.0);
@@ -3484,7 +3649,9 @@ fn blurring(on: RwSignal<bool>, tint: RwSignal<Color>) -> Container {
 /// published must cover its middle and leave the box's corners to the desktop.
 #[test]
 fn a_turned_compositor_blur_publishes_its_shape() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container().width(fill()).height(fill()).child(
             container()
@@ -3536,7 +3703,9 @@ fn a_turned_compositor_blur_publishes_its_shape() {
 /// more is said however often the surface repaints.
 #[test]
 fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let on = create_signal(true);
     let tint = create_signal(Color::BLACK);
     let surface = app.surface(fixed_bar(), move || blurring(on, tint));
@@ -3576,7 +3745,9 @@ fn a_compositor_blur_is_published_and_withdrawn_once_it_goes() {
 /// nothing past them.
 #[test]
 fn merged_pills_publish_a_box_over_their_neck() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let pill = Color::rgba(0.1, 0.1, 0.12, 0.7);
     let surface = app.surface(fixed_bar(), move || {
         container().width(fill()).height(fill()).padding(8.0).child(
@@ -3638,7 +3809,9 @@ fn merged_pills_publish_a_box_over_their_neck() {
 /// the compositor for the new height.
 #[test]
 fn a_content_sized_surface_follows_content_that_grows() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(24.0f32);
     let bar = app.surface(content_bar(), move || {
         container().height(move || height.get())
@@ -3674,7 +3847,7 @@ fn eases_80_to_24(tall: RwSignal<bool>) -> impl Fn() -> Container + 'static {
 /// Returns the app, the surface, the signal that opens it, and the instant the
 /// close starts at: what the zones asked after that instant are compared from.
 fn closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let tall = create_signal(true);
     let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 80, 1.0);
@@ -3741,7 +3914,9 @@ fn holds_then_asks_once_for_24<T: PartialEq + std::fmt::Debug + From<u8>>(
 /// is the strip from before the panel opened (#896).
 #[test]
 fn a_content_axis_given_back_mid_close_holds_the_pinned_size() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tall = create_signal(false);
     let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 24, 1.0);
@@ -3793,7 +3968,9 @@ fn filling_root(strip: RwSignal<f32>, placed: WidgetRef) -> Container {
 /// sizes to what it holds, as it does on a scroller's axis (#898).
 #[test]
 fn a_filling_root_measures_to_its_content() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let strip = create_signal(24.0f32);
     let bar = app.surface(content_bar(), move || {
         filling_root(strip, create_widget_ref())
@@ -3815,7 +3992,9 @@ fn a_filling_root_measures_to_its_content() {
 /// stays on its edge until the surface has shrunk.
 #[test]
 fn a_filling_root_keeps_a_bottom_strip_at_the_bottom_while_a_shrink_is_held() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let strip = create_signal(80.0f32);
     let placed = create_widget_ref();
     let bar = app.surface(content_bar(), move || filling_root(strip, placed));
@@ -3853,7 +4032,9 @@ fn a_filling_root_keeps_a_bottom_strip_at_the_bottom_while_a_shrink_is_held() {
 /// measured again at the cap and the height counts the lines it wraps to.
 #[test]
 fn a_text_wider_than_the_screen_measures_the_height_it_wraps_to() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let toast = || {
         SurfaceConfig::new()
             .width(content())
@@ -3893,7 +4074,9 @@ fn a_text_wider_than_the_screen_measures_the_height_it_wraps_to() {
 /// one line while the text wraps to several.
 #[test]
 fn a_transitioned_height_follows_a_text_that_grows_past_the_screen() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let words = create_signal(String::from("one line"));
     let toast = app.surface(
         SurfaceConfig::new()
@@ -3947,7 +4130,9 @@ fn every_size_rode_a_buffer_of_it(app: &Headless, bar: SurfaceId, from: usize) {
 /// A content-sized surface resized from `from` to `to` commits the new size
 /// with a buffer drawn at it, in the frame that asked.
 fn resizes_with_a_buffer_of_its_size(from: f32, to: f32) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(from);
     let bar = app.surface(content_bar(), move || {
         container().height(move || height.get())
@@ -3986,7 +4171,9 @@ fn a_shrinking_surface_commits_its_size_with_a_buffer_of_it() {
 /// left and the old buffer would be drawn from its new left edge.
 #[test]
 fn a_right_anchored_surface_commits_its_width_with_a_buffer_of_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let width = create_signal(100.0f32);
     let dock = app.surface(
         SurfaceConfig::new()
@@ -4011,7 +4198,9 @@ fn a_right_anchored_surface_commits_its_width_with_a_buffer_of_it() {
 /// the next frame is drawn at.
 #[test]
 fn a_configure_that_clamps_the_size_asked_for_is_drawn_at() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let height = create_signal(24.0f32);
     let bar = app.surface(content_bar(), move || {
         container().height(move || height.get())
@@ -4035,7 +4224,9 @@ fn a_configure_that_clamps_the_size_asked_for_is_drawn_at() {
 /// back: the bar that covers the output while a panel is open.
 #[test]
 fn a_pinned_size_and_its_release_commit_with_a_buffer_of_them() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(content_bar(), || container().height(24.0));
     app.configure(bar, 200, 24, 1.0);
     app.step();
@@ -4056,7 +4247,7 @@ fn a_pinned_size_and_its_release_commit_with_a_buffer_of_them() {
 /// on a bar. Returns the app, the popup, the signal that opens it, and the
 /// instant the close starts at.
 fn popup_closing_from_80() -> Option<(Headless, SurfaceId, RwSignal<bool>, Instant)> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let bar = app.surface(content_bar(), measuring_24);
     app.configure(bar, 200, 24, 1.0);
     app.step();
@@ -4127,7 +4318,9 @@ fn a_close_reopened_half_way_never_resizes_the_surface() {
 /// and the surface shrinks once the row is gone.
 #[test]
 fn a_collapsing_row_keeps_the_surface_until_it_is_gone() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let rows = create_signal(vec![0u32, 1]);
     let bar = app.surface(content_bar(), move || {
         container().layout(Flex::column()).children(keyed(
@@ -4156,7 +4349,7 @@ type Asked = (Vec<(u32, u32)>, Vec<i32>);
 /// container — then turned content-wide and given `height` in one call.
 /// Returns the sizes it asked for and the zones it reserved, after one step.
 fn resize_to_content_wide(height: u32) -> Option<Asked> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let bar = app.surface(
         SurfaceConfig::new()
             .width(300)
@@ -4215,7 +4408,9 @@ fn a_surface_turned_content_wide_at_its_own_height_asks_as_before() {
 /// measure reads the in-flight layout back and configures the surface to it.
 #[test]
 fn a_growing_child_configures_the_surface_once_to_where_it_is_going() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tall = create_signal(false);
     let bar = app.surface(content_bar(), eases_80_to_24(tall));
     app.configure(bar, 200, 24, 1.0);
@@ -4254,7 +4449,9 @@ fn a_growing_child_configures_the_surface_once_to_where_it_is_going() {
 /// finished, at its full 200.
 #[test]
 fn a_first_layout_dates_from_the_frame_that_asked_for_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container()
             .width(200.0.transition(1000.0).entering_from(0.0))
@@ -4311,7 +4508,9 @@ fn a_first_layout_dates_from_the_frame_that_asked_for_it() {
 /// deciding whether the measure descends.
 #[test]
 fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tall = create_signal(false);
     let bar = app.surface(content_bar(), move || {
         container().width(fill()).height(at_most(24.0)).child(
@@ -4361,7 +4560,9 @@ fn a_skipped_subtree_still_says_what_is_in_flight_below_it() {
 /// popup anchored to the widget opened beside it.
 #[test]
 fn a_widget_ref_rect_leaves_out_what_its_widget_paints_outside_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
         container().padding(10.0).child(
@@ -4397,7 +4598,9 @@ fn a_widget_ref_rect_leaves_out_what_its_widget_paints_outside_it() {
 /// it to.
 #[test]
 fn a_widget_ref_rect_follows_the_scroll_its_widget_is_drawn_under() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let row = create_widget_ref();
     let (surface, mut at) = scroller(&mut app, move || {
         container()
@@ -4453,7 +4656,9 @@ fn a_widget_ref_rect_follows_the_scroll_its_widget_is_drawn_under() {
 /// by frame, and rests where the translate does.
 #[test]
 fn a_widget_ref_rect_follows_an_ancestor_translate_as_it_animates() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let moved = create_signal(false);
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
@@ -4502,7 +4707,9 @@ fn a_widget_ref_rect_follows_an_ancestor_translate_as_it_animates() {
 /// the same centre.
 #[test]
 fn a_widget_ref_rect_is_the_box_its_own_scale_draws() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
         container().padding(10.0).child(
@@ -4543,7 +4750,9 @@ fn a_translated_card_in_a_scaled_parent(card: WidgetRef, transformed: bool) -> C
 /// at all.
 #[test]
 fn a_widget_ref_layout_rect_is_its_rect_with_the_transforms_taken_out() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let card = create_widget_ref();
     let plain = create_widget_ref();
     let one = app.surface(fixed_bar(), move || {
@@ -4582,7 +4791,9 @@ fn writes_of(signal: Signal<Rect>) -> Rc<Cell<usize>> {
 /// never writes `layout_rect()`: nothing about the layout moved.
 #[test]
 fn an_animating_translate_never_writes_a_widget_ref_layout_rect() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let moved = create_signal(false);
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
@@ -4633,7 +4844,9 @@ fn an_animating_translate_never_writes_a_widget_ref_layout_rect() {
 /// frame that laid it out, and the frames after it write nothing.
 #[test]
 fn a_layout_move_writes_a_widget_ref_layout_rect_once() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let wide = create_signal(false);
     let card = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
@@ -4671,7 +4884,9 @@ fn a_layout_move_writes_a_widget_ref_layout_rect_once() {
 /// happening at all.
 #[test]
 fn a_restarted_layout_root_keeps_the_constraints_it_was_placed_under() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tall = create_signal(false);
     let boundary = create_widget_ref();
     let surface = app.surface(fixed_bar(), move || {
@@ -4744,7 +4959,9 @@ fn a_bar_per_output() -> Rc<RefCell<HashMap<OutputId, SurfaceHandle>>> {
 /// screen.
 #[test]
 fn a_surface_spawned_per_output_goes_when_its_output_goes() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bars = a_bar_per_output();
 
     let laptop = app.connect_output("eDP-1");
@@ -4795,7 +5012,9 @@ fn a_surface_spawned_per_output_goes_when_its_output_goes() {
 /// the effect re-runs often enough for that to be a real way to be wrong.
 #[test]
 fn a_departed_outputs_surface_is_torn_down_rather_than_abandoned() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bars = a_bar_per_output();
 
     let laptop = app.connect_output("eDP-1");
@@ -4853,7 +5072,9 @@ fn lock_screen(output: OutputInfo) -> Text {
 /// and a lock refused outright on Hyprland (#514).
 #[test]
 fn a_lock_covers_each_connected_output_exactly_once() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
     let external = app.connect_output("DP-2");
 
@@ -4909,7 +5130,9 @@ fn a_lock_covers_each_connected_output_exactly_once() {
 /// the application goes on laying out and drawing with no lock under them.
 #[test]
 fn a_refused_lock_takes_down_the_covers_made_while_locking() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.connect_output("eDP-1");
     app.connect_output("DP-2");
 
@@ -4937,7 +5160,9 @@ fn a_refused_lock_takes_down_the_covers_made_while_locking() {
 /// while locking, as a refusal does.
 #[test]
 fn an_unlock_before_the_grant_takes_down_the_covers_made_while_locking() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.connect_output("eDP-1");
     app.connect_output("DP-2");
 
@@ -4962,7 +5187,9 @@ fn an_unlock_before_the_grant_takes_down_the_covers_made_while_locking() {
 /// so is one plugged in after it is granted.
 #[test]
 fn an_output_connected_while_locking_or_locked_is_covered() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let laptop = app.connect_output("eDP-1");
 
     lock_session(lock_screen);
@@ -5003,7 +5230,9 @@ fn an_output_connected_while_locking_or_locked_is_covered() {
 /// frames is the assertion that would have caught it.
 #[test]
 fn an_output_that_leaves_mid_lock_is_asked_for_nothing_further() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let _laptop = app.connect_output("eDP-1");
     let external = app.connect_output("DP-2");
 
@@ -5047,7 +5276,9 @@ fn pointer_enters(app: &mut Headless, surface: SurfaceId) {
 /// one — which is what dropping it as "no change" made it (#479).
 #[test]
 fn a_surface_that_never_sets_a_cursor_asks_for_the_arrow_on_enter() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
     app.configure(surface, 200, 50, 1.0);
     app.step();
@@ -5064,7 +5295,9 @@ fn a_surface_that_never_sets_a_cursor_asks_for_the_arrow_on_enter() {
 /// time, even though the shape itself never changed.
 #[test]
 fn every_enter_asks_for_the_shape_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let left = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
     let right = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
     app.configure(left, 200, 50, 1.0);
@@ -5102,7 +5335,9 @@ fn left_of_a_bar(left: Container) -> Container {
 
 #[test]
 fn hovering_a_container_that_declares_a_cursor_asks_for_it_and_leaving_asks_for_the_arrow() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         left_of_a_bar(container().cursor(CursorIcon::Pointer))
     });
@@ -5125,7 +5360,9 @@ fn hovering_a_container_that_declares_a_cursor_asks_for_it_and_leaving_asks_for_
 /// an imperative `set_cursor(Default)` on the field's leave could never say.
 #[test]
 fn a_field_inside_a_clickable_row_shows_its_own_cursor_and_hands_the_row_its_back() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let value = create_signal(String::new());
     let surface = app.surface(fixed_bar(), move || {
         left_of_a_bar(
@@ -5158,7 +5395,9 @@ fn a_field_inside_a_clickable_row_shows_its_own_cursor_and_hands_the_row_its_bac
 
 #[test]
 fn a_cursor_given_by_a_signal_changes_while_the_pointer_stays_still() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let busy = create_signal(false);
     let surface = app.surface(fixed_bar(), move || {
         container().width(fill()).height(fill()).cursor(move || {
@@ -5193,7 +5432,9 @@ fn a_cursor_given_by_a_signal_changes_while_the_pointer_stays_still() {
 /// beneath it answers.
 #[test]
 fn a_container_that_takes_no_input_leaves_the_cursor_to_the_one_beneath_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container()
             .width(fill())
@@ -5273,7 +5514,7 @@ fn a_cursor_closure_whose_widget_went_under_a_held_button_is_not_read_again() {
 /// closure reads.
 fn a_cursor_closure_under_the_pointer()
 -> Option<(Headless, SurfaceId, RwSignal<bool>, RwSignal<bool>)> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let shown = create_signal(true);
     let loading = create_signal(false);
     let surface = app.surface(fixed_bar(), move || {
@@ -5308,7 +5549,9 @@ fn a_cursor_closure_under_the_pointer()
 /// enter's serial.
 #[test]
 fn a_root_that_hides_the_cursor_asks_for_hidden_on_every_enter() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container()
             .width(fill())
@@ -5332,7 +5575,9 @@ fn a_root_that_hides_the_cursor_asks_for_hidden_on_every_enter() {
 /// root's `Hidden` takes over again the moment the pointer leaves it.
 #[test]
 fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         left_of_a_bar(container().cursor(CursorIcon::Pointer)).cursor(CursorIcon::Hidden)
     });
@@ -5360,7 +5605,9 @@ fn a_child_of_a_hidden_root_shows_its_own_cursor_and_hides_it_again_on_leaving()
 /// made only on a move would give the I-beam back on every click.
 #[test]
 fn a_text_input_that_hides_the_cursor_claims_hidden_on_moves_and_on_presses() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let value = create_password();
     let surface = app.surface(fixed_bar(), move || {
         left_of_a_bar(
@@ -5393,7 +5640,9 @@ fn a_text_input_that_hides_the_cursor_claims_hidden_on_moves_and_on_presses() {
 
 #[test]
 fn a_text_input_that_declares_no_cursor_still_shows_the_i_beam() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let value = create_signal(String::new());
     let surface = app.surface(fixed_bar(), move || {
         left_of_a_bar(container().child(text_input(value))).cursor(CursorIcon::Hidden)
@@ -5411,7 +5660,9 @@ fn a_text_input_that_declares_no_cursor_still_shows_the_i_beam() {
 
 #[test]
 fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let value = create_signal(String::new());
     let waiting = create_signal(false);
     let surface = app.surface(fixed_bar(), move || {
@@ -5442,7 +5693,9 @@ fn a_text_input_cursor_given_by_a_signal_changes_while_the_pointer_stays_still()
 /// the drag's origin, which no container offers by position.
 #[test]
 fn a_right_click_two_siblings_from_a_left_drag_leaves_the_drag_alone() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let seen = Rc::new(RefCell::new(Vec::new()));
     let log = seen.clone();
     let surface = app.surface(fixed_bar(), move || {
@@ -5499,7 +5752,9 @@ fn a_right_click_two_siblings_from_a_left_drag_leaves_the_drag_alone() {
 /// that no longer exists.
 #[test]
 fn a_press_held_on_a_surface_that_closes_does_not_hold_the_next_one() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let first = app.surface(fixed_bar(), measuring_24);
     app.configure(first, 200, 50, 1.0);
     let clicks = create_signal(0u32);
@@ -5528,7 +5783,9 @@ fn a_press_held_on_a_surface_that_closes_does_not_hold_the_next_one() {
 /// for (#625).
 #[test]
 fn a_right_press_during_a_drag_keeps_the_cursor_under_the_pointer() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || {
         container()
             .layout(Flex::row())
@@ -5599,7 +5856,9 @@ fn spinner_and_pulse() -> (Container, Text) {
 #[test]
 fn what_a_hidden_panel_holds_lets_the_surface_go_idle() {
     for which in ["spinner", "pulse"] {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let busy = create_signal(true);
         let surface = app.surface(fixed_bar(), move || {
             let (spinner, pulse) = spinner_and_pulse();
@@ -5647,7 +5906,9 @@ fn what_a_hidden_panel_holds_lets_the_surface_go_idle() {
 /// read stopped at the outer one.
 #[test]
 fn a_spinner_two_panels_deep_runs_again_when_the_outer_one_is_shown() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let outer = create_signal(true);
     let inner = create_signal(true);
     let surface = app.surface(fixed_bar(), move || {
@@ -5708,7 +5969,9 @@ fn a_widget_from_outside_the_crate_does_not_animate_inside_a_hidden_panel() {
         fn paint(&self, _ctx: &mut PaintContext) {}
     }
 
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let shown = create_signal(true);
     let tick = create_signal(0u32);
     let advanced = Rc::new(Cell::new(0));
@@ -5748,7 +6011,9 @@ fn a_widget_from_outside_the_crate_does_not_animate_inside_a_hidden_panel() {
 /// A scale that does come is a change, which the test below draws.
 #[test]
 fn a_surface_never_told_its_scale_is_built_at_one_and_redrawn_only_on_change() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), container);
     app.configure_size(surface, 200, 50);
     app.step();
@@ -5773,7 +6038,9 @@ fn a_surface_never_told_its_scale_is_built_at_one_and_redrawn_only_on_change() {
 /// on passes where nothing changed.
 #[test]
 fn a_late_scale_resizes_the_buffer_and_ends_the_forced_render() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), container);
     app.configure_size(surface, 200, 50);
     app.step();
@@ -5797,7 +6064,9 @@ fn a_late_scale_resizes_the_buffer_and_ends_the_forced_render() {
 /// is built at: one target, at 2, and never one at 1 grown to it.
 #[test]
 fn a_scale_sent_before_configure_is_the_first_buffers() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), container);
     app.send_scale(surface, 2.0);
     app.configure_size(surface, 200, 50);
@@ -5810,7 +6079,9 @@ fn a_scale_sent_before_configure_is_the_first_buffers() {
 /// is until the compositor sends one: one target, at its logical size.
 #[test]
 fn a_lock_surface_with_no_scale_yet_is_built_at_one() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.connect_output("eDP-1");
     lock_session(lock_screen);
     app.step();
@@ -5825,7 +6096,9 @@ fn a_lock_surface_with_no_scale_yet_is_built_at_one() {
 /// nothing does not draw it again.
 #[test]
 fn a_drawn_popup_is_not_drawn_again_for_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let parent = app.surface(content_bar(), measuring_24);
     app.configure(parent, 200, 24, 1.0);
     app.step();
@@ -5907,7 +6180,9 @@ impl BadgeRow {
 /// A badge that grows pushes the title back rather than out of the row.
 #[test]
 fn a_badge_that_grows_lays_its_row_out_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let row = title_and_badge(&mut app, 40.0, true);
     assert_eq!(row.spans(&app), [Some((0, 252)), Some((260, 40))]);
 
@@ -5923,7 +6198,9 @@ fn a_badge_that_grows_lays_its_row_out_again() {
 /// A badge that is hidden gives the title its place, spacing and all.
 #[test]
 fn a_badge_that_is_hidden_lays_its_row_out_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let row = title_and_badge(&mut app, 40.0, true);
 
     row.shown.set(false);
@@ -5939,7 +6216,9 @@ fn a_badge_that_is_hidden_lays_its_row_out_again() {
 /// a hidden container is a relayout boundary whatever its size says.
 #[test]
 fn a_badge_that_is_shown_lays_its_row_out_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let row = title_and_badge(&mut app, 40.0, false);
     assert_eq!(row.spans(&app), [Some((0, 300)), None]);
 
@@ -6004,7 +6283,9 @@ impl SwitchedOff {
 #[test]
 fn a_container_switched_off_under_the_pointer_hears_it_leave() {
     for (gate, nested) in SWITCHED_OFF {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let on = create_signal(true);
         let calls = Rc::new(RefCell::new(Vec::new()));
         let record = calls.clone();
@@ -6044,7 +6325,9 @@ fn a_container_switched_off_under_the_pointer_hears_it_leave() {
 #[test]
 fn a_container_switched_off_mid_press_is_not_pressed_when_on_again() {
     for (gate, nested) in SWITCHED_OFF {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let on = create_signal(true);
         let clicks = create_signal(0u32);
         let surface = app.surface(fixed_bar(), move || {
@@ -6129,7 +6412,9 @@ fn reorderable(
 /// and a click lands where it is drawn.
 #[test]
 fn a_row_moved_by_a_reorder_slides_from_where_it_was() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (a, b) = (create_widget_ref(), create_widget_ref());
     let rows = create_signal(vec![0, 1]);
     let clicked = Rc::new(Cell::new(None));
@@ -6188,7 +6473,9 @@ fn a_row_moved_by_a_reorder_slides_from_where_it_was() {
 /// out on every frame of the scroll.
 #[test]
 fn scrolling_an_ancestor_slides_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let row = create_widget_ref();
     let (surface, mut at) = scroller(&mut app, move || {
         container()
@@ -6239,7 +6526,9 @@ fn scrolling_an_ancestor_slides_nothing() {
 /// not slide, and riding the parent's slide where it does.
 #[test]
 fn a_parents_move_does_not_slide_its_children() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let moved = create_signal(false);
     let (still, sliding_parent, carried) = (
         create_widget_ref(),
@@ -6325,7 +6614,9 @@ fn a_springing_card(card: WidgetRef, across: RwSignal<f32>, wide: RwSignal<bool>
 /// moving, and it settles at the second target.
 #[test]
 fn a_move_during_a_move_continues_from_where_it_is_drawn() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let card = create_widget_ref();
     let across = create_signal(0.0);
     let wide = create_signal(false);
@@ -6382,7 +6673,9 @@ fn a_move_during_a_move_continues_from_where_it_is_drawn() {
 /// transition and the slide each reach their own target.
 #[test]
 fn a_card_that_moves_and_grows_reaches_both_targets() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let card = create_widget_ref();
     let across = create_signal(0.0);
     let wide = create_signal(false);
@@ -6419,7 +6712,9 @@ fn a_card_that_moves_and_grows_reaches_both_targets() {
 /// starts to move.
 #[test]
 fn a_row_sliding_out_of_view_is_painted_on_its_way() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let pushed = create_signal(false);
     let red = |[r, g, b, _]: [u8; 4]| r > 200 && g < 50 && b < 50;
     let (surface, mut at) = scroller(&mut app, move || {
@@ -6545,7 +6840,9 @@ fn a_pill_shown_as_the_surface_shrinks(
 /// the spring damaged — and drew — a pill four times the surface.
 #[test]
 fn a_container_shown_as_its_surface_shrinks_resumes_its_animation_inside_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, pill, before) = a_pill_shown_as_the_surface_shrinks(&mut app, true);
     let damage = &app.damage_reported(surface)[before..];
 
@@ -6569,7 +6866,9 @@ fn a_container_shown_as_its_surface_shrinks_resumes_its_animation_inside_it() {
 /// did.
 #[test]
 fn a_layout_pending_in_the_frame_a_surface_is_resized_does_not_keep_the_old_size() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, pill, _) = a_pill_shown_as_the_surface_shrinks(&mut app, false);
 
     assert_eq!(app.root_size(surface), (100.0, 40.0));
@@ -6581,7 +6880,9 @@ fn a_layout_pending_in_the_frame_a_surface_is_resized_does_not_keep_the_old_size
 /// 3840 by 48 buffer, and only one of them is 3840 wide.
 #[test]
 fn a_resize_that_keeps_the_buffer_still_lays_the_surface_out_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(fixed_bar(), || container().width(fill()).height(fill()));
     app.configure(surface, 2560, 32, 1.5);
     app.step();
@@ -6639,7 +6940,9 @@ fn a_repainting_child_is_damaged_where_each_frame_draws_it(
     moves: impl FnOnce(Container, RwSignal<f32>) -> Container + 'static,
     case: &str,
 ) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (gap, offset, tint) = (
         create_signal(0.0f32),
         create_signal(0.0f32),
@@ -6737,7 +7040,9 @@ fn a_child_repainting_in_a_card_translated_by_a_spring_is_damaged_where_each_fra
 /// through the scroll offset, can name where it is drawn.
 #[test]
 fn a_row_repainting_in_a_scrolled_list_is_damaged_where_each_frame_draws_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let tint = create_signal(false);
     let row = create_widget_ref();
     let surface =
@@ -6841,7 +7146,9 @@ fn a_row_repainting_in_a_scrolled_list_is_damaged_where_each_frame_draws_it() {
 #[test]
 fn a_repainting_shape_damages_the_fringe_of_its_edge() {
     for scale in [1.0f32, 2.0] {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let tint = create_signal(false);
         let surface = app.surface(SurfaceConfig::new().width(200).height(200), move || {
             container()

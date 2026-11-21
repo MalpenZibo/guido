@@ -13,8 +13,6 @@
 
 #![cfg(feature = "testing")]
 
-mod common;
-
 use guido::layout::Flex;
 use guido::prelude::*;
 use guido::surface::SurfaceId;
@@ -106,7 +104,7 @@ fn a_blur_near_the_surface_edge_reads_the_content_past_it() {
                 [(middle, last), (middle, SIDE - 5)],
             ),
         ] {
-            let Some(mut app) = common::headless() else {
+            let Some(mut app) = Headless::new_or_skip() else {
                 return;
             };
             let cut = surface(&mut app, (SIDE, SIDE), scale, || {
@@ -145,7 +143,7 @@ fn a_blur_near_the_surface_edge_reads_the_content_past_it() {
 fn a_blur_still_fades_the_content_where_it_ends() {
     let middle = SIDE / 2;
     for scale in [1.0, 2.0] {
-        let Some(mut app) = common::headless() else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let plain = surface(&mut app, (SIDE, SIDE), scale, || {

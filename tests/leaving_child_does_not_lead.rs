@@ -11,9 +11,8 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
+use guido::testing::Headless;
 use guido::widgets::Rect;
-
-mod common;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -53,7 +52,7 @@ struct Island {
 
 impl Island {
     fn new() -> Option<Self> {
-        let mut app = common::headless()?;
+        let mut app = Headless::new_or_skip()?;
         let views = create_signal(vec![true]);
         let shape = create_widget_ref();
         let wide = create_widget_ref();

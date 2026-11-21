@@ -15,8 +15,6 @@
 //! **No harness**, for the reason `frame_allocations_are_counted.rs` gives:
 //! the counter is the process's, and libtest's own thread allocates into it.
 
-mod common;
-
 use guido::prelude::*;
 use guido::render_stats;
 
@@ -33,7 +31,7 @@ const WARM_UP: usize = 4;
 /// Allocations over `FRAMES` painted frames of a column of `labels` labels,
 /// with only the colour behind them changing; `None` without an adapter.
 fn allocations_of_a_column(labels: usize) -> Option<u64> {
-    let mut app = common::headless()?;
+    let mut app = guido::testing::Headless::new_or_skip()?;
     let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
     let surface = app.surface(
         SurfaceConfig::new()

@@ -190,7 +190,7 @@ fn a_read_does_not_point_a_size_that_follows_its_content() {
 fn a_size_below_a_read_child_follows_its_content() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let content = create_signal(10.0f32);
@@ -303,7 +303,7 @@ fn a_child_read_in_a_measure_stands_where_the_measure_placed_it() {
 fn a_settled_child_read_on_a_content_sized_surface_is_laid_out_by_neither_pass() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let runs = Rc::new(Cell::new(0));
@@ -378,7 +378,7 @@ fn sliding_row(tick: RwSignal<f32>, end: RwSignal<bool>, sliding: WidgetRef) -> 
 fn a_read_does_not_restart_a_slide() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let tick = create_signal(1.0f32);
@@ -518,7 +518,7 @@ fn a_read_before_the_first_placement_answers_where_the_enter_starts() {
 fn a_read_answers_what_layout_child_does_frame_after_frame() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let grows = create_signal(20.0f32);
@@ -586,7 +586,7 @@ fn a_read_answers_what_layout_child_does_frame_after_frame() {
 fn a_read_after_the_first_placement_reads_where_it_put_the_size() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let reads = Reads::default();

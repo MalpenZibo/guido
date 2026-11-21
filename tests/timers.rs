@@ -16,9 +16,6 @@ use guido::reactive::dispose_owner;
 use guido::reactive::owner::with_owner;
 use guido::testing::Headless;
 
-mod common;
-use common::headless;
-
 const MS: Duration = Duration::from_millis(1);
 
 /// A surface whose whole area is `colour`, so a frame says what it was.
@@ -38,7 +35,9 @@ fn painted(app: &mut Headless, colour: RwSignal<Color>) -> SurfaceId {
 /// the frame of the pass that ran it.
 #[test]
 fn a_timeout_reads_a_signal_and_writes_another_when_due() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let resting = create_signal(false);
     let colour = create_signal(Color::BLUE);
     let surface = painted(&mut app, colour);
@@ -76,7 +75,9 @@ fn a_timeout_reads_a_signal_and_writes_another_when_due() {
 /// next run cancels it.
 #[test]
 fn a_timeout_scheduled_per_run_is_a_debounce() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let query = create_signal(String::from("gu"));
     let searched = Rc::new(RefCell::new(Vec::new()));
 
@@ -104,7 +105,9 @@ fn a_timeout_scheduled_per_run_is_a_debounce() {
 /// Disposing the scope a timeout was scheduled in cancels it.
 #[test]
 fn a_timeout_goes_with_its_scope() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let ran = Rc::new(Cell::new(false));
 
     let flag = ran.clone();
@@ -123,7 +126,9 @@ fn a_timeout_goes_with_its_scope() {
 /// `cancel` stops a timeout before it runs, and is harmless after.
 #[test]
 fn a_cancelled_timeout_never_runs() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let runs = Rc::new(Cell::new(0));
 
     let count = runs.clone();
@@ -154,7 +159,9 @@ fn a_cancelled_timeout_never_runs() {
 /// `cancel`.
 #[test]
 fn an_interval_runs_once_per_period_until_cancelled() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let ticks = Rc::new(Cell::new(0));
 
     let count = ticks.clone();
@@ -187,7 +194,9 @@ fn an_interval_runs_once_per_period_until_cancelled() {
 /// moment in the order they were created.
 #[test]
 fn timers_due_in_one_pass_run_in_deadline_order() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let order = Rc::new(RefCell::new(Vec::new()));
 
     for (name, delay) in [("first at 100", 100), ("second at 100", 100), ("at 50", 50)] {
@@ -203,12 +212,14 @@ fn timers_due_in_one_pass_run_in_deadline_order() {
 
 #[test]
 fn old_handles_leave_the_next_applications_timers_alone() {
-    let Some(app) = headless() else { return };
+    let Some(app) = Headless::new_or_skip() else {
+        return;
+    };
     let mut old = vec![set_timeout(100 * MS, || {}), set_interval(100 * MS, || {})];
     drop(app);
 
     for _ in 0..3 {
-        let mut app = headless().expect("the first application had an adapter");
+        let mut app = Headless::new_or_skip().expect("the first application had an adapter");
         let timeouts = Rc::new(Cell::new(0));
         let intervals = Rc::new(Cell::new(0));
         let count = timeouts.clone();

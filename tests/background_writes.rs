@@ -10,12 +10,11 @@
 use guido::prelude::*;
 use guido::testing::Headless;
 
-mod common;
-use common::headless;
-
 #[test]
 fn a_background_write_lands_though_another_application_was_dropped() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let value = create_signal(0u32);
     let surface = app.surface(
         SurfaceConfig::new()
@@ -35,7 +34,7 @@ fn a_background_write_lands_though_another_application_was_dropped() {
     // Another application, on another thread, comes and goes before this one
     // applies the write.
     std::thread::spawn(|| {
-        let other: Option<Headless> = headless();
+        let other: Option<Headless> = Headless::new_or_skip();
         assert!(other.is_some(), "the second application started");
     })
     .join()
@@ -52,7 +51,7 @@ fn a_background_write_lands_though_another_application_was_dropped() {
 /// An application, and a signal holding `value` made the same way in each, so
 /// two of them on two fresh threads hand out the same signal id.
 fn app_holding<T: Clone + PartialEq + Send + 'static>(value: T) -> Option<(Headless, RwSignal<T>)> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let signal = create_signal(value);
     let surface = app.surface(
         SurfaceConfig::new()

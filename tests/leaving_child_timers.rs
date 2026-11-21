@@ -18,9 +18,6 @@ use std::time::{Duration, Instant};
 use guido::prelude::*;
 use guido::testing::Headless;
 
-mod common;
-use common::headless;
-
 const MS: Duration = Duration::from_millis(1);
 
 /// A box that slides out over 200 ms when it is taken away.
@@ -62,7 +59,9 @@ fn step_through(app: &mut Headless, t0: Instant, from: u32, to: u32) {
 /// removed, and not once more through its exit or after it.
 #[test]
 fn a_leaving_childs_interval_does_not_fire_through_its_exit() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let step = create_signal(0usize);
     let ticks = Rc::new([Cell::new(0), Cell::new(0)]);
 
@@ -107,7 +106,9 @@ fn a_leaving_childs_interval_does_not_fire_through_its_exit() {
 /// for the beats it missed, and not a whole period after the resume.
 #[test]
 fn a_keyed_row_that_comes_back_resumes_its_timer_with_the_rest_of_its_period() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let rows = create_signal(vec![0usize]);
     let ticks = Rc::new([Cell::new(0), Cell::new(0)]);
 

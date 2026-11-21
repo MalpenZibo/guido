@@ -17,9 +17,6 @@ use std::sync::Arc;
 use guido::prelude::*;
 use guido::testing::Headless;
 
-mod common;
-use common::headless;
-
 const BACKDROP: Color = Color::rgb(0.0, 0.0, 1.0);
 
 /// A 20×20 PNG of one opaque colour, encoded here so the test depends on no
@@ -44,7 +41,7 @@ fn sized_png(width: u32, height: u32) -> Vec<u8> {
 }
 
 fn upload_limit_image(source: ImageSource, fit: ContentFit) {
-    let Some(mut app) = headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let green = ImageSource::Rgba {
@@ -121,7 +118,9 @@ fn strongly_shrunk_rasters_keep_thin_translucent_lines() {
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         for (width, height) in [(limit * 5, 1), (1, limit * 5)] {
-            let Some(mut app) = headless() else { return };
+            let Some(mut app) = Headless::new_or_skip() else {
+                return;
+            };
             let pixels: Vec<u8> = (0..width * height)
                 .flat_map(|x| if x % 5 == 0 { [255, 0, 0, 128] } else { [0; 4] })
                 .collect();
@@ -170,7 +169,9 @@ fn nearly_unscaled_rasters_keep_distinct_rows_and_columns() {
     let limit = wgpu::Limits::default().max_texture_dimension_2d;
     for encoded in [false, true] {
         for (width, height) in [(limit, 2), (limit + 1, 2), (2, limit), (2, limit + 1)] {
-            let Some(mut app) = headless() else { return };
+            let Some(mut app) = Headless::new_or_skip() else {
+                return;
+            };
             let mut pixels = Vec::new();
             for y in 0..height {
                 for x in 0..width {
@@ -283,7 +284,9 @@ fn svgs_taller_than_the_texture_limit_draw_at_intrinsic_size() {
 #[test]
 fn a_clamped_svg_can_be_shared_and_fitted_again() {
     for (width, height) in [(8193, 1), (1, 8193)] {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let source = limit_svg(width, height);
         let fit = create_signal(ContentFit::None);
         let surface = app.surface(
@@ -376,7 +379,9 @@ fn is_backdrop(pixel: [u8; 4]) -> bool {
 /// Red before #507: the renderer decoded inside the frame, so the first frame
 /// already held the image, and held the frame until it had it.
 fn a_pending_image_is_drawn_on_a_later_frame(source: ImageSource, side: u32) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let hold = app.hold_image_decodes();
     let (surface, ready) = surface(&mut app, vec![source], side);
 
@@ -484,7 +489,9 @@ fn sideways_photo() -> Vec<u8> {
 ///
 /// Red before #814: laid out 32×16, and drawn as stored.
 fn a_sideways_photo_is_drawn_upright(source: ImageSource) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let surface = app.surface(
         SurfaceConfig::new()
             .height(40)
@@ -528,7 +535,9 @@ fn unreadable_raster_files_stay_failed() {
     for path in [root.join("missing-image-539.png"), corrupt] {
         let source = ImageSource::Path(path);
         assert_eq!(guido::image_metadata::get_intrinsic_size(&source), None);
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let (surface, ready) = surface(&mut app, vec![source], 20);
         app.step();
         app.wait_for_image_decodes();
@@ -550,7 +559,9 @@ fn a_corrupt_raster_payload_never_becomes_ready() {
         guido::image_metadata::get_intrinsic_size(&source),
         Some((20.0, 20.0))
     );
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, ready) = surface(&mut app, vec![source], 20);
     app.step();
     app.wait_for_image_decodes();
@@ -562,7 +573,9 @@ fn a_corrupt_raster_payload_never_becomes_ready() {
 
 /// Two images of one source share one decode, and both are drawn by it.
 fn two_images_of_one_source_decode_it_once(first: ImageSource, second: ImageSource, side: u32) {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, _) = surface(&mut app, vec![first, second], side);
 
     app.step();
@@ -607,7 +620,9 @@ fn two_images_of_equal_bytes_decode_them_once() {
 /// first frame — which is what `Rgba` is for.
 #[test]
 fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let _hold = app.hold_image_decodes();
     let red: Vec<u8> = [255, 0, 0, 255].repeat(20 * 20);
     let (surface, ready) = surface(
@@ -635,7 +650,9 @@ fn raw_pixels_are_ready_and_drawn_on_the_first_frame() {
 /// it, 19 MB for a 2912×1632 wallpaper, next to the texture holding the same.
 #[test]
 fn the_pixels_go_once_the_renderer_has_uploaded_them() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let path = png_file("uploaded-then-dropped.png", [255, 0, 0]);
     let (surface, ready) = surface(&mut app, vec![ImageSource::Path(path)], 20);
 
@@ -663,7 +680,9 @@ fn the_pixels_go_once_the_renderer_has_uploaded_them() {
 /// second one started a decode of its own and drew nothing until it landed.
 #[test]
 fn an_image_mounted_after_the_upload_is_drawn_from_the_texture() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let path = png_file("mounted-after-upload.png", [255, 0, 0]);
     let generation = create_signal(0u32);
     let surface = app.surface(
@@ -708,7 +727,9 @@ fn an_image_mounted_after_the_upload_is_drawn_from_the_texture() {
 /// pixels left to draw from.
 #[test]
 fn an_image_whose_texture_is_gone_is_decoded_again() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let path = png_file("texture-gone.png", [255, 0, 0]);
     let backdrop = create_signal(BACKDROP);
     let surface = app.surface(
@@ -778,7 +799,9 @@ const LARGE: u32 = 100;
 #[cfg(feature = "svg")]
 #[test]
 fn a_small_svg_is_drawn_on_its_first_frame() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let _hold = app.hold_image_decodes();
     let (surface, ready) = surface(
         &mut app,
@@ -807,7 +830,9 @@ fn a_small_svg_is_drawn_on_its_first_frame() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_large_document_drawn_as_an_icon_becomes_ready() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, ready) = surface(
         &mut app,
         vec![ImageSource::SvgBytes(svg("#f00", 512).into())],
@@ -838,7 +863,9 @@ fn a_large_document_drawn_as_an_icon_becomes_ready() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_small_document_drawn_large_is_not_ready_until_its_raster_lands() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let hold = app.hold_image_decodes();
     let (surface, ready) = surface(
         &mut app,
@@ -905,7 +932,9 @@ fn two_svgs_of_one_source_rasterize_it_once() {
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     // Both sides: a raster is fitted to its box with the aspect kept, so a
     // square SVG in a box only wider needs no raster of its own.
     let side = create_signal(LARGE as f32);
@@ -968,7 +997,9 @@ fn an_svg_resized_keeps_drawing_until_its_new_raster_lands() {
 #[cfg(feature = "svg")]
 #[test]
 fn one_svg_at_two_sizes_rasterizes_each_once() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let source = ImageSource::SvgBytes(svg("#f00", LARGE).into());
     let (small, large) = (LARGE, LARGE * 3 / 2);
     let surface = app.surface(
@@ -1102,7 +1133,9 @@ fn sources(count: u8, green: u8) -> Vec<ImageSource> {
 #[test]
 fn small_images_off_screen_stay_cached_while_under_the_budget() {
     const IMAGES: u8 = 200;
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0), Vec::new()]);
     switcher.show(&mut app, 0);
     assert_eq!(app.image_decodes_started(), u64::from(IMAGES));
@@ -1129,7 +1162,7 @@ fn small_images_off_screen_stay_cached_while_under_the_budget() {
 /// under `budget`. Returns how many decodes it took to bring A back, after
 /// checking that B — on screen throughout — was never evicted.
 fn decodes_to_bring_back_an_idle_image(budget: usize) -> Option<u64> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     guido::set_image_cache_budget(budget);
     let switcher = Switcher::new(&mut app, vec![sources(1, 0), sources(1, 100)]);
     switcher.show(&mut app, 0);
@@ -1187,7 +1220,9 @@ fn the_budget_the_application_sets_is_the_one_used() {
 #[test]
 fn images_on_screen_over_the_budget_stay_drawn() {
     const IMAGES: u8 = 70;
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     guido::set_image_cache_budget(IMAGE_BYTES * 10);
     let switcher = Switcher::new(&mut app, vec![sources(IMAGES, 0)]);
     switcher.show(&mut app, 0);
@@ -1228,7 +1263,9 @@ fn images_on_screen_over_the_budget_stay_drawn() {
 fn a_decoded_image_is_premultiplied_like_raw_pixels() {
     const SIDE: u32 = 80;
     const FILL: [u8; 3] = [242, 115, 64];
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let disc = ::image::RgbaImage::from_fn(SIDE, SIDE, |x, y| {
         let centre = SIDE as f32 / 2.0;
         let distance =
@@ -1380,7 +1417,9 @@ fn bytes(source: &ImageSource) -> &[u8] {
 /// drawn as itself, and from a texture of its own.
 fn two_sources_are_two_images(red: ImageSource, green: ImageSource) {
     assert_differ_off_the_samples(bytes(&red), bytes(&green));
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (surface, _) = surface(&mut app, vec![red, green], 40);
 
     app.step();
@@ -1421,7 +1460,9 @@ fn svgs_alike_where_sampled_are_two_images() {
 /// contents, not the buffer.
 #[test]
 fn raw_pixels_equal_in_two_buffers_share_a_texture() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (first, second) = (one_pixel_rgba([255, 0, 0]), one_pixel_rgba([255, 0, 0]));
     assert!(!std::ptr::eq(bytes(&first), bytes(&second)));
     let (surface, _) = surface(&mut app, vec![first, second], 40);
@@ -1438,7 +1479,9 @@ fn raw_pixels_equal_in_two_buffers_share_a_texture() {
 /// one (#606).
 #[test]
 fn a_replaced_source_alike_where_sampled_is_drawn_as_itself() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let source = create_signal(one_pixel_rgba([255, 0, 0]));
     let surface = swappable(&mut app, source.into(), 40);
     app.step();
@@ -1459,7 +1502,9 @@ fn a_replaced_source_alike_where_sampled_is_drawn_as_itself() {
 #[cfg(feature = "svg")]
 #[test]
 fn a_new_svg_does_not_borrow_another_sources_raster() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (red, green) = (one_pixel_svg("#f00", LARGE), one_pixel_svg("#0f0", LARGE));
     assert_differ_off_the_samples(bytes(&red), bytes(&green));
     let source = create_signal(red);
@@ -1499,7 +1544,9 @@ fn a_new_svg_does_not_borrow_another_sources_raster() {
 /// alone would keep a replaced buffer alive until its texture was evicted.
 #[test]
 fn replaced_raw_pixels_are_not_kept_by_the_cache() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let red = one_pixel_rgba([255, 0, 0]);
     let ImageSource::Rgba { pixels, .. } = &red else {
         unreachable!()
@@ -1535,7 +1582,9 @@ fn replaced_raw_pixels_are_not_kept_by_the_cache() {
 /// the image would never see the new buffer.
 #[test]
 fn equal_raw_pixels_in_a_new_buffer_keep_their_texture() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let source = create_signal(one_pixel_rgba([255, 0, 0]));
     let surface = swappable(&mut app, source.into(), 40);
     app.step();

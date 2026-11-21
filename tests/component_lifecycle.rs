@@ -130,7 +130,7 @@ mod through_a_real_loop {
 
     #[test]
     fn a_removed_component_slides_out_before_it_goes() {
-        let Some(mut app) = common::headless() else {
+        let Some(mut app) = guido::testing::Headless::new_or_skip() else {
             return;
         };
         let shown = create_signal(true);

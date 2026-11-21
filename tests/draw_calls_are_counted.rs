@@ -8,10 +8,9 @@
 //! small images share an atlas page and are one call however many there are,
 //! and the shapes and the text around them are one call per draw group.
 
-mod common;
-
 use guido::prelude::*;
 use guido::render_stats::{self, DrawCalls, GpuAllocations, LayerWork, PathMeshes, StatsSnapshot};
+use guido::testing::Headless;
 use guido::widget_prelude::*;
 
 const IMAGES: usize = 7;
@@ -53,7 +52,7 @@ fn draw_calls_of_one_frame(build: impl FnOnce() -> Container + 'static) -> Optio
 }
 
 fn first_frame(build: impl FnOnce() -> Container + 'static) -> Option<StatsSnapshot> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(20)
@@ -230,7 +229,7 @@ impl Widget for Dashed {
 /// tessellates nothing.
 #[test]
 fn dashes_a_period_apart_are_one_mesh() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
@@ -404,7 +403,7 @@ fn preparing_a_frame_of_images_is_counted_in_buffers_and_bind_groups() {
 /// prepared again from textures that are already cached.
 #[test]
 fn a_frame_that_draws_cached_textures_again_makes_no_buffer_and_no_bind_group() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
@@ -462,7 +461,7 @@ fn images_row(sources: Vec<ImageSource>) -> Container {
 /// quad is drawn.
 #[test]
 fn two_hundred_small_images_are_one_draw_call() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let surface = app.surface(
@@ -505,7 +504,7 @@ fn an_image_too_large_for_a_page_ends_the_run_it_interrupts() {
 /// entries after it has looked for empty pages, so the page goes on the next.
 #[test]
 fn a_page_eviction_empties_is_given_back() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     guido::set_image_cache_budget(0);
@@ -557,7 +556,7 @@ fn a_page_eviction_empties_is_given_back() {
 /// each allocate on a frame that is zero here.
 #[test]
 fn the_frame_buffers_grow_only_past_what_they_have_held() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let count = create_signal(2usize);
@@ -595,7 +594,7 @@ fn the_frame_buffers_grow_only_past_what_they_have_held() {
 /// of its own: drawing the same labels again allocates nothing there either.
 #[test]
 fn transformed_text_drawn_again_allocates_no_buffer() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
@@ -703,7 +702,7 @@ fn cell_colour(index: usize) -> (u8, u8) {
 /// every texture they read is one they have bound before.
 #[test]
 fn a_frame_that_blurs_its_backdrop_again_makes_no_buffer_and_no_bind_group() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let backdrop = create_signal(Color::rgb(0.1, 0.1, 0.1));
@@ -747,7 +746,7 @@ fn a_frame_that_blurs_its_backdrop_again_makes_no_buffer_and_no_bind_group() {
 /// uniforms and not a neighbour's — or a slot the growth left unwritten.
 #[test]
 fn the_backdrop_uniforms_grow_only_past_what_they_have_held() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let count = create_signal(1usize);
@@ -821,7 +820,7 @@ fn two_frames(
     build: impl FnOnce() -> Container + 'static,
     between: impl FnOnce(),
 ) -> Option<(StatsSnapshot, StatsSnapshot)> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(20)
@@ -1011,7 +1010,7 @@ fn a_blur_that_moves_blurs_the_texture_again_without_drawing_into_it() {
 /// into the pool, and a texture nobody takes from the pool is dropped.
 #[test]
 fn a_layer_s_texture_is_kept_while_it_might_be_wanted_and_then_released() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let opacity = create_signal(0.5);
@@ -1055,7 +1054,7 @@ fn a_layer_s_texture_is_kept_while_it_might_be_wanted_and_then_released() {
 /// full rate keeps the texture it would be drawn from when it next paints.
 #[test]
 fn a_layer_s_texture_idles_by_its_own_surface_s_frames() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let opacity = create_signal(0.5);
@@ -1247,7 +1246,7 @@ fn backdrops_inside_a_layer_share_three_passes() {
 /// than drawn from a texel nobody wrote and left as sharp as it was.
 #[test]
 fn a_frost_too_thin_to_shrink_at_the_surface_s_edge_is_blurred_inside_it() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let surface = app.surface(
@@ -1299,7 +1298,7 @@ fn card_beside(poke: RwSignal<Color>) -> Container {
 /// again before it is drawn, with the layer's content.
 #[test]
 fn a_layer_whose_texture_is_gone_is_drawn_again_in_the_same_frame() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let poke = create_signal(Color::rgb(0.1, 0.1, 0.1));
@@ -1331,7 +1330,7 @@ fn a_layer_whose_texture_is_gone_is_drawn_again_in_the_same_frame() {
 /// whose surface has gone — and drawn again when that surface next paints.
 #[test]
 fn a_layer_no_surface_names_is_released_and_drawn_again_when_it_is() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let still_poke = create_signal(Color::rgb(0.1, 0.1, 0.1));

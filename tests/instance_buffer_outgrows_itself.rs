@@ -21,9 +21,8 @@
 //! validation on the write; one that grows it without rebuilding the bind
 //! group draws the late shapes wrong.
 
-mod common;
-
 use guido::prelude::*;
+use guido::testing::Headless;
 
 /// Comfortably past the 256 the buffer starts at, and past the 512 one
 /// doubling gives, so the growth runs more than once.
@@ -60,7 +59,7 @@ fn grid() -> Container {
 
 #[test]
 fn the_shapes_past_the_buffers_first_size_are_still_drawn() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let width = (ACROSS as f32 * CELL) as u32;

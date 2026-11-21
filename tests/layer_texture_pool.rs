@@ -1,9 +1,8 @@
 #![cfg(feature = "testing")]
 //! A layer draws the same picture whatever textures the pool hands it.
 
-mod common;
-
 use guido::prelude::*;
+use guido::testing::Headless;
 
 /// #808: a blurred row drawn from the pool a larger layer left behind is the
 /// row drawn from fresh textures.
@@ -15,7 +14,7 @@ use guido::prelude::*;
 /// at twice its size, shifted right and down, cut by its composite.
 #[test]
 fn a_blurred_layer_is_the_same_from_a_pool_another_layer_left() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let panel = create_signal(true);

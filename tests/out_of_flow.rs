@@ -143,7 +143,7 @@ fn an_out_of_flow_child_hangs_from_its_parents_edge() {
 fn a_hung_child_follows_its_growing_parent_without_restarting_its_own_motion() {
     use std::time::{Duration, Instant};
 
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let tall = create_signal(30.0f32);
