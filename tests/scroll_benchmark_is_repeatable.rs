@@ -46,11 +46,11 @@ const FRAMES_PER_PHASE: usize = 6;
 static HEAP: guido::heap::CountingAllocator = guido::heap::CountingAllocator;
 
 /// `None` on a machine with no adapter, which is a skip unless the job pointed
-/// at lavapipe says a skip is a failure — `common::headless` keeps that
+/// at lavapipe says a skip is a failure — `Headless::new_or_skip` keeps that
 /// contract for every test that needs one.
 fn play(rows: usize) -> Option<scripted::Run> {
     let _alone = common::one_play_at_a_time();
-    let mut app = common::headless()?;
+    let mut app = guido::testing::Headless::new_or_skip()?;
     let script = scripted::script(FRAMES_PER_PHASE);
     Some(scripted::play(
         &mut app,

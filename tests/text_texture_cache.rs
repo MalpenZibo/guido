@@ -4,8 +4,7 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-
-mod common;
+use guido::testing::Headless;
 
 /// A panel that opens and closes over and over, its rounded corner passing
 /// over its label, at the uneven pace a compositor's frames arrive at, holds
@@ -18,7 +17,7 @@ mod common;
 /// uneven: what the cache kept then was every size it had ever been asked for.
 #[test]
 fn an_animation_repeated_holds_no_more_text_textures_than_once() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let open = create_signal(false);

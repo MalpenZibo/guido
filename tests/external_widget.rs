@@ -196,22 +196,6 @@ fn a_leaf_with_no_check_of_its_own_is_not_laid_out_twice_for_one_answer() {
     );
 }
 
-/// An application without a compositor, or `None` where there is no adapter
-/// to draw with — which is a failure where `GUIDO_GPU_REQUIRED` says one must
-/// be there. Its own copy rather than `common`'s, because this file takes
-/// nothing but the public API.
-#[cfg(feature = "testing")]
-fn headless() -> Option<guido::testing::Headless> {
-    let app = guido::testing::Headless::new();
-    if app.is_none() {
-        if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() {
-            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found");
-        }
-        eprintln!("no GPU adapter; skipping");
-    }
-    app
-}
-
 /// A leaf written outside the crate whose `paint` reads a signal and opens no
 /// scope of its own — which is what the book tells its reader costs an
 /// over-broad repaint, and in fact costs every repaint.
@@ -221,6 +205,7 @@ fn headless() -> Option<guido::testing::Headless> {
 #[cfg(feature = "testing")]
 mod a_paint_that_opens_no_scope {
     use super::*;
+    use guido::testing::Headless;
 
     /// A parent written outside the crate, which paints its one child through
     /// the call the framework provides — the reason `paint_child` and the
@@ -269,7 +254,9 @@ mod a_paint_that_opens_no_scope {
 
     #[test]
     fn a_widget_that_opens_no_paint_scope_still_follows_its_signal() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
 
         let colour = create_signal(Color::rgb(1.0, 0.0, 0.0));
         let surface = app.surface(
@@ -366,7 +353,9 @@ mod the_scale_a_frame_is_painted_at {
 
     #[test]
     fn a_widget_rebuilds_its_raster_at_the_scale_it_is_painted_at() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let (surface, built) = raster_surface(&mut app);
 
         app.configure(surface, 100, 20, 1.0);
@@ -386,7 +375,9 @@ mod the_scale_a_frame_is_painted_at {
 
     #[test]
     fn a_surface_that_was_never_sent_a_scale_is_painted_at_one() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let (surface, built) = raster_surface(&mut app);
 
         app.configure_size(surface, 100, 20);
@@ -396,7 +387,9 @@ mod the_scale_a_frame_is_painted_at {
 
     #[test]
     fn each_surface_is_painted_at_its_own_scale() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let (first, first_built) = raster_surface(&mut app);
         let (second, second_built) = raster_surface(&mut app);
 

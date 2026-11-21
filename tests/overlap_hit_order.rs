@@ -249,7 +249,7 @@ fn a_hit_container_whose_child_took_nothing_takes_its_own_click() {
 fn cursors_beside_then_over(top: fn() -> Container) -> Option<Vec<CursorIcon>> {
     use std::time::Instant;
 
-    let mut app = common::headless()?;
+    let mut app = guido::testing::Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(50)

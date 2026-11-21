@@ -82,7 +82,7 @@ fn bar() -> SurfaceConfig {
 #[test]
 fn a_parent_in_flight_never_changes_a_natural_childs_width() {
     use std::time::{Duration, Instant};
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let (parent, inner) = (create_widget_ref(), create_widget_ref());
@@ -257,7 +257,7 @@ fn a_natural_child_does_not_widen_its_parent() {
 #[cfg(feature = "testing")]
 #[test]
 fn a_natural_child_that_changes_is_placed_again() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let placed = create_widget_ref();
@@ -308,7 +308,7 @@ fn eased_bound(
     transition: Transition,
 ) -> Option<Vec<f32>> {
     use std::time::{Duration, Instant};
-    let mut app = common::headless()?;
+    let mut app = guido::testing::Headless::new_or_skip()?;
     let placed = create_widget_ref();
     let wide = create_signal(!widen);
     let surface = app.surface(bar(), move || {

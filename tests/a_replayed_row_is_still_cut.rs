@@ -16,8 +16,6 @@
 
 #![cfg(feature = "testing")]
 
-mod common;
-
 use guido::prelude::*;
 use guido::surface::SurfaceId;
 use guido::testing::Headless;
@@ -59,7 +57,7 @@ fn shows_a_row(app: &Headless, surface: SurfaceId, y: u32) -> bool {
 
 #[test]
 fn a_replayed_row_is_still_cut_by_the_scroller_it_left() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
 

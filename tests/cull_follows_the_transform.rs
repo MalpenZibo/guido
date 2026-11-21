@@ -371,7 +371,7 @@ mod through_a_real_loop {
 
     #[test]
     fn a_row_that_never_painted_can_still_lift_itself_into_view() {
-        let Some(mut app) = common::headless() else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
 

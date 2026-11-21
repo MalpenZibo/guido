@@ -13,8 +13,6 @@
 //! retained frame has to be its frame, pixel for pixel, band by band. The
 //! measurer's own key is watched by the hugging box's edge.
 
-mod common;
-use common::headless;
 use guido::prelude::*;
 use guido::surface::SurfaceId;
 use guido::testing::Headless;
@@ -112,7 +110,7 @@ fn view(spacing: RwSignal<f32>) -> Container {
 /// An application drawing the view at `spacing`, one frame in.
 fn app(spacing: f32) -> Option<(Headless, SurfaceId, RwSignal<f32>)> {
     guido::load_font(FONT.to_vec());
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let spacing = create_signal(spacing);
     let surface = app.surface(
         SurfaceConfig::new()

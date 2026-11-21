@@ -360,27 +360,6 @@ pub fn heap_figures_agree(first: u64, second: u64, what: &str, in_parts: u64) {
     );
 }
 
-/// An application driven without a compositor, or `None` where this machine
-/// has no adapter to draw with.
-///
-/// The skip and the variable that forbids it are the contract the rasterizer
-/// job depends on — in that job a skip is a failure, and `GUIDO_GPU_REQUIRED`
-/// is how it says so. `tests/headless_app.rs` and `tests/external_widget.rs`
-/// each still carry their own copy; they do not take `mod common`.
-#[cfg(feature = "testing")]
-pub fn headless() -> Option<guido::testing::Headless> {
-    match guido::testing::Headless::new() {
-        Some(app) => Some(app),
-        None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
-            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
-        }
-        None => {
-            eprintln!("no GPU adapter; skipping");
-            None
-        }
-    }
-}
-
 /// The `count`th left press of a run at a point, numbered as the platform
 /// numbers it — which a test talking to a widget directly has to do itself.
 pub fn press_numbered(x: f32, y: f32, count: u32) -> Event {

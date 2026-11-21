@@ -18,9 +18,6 @@ use guido::prelude::*;
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
-mod common;
-use common::headless;
-
 const ROWS: usize = 1000;
 const ROW_HEIGHT: f32 = 20.0;
 
@@ -63,7 +60,9 @@ impl Widget for Counted {
 
 #[test]
 fn a_wheel_event_over_a_list_visits_the_rows_near_the_pointer() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -133,7 +132,9 @@ fn logged_rows(log: Rc<RefCell<Log>>, count: usize) -> impl Iterator<Item = Box<
 
 #[test]
 fn a_row_the_pointer_jumps_away_from_is_no_longer_hovered() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
@@ -159,7 +160,9 @@ fn a_row_the_pointer_jumps_away_from_is_no_longer_hovered() {
 
 #[test]
 fn a_press_dragged_far_away_still_gets_its_moves_and_its_release() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
@@ -190,7 +193,9 @@ fn a_press_dragged_far_away_still_gets_its_moves_and_its_release() {
 /// by what was owed, and settles it; the next reaches it by the press alone.
 #[test]
 fn a_press_with_no_position_holds_the_row_the_pointer_rested_on() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let (first, rest) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
     let (counted, others) = (first.clone(), rest.clone());
     let (id, mut at) = surface(&mut app, move || {
@@ -222,7 +227,9 @@ fn a_press_with_no_position_holds_the_row_the_pointer_rested_on() {
 
 #[test]
 fn a_row_moved_by_a_transform_is_clicked_where_it_is_drawn() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let clicked = Rc::new(Cell::new(None));
     let rows = clicked.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -257,7 +264,9 @@ fn a_row_moved_by_a_transform_is_clicked_where_it_is_drawn() {
 
 #[test]
 fn a_row_left_for_a_header_and_back_is_no_longer_hovered() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     // A header above the list, the shape of a launcher's search field over its
@@ -302,7 +311,9 @@ fn play(
 /// record still owes the move that takes its hover away.
 #[test]
 fn a_row_two_wheel_steps_carry_off_is_no_longer_hovered_once_the_pointer_leaves() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     let (id, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
@@ -337,7 +348,9 @@ fn a_row_two_wheel_steps_carry_off_is_no_longer_hovered_once_the_pointer_leaves(
 
 #[test]
 fn a_release_and_a_leave_leave_nothing_owed() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -414,7 +427,9 @@ impl Widget for Greedy {
 
 #[test]
 fn the_children_owed_an_event_are_offered_it_the_one_drawn_on_top_first() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let took = Rc::new(RefCell::new(Vec::new()));
     let rows = took.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -440,7 +455,9 @@ fn the_children_owed_an_event_are_offered_it_the_one_drawn_on_top_first() {
 
 #[test]
 fn a_press_held_while_the_list_changes_still_gets_its_release() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let keys = Rc::new(Cell::new(None));
     let released = Rc::new(RefCell::new(Vec::new()));
     let (data, ups) = (keys.clone(), released.clone());
@@ -501,7 +518,9 @@ fn under_a_header(rows: impl Iterator<Item = Box<dyn Widget>>) -> Container {
 
 #[test]
 fn a_row_pressed_in_a_list_and_released_outside_it_gets_its_release() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -532,7 +551,9 @@ fn a_row_pressed_in_a_list_and_released_outside_it_gets_its_release() {
 #[test]
 fn a_row_hovered_in_a_list_is_no_longer_hovered_once_the_pointer_leaves_the_list() {
     for count in [5, ROWS] {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let log = Rc::new(RefCell::new(Log::default()));
         let rows = log.clone();
         let (id, mut at) = surface(&mut app, move || {
@@ -559,7 +580,9 @@ fn a_row_hovered_in_a_list_is_no_longer_hovered_once_the_pointer_leaves_the_list
 
 #[test]
 fn a_leave_visits_what_the_pointer_was_over_and_nothing_else() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -587,7 +610,7 @@ fn row_0_half_under_the_header(
     log: Rc<RefCell<Log>>,
     direct: bool,
 ) -> (Headless, SurfaceId, Instant) {
-    let mut app = headless().expect("checked by the caller");
+    let mut app = Headless::new_or_skip().expect("checked by the caller");
     let rows = log.clone();
     let (id, mut at) = surface(&mut app, move || {
         if direct {
@@ -623,7 +646,7 @@ fn row_0_half_under_the_header(
 
 #[test]
 fn a_row_half_under_the_clip_loses_its_hover_to_the_header_over_it() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     for direct in [false, true] {
@@ -650,7 +673,7 @@ fn a_row_half_under_the_clip_loses_its_hover_to_the_header_over_it() {
 
 #[test]
 fn a_press_on_the_header_does_not_reach_the_row_it_hides() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     for direct in [false, true] {
@@ -688,7 +711,9 @@ fn a_press_on_the_header_does_not_reach_the_row_it_hides() {
 
 #[test]
 fn a_leave_clears_the_hover_after_another_surface_had_the_pointer() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     let (list_surface, mut at) = surface(&mut app, move || list(logged_rows(rows.clone(), ROWS)));
@@ -714,7 +739,9 @@ fn a_leave_clears_the_hover_after_another_surface_had_the_pointer() {
 
 #[test]
 fn a_list_below_a_list_is_not_withheld_by_the_one_above() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let log = Rc::new(RefCell::new(Log::default()));
     let rows = log.clone();
     // Two lists stacked: a point on the lower one is outside the upper one's
@@ -739,7 +766,7 @@ fn a_list_below_a_list_is_not_withheld_by_the_one_above() {
 /// scrolled 80 under a pointer resting on row 4: row 3 is drawn from 30 to 50,
 /// behind the header and outside the list's clip (#915).
 fn ten_rows_scrolled_under_a_header(log: Rc<RefCell<Log>>) -> (Headless, SurfaceId, Instant) {
-    let mut app = headless().expect("checked by the caller");
+    let mut app = Headless::new_or_skip().expect("checked by the caller");
     let rows = log.clone();
     let id = app.surface(
         SurfaceConfig::new()
@@ -783,7 +810,7 @@ fn hovered(log: &Log) -> Vec<usize> {
 
 #[test]
 fn a_drag_onto_the_header_hovers_no_row_the_list_clipped_away() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     for y in [5.0, 25.0, 40.0, 49.0, 120.0] {
@@ -816,7 +843,7 @@ fn a_drag_onto_the_header_hovers_no_row_the_list_clipped_away() {
 
 #[test]
 fn a_drag_over_the_header_still_reaches_the_row_it_pressed() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     let log = Rc::new(RefCell::new(Log::default()));
@@ -844,7 +871,7 @@ fn a_drag_over_the_header_still_reaches_the_row_it_pressed() {
 
 #[test]
 fn a_press_released_on_the_half_of_its_row_the_header_hides_clicks_nothing() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     for direct in [false, true] {

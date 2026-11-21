@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 use guido::prelude::*;
 use guido::widget_prelude::*;
 
-mod common;
-use common::headless;
+use guido::testing::Headless;
 
 const ROWS: usize = 1000;
 
@@ -42,7 +41,9 @@ impl Widget for Counted {
 
 #[test]
 fn no_event_visits_a_row_outside_its_route() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
     let rechecks = Rc::new(Cell::new(0));

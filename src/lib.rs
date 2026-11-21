@@ -4420,18 +4420,46 @@ mod a_frame_is_a_description_not_a_connection {
 /// A test that needs an adapter and silently passes without one reports green
 /// for the single reason that matters, so the job pointed at lavapipe sets that
 /// variable and a skip becomes a failure there. Written once because the
-/// variable's name and the message are the contract that job depends on.
-#[cfg(test)]
+/// variable's name and the message are the contract that job depends on;
+/// [`testing::Headless::new_or_skip`] is how a test outside the crate reaches it.
+#[cfg(any(test, feature = "testing"))]
 fn or_skip<T>(made: Option<T>) -> Option<T> {
+    or_skip_when(made, std::env::var_os("GUIDO_GPU_REQUIRED").is_some())
+}
+
+/// [`or_skip`] with the variable already read, so the rule can be tested
+/// without setting it under the tests that read it.
+#[cfg(any(test, feature = "testing"))]
+fn or_skip_when<T>(made: Option<T>, required: bool) -> Option<T> {
     match made {
         Some(made) => Some(made),
-        None if std::env::var_os("GUIDO_GPU_REQUIRED").is_some() => {
-            panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found")
-        }
+        None if required => panic!("GUIDO_GPU_REQUIRED is set and no GPU adapter was found"),
         None => {
             eprintln!("no GPU adapter; skipping");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod a_missing_adapter {
+    use super::or_skip_when;
+
+    #[test]
+    fn is_no_reason_to_skip_when_there_is_one() {
+        assert_eq!(or_skip_when(Some(7), false), Some(7));
+        assert_eq!(or_skip_when(Some(7), true), Some(7));
+    }
+
+    #[test]
+    fn skips_where_nothing_requires_one() {
+        assert_eq!(or_skip_when(None::<u8>, false), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "GUIDO_GPU_REQUIRED is set and no GPU adapter was found")]
+    fn fails_where_one_is_required() {
+        or_skip_when(None::<u8>, true);
     }
 }
 

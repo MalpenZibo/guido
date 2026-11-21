@@ -12,8 +12,7 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-
-mod common;
+use guido::testing::Headless;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -50,7 +49,7 @@ impl Run {
     /// One row while `shown`, built by `row` around a child that `child`
     /// points at.
     fn new(shown: Signal<bool>, row: impl Fn(WidgetRef) -> Container + 'static) -> Option<Self> {
-        let mut app = common::headless()?;
+        let mut app = Headless::new_or_skip()?;
         let list = create_widget_ref();
         let child = create_widget_ref();
         let surface = app.surface(bar(), move || {

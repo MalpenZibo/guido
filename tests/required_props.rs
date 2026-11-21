@@ -116,7 +116,7 @@ fn a_generic_component_with_a_required_prop_is_named_on_its_struct() {
 #[cfg(feature = "testing")]
 #[test]
 fn a_required_prop_renders_under_headless_and_follows_its_signal() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let width = create_signal(30.0f32);

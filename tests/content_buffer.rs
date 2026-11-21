@@ -12,9 +12,6 @@ use std::time::{Duration, Instant};
 use guido::prelude::*;
 use guido::testing::Headless;
 
-mod common;
-use common::headless;
-
 const RED: Color = Color::rgb(1.0, 0.0, 0.0);
 const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
 
@@ -48,7 +45,7 @@ fn bar_and_panel(open: RwSignal<bool>) -> impl Fn() -> Container + 'static {
 }
 
 fn opened_at_rest(open: bool) -> Option<(Headless, SurfaceId, RwSignal<bool>)> {
-    let mut app = headless()?;
+    let mut app = Headless::new_or_skip()?;
     let open = create_signal(open);
     let bar = app.surface(stretched_bar(), bar_and_panel(open));
     app.configure(bar, 400, 300, 1.0);
@@ -148,7 +145,9 @@ fn a_shrink_waits_until_the_content_has_settled() {
 /// the bar is on the surface, not where it is in the buffer.
 #[test]
 fn the_input_region_is_in_the_surfaces_coordinates() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(stretched_bar(), || {
         container()
             .width(fill())
@@ -175,7 +174,9 @@ fn the_input_region_is_in_the_surfaces_coordinates() {
 /// be with the declaration left out.
 #[test]
 fn without_subsurfaces_the_whole_surface_is_drawn() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     app.without_subsurfaces();
     let open = create_signal(false);
     let bar = app.surface(stretched_bar(), bar_and_panel(open));
@@ -205,7 +206,9 @@ fn surface_pixel(app: &Headless, id: SurfaceId, x: u32, y: u32) -> [u8; 4] {
 /// rather than cutting it at the bar's edge.
 #[test]
 fn a_shadow_is_drawn_whole() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(stretched_bar(), || {
         container()
             .width(fill())
@@ -255,7 +258,9 @@ fn bar_and_moved_panel<M>(moved: impl IntoAnimated<Translate, M>) -> Container {
 /// were laid out.
 #[test]
 fn a_moved_child_is_drawn_where_it_is_moved_to() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(stretched_bar(), || {
         bar_and_moved_panel(|| Translate::new(0.0, -180.0))
     });
@@ -271,7 +276,9 @@ fn a_moved_child_is_drawn_where_it_is_moved_to() {
 /// over 100 ms, is drawn whole on its way.
 #[test]
 fn a_panel_sliding_in_is_drawn_whole() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let open = create_signal(false);
     let bar = app.surface(stretched_bar(), move || {
         bar_and_moved_panel(
@@ -301,7 +308,9 @@ fn a_panel_sliding_in_is_drawn_whole() {
 /// click anywhere on the surface.
 #[test]
 fn a_backdrop_that_only_takes_clicks_draws_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(stretched_bar(), || {
         container()
             .width(fill())
@@ -334,7 +343,9 @@ fn a_surface_that_blurs_nothing_declares_an_empty_blur_region() {
 /// buffer follows it all the same: the frame says what it drew.
 #[test]
 fn a_transform_that_changes_alone_is_followed() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let lifted = create_signal(false);
     let bar = app.surface(stretched_bar(), move || {
         bar_and_moved_panel(move || Translate::new(0.0, if lifted.get() { -180.0 } else { 0.0 }))
@@ -354,7 +365,9 @@ fn a_transform_that_changes_alone_is_followed() {
 /// changes a colour and no layout, and is drawn over the whole surface.
 #[test]
 fn a_backdrop_that_starts_to_draw_is_drawn_whole() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let dim = create_signal(false);
     let bar = app.surface(stretched_bar(), move || {
         container()
@@ -385,7 +398,9 @@ fn a_backdrop_that_starts_to_draw_is_drawn_whole() {
 /// coordinates, and the bar fills it from its first row.
 #[test]
 fn a_content_buffer_at_scale_two_is_placed_in_logical_pixels() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let open = create_signal(false);
     let bar = app.surface(stretched_bar(), bar_and_panel(open));
     app.configure(bar, 400, 300, 2.0);
@@ -404,7 +419,9 @@ fn a_content_buffer_at_scale_two_is_placed_in_logical_pixels() {
 /// faded one by one would make.
 #[test]
 fn a_layer_lands_where_it_is_in_a_moved_buffer() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let bar = app.surface(stretched_bar(), || {
         container()
             .width(fill())
@@ -440,7 +457,9 @@ fn a_layer_lands_where_it_is_in_a_moved_buffer() {
 /// (#933). At 1.5 a step of two logical pixels is three physical ones.
 #[test]
 fn a_content_buffer_at_a_fractional_scale_stands_on_the_physical_grid() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let panel = create_signal(11.0f32);
     let bar = app.surface(stretched_bar(), move || {
         container()

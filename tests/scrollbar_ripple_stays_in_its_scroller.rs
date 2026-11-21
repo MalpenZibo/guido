@@ -10,9 +10,8 @@
 //! Read off the frame `Headless` draws, so the whole of it — paint, flatten,
 //! the clip tree and the shader — is what answers.
 
-mod common;
-
 use guido::prelude::*;
+use guido::testing::Headless;
 use std::time::{Duration, Instant};
 
 const BACKGROUND: Color = Color::rgb(0.1, 0.1, 0.12);
@@ -76,7 +75,7 @@ fn outside_the_arc(frame: &[u8], width: u32, height: u32, scale: f32) -> usize {
 /// Press the handle near the top-right corner, hold it, and drag it down into
 /// the bottom-right one; the worst frame on the way.
 fn worst_frame_while_held(scale: f32) -> Option<usize> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let (w, h) = (300, 300);
     let surface = app.surface(
         SurfaceConfig::new()

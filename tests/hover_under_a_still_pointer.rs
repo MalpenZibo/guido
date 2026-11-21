@@ -456,7 +456,6 @@ fn a_key_that_scrolls_moves_the_hover() {
 #[cfg(feature = "testing")]
 mod through_the_loop {
     use super::*;
-    use common::headless;
     use guido::layout::ZStack;
     use guido::testing::Headless;
     use std::time::{Duration, Instant};
@@ -475,7 +474,9 @@ mod through_the_loop {
     /// frame is drawn, without waiting for the pointer to move (#844).
     #[test]
     fn a_child_built_under_the_pointer_hears_its_hover() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let heard: Heard = Rc::default();
         let step = create_signal(0usize);
         let child_heard = heard.clone();
@@ -502,7 +503,9 @@ mod through_the_loop {
     /// frame that hides it is drawn, not at the pointer's next move.
     #[test]
     fn a_container_hidden_under_the_pointer_hears_its_leave_at_the_next_frame() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let heard: Heard = Rc::default();
         let shown = create_signal(true);
         let card_heard = heard.clone();
@@ -532,7 +535,9 @@ mod through_the_loop {
     /// itself back on the one after, for as long as the pointer rested there.
     #[test]
     fn a_hover_style_that_moves_its_box_settles() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let heard = Rc::new(RefCell::new(Vec::new()));
         let card_heard = heard.clone();
         let bar = app.surface(SurfaceConfig::new().width(200).height(100), move || {
@@ -575,7 +580,7 @@ mod through_the_loop {
             // Inside, before each application: one that goes takes the fonts
             // it was given with it.
             guido::load_font(FONT.to_vec());
-            let mut app = headless()?;
+            let mut app = Headless::new_or_skip()?;
             let heard = Rc::new(RefCell::new(Vec::new()));
             let button_heard = heard.clone();
             let bar = app.surface(SurfaceConfig::new().width(300).height(60), move || {
@@ -625,7 +630,9 @@ mod through_the_loop {
     /// under a pointer resting at 45.
     #[test]
     fn an_on_hover_that_shrinks_its_box_flickers_at_its_edge() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let heard = Rc::new(RefCell::new(Vec::new()));
         let box_heard = heard.clone();
         let bar = app.surface(SurfaceConfig::new().width(200).height(100), move || {
@@ -660,7 +667,9 @@ mod through_the_loop {
     /// rests there, like a style that shrinks the box.
     #[test]
     fn an_on_hover_that_shows_a_cover_over_its_box_flickers() {
-        let Some(mut app) = headless() else { return };
+        let Some(mut app) = Headless::new_or_skip() else {
+            return;
+        };
         let heard = Rc::new(RefCell::new(Vec::new()));
         let card_heard = heard.clone();
         let bar = app.surface(SurfaceConfig::new().width(100).height(100), move || {

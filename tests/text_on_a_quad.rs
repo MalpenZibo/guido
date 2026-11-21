@@ -2,13 +2,12 @@
 //! A text the quad path draws is the text glyphon would have drawn.
 
 use guido::prelude::*;
-
-mod common;
+use guido::testing::Headless;
 
 /// The lowest row of ink of a label 20 pixels tall squeezed into a box 8
 /// tall, in a card 40 tall, looked for where the card's corners do not reach.
 fn lowest_ink_of_a_squeezed_label(corners: f32) -> Option<u32> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(60)
@@ -65,7 +64,7 @@ fn a_squeezed_label_is_cut_by_its_clip_not_by_its_box_on_a_quad() {
 /// The first and last rows of ink of two lines of 40-pixel letters set 24
 /// pixels apart, in a card whose corners reach them or do not.
 fn ink_of_tightly_set_lines(corners: f32) -> Option<(u32, u32)> {
-    let mut app = common::headless()?;
+    let mut app = Headless::new_or_skip()?;
     let surface = app.surface(
         SurfaceConfig::new()
             .height(180)

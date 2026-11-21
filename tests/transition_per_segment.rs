@@ -11,8 +11,7 @@
 use std::time::{Duration, Instant};
 
 use guido::prelude::*;
-
-mod common;
+use guido::testing::Headless;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -47,7 +46,7 @@ fn widths(
 /// width changes: it opens slowly and closes fast, as the state says.
 #[test]
 fn a_transition_read_from_state_picks_the_close_when_it_closes() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let open = create_signal(false);
@@ -95,7 +94,7 @@ fn a_transition_read_from_state_picks_the_close_when_it_closes() {
 /// widget already says it is closing.
 #[test]
 fn an_exit_reads_the_transition_when_the_widget_is_removed() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let open = create_signal(true);
@@ -141,7 +140,7 @@ fn an_exit_reads_the_transition_when_the_widget_is_removed() {
 /// once, and an interrupted grow is measured from where the width is.
 #[test]
 fn a_transition_chosen_by_the_segment_grows_late_and_shrinks_at_once() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let content = create_signal(100.0_f32);
@@ -189,7 +188,7 @@ fn a_transition_chosen_by_the_segment_grows_late_and_shrinks_at_once() {
 /// both times.
 #[test]
 fn a_segment_says_whether_it_enters_or_leaves() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let shown = create_signal(true);

@@ -110,7 +110,7 @@ fn a_callback_prop_beside_a_type_parameter_named_f() {
 #[cfg(feature = "testing")]
 #[test]
 fn a_generic_component_renders_under_headless() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = guido::testing::Headless::new_or_skip() else {
         return;
     };
     let surface = app.surface(

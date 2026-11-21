@@ -5,9 +5,8 @@
 //! for the images they happen to hold: icons small enough that a page is never
 //! close to full, and never cropped. These are the cases they leave out.
 
-mod common;
-
 use guido::prelude::*;
+use guido::testing::Headless;
 
 fn solid(width: u32, height: u32, rgba: [u8; 4]) -> ImageSource {
     ImageSource::Rgba {
@@ -30,7 +29,7 @@ fn boxed(source: ImageSource, width: f32, height: f32, fit: ContentFit) -> Conta
 /// its neighbour, and the rows it lost would show at its edge.
 #[test]
 fn sixteen_entries_the_size_of_a_quarter_page_fill_one_page_and_keep_their_edges() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     const SIDE: u32 = 254;
@@ -89,7 +88,7 @@ fn sixteen_entries_the_size_of_a_quarter_page_fill_one_page_and_keep_their_edges
 /// image keeps a texture of its own, however thin.
 #[test]
 fn an_image_too_wide_or_too_tall_for_an_entry_keeps_a_texture_of_its_own() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let surface = app.surface(SurfaceConfig::new().height(20), || {
@@ -141,7 +140,7 @@ fn banded(width: u32, height: u32) -> ImageSource {
 /// does on a texture of its own too, so the reads are one pixel in.
 #[test]
 fn a_cropped_image_is_cropped_from_its_own_entry() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     let surface = app.surface(SurfaceConfig::new().height(8), || {
@@ -178,7 +177,7 @@ fn a_cropped_image_is_cropped_from_its_own_entry() {
 /// row. Eighty are two shelves of a 1024-wide page.
 #[test]
 fn an_entry_on_the_shelf_above_another_keeps_its_last_row() {
-    let Some(mut app) = common::headless() else {
+    let Some(mut app) = Headless::new_or_skip() else {
         return;
     };
     const SIDE: u32 = 24;

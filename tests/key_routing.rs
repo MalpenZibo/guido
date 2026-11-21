@@ -32,9 +32,6 @@ use guido::reactive::focus::{focused_widget, request_focus};
 use guido::testing::Headless;
 use guido::widget_prelude::*;
 
-mod common;
-use common::headless;
-
 const ROWS: usize = 1000;
 
 /// The keys each named listener heard, in the order it heard them.
@@ -113,7 +110,9 @@ fn answering(name: &'static str, heard: Log, answer: EventResponse) -> Container
 
 #[test]
 fn a_key_visits_the_focus_path_and_nothing_else() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let visits = Rc::new(Cell::new(0));
     let counter = visits.clone();
     let typed = create_signal(String::new());
@@ -160,7 +159,9 @@ fn a_key_visits_the_focus_path_and_nothing_else() {
 
 #[test]
 fn a_listener_hears_a_key_with_nothing_focused() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -174,7 +175,9 @@ fn a_listener_hears_a_key_with_nothing_focused() {
 
 #[test]
 fn a_focused_field_keeps_the_keys_it_takes_and_passes_the_rest_on() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (around, beside) = (heard.clone(), heard.clone());
     let typed = create_signal(String::new());
@@ -208,7 +211,9 @@ fn a_focused_field_keeps_the_keys_it_takes_and_passes_the_rest_on() {
 /// a list paging, an application binding F5.
 #[test]
 fn paging_and_function_keys_reach_the_listener_around_a_focused_field() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let around = heard.clone();
     let typed = create_signal(String::new());
@@ -240,7 +245,9 @@ fn paging_and_function_keys_reach_the_listener_around_a_focused_field() {
 
 #[test]
 fn the_innermost_listener_hears_a_key_first() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (outer, inner) = (heard.clone(), heard.clone());
     let (id, mut at) = surface(&mut app, move || {
@@ -264,7 +271,9 @@ fn passer(name: &'static str, heard: Log) -> Container {
 
 #[test]
 fn a_listener_that_lets_a_key_through_passes_it_to_the_next() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (outer, inner) = (heard.clone(), heard.clone());
     let (id, mut at) = surface(&mut app, move || {
@@ -286,7 +295,9 @@ fn a_listener_that_lets_a_key_through_passes_it_to_the_next() {
 
 #[test]
 fn a_listener_on_the_focus_path_hears_a_key_it_let_through_once() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (around, beside) = (heard.clone(), heard.clone());
     let typed = create_signal(String::new());
@@ -319,7 +330,9 @@ fn a_listener_on_the_focus_path_hears_a_key_it_let_through_once() {
 
 #[test]
 fn a_listener_inside_a_hidden_container_hears_nothing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -337,7 +350,9 @@ fn a_listener_inside_a_hidden_container_hears_nothing() {
 
 #[test]
 fn a_listener_before_the_focused_field_no_longer_takes_its_typing() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let before = heard.clone();
     let typed = create_signal(String::new());
@@ -399,7 +414,9 @@ enum Route {
 /// Enter, held for two repeats, released, and pressed again — played into a
 /// listener that counts the key-downs `count` accepts.
 fn replay(route: Route, count: fn(bool) -> bool) -> u32 {
-    let Some(mut app) = headless() else { return 0 };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return 0;
+    };
     let heard = Rc::new(Cell::new(0));
     let log = heard.clone();
     let listener = move || {
@@ -443,7 +460,7 @@ fn replay(route: Route, count: fn(bool) -> bool) -> u32 {
 
 #[test]
 fn a_held_key_activates_once_per_press_on_the_focus_path() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     assert_eq!(replay(Route::Focused, |repeat| !repeat), 2, "two presses");
@@ -456,7 +473,7 @@ fn a_held_key_activates_once_per_press_on_the_focus_path() {
 
 #[test]
 fn a_held_key_activates_once_per_press_past_an_unhandling_focus() {
-    if headless().is_none() {
+    if Headless::new_or_skip().is_none() {
         return;
     }
     assert_eq!(replay(Route::Listener, |repeat| !repeat), 2, "two presses");
@@ -506,7 +523,9 @@ fn both_ways(name: &'static str, heard: Rc<RefCell<Vec<Heard>>>) -> Container {
 
 #[test]
 fn a_release_visits_the_focus_path_after_its_press() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (around, beside) = (heard.clone(), heard.clone());
     let (id, mut at) = surface(&mut app, move || {
@@ -550,7 +569,9 @@ fn a_release_visits_the_focus_path_after_its_press() {
 /// A container that declares only `on_key_up` listens too.
 #[test]
 fn a_listener_hears_a_release_with_nothing_focused() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let log = heard.clone();
     let (id, mut at) = surface(&mut app, move || {
@@ -578,7 +599,9 @@ fn a_listener_hears_a_release_with_nothing_focused() {
 /// lets its release through.
 #[test]
 fn a_listener_hears_the_release_of_a_key_the_field_took() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let beside = heard.clone();
     let typed = create_signal(String::new());
@@ -640,7 +663,9 @@ fn capturing(name: &'static str, log: Log, takes: &'static [Key]) -> Container {
 /// let them through.
 #[test]
 fn a_container_takes_the_arrows_before_the_focused_field_under_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (captured, bubbled) = (heard.clone(), heard.clone());
     let query = create_signal(String::new());
@@ -752,7 +777,9 @@ fn nested_captures(app: &mut Headless, heard: &Log) -> (SurfaceId, Instant) {
 
 #[test]
 fn captures_run_outside_in_before_the_focused_widget_and_bubbling_after() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (id, mut at) = nested_captures(&mut app, &heard);
 
@@ -781,7 +808,9 @@ fn captures_run_outside_in_before_the_focused_widget_and_bubbling_after() {
 
 #[test]
 fn a_capture_that_takes_a_key_keeps_it_from_everything_after_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (id, mut at) = nested_captures(&mut app, &heard);
     let focused = focused_widget();
@@ -818,7 +847,9 @@ fn a_capture_that_takes_a_key_keeps_it_from_everything_after_it() {
 /// and a capture listener hears it on the way, before the listeners inside it.
 #[test]
 fn a_capture_hears_a_key_with_nothing_focused_before_the_listeners_inside_it() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (outer, inner) = (heard.clone(), heard.clone());
     let (id, mut at) = surface(&mut app, move || {
@@ -848,7 +879,9 @@ fn a_capture_hears_a_key_with_nothing_focused_before_the_listeners_inside_it() {
 /// the way down to a listener beside the focus passes it.
 #[test]
 fn a_capture_on_the_focus_path_hears_a_key_once() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (around, beside) = (heard.clone(), heard.clone());
     let typed = create_signal(String::new());
@@ -892,7 +925,9 @@ fn a_capture_on_the_focus_path_hears_a_key_once() {
 /// first, as a capture listener on the web's target does.
 #[test]
 fn a_focused_container_hears_its_own_capture_before_its_own_listener() {
-    let Some(mut app) = headless() else { return };
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
     let heard = Rc::new(RefCell::new(Vec::new()));
     let (captured, bubbled) = (heard.clone(), heard.clone());
     let (id, mut at) = surface(&mut app, move || {
