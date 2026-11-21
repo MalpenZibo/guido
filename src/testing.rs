@@ -602,6 +602,23 @@ impl Headless {
         })
     }
 
+    /// [`Headless::new`] for a test: `None` without an adapter, after saying so
+    /// on stderr, and a panic instead where `GUIDO_GPU_REQUIRED` is set.
+    ///
+    /// A test that skips without an adapter passes on a machine that has none,
+    /// CI's among them, without having run. Setting the variable in the job
+    /// that has one makes such a skip a failure there:
+    ///
+    /// ```no_run
+    /// # use guido::testing::Headless;
+    /// let Some(mut app) = Headless::new_or_skip() else {
+    ///     return;
+    /// };
+    /// ```
+    pub fn new_or_skip() -> Option<Self> {
+        crate::or_skip(Self::new())
+    }
+
     /// Hold a device of this application's own, made and let go as
     /// `App::run` does, rather than the one every application in a test
     /// binary shares and nothing lets go of.
@@ -1160,6 +1177,19 @@ pub fn finish_image_decodes() -> u64 {
 }
 
 #[cfg(test)]
+mod new_or_skip {
+    use super::Headless;
+
+    /// It skips only where `new` has nothing to give: one that always said
+    /// `None` would skip every test that asks it, green, on an adapter too.
+    #[test]
+    fn gives_an_application_wherever_new_does() {
+        let has_adapter = Headless::new().is_some();
+        assert_eq!(Headless::new_or_skip().is_some(), has_adapter);
+    }
+}
+
+#[cfg(test)]
 mod the_two_refusals_the_loop_cannot_reach {
     use super::*;
 
@@ -1252,7 +1282,7 @@ mod one_device_for_the_binary {
     /// outlive the test.
     #[test]
     fn two_applications_are_handed_the_same_device() {
-        let Some(first) = crate::or_skip(Headless::new()) else {
+        let Some(first) = Headless::new_or_skip() else {
             return;
         };
         let second = Headless::new().expect("the first one had an adapter");
@@ -1295,7 +1325,7 @@ mod the_next_application_on_this_thread {
     /// twice.
     #[test]
     fn does_not_inherit_the_last_one_tearing_its_widgets_down() {
-        let Some(mut first) = crate::or_skip(Headless::new()) else {
+        let Some(mut first) = Headless::new_or_skip() else {
             return;
         };
         let white = drew_a_row(&mut first);
@@ -1414,7 +1444,7 @@ mod the_hover_after_a_frame {
     /// shows the hand; row 1, now under the pointer, shows none.
     #[test]
     fn moves_with_what_a_scroll_moved() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1437,7 +1467,7 @@ mod the_hover_after_a_frame {
     /// under it down, and the hover goes to what is under the pointer now.
     #[test]
     fn moves_with_what_a_layout_moved() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1452,7 +1482,7 @@ mod the_hover_after_a_frame {
     /// size changed, and that is enough.
     #[test]
     fn moves_with_a_row_that_grows_under_it() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1480,7 +1510,7 @@ mod the_hover_after_a_frame {
     /// is changed, and that is enough.
     #[test]
     fn moves_with_a_row_pushed_under_it() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1511,7 +1541,7 @@ mod the_hover_after_a_frame {
     /// A child built where the pointer is: nothing moved, something appeared.
     #[test]
     fn moves_to_a_child_built_under_it() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1542,7 +1572,7 @@ mod the_hover_after_a_frame {
     /// trusted: the hover waits for the pointer to say where it is.
     #[test]
     fn waits_after_a_resize_for_the_pointer_to_say_where_it_is() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1567,7 +1597,7 @@ mod the_hover_after_a_frame {
     /// pointer as the dialog went hears nothing.
     #[test]
     fn is_not_worked_out_on_a_surface_that_asked_to_close() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1593,7 +1623,7 @@ mod the_hover_after_a_frame {
     /// overlay that covered the row is gone, and the row hears its hover.
     #[test]
     fn moves_to_what_a_removal_uncovers() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1634,7 +1664,7 @@ mod the_hover_after_a_frame {
     #[test]
     fn moves_to_what_an_exit_uncovers_as_it_starts() {
         use crate::animation::{Animate, TimingFunction, Transition};
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1678,7 +1708,7 @@ mod the_hover_after_a_frame {
     /// and what that pulls under the pointer hears its hover.
     #[test]
     fn moves_with_a_scroll_clamped_by_content_that_shrank() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1729,7 +1759,7 @@ mod the_hover_after_a_frame {
     #[test]
     fn moves_with_a_slide_when_the_pointer_moves() {
         use crate::animation::{TimingFunction, Transition};
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1779,7 +1809,7 @@ mod the_hover_after_a_frame {
     /// process-wide, could otherwise draw a frame here.
     #[test]
     fn is_worked_out_at_a_release_that_draws_nothing() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1810,7 +1840,7 @@ mod the_hover_after_a_frame {
     /// dismissed surface hears nothing more (#675).
     #[test]
     fn is_not_worked_out_at_a_release_whose_click_closes() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1861,7 +1891,7 @@ mod the_hover_after_a_frame {
     /// point it had is not trusted, as after a configure.
     #[test]
     fn waits_after_its_own_content_resizes_the_surface() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1901,7 +1931,7 @@ mod the_hover_after_a_frame {
     #[test]
     fn a_lifted_box_is_worked_out_where_it_is_drawn() {
         use crate::widgets::Stateful;
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1940,7 +1970,7 @@ mod the_hover_after_a_frame {
     /// outlives it, so the key is worked out after its frame, cursor and all.
     #[test]
     fn moves_the_cursor_with_a_key_that_scrolls_after_a_click() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -1970,7 +2000,7 @@ mod the_hover_after_a_frame {
     /// only thing that can do it: no frame follows.
     #[test]
     fn moves_the_cursor_at_a_release_with_no_position() {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -2010,7 +2040,7 @@ mod the_hover_after_a_frame {
     #[test]
     fn moves_to_a_row_brought_back_mid_exit() {
         use crate::animation::{Animate, TimingFunction, Transition};
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
@@ -2091,7 +2121,7 @@ mod the_hover_after_a_frame {
     }
 
     fn clamped_by_padding_that_shrank(scroll: Scroll) {
-        let Some(mut app) = crate::or_skip(Headless::new()) else {
+        let Some(mut app) = Headless::new_or_skip() else {
             return;
         };
         let heard: Heard = Rc::default();
