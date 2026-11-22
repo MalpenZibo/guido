@@ -148,7 +148,7 @@ impl FontFamily {
 /// text("Hello").font_weight(FontWeight::BOLD);
 /// text("Hello").font_weight(FontWeight(600));
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct FontWeight(pub u16);
 
 impl FontWeight {
