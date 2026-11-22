@@ -147,9 +147,10 @@ pub(crate) struct AppState {
     /// system takes `custom_fonts`, and finding one is a shaping.
     pub(crate) resolved_fonts:
         RefCell<FxHashMap<(FontFamily, FontWeight, FontStyle), crate::renderer::ResolvedFont>>,
-    /// Whether a font system already took the list, so a late load can say it
-    /// came too late.
-    pub(crate) fonts_consumed: Cell<bool>,
+    /// The font database every font system is built from, scanned once, from
+    /// the system's fonts and `custom_fonts`, by the first to ask
+    /// (`src/fonts.rs`). Once it is here a late load comes too late.
+    pub(crate) font_db: RefCell<Option<crate::fonts::FontDb>>,
 
     // --- Images ------------------------------------------------------------
     /// One entry per raster source being shown, each holding the signal its
@@ -206,7 +207,7 @@ pub(crate) fn reset() {
             custom_fonts,
             custom_font_hashes,
             resolved_fonts,
-            fonts_consumed,
+            font_db,
             decoded_images,
             image_decoder,
             image_events,
@@ -255,7 +256,7 @@ pub(crate) fn reset() {
         custom_fonts.take();
         custom_font_hashes.take();
         resolved_fonts.take();
-        fonts_consumed.take();
+        font_db.take();
 
         image_events.clear();
         decoded_images.take();
