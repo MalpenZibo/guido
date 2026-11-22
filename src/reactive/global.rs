@@ -1,33 +1,4 @@
-//! Signals whose owner is the application.
-//!
-//! A signal belongs to whatever scope is current when `create_signal` runs, and
-//! that scope is ambient and time-dependent: the same line inside a widget
-//! factory belongs to that surface, inside a click handler to the root, on an
-//! effect's first run to whoever created the effect. For state with one instance
-//! per process — what the compositor reports, where the keyboard focus is — the
-//! owner is none of those. It is the application, and drawing it by lot from
-//! whoever reads first is how "signal was disposed" panics get made.
-//!
-//! A `GlobalSignal` says so at the declaration:
-//!
-//! ```ignore
-//! // not compiled: `GlobalSignal` is crate-internal, and a doctest compiles
-//! // against the crate from outside.
-//! static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
-//!
-//! pub fn keyboard_modifiers() -> Signal<Modifiers> {
-//!     MODIFIERS.get().read_only()
-//! }
-//! ```
-//!
-//! Created under the root owner on first use — so it outlives every scope that
-//! might read it — and forgotten when the `App` is dropped, which the next `App`
-//! on this thread needs: `reset_reactive` wipes the signal storage, and an id
-//! kept across that points into an arena that no longer exists.
-//!
-//! The identity is the `static` itself, taken by address, so two globals of the
-//! same type are two globals. Nothing has to be registered, listed, or reset by
-//! hand.
+//! Signals whose owner is the application. See [`GlobalSignal`].
 
 use std::any::TypeId;
 use std::collections::hash_map::Entry;
@@ -38,9 +9,48 @@ use super::state::with_reactive;
 
 /// A signal that lives as long as the `App`.
 ///
-/// Declare it as a `static` and read it through [`get`](GlobalSignal::get);
-/// the signal itself is created on first use. See the module docs.
-pub(crate) struct GlobalSignal<T: 'static> {
+/// A signal belongs to whatever scope is current when `create_signal` runs, and
+/// that scope is ambient and time-dependent: the same line inside a widget
+/// factory belongs to that surface, inside a click handler to the root, on an
+/// effect's first run to whoever created the effect. For state with one instance
+/// per process — what the compositor reports, where the keyboard focus is, the
+/// colours a library reads from the wallpaper — the owner is none of those. It
+/// is the application, and drawing it by lot from whoever reads first is how
+/// "signal was disposed" panics get made.
+///
+/// A `GlobalSignal` says so at the declaration:
+///
+/// ```
+/// use guido::prelude::*;
+/// use guido::reactive::GlobalSignal;
+///
+/// #[derive(Clone, PartialEq, Default)]
+/// struct Wallpapers { accent: Color }
+///
+/// static WALLPAPERS: GlobalSignal<Wallpapers> = GlobalSignal::new(Wallpapers::default);
+///
+/// pub fn accent() -> Signal<Color> {
+///     let wallpapers = WALLPAPERS.get();
+///     create_derived(move || wallpapers.with(|w| w.accent))
+/// }
+/// # fn main() { let _ = accent(); }
+/// ```
+///
+/// Created under the root owner on first use — so it outlives every scope that
+/// might read it — and forgotten when the `App` is dropped; the next `App` gets
+/// a fresh one, starting again from `init`. With no `App`, as in a unit test,
+/// there is no root, and it belongs to the current scope.
+///
+/// The identity is the `static` itself, taken by address, so two globals of the
+/// same type are two globals. Nothing has to be registered, listed, or reset by
+/// hand.
+///
+/// "Global" means the thread's: the reactive runtime is per thread. Call `get`
+/// on the `App`'s thread and hand a background thread `get().writer()` — a
+/// [`writer`](RwSignal::writer) — since `get` called on the background thread
+/// itself makes a separate signal in that thread's runtime, which no surface
+/// reads.
+pub struct GlobalSignal<T: 'static> {
     /// The value the signal starts from. A `fn` pointer rather than a `T` so
     /// the `static` is `Sync` whatever `T` is, and so the value is built when
     /// there is a runtime to build it in.
@@ -49,7 +59,7 @@ pub(crate) struct GlobalSignal<T: 'static> {
 
 impl<T: Clone + Send + 'static> GlobalSignal<T> {
     /// Declare a global signal starting from `init()`.
-    pub(crate) const fn new(init: fn() -> T) -> Self {
+    pub const fn new(init: fn() -> T) -> Self {
         Self { init }
     }
 
@@ -61,7 +71,7 @@ impl<T: Clone + Send + 'static> GlobalSignal<T> {
     /// one, so clearing the map is a tidying rather than a step the teardown
     /// has to get in the right order. Reading a global while an `App` is being torn
     /// down — a widget's cleanup, a drop — therefore cannot panic.
-    pub(crate) fn get(&'static self) -> RwSignal<T> {
+    pub fn get(&'static self) -> RwSignal<T> {
         let key = self as *const Self as usize;
         let cached = with_reactive(|reactive| reactive.globals.borrow().get(&key).copied());
         if let Some((id, declared)) = cached {

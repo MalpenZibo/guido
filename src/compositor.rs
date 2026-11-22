@@ -6,7 +6,7 @@
 //! where a blurred one is not on offer — needs to read that as a signal
 //! rather than ask once at startup.
 
-use crate::reactive::global::GlobalSignal;
+use crate::reactive::GlobalSignal;
 use crate::reactive::{RwSignal, Signal};
 
 /// Compositor-side effects currently on offer.

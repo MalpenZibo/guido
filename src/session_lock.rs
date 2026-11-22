@@ -29,7 +29,7 @@ use rustc_hash::FxHashMap;
 use crate::app_state::with_app_state;
 use crate::outputs::{self, OutputId, OutputInfo};
 use crate::platform::LockEvent;
-use crate::reactive::global::GlobalSignal;
+use crate::reactive::GlobalSignal;
 use crate::reactive::{RwSignal, Signal};
 use crate::surface::{SurfaceConfig, SurfaceId};
 use crate::surface_manager::{ManagedSurface, SurfaceManager};

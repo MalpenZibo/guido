@@ -26,7 +26,7 @@ use smallvec::SmallVec;
 
 use crate::app_state::with_app_state;
 use crate::jobs::{JobRequest, request_job};
-use crate::reactive::global::GlobalSignal;
+use crate::reactive::GlobalSignal;
 use crate::reactive::signal::RwSignal;
 use crate::tree::{Tree, WidgetId};
 use crate::widget_ref::Attachment;

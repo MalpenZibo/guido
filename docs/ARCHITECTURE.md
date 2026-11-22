@@ -36,7 +36,7 @@ Single-threaded reactive primitives inspired by SolidJS and Floem.
 - `Memo<T>` - Eager derived values that recompute when dependencies change, only notify on actual changes (`PartialEq`)
 - `Effect` - Side effects that re-run when tracked signals change
 - `WriteSignal<T>` - `Send` handle for background thread updates, obtained via `RwSignal::writer()`
-- `GlobalSignal<T>` (internal) - a signal whose owner is the *application*, declared as a `static`. See "Owners" below.
+- `GlobalSignal<T>` - a signal whose owner is the *application*, declared as a `static`. See "Owners" below.
 - `Prop<T>` - what a widget *property field* holds: `Unset`, `Const(T)` or `Reactive(Signal<T>)`. A constant keeps the constant and claims no signal slot, which a `create_stored()` did anyway. Produced by `IntoSignal::into_prop()`, which reads the case off the marker.
 
 **How it works:**

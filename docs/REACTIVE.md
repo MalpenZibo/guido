@@ -213,9 +213,8 @@ handful of things with one instance per process — what the compositor reports,
 where the keyboard focus is — the owner is none of those. It is the
 application.
 
-The library declares those as `GlobalSignal` (internal to the crate), which
-creates the signal under the root owner on first use and rebuilds it if the
-last one is gone:
+Those are declared as `GlobalSignal`, which creates the signal under the root
+owner on first use and rebuilds it if the last one is gone:
 
 ```rust
 static MODIFIERS: GlobalSignal<Modifiers> = GlobalSignal::new(Modifiers::default);
@@ -225,8 +224,9 @@ pub fn keyboard_modifiers() -> Signal<Modifiers> {
 }
 ```
 
-Applications do not need it: a signal created in `App::run`'s setup already
-belongs to the root owner, which lives as long as the app.
+An application rarely needs it: a signal created in `App::run`'s setup already
+belongs to the root owner, which lives as long as the app. A library built on
+guido has no setup closure of its own, and declares a `GlobalSignal` instead.
 
 ## Using Signals in Widgets
 
