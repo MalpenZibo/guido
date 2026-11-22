@@ -280,6 +280,38 @@ fn cpu_indicator() -> Container {
 }
 ```
 
+## State a Library Keeps
+
+Context reaches down from where it was declared, and a library built on guido
+declares nothing at the root: the `App::run` setup is its caller's. For state
+that belongs to the whole application rather than to one surface — the colours
+read from a wallpaper, which every bar and every settings window reads — a
+library declares a `GlobalSignal` instead:
+
+```rust
+# extern crate guido;
+use guido::prelude::*;
+use guido::reactive::GlobalSignal;
+
+#[derive(Clone, PartialEq, Default)]
+pub struct Wallpapers {
+    pub accent: Color,
+}
+
+static WALLPAPERS: GlobalSignal<Wallpapers> = GlobalSignal::new(Wallpapers::default);
+
+pub fn accent() -> Signal<Color> {
+    let wallpapers = WALLPAPERS.get();
+    create_derived(move || wallpapers.with(|w| w.accent))
+}
+# fn main() { let _ = accent(); }
+```
+
+The signal is made the first time anything calls `get`, and it belongs to the
+application, not to the surface that happened to ask first: that surface can
+close and the others go on reading the same signal. When the `App` is dropped
+it goes too, and the next `App` starts again from `Wallpapers::default`.
+
 ## Context vs Passing Signals
 
 | Approach | Best for |

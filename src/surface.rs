@@ -44,8 +44,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::app_state::with_app_state;
 use crate::outputs::OutputId;
 use crate::platform::{Anchor, KeyboardInteractivity, Layer};
+use crate::reactive::GlobalSignal;
 use crate::reactive::Trigger;
-use crate::reactive::global::GlobalSignal;
 use crate::widgets::{Color, Rect, Widget};
 
 /// Unique identifier for each surface in the application.

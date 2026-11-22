@@ -20,7 +20,7 @@
 //! });
 //! ```
 
-use crate::reactive::global::GlobalSignal;
+use crate::reactive::GlobalSignal;
 use crate::reactive::{RwSignal, Signal};
 use crate::widgets::Modifiers;
 
