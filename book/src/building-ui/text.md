@@ -277,6 +277,38 @@ Available font families:
 - `FontFamily::Fantasy` - Fantasy/decorative font
 - `FontFamily::name(&str)` - Custom font by name, interned
 
+### Listing the Fonts
+
+`font_families()` lists every family guido can draw with: the system's and
+those given to `load_font`, sorted by name. Each says its `name()` — what
+`FontFamily::name` takes — whether it is `monospaced()`, the `weights()` its
+faces come in (a variable face as the whole span of its weight axis), and
+whether it `covers` a character, which is what a font picker uses to leave out
+families that cannot draw the text it will show:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+let pickable = create_derived(|| {
+    font_families().with(|families| {
+        families
+            .iter()
+            .filter(|family| family.covers('a') && family.covers('A'))
+            .map(|family| family.name().to_owned())
+            .collect::<Vec<_>>()
+    })
+});
+# let _ = pickable;
+# }
+```
+
+The list is empty at first. Knowing which characters a family draws means
+reading every face, so a thread does it, and the signal changes once, when
+that thread is done. A font given to `load_font` after the first call is not
+listed — nor drawn: like the first text, the first list fixes the fonts there
+are.
+
 ### Font Weight
 
 Set the font weight using predefined constants or numeric values (100-900).

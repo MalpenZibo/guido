@@ -61,8 +61,9 @@ is invisible to any test that renders at scale 1.
 cached. Fonts come from the system plus anything the application handed to
 `load_font`, scanned once: the measurer and both draw paths build their
 `FontSystem` from copies of one database (`src/fonts.rs`), so they agree on
-the faces there are. Text metrics depend on the fonts installed on the
-machine, which is why the render-tree snapshots exclude text. The goldens do render it: they vendor a font under
+the faces there are, and `font_families` lists the same ones. Text metrics
+depend on the fonts installed on the machine, which is why the render-tree
+snapshots exclude text. The goldens do render it: they vendor a font under
 `tests/assets/` and name it in every scenario, so nothing there can reach a
 system font.
 

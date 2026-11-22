@@ -87,6 +87,7 @@ pub mod platform;
 pub mod renderer;
 
 // Re-export macros
+pub use fonts::{FontFamilyInfo, font_families};
 pub use guido_macros::SignalFields;
 /// A prop marked `#[prop(required)]` is an argument of the constructor, in
 /// the order it is declared, and every other prop keeps its setter:
@@ -206,7 +207,8 @@ pub fn default_font_family() -> FontFamily {
 /// Load custom font data into the application.
 ///
 /// The font is scanned with the system's when guido first needs a font, which
-/// makes it available for use via `FontFamily::name`.
+/// makes it available for use via `FontFamily::name` and lists it in
+/// [`font_families`].
 ///
 /// This should be called before creating any widgets or surfaces — and
 /// before *each* [`App::run`], not once for the process: the fonts belong to
@@ -365,8 +367,9 @@ pub mod prelude {
         arc, container, image, keyed, password_input, text, text_input,
     };
     pub use crate::{
-        App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
-        restart_app, set_default_font_family, set_image_cache_budget,
+        App, ExitReason, FontFamilyInfo, Secret, SignalFields, component, default_font_family,
+        font_families, load_font, quit_app, restart_app, set_default_font_family,
+        set_image_cache_budget,
     };
 }
 
