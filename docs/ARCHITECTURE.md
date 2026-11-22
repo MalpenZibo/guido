@@ -516,6 +516,7 @@ register is of. Sweeping either in would make the register noise.
 | `STATE` | `src/session_lock.rs` | `GlobalSignal`: the lock lifecycle, read from widget scopes that come and go while the platform's lock bookkeeping lives in `AppState::lock` |
 | `FOCUS` | `src/reactive/focus.rs` | `GlobalSignal`: the focused widget and its ancestors, so resolving a `when_focused` subscribes to it |
 | `POPUP_DISMISSAL` | `src/surface.rs` | `GlobalSignal`: the notifier that makes reading `AppState::live_popups` reactive, owned by the application rather than by whichever popup opened first |
+| `FAMILIES` | `src/fonts.rs` | `GlobalSignal`: the font families, written once by the thread that reads every face; a signal the application owns rather than whichever widget asked first, and made again for the next `App` with nothing to reset by hand |
 | `WRITE_QUEUES` | `src/reactive/runtime.rs` | Process-wide: the writes a `Send` `WriteSignal` made off its signal's thread, one queue per reactive runtime, pushed by whichever thread holds the writer and drained by the runtime it names. The one place it cannot be is a thread's cell, `REACTIVE` and `APP` included — the producer would push into its own and the loop would drain an empty one. One queue per runtime because a signal id is a slot in one thread's storage, and a test binary runs a `Headless` on every thread (#943); which queue is a runtime's is `ReactiveState::write_route`, closed by its reset so the writers an `App` left behind find nowhere to write |
 | `NEXT_WRITE_ROUTE` | `src/reactive/runtime.rs` | Process-wide: the number the next route takes. Two runtimes, or one before and after a reset, must never share one, which a counter in either of them cannot promise |
 | `INGRESS_SENDER` | `src/ingress.rs` | Process-wide: the loop's calloop channel, reached from whichever thread sends on it — a service queues a write from its own; a selection reader takes its handle on the main thread and sends from the reader's, seconds later. `with_app_state` on a worker mints that thread its own empty `AppState`, so a field there would read back as "no loop" and silently take the fallback |
@@ -1113,6 +1114,7 @@ duplicate was found.
 | `src/reactive/prop.rs` | `Prop<T>`: what a property field holds, so a constant costs the constant |
 | `src/reactive/global.rs` | `GlobalSignal`: state whose owner is the application |
 | `src/reactive/password.rs` | `Password`: a signal holding a `Secret`, lent and never copied out |
+| `src/fonts.rs` | The fonts guido draws with: one scan shared by every `FontSystem`, and `font_families` read off the frame |
 | `src/image_decode.rs` | Raster images decoded off the frame: one signal per source, a worker that writes them, and the handle that frees the pixels with the last image |
 | `src/heap.rs` | `CountingAllocator`: what a frame asks of the allocator, for the binary that installs it |
 | `src/secret.rs` | `Secret`: a password in pages of its own — locked, left out of core dumps, zeroed when given back |

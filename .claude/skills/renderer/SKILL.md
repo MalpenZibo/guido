@@ -59,10 +59,13 @@ is invisible to any test that renders at scale 1.
 
 `glyphon` over `cosmic-text`. Measurement lives in `text_measurer.rs` and is
 cached. Fonts come from the system plus anything the application handed to
-`load_font`. Text metrics depend on the fonts installed on the machine, which
-is why the render-tree snapshots exclude text. The goldens do render it: they
-vendor a font under `tests/assets/` and name it in every scenario, so nothing
-there can reach a system font.
+`load_font`, scanned once: the measurer and both draw paths build their
+`FontSystem` from copies of one database (`src/fonts.rs`), so they agree on
+the faces there are, and `font_families` lists the same ones. Text metrics
+depend on the fonts installed on the machine, which is why the render-tree
+snapshots exclude text. The goldens do render it: they vendor a font under
+`tests/assets/` and name it in every scenario, so nothing there can reach a
+system font.
 
 Measurement and the three draw paths below each shape the text for
 themselves, and all four go through one `shape` in `text.rs`. Every text

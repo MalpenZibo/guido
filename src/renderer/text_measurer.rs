@@ -192,12 +192,7 @@ pub struct TextMeasurer {
 
 impl TextMeasurer {
     pub fn new() -> Self {
-        let mut font_system = FontSystem::new();
-        for data in crate::get_registered_fonts() {
-            font_system
-                .db_mut()
-                .load_font_source(cosmic_text::fontdb::Source::Binary(data));
-        }
+        let font_system = crate::fonts::font_system();
         Self {
             font_system,
             measure_cache: FxHashMap::default(),

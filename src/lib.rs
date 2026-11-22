@@ -57,6 +57,7 @@ pub mod clock;
 pub mod compositor;
 mod deferred;
 pub(crate) mod finite;
+mod fonts;
 pub mod heap;
 mod image_decode;
 pub mod image_metadata;
@@ -86,6 +87,7 @@ pub mod platform;
 pub mod renderer;
 
 // Re-export macros
+pub use fonts::{FontFamilyInfo, font_families};
 pub use guido_macros::SignalFields;
 /// A prop marked `#[prop(required)]` is an argument of the constructor, in
 /// the order it is declared, and every other prop keeps its setter:
@@ -204,8 +206,9 @@ pub fn default_font_family() -> FontFamily {
 
 /// Load custom font data into the application.
 ///
-/// The font bytes will be loaded into all internal FontSystem instances,
-/// making the font available for use via `FontFamily::name`.
+/// The font is scanned with the system's when guido first needs a font, which
+/// makes it available for use via `FontFamily::name` and lists it in
+/// [`font_families`].
 ///
 /// This should be called before creating any widgets or surfaces — and
 /// before *each* [`App::run`], not once for the process: the fonts belong to
@@ -222,9 +225,9 @@ pub fn default_font_family() -> FontFamily {
 /// guido::load_font(NERD_FONT.to_vec());
 /// ```
 pub fn load_font(data: Vec<u8>) {
-    if with_app_state(|app| app.fonts_consumed.get()) {
+    if with_app_state(|app| app.font_db.borrow().is_some()) {
         log::warn!(
-            "load_font() called after FontSystem initialization — \
+            "load_font() called after the fonts were scanned — \
              this font will not be available. Call load_font() before App::run()."
         );
     }
@@ -268,17 +271,6 @@ pub fn set_image_cache_budget(bytes: usize) {
 /// [`set_image_cache_budget`] or the default.
 pub(crate) fn image_cache_budget() -> usize {
     with_app_state(|app| app.image_cache_budget.get()).unwrap_or(DEFAULT_IMAGE_CACHE_BUDGET)
-}
-
-/// Get all registered custom font data (for loading into FontSystems).
-///
-/// Returns cloned `Arc` pointers so every FontSystem (measurer, renderer)
-/// receives the same set of fonts.
-pub(crate) fn get_registered_fonts() -> Vec<Arc<Vec<u8>>> {
-    with_app_state(|app| {
-        app.fonts_consumed.set(true);
-        app.custom_fonts.borrow().clone()
-    })
 }
 
 /// The reason the application's main loop exited.
@@ -375,8 +367,9 @@ pub mod prelude {
         arc, container, image, keyed, password_input, text, text_input,
     };
     pub use crate::{
-        App, ExitReason, Secret, SignalFields, component, default_font_family, load_font, quit_app,
-        restart_app, set_default_font_family, set_image_cache_budget,
+        App, ExitReason, FontFamilyInfo, Secret, SignalFields, component, default_font_family,
+        font_families, load_font, quit_app, restart_app, set_default_font_family,
+        set_image_cache_budget,
     };
 }
 
@@ -3389,16 +3382,19 @@ mod restart_tests {
         let first = App::new();
         load_font(vec![11u8; 64]);
         assert_eq!(
-            get_registered_fonts().len(),
+            with_app_state(|app| app.custom_fonts.borrow().len()),
             1,
             "the App under test has a font to forget"
         );
+        crate::fonts::font_system();
         drop(first);
 
         let _next = App::new();
 
         assert!(
-            get_registered_fonts().is_empty(),
+            with_app_state(
+                |app| app.custom_fonts.borrow().is_empty() && app.font_db.borrow().is_none()
+            ),
             "the next App would draw in a font it was never given"
         );
     }

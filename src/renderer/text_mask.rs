@@ -131,8 +131,8 @@ struct CachedMask {
 /// [`text_quad`](super::text_quad) — built on the first such text and not
 /// before.
 ///
-/// A `FontSystem` scans the machine's fonts to construct, and the atlas is two
-/// textures before it holds a glyph: not a cost to put on every app for paths
+/// A `FontSystem` costs the application's font database, copied or scanned,
+/// and the atlas is two textures before it holds a glyph: not a cost to put on every app for paths
 /// most of them never take.
 pub(super) struct Shaper {
     pub(super) font_system: FontSystem,
@@ -146,12 +146,7 @@ pub(super) struct Shaper {
 
 impl Shaper {
     pub(super) fn new(device: &Device, queue: &Queue, format: TextureFormat) -> Self {
-        let mut font_system = FontSystem::new();
-        for data in crate::get_registered_fonts() {
-            font_system
-                .db_mut()
-                .load_font_source(glyphon::fontdb::Source::Binary(data));
-        }
+        let font_system = crate::fonts::font_system();
         let cache = Cache::new(device);
         let mut atlas = TextAtlas::with_color_mode(device, queue, &cache, format, ColorMode::Web);
         let text_renderer =
