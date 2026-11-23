@@ -179,6 +179,82 @@ A widget that draws a shape no box describes — a chart, a custom outline —
 builds a `Path` and hands it to `ctx.draw_path`; [Arcs &
 Paths](../building-ui/arcs-and-paths.md) has the vocabulary.
 
+## A widget that animates
+
+A value that eases is an `AnimationState`: it holds where the value is, where
+it is going and how it gets there. Your widget points it somewhere in `layout`,
+moves it on in `advance_animations`, and paints whatever it holds.
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# use guido::widget_prelude::*;
+use guido::widgets::container::AnimationState;
+
+struct Swatch {
+    color: Signal<Color>,
+    motion: AnimationState<Color>,
+}
+
+impl Widget for Swatch {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let target = self.color.get();
+        if self.motion.is_initial() {
+            // The first layout places it: there is nothing to ease from yet.
+            self.motion.set_immediate(ctx, target);
+        } else {
+            self.motion.animate_to(target, ctx.tree_ref().frame_instant());
+            if self.motion.is_animating() {
+                ctx.request_animation_frame();
+            }
+        }
+        constraints.constrain(Size::new(20.0, 20.0))
+    }
+
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        if self.motion.advance(tree.frame_instant()).is_changed() {
+            tree.mark_needs_paint(id);
+        }
+        self.motion.is_animating()
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        let square = Rect::new(0.0, 0.0, 20.0, 20.0);
+        ctx.draw_rounded_rect(square, self.motion.displayed(), 0.0);
+    }
+}
+
+fn swatch(color: Signal<Color>) -> Swatch {
+    Swatch {
+        color,
+        motion: AnimationState::new(
+            Color::TRANSPARENT,
+            Transition::new(200.0, TimingFunction::EaseOut),
+        ),
+    }
+}
+# fn main() {}
+```
+
+Three calls carry it from one frame to the next.
+
+**`ctx.request_animation_frame()` starts it.** A retarget happens in `layout`,
+and nothing calls `advance_animations` until a widget asks: this asks for the
+next frame. Outside `layout` — in `event`, say — the same request is
+`tree.request_animation_frame(id)`.
+
+**What `advance_animations` returns keeps it going.** `true` is another frame,
+`false` is none. Return whether the value is still moving, and the frames stop
+on their own the frame it arrives. A widget inside a hidden container is not
+advanced at all, so it asks for nothing while nobody can see it.
+
+**`tree.mark_needs_paint(id)` shows it.** A frame is not a repaint: a delay, or
+a spring that has settled to the pixel, runs without changing what is drawn. So
+the widget asks for its paint where the value moved, and only there. That call
+is the flag and nothing else, so a widget whose reach follows the value — a
+shadow that grows, an offset — publishes the new reach in the same place, with
+`tree.set_own_paint_reach(id, ..)`.
+
 ## A layout
 
 `Layout` has one method to write: given the children and the constraints, place

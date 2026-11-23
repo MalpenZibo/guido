@@ -123,8 +123,15 @@ Two methods are required, the rest default:
   `PaintContext::paint_child`, which opens the widget's own Paint scope, so a
   read made while drawing belongs to it without the widget asking
 - `event(&mut self, tree, id, event) -> EventResponse` — defaults to `Ignored`
-- `advance_animations`, `reconcile_children`, `layout_hints`,
-  `register_children` — defaults
+- `advance_animations` — a default, called on a frame that asked for one.
+  Its `bool` is the next frame: `true` is another call, `false` is none, and
+  the loop asks rather than the widget. The first frame of a motion is
+  `LayoutCtx::request_animation_frame` from `layout`, or
+  `Tree::request_animation_frame` elsewhere. A frame is not a paint: what moved
+  asks for that itself, with a Paint or Layout job inside the crate and
+  `Tree::mark_needs_paint` outside it. A blink, due on a deadline, answers
+  `false` — a `true` for it would be a frame every vsync
+- `reconcile_children`, `layout_hints`, `register_children` — defaults
 - `begin_exit`, `is_exiting`, `cancel_exit` — defaults: what the reconciler
   asks a removed widget and what is built inside it, as far as the next
   dynamic list, and `Container` is the one that answers

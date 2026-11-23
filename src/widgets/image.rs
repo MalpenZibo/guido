@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::animation::IntoAnimated;
 use crate::finite::AllFinite;
 use crate::image_decode::DecodeHandle;
-use crate::jobs::{JobRequest, RequiredJob, request_animation_frame, request_job};
+use crate::jobs::{JobRequest, RequiredJob, request_job};
 use crate::layout::{Constraints, Size};
 use crate::reactive::{IntoSignal, Prop, RwSignal, Signal, create_memo, create_signal};
 use crate::renderer::PaintContext;
@@ -358,10 +358,10 @@ impl Widget for Image {
         let Some(anim) = self.extras.as_mut().and_then(|e| e.tint.as_mut()) else {
             return false;
         };
-        let moved = anim.advance(tree.frame_instant()).is_changed();
-        let running = anim.is_animating();
-        request_animation_frame(id, moved.then_some(RequiredJob::Paint), running);
-        running
+        if anim.advance(tree.frame_instant()).is_changed() {
+            request_job(id, JobRequest::Paint);
+        }
+        anim.is_animating()
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {

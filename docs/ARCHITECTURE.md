@@ -360,6 +360,24 @@ The jobs system connects reactive signals to widget invalidation.
 - `layout_roots` are per-surface as well, so one surface's render pass
   never lays out another surface's subtrees.
 
+**Animation frames:**
+- An Animation job calls the widget's `advance_animations`, and what it
+  returns is the next frame: on `true` the loop queues another Animation job,
+  on `false` nothing. `Arc`, `Image`, `Text` and `TextInput` ask for no
+  continuation of their own; `Container`'s animation sources still queue
+  theirs where they advance, which the loop's request meets in the dedup.
+- The *first* frame is asked for by whoever starts the motion — inside the
+  crate with `request_job`, from outside it with
+  `LayoutCtx::request_animation_frame` or `Tree::request_animation_frame`,
+  which are that request and nothing more.
+- A frame is not a repaint. A moved value asks for its own follow-up: a Paint
+  or Layout job from a built-in, `Tree::mark_needs_paint` from a widget
+  outside the crate. Inside a delay the widget is woken and nothing is
+  painted.
+- Inside a hidden container `process_jobs` does not call `advance_animations`
+  at all, except for a widget that is exiting — so there is no `true` to turn
+  into a frame.
+
 ## Event Loop Wakeup Contract
 
 The main loop blocks in `calloop::EventLoop::dispatch` when idle. Anything
@@ -533,8 +551,8 @@ All widgets implement this trait:
 
 ```rust
 pub trait Widget {
-    /// Advance animations for this widget and children.
-    /// Returns true if any animations are still active.
+    /// Move this widget's animations on. `true` is another frame, `false`
+    /// is none; a frame is not a repaint.
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool { false }
 
     /// Reconcile dynamic children. Returns true if children changed.

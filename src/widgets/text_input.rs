@@ -21,7 +21,7 @@ use zeroize::Zeroizing;
 use crate::animation::IntoAnimated;
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
-use crate::jobs::{JobRequest, RequiredJob, request_animation_frame, request_job, request_job_at};
+use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::{has_focus_with_keyboard, offer_autofocus};
 use crate::reactive::{
@@ -1090,18 +1090,16 @@ impl<C: Content> TextInput<C> {
         overflow
     }
 
-    /// Advance the blink, and ask to be woken when it next changes.
+    /// Advance the blink. The wake for its next change is asked for by `paint`.
     ///
-    /// Returns whether the caret is drawn at all.
-    ///
-    /// The wake is *scheduled*, not animated. Asking for an animation frame —
-    /// which is what this did — pins the loop at 60 fps for a square wave that
-    /// changes twice a second, so 113 frames out of 114 repaint the same pixels.
-    /// A focused field is the normal state of a lock screen, and that ran all
-    /// night.
-    fn update_cursor_blink(&mut self, tree: &Tree, id: WidgetId) -> bool {
+    /// The wake is *scheduled*, not animated, so this answers nothing the loop
+    /// could take for a frame. Asking for an animation frame — which is what
+    /// this did — pins the loop at 60 fps for a square wave that changes twice
+    /// a second, so 113 frames out of 114 repaint the same pixels. A focused
+    /// field is the normal state of a lock screen, and that ran all night.
+    fn update_cursor_blink(&mut self, tree: &Tree, id: WidgetId) {
         if !self.cached_caret || !has_focus_with_keyboard(tree, id) {
-            return false;
+            return;
         }
         let now = tree.frame_instant();
         let period = Duration::from_millis(CURSOR_BLINK_MS);
@@ -1109,7 +1107,6 @@ impl<C: Content> TextInput<C> {
             self.cursor_visible = !self.cursor_visible;
             self.last_cursor_toggle = now;
         }
-        true
     }
 
     /// Reset cursor to visible (called on input)
@@ -1788,15 +1785,16 @@ impl<C: Content> TextInput<C> {
         }
     }
 
-    /// Move them on, and ask for the frame that carries them further.
+    /// Move them on, ask for the paint their new values need, and answer
+    /// whether they want the next frame.
     fn advance_input_anims(&mut self, tree: &Tree, id: WidgetId) -> bool {
         let Some(anims) = self.input_anims.as_deref_mut() else {
             return false;
         };
-        let moved = anims.advance(tree.frame_instant());
-        let running = anims.is_animating();
-        request_animation_frame(id, moved.then_some(RequiredJob::Paint), running);
-        running
+        if anims.advance(tree.frame_instant()) {
+            request_job(id, JobRequest::Paint);
+        }
+        anims.is_animating()
     }
 
     /// Colour of the caret, and how it moves.
@@ -1835,10 +1833,10 @@ impl<C: Content> Widget for TextInput<C> {
     }
 
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
-        let blinking = self.update_cursor_blink(tree, id);
+        self.update_cursor_blink(tree, id);
         let animating = self.advance_text_anims(tree, id);
         let furnishing = self.advance_input_anims(tree, id);
-        blinking || animating || furnishing
+        animating || furnishing
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
@@ -3202,14 +3200,18 @@ mod tests {
     #[test]
     fn advancing_a_blinking_caret_never_asks_for_a_frame() {
         // The division of labour: `advance_animations` applies the toggle, `paint`
-        // asks for the next wake. What neither may do is request an animation job,
-        // which means "advance me every frame" and is what pinned the loop at
-        // 60 fps to redraw the same pixels 113 frames out of 114.
+        // asks for the next wake. What neither may do is ask for an animation
+        // frame, which means "advance me every frame" and is what pinned the loop
+        // at 60 fps to redraw the same pixels 113 frames out of 114 — and
+        // answering `true` is asking for one, because the loop honours it.
         let (mut tree, id) = field(text_input(create_signal(String::new())), true);
 
-        let blinking = advance(&mut tree, id);
+        let wants_a_frame = advance(&mut tree, id);
 
-        assert!(blinking, "a focused caret is a blinking one");
+        assert!(
+            !wants_a_frame,
+            "a blink is due on a deadline, and `true` would be a frame every vsync"
+        );
         assert!(
             !queued_job_types(id).contains(&JobType::Animation),
             "queued: {:?}",
@@ -3221,9 +3223,9 @@ mod tests {
     fn a_field_without_a_caret_asks_for_nothing() {
         let (mut tree, id) = field(text_input(create_signal(String::new())).no_caret(), true);
 
-        let blinking = advance(&mut tree, id);
+        let wants_a_frame = advance(&mut tree, id);
 
-        assert!(!blinking);
+        assert!(!wants_a_frame);
         assert_eq!(
             next_deadline(),
             None,
@@ -3236,9 +3238,9 @@ mod tests {
     fn an_unfocused_field_asks_for_nothing() {
         let (mut tree, id) = field(text_input(create_signal(String::new())), false);
 
-        let blinking = advance(&mut tree, id);
+        let wants_a_frame = advance(&mut tree, id);
 
-        assert!(!blinking);
+        assert!(!wants_a_frame);
         assert_eq!(next_deadline(), None);
     }
 
@@ -3253,12 +3255,12 @@ mod tests {
         tree.set_event_instant(None);
         clear_pending_jobs();
 
-        let blinking = advance(&mut tree, id);
+        let wants_a_frame = advance(&mut tree, id);
         paint_once(&mut tree, id);
 
         assert!(has_focus(id), "the focus stayed");
-        assert!(!blinking, "but the caret does not blink");
-        assert_eq!(next_deadline(), None, "and asks for no wake");
+        assert!(!wants_a_frame, "but the caret asks for no frame");
+        assert_eq!(next_deadline(), None, "and for no wake");
     }
 
     /// The caret stands between the figures a feature drew, and the field is

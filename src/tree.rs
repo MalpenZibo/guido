@@ -2981,6 +2981,22 @@ impl Tree {
         }
     }
 
+    /// Ask for `id`'s [`advance_animations`](crate::widgets::Widget::advance_animations)
+    /// on the next frame.
+    ///
+    /// The first frame of a motion: from then on, what `advance_animations`
+    /// answers is whether the next one comes. A widget that retargets in
+    /// `layout` asks through [`LayoutCtx::request_animation_frame`]; this is
+    /// for everywhere else a widget holds the tree, such as `event`. Only a
+    /// wake — a frame is not a repaint, and what moved asks for its paint with
+    /// [`mark_needs_paint`](Self::mark_needs_paint).
+    pub fn request_animation_frame(&self, id: WidgetId) {
+        crate::jobs::request_job(
+            id,
+            crate::jobs::JobRequest::Animation(crate::jobs::RequiredJob::None),
+        );
+    }
+
     /// Clear the needs-paint flag for a widget.
     pub fn clear_needs_paint(&mut self, id: WidgetId) {
         if let Some(idx) = self.get_dense_index(id) {
@@ -3447,10 +3463,7 @@ impl Tree {
                 refresh_paint_reach(&*widget, tree, id)
             });
             self.mark_needs_paint(id);
-            crate::jobs::request_job(
-                id,
-                crate::jobs::JobRequest::Animation(crate::jobs::RequiredJob::None),
-            );
+            self.request_animation_frame(id);
         }
         if let Some((root, occupied)) = self.surface_relative_damage_and_root(id) {
             self.expand_damage_rect(root, occupied);
@@ -5927,6 +5940,14 @@ impl LayoutCtx<'_> {
     /// The tree, to read.
     pub fn tree_ref(&self) -> &Tree {
         self.tree
+    }
+
+    /// Ask for this widget's
+    /// [`advance_animations`](crate::widgets::Widget::advance_animations) on
+    /// the next frame — the first frame of a motion this layout has just
+    /// pointed somewhere. See [`Tree::request_animation_frame`].
+    pub fn request_animation_frame(&self) {
+        self.tree.request_animation_frame(self.id);
     }
 
     /// Say that what was just read would have answered the other pass
