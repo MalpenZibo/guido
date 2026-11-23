@@ -445,11 +445,13 @@ impl TextAnims {
         (wants, measured)
     }
 
-    /// Move both motions on, and say what the next frame wants.
+    /// Move both motions on, and say what their new values want: a paint, or a
+    /// layout where the size moved. Whether the next frame comes is
+    /// `is_animating`, which the loop is told.
     ///
     /// `None` where nothing moved: a transition inside its `delay_ms` is
     /// animating and has produced no new value, and asking for a paint there
-    /// would wake the loop every frame for a picture that has not changed.
+    /// would repaint every frame a picture that has not changed.
     pub(crate) fn advance(&mut self, now: FrameInstant) -> Option<RequiredJob> {
         let mut wants = None;
         if let Some(a) = self.color.as_mut()
@@ -576,8 +578,8 @@ macro_rules! declares_text_style {
                 measured
             }
 
-            /// Move the declared motions on, and ask for the frame that carries
-            /// them further.
+            /// Move the declared motions on, ask for the paint or layout their
+            /// new values need, and answer whether they want the next frame.
             fn advance_text_anims(
                 &mut self,
                 tree: &$crate::tree::Tree,
@@ -587,10 +589,14 @@ macro_rules! declares_text_style {
                 let Some(anims) = self.$anims.as_deref_mut() else {
                     return false;
                 };
-                let moved = anims.advance(now);
-                let running = anims.is_animating();
-                $crate::jobs::request_animation_frame(id, moved, running);
-                running
+                if let Some(moved) = anims.advance(now) {
+                    let follow_up = match moved {
+                        $crate::jobs::RequiredJob::Layout => $crate::jobs::JobRequest::Layout,
+                        _ => $crate::jobs::JobRequest::Paint,
+                    };
+                    $crate::jobs::request_job(id, follow_up);
+                }
+                anims.is_animating()
             }
 
             /// Whether a colour motion was declared — see

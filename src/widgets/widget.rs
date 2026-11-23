@@ -1146,9 +1146,17 @@ impl Placement {
 }
 
 pub trait Widget {
-    /// Advance animations for this widget and children.
-    /// Returns true if any animations are still active and need another frame.
-    /// Called once per frame before layout.
+    /// Move this widget's animations on to the frame's instant,
+    /// [`Tree::frame_instant`].
+    ///
+    /// Called once on a frame that asked for it, before layout. The
+    /// return value is the next frame: `true` calls this again on the next
+    /// one, `false` does not, until something asks again. Not inside a
+    /// hidden container — nothing there is on screen to move — unless the
+    /// widget [is exiting](Self::is_exiting).
+    ///
+    /// A frame is not a repaint. A widget whose value moved asks for its paint
+    /// with [`Tree::mark_needs_paint`].
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let _ = (tree, id);
         false

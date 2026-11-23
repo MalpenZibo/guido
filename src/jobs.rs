@@ -191,22 +191,6 @@ pub struct Job {
     pub job_type: JobType,
 }
 
-/// Ask for the frame an animation that has just advanced needs: the job its
-/// new value wants where it moved, and only to be woken where it is running
-/// but produced nothing — inside a delay, where a paint would wake the loop
-/// every frame for a picture that has not changed.
-pub(crate) fn request_animation_frame(
-    widget_id: WidgetId,
-    moved: Option<RequiredJob>,
-    running: bool,
-) {
-    if let Some(required) = moved {
-        request_job(widget_id, JobRequest::Animation(required));
-    } else if running {
-        request_job(widget_id, JobRequest::Animation(RequiredJob::None));
-    }
-}
-
 /// Request a job (handles animation follow-up jobs automatically).
 /// For animations, this inserts both the Animation job and any required follow-up job.
 pub fn request_job(widget_id: WidgetId, request: JobRequest) {
@@ -556,7 +540,10 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
             {
                 return;
             }
-            widget.advance_animations(tree, wid);
+            // What it answers is the next frame — see the trait method.
+            if widget.advance_animations(tree, wid) {
+                request_job(wid, JobRequest::Animation(RequiredJob::None));
+            }
         });
     }
     for id in reconcile {

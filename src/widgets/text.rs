@@ -413,8 +413,8 @@ impl Stateful for Text {
 crate::widgets::text_style::declares_text_style!(Text, style, anims);
 
 impl Widget for Text {
-    /// Move the declared motions on, and ask for the frame that carries them
-    /// further.
+    /// Move the declared motions on, ask for the paint or layout their new
+    /// values need, and answer whether they want the next frame.
     ///
     /// Where they are pointed is decided in `retarget_text_anims`, during
     /// layout, so there is no target to resolve here — only time to pass.
