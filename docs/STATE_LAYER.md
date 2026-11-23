@@ -332,8 +332,9 @@ quietly ignored, because [`Animated`] is deliberately not an [`IntoSignal`]:
 Every animatable property takes a motion the same way — `background`, `border`
 (each half separately), `outline` (each of its three), `corners`, `padding`,
 `shadow`, `width`, `height`,
-`translate`, `rotate` and `scale` on a container, and `color` and `font_size` on
-a `text` or a `text_input`.
+`translate`, `rotate` and `scale` on a container, `color` and `font_size` on
+a `text` or a `text_input`, and `cursor_color`, `selection_color` and
+`placeholder_color` on a `text_input`.
 
 [`Animated`]: ../src/animation/animated.rs
 [`IntoSignal`]: ../src/reactive/into_signal.rs
