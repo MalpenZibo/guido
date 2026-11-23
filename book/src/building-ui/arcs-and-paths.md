@@ -52,18 +52,19 @@ arc()
 A negative sweep runs anticlockwise. Progress 0 draws the track alone, even
 with round caps — not a dot.
 
-`progress` and `color` are animatable, like a container's background: give
-either a `.transition(..)` and it eases to every new value. That costs nothing
-per frame beyond the frame itself, because an arc is drawn exactly, as one
-shape, rather than cut into triangles — a ring easing for a second is a number
-changing sixty times, never a new shape to build.
+`progress`, `color` and `track` are animatable, like a container's background:
+give one a `.transition(..)` and it eases to every new value — give the track
+the same motion as the colour, and a new palette moves the two together. That
+costs nothing per frame beyond the frame itself, because an arc is drawn
+exactly, as one shape, rather than cut into triangles — a ring easing for a
+second is a number changing sixty times, never a new shape to build.
 
 | Property | Default | Reactive | Animatable |
 | --- | --- | --- | --- |
 | `size` | 24 | yes | |
 | `stroke` | 2 | yes | |
 | `color` | white | yes | yes |
-| `track` | none | yes | |
+| `track` | none | yes | yes |
 | `caps` | `Cap::Butt` | yes | |
 | `start` | 0 | yes | |
 | `sweep` | 360 | yes | |
