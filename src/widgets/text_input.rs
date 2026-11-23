@@ -18,9 +18,10 @@ use std::time::{Duration, Instant};
 use unicode_segmentation::{GraphemeCursor, UnicodeSegmentation};
 use zeroize::Zeroizing;
 
+use crate::animation::IntoAnimated;
 use crate::clock::{EventInstant, FrameInstant};
 use crate::default_font_family;
-use crate::jobs::{JobRequest, RequiredJob, request_job, request_job_at};
+use crate::jobs::{JobRequest, RequiredJob, request_animation_frame, request_job, request_job_at};
 use crate::layout::{Constraints, Size};
 use crate::reactive::focus::{has_focus_with_keyboard, offer_autofocus};
 use crate::reactive::{
@@ -31,6 +32,7 @@ use crate::renderer::{PaintContext, char_index_from_x_styled};
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 use crate::widget_ref::{WidgetRef, register_widget_ref};
 
+use super::container::{AnimationState, declare, get_animated_value};
 use super::control::Control;
 use super::font::{FontFamily, FontFeatures, FontStyle, FontWeight, LineHeight};
 use super::state_layer::{StateWhen, Stateful, state_is_active};
@@ -58,6 +60,65 @@ pub(crate) struct InputStyle {
     /// Colour of the placeholder. Defaults to the text colour at reduced
     /// alpha — a placeholder is the same text, quieter.
     pub(crate) placeholder_color: Prop<Color>,
+}
+
+/// Where a declared caret, band or placeholder colour keeps its motion.
+///
+/// Beside [`InputStyle`] rather than in it, as a text's motions are beside its
+/// style, and boxed and absent unless one of the three was declared with one.
+#[derive(Default)]
+struct InputAnims {
+    cursor_color: Option<AnimationState<Color>>,
+    selection_color: Option<AnimationState<Color>>,
+    placeholder_color: Option<AnimationState<Color>>,
+}
+
+impl InputAnims {
+    fn states(&mut self) -> [&mut Option<AnimationState<Color>>; 3] {
+        [
+            &mut self.cursor_color,
+            &mut self.selection_color,
+            &mut self.placeholder_color,
+        ]
+    }
+
+    /// Point each motion at the colour now declared, and say whether any is
+    /// still on its way.
+    ///
+    /// During layout, as the text colour's motion is retargeted: the declared
+    /// colour has to be read under tracking for a change to reach the motion,
+    /// and only a colour with one pays for that read — the rest are read at
+    /// paint.
+    fn retarget(&mut self, ctx: &mut LayoutCtx, declared: &InputStyle, now: FrameInstant) -> bool {
+        let props = [
+            declared.cursor_color,
+            declared.selection_color,
+            declared.placeholder_color,
+        ];
+        for (state, prop) in self.states().into_iter().zip(props) {
+            if let Some(a) = state.as_mut()
+                && let Some(color) = prop.get()
+            {
+                a.retarget(ctx, color, now);
+            }
+        }
+        self.is_animating()
+    }
+
+    /// Move each motion on, and say whether any produced a new colour.
+    fn advance(&mut self, now: FrameInstant) -> bool {
+        self.states()
+            .into_iter()
+            .flatten()
+            .fold(false, |moved, a| a.advance(now).is_changed() | moved)
+    }
+
+    fn is_animating(&mut self) -> bool {
+        self.states()
+            .into_iter()
+            .flatten()
+            .any(|a| a.is_animating())
+    }
 }
 
 /// Cursor blink interval in milliseconds
@@ -544,6 +605,9 @@ pub struct TextInput<C = Plain> {
     /// How the declared colour and size move, when declared with a motion.
     text_anims: Option<Box<crate::widgets::text_style::TextAnims>>,
     input_style: Option<Box<InputStyle>>,
+    /// How the declared caret, band and placeholder colours move, when
+    /// declared with a motion.
+    input_anims: Option<Box<InputAnims>>,
     /// Overrides that apply while this field's control is in a state, in
     /// declaration order.
     states: Vec<(StateWhen, TextStyle)>,
@@ -678,6 +742,7 @@ impl<C: Content> TextInput<C> {
             text_style: None,
             text_anims: None,
             input_style: None,
+            input_anims: None,
             states: Vec::new(),
         }
     }
@@ -990,6 +1055,7 @@ impl<C: Content> TextInput<C> {
         // `declares_text_style`.
         let new_font_size =
             self.retarget_text_anims(ctx, id, new_color.unwrap_or(Color::WHITE), new_font_size);
+        self.retarget_input_anims(ctx, id);
 
         // Check font properties - only set dirty flag if changed
         if (new_font_size - self.cached_font_size).abs() > f32::EPSILON {
@@ -1708,21 +1774,56 @@ impl<C: Content> TextInput<C> {
         self.input_style.get_or_insert_with(Box::default)
     }
 
-    /// Colour of the caret.
-    pub fn cursor_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().cursor_color = color.into_prop();
+    /// Point the declared caret, band and placeholder motions at what is now
+    /// declared, and ask for the frame that moves them.
+    fn retarget_input_anims(&mut self, ctx: &mut LayoutCtx, id: WidgetId) {
+        let (Some(anims), Some(declared)) =
+            (self.input_anims.as_deref_mut(), self.input_style.as_deref())
+        else {
+            return;
+        };
+        let now = ctx.tree_ref().frame_instant();
+        if anims.retarget(ctx, declared, now) {
+            request_job(id, JobRequest::Animation(RequiredJob::Paint));
+        }
+    }
+
+    /// Move them on, and ask for the frame that carries them further.
+    fn advance_input_anims(&mut self, tree: &Tree, id: WidgetId) -> bool {
+        let Some(anims) = self.input_anims.as_deref_mut() else {
+            return false;
+        };
+        let moved = anims.advance(tree.frame_instant());
+        let running = anims.is_animating();
+        request_animation_frame(id, moved.then_some(RequiredJob::Paint), running);
+        running
+    }
+
+    /// Colour of the caret, and how it moves.
+    pub fn cursor_color<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
+        self.input_style_mut().cursor_color =
+            declare(&mut self.input_anims, color, |a: &mut InputAnims| {
+                &mut a.cursor_color
+            });
         self
     }
 
-    /// Colour of the selection band behind the selected glyphs.
-    pub fn selection_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().selection_color = color.into_prop();
+    /// Colour of the selection band behind the selected glyphs, and how it
+    /// moves.
+    pub fn selection_color<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
+        self.input_style_mut().selection_color =
+            declare(&mut self.input_anims, color, |a: &mut InputAnims| {
+                &mut a.selection_color
+            });
         self
     }
 
-    /// Colour of the placeholder.
-    pub fn placeholder_color<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.input_style_mut().placeholder_color = color.into_prop();
+    /// Colour of the placeholder, and how it moves.
+    pub fn placeholder_color<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
+        self.input_style_mut().placeholder_color =
+            declare(&mut self.input_anims, color, |a: &mut InputAnims| {
+                &mut a.placeholder_color
+            });
         self
     }
 }
@@ -1736,7 +1837,8 @@ impl<C: Content> Widget for TextInput<C> {
     fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
         let blinking = self.update_cursor_blink(tree, id);
         let animating = self.advance_text_anims(tree, id);
-        blinking || animating
+        let furnishing = self.advance_input_anims(tree, id);
+        blinking || animating || furnishing
     }
 
     fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
@@ -1812,7 +1914,8 @@ impl<C: Content> Widget for TextInput<C> {
         let (text_color, selection_color, cursor_color, stroke, shadow, placeholder) = {
             let style = self.resolved_text_style(tree, id);
             let input = self.resolved_input_style();
-            let text_color = crate::widgets::container::get_animated_value(
+            let anims = self.input_anims.as_deref();
+            let text_color = get_animated_value(
                 self.text_anims.as_ref().and_then(|a| a.color.as_ref()),
                 || style.color(id),
             );
@@ -1827,22 +1930,25 @@ impl<C: Content> Widget for TextInput<C> {
                 .then(|| self.placeholder.get())
                 .flatten()
                 .map(|placeholder| {
-                    let color = input.placeholder_color.get_or(Color::rgba(
-                        text_color.r,
-                        text_color.g,
-                        text_color.b,
-                        text_color.a * PLACEHOLDER_ALPHA,
-                    ));
+                    let quieter = text_color.with_alpha(text_color.a * PLACEHOLDER_ALPHA);
+                    let color = get_animated_value(
+                        anims.and_then(|a| a.placeholder_color.as_ref()),
+                        || input.placeholder_color.get_or(quieter),
+                    );
                     (placeholder, color)
                 });
             (
                 text_color,
-                input
-                    .selection_color
-                    .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4)),
+                get_animated_value(anims.and_then(|a| a.selection_color.as_ref()), || {
+                    input
+                        .selection_color
+                        .get_or(Color::rgba(0.4, 0.6, 1.0, 0.4))
+                }),
                 // The caret defaults to the text colour: an input that
                 // only sets `text_color` should not sprout a blue cursor.
-                input.cursor_color.get_or(text_color),
+                get_animated_value(anims.and_then(|a| a.cursor_color.as_ref()), || {
+                    input.cursor_color.get_or(text_color)
+                }),
                 style.stroke(),
                 style.shadow(),
                 placeholder,
@@ -2314,12 +2420,21 @@ mod tests {
         });
     }
 
-    /// The colour and size the field drew its glyphs at, on a frame at a named
-    /// instant.
+    /// A frame at a named instant: laid out from `id`, then painted.
     ///
     /// Named because an eased value is a function of how long it has been
     /// running, and a test that let the clock decide would assert on whatever
     /// the machine managed between two calls.
+    fn painted_at(tree: &mut Tree, id: WidgetId, at: Instant) -> crate::renderer::RenderNode {
+        tree.set_frame_instant(Some(at));
+        relayout(tree, id);
+        let node = paint_once(tree, id);
+        tree.set_frame_instant(None);
+        node
+    }
+
+    /// The colour and size the field drew its glyphs at, on a frame at a named
+    /// instant.
     fn drawn_text(tree: &mut Tree, id: WidgetId, at: std::time::Instant) -> Option<(Color, f32)> {
         fn find(node: &crate::renderer::RenderNode) -> Option<(Color, f32)> {
             for cmd in &node.commands {
@@ -2332,11 +2447,7 @@ mod tests {
             }
             node.children.iter().find_map(|child| find(child))
         }
-        tree.set_frame_instant(Some(at));
-        relayout(tree, id);
-        let node = paint_once(tree, id);
-        tree.set_frame_instant(None);
-        find(&node)
+        find(&painted_at(tree, id, at))
     }
 
     /// Every rectangle the field draws. Focused with no selection, the caret is
@@ -2727,6 +2838,104 @@ mod tests {
             midway.r > 0.01 && midway.r < 0.99,
             "an input's declared colour has to ease like a text's, got {midway:?}"
         );
+    }
+
+    /// The colour a field painted its furniture in, a quarter of the way into
+    /// a 400 ms move from black to white that `declare` gave a motion to.
+    ///
+    /// Every frame is at a named instant, and the keys that place the caret
+    /// are pressed at the first of them, which restarts the blink there. The
+    /// caret is on screen for the whole run, so what `pick` reads is its
+    /// colour and never whether it happened to be drawn.
+    fn painted_partway(
+        declare: impl FnOnce(TextInput, RwSignal<Color>) -> TextInput,
+        value: &str,
+        select_all: bool,
+        pick: fn(rects: &[Color], texts: &[Color]) -> Option<Color>,
+    ) -> Option<Color> {
+        fn collect(
+            node: &crate::renderer::RenderNode,
+            rects: &mut Vec<Color>,
+            texts: &mut Vec<Color>,
+        ) {
+            for cmd in &node.commands {
+                match &**cmd {
+                    crate::renderer::DrawCommand::RoundedRect { color, .. } => rects.push(*color),
+                    crate::renderer::DrawCommand::Text { color, .. } => texts.push(*color),
+                    _ => {}
+                }
+            }
+            for child in &node.children {
+                collect(child, rects, texts);
+            }
+        }
+        let frame = |tree: &mut Tree, root: WidgetId, at: Instant| {
+            let (mut rects, mut texts) = (Vec::new(), Vec::new());
+            collect(&painted_at(tree, root, at), &mut rects, &mut texts);
+            pick(&rects, &texts)
+        };
+
+        let hue = create_signal(Color::rgb(0.0, 0.0, 0.0));
+        let (mut tree, root, id) =
+            field_in_container(declare(text_input(create_signal(value.to_owned())), hue));
+
+        let t0 = Instant::now();
+        tree.set_event_instant(Some(t0));
+        caret_to_end(&mut tree, id);
+        if select_all {
+            key(&mut tree, id, Key::Home, true);
+        }
+        tree.set_event_instant(None);
+        frame(&mut tree, root, t0);
+
+        hue.set(Color::rgb(1.0, 1.0, 1.0));
+        frame(&mut tree, root, t0 + Duration::from_millis(1));
+        frame(&mut tree, root, t0 + Duration::from_millis(100))
+    }
+
+    /// The caret, the band and the placeholder ease as the glyphs do: a
+    /// palette that changes moves all four together, rather than three of them
+    /// jumping while the text is on its way (#952).
+    #[test]
+    fn a_fields_furniture_eases_into_a_new_colour_as_its_text_does() {
+        use crate::animation::Animate;
+
+        let caret = painted_partway(
+            |field, hue| field.cursor_color((move || hue.get()).transition(400.0)),
+            "abc",
+            false,
+            // Focused with no selection, the caret is the one rectangle.
+            |rects, _| rects.last().copied(),
+        );
+        let band = painted_partway(
+            |field, hue| field.selection_color((move || hue.get()).transition(400.0)),
+            "abc",
+            true,
+            // The band is drawn first, under the glyphs and the caret.
+            |rects, _| rects.first().copied(),
+        );
+        let placeholder = painted_partway(
+            |field, hue| {
+                field
+                    .placeholder("Search")
+                    .placeholder_color((move || hue.get()).transition(400.0))
+            },
+            "",
+            false,
+            |_, texts| texts.first().copied(),
+        );
+
+        for (what, painted) in [
+            ("caret", caret),
+            ("selection band", band),
+            ("placeholder", placeholder),
+        ] {
+            assert!(
+                painted.is_some_and(|c| c.r > 0.01 && c.r < 0.99),
+                "the {what} jumped rather than eased: painted {painted:?} a quarter of \
+                 the way into its transition"
+            );
+        }
     }
 
     /// A field's own font size is resolved by its own `refresh`, so the door
