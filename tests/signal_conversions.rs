@@ -44,6 +44,27 @@ fn a_signal_of_a_value_reaches_an_optional_property() {
     let _ = container().gradient(g);
 }
 
+/// A gradient takes a motion in every form it takes a value — a bare one, an
+/// optional one, a signal, a closure — and still takes all of them plainly,
+/// `None` included.
+#[test]
+fn a_gradient_takes_a_motion_in_every_form_it_takes_a_value() {
+    let g = LinearGradient::horizontal(Color::RED, Color::BLUE);
+    let s = create_signal(g);
+    let on = create_signal(true);
+    let _ = container()
+        .gradient(g)
+        .gradient(Some(g))
+        .gradient(None)
+        .gradient(s)
+        .gradient(move || on.get().then_some(g));
+    let _ = container()
+        .gradient(g.transition(200.0))
+        .gradient(Some(g).transition(200.0))
+        .gradient(s.transition(200.0))
+        .gradient((move || on.get().then_some(g)).transition(200.0));
+}
+
 /// A memo is the fourth form `IntoSignal` accepts, and it converts too.
 #[test]
 fn a_memo_reaches_a_property_it_can_convert_into() {

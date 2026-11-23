@@ -84,8 +84,8 @@ impl Container {
     /// all while an exact background replaces it.
     ///
     /// [`effective_background_target`]: Self::effective_background_target
-    pub(super) fn effective_gradient(&self, id: WidgetId) -> Option<LinearGradient> {
-        let base = self.gradient_prop().get().flatten()?;
+    pub(super) fn effective_gradient_target(&self, id: WidgetId) -> Option<LinearGradient> {
+        let base = self.gradient_prop().get_finite_or(None, id, "gradient")?;
         self.resolve_state_value(id, Some(base), |state| {
             if let Some(BackgroundOverride::Exact(_)) = state.background {
                 // Passed over, as the solid fill passes it over, when the colour
@@ -583,6 +583,12 @@ impl Container {
         })
     }
 
+    pub(super) fn animated_gradient(&self, id: WidgetId) -> Option<LinearGradient> {
+        get_animated_value(self.anims.as_ref().and_then(|a| a.gradient()), || {
+            self.effective_gradient_target(id)
+        })
+    }
+
     pub(super) fn animated_corners(&self, id: WidgetId) -> crate::widgets::Corners {
         get_animated_value(self.anims.as_ref().and_then(|a| a.corners()), || {
             self.effective_corners_target(id)
@@ -1062,7 +1068,7 @@ impl Container {
         // dearest to resolve.
         self.animated_background(id).a > 0.0
             || self
-                .effective_gradient(id)
+                .animated_gradient(id)
                 .is_some_and(|g| gradient_shows(&g))
             || border_shows(self.box_border_width(id), self.animated_border_color(id))
             || self
