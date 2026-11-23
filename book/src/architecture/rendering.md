@@ -269,14 +269,16 @@ drawn as a texture and cut in the shader instead.
 ## Animation Advancement
 
 Animations advance during per-surface job processing, before layout and paint,
-so the frame being built always renders with up-to-date animation values. Each
-advance pushes a continuation job (`Animation` plus a `Paint` or `Layout`
-follow-up when the value changed), which schedules the next advancement.
+so the frame being built always renders with up-to-date animation values. A
+widget that is still moving answers `true` from `advance_animations`, and the
+loop queues its next `Animation` job; a value that changed asks for the `Paint`
+or `Layout` that shows it.
 
-Continuation jobs are throttled by the frame-pacing gate: while the compositor
-hasn't shown the previous frame, they stay queued, so animations step once per
-displayed frame instead of once per loop iteration. Widgets like TextInput use
-this mechanism to drive cursor blinking.
+Those continuation jobs are throttled by the frame-pacing gate: while the
+compositor hasn't shown the previous frame, they stay queued, so animations
+step once per displayed frame instead of once per loop iteration. A caret's
+blink is not an animation: it is a job scheduled for a deadline, and asks for
+no frame between toggles.
 
 ## Performance Notes
 

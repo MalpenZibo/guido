@@ -363,9 +363,8 @@ The jobs system connects reactive signals to widget invalidation.
 **Animation frames:**
 - An Animation job calls the widget's `advance_animations`, and what it
   returns is the next frame: on `true` the loop queues another Animation job,
-  on `false` nothing. `Arc`, `Image`, `Text` and `TextInput` ask for no
-  continuation of their own; `Container`'s animation sources still queue
-  theirs where they advance, which the loop's request meets in the dedup.
+  on `false` nothing. No widget asks for its own continuation: where a value
+  moved, it asks only for the `Paint` or `Layout` that shows it.
 - The *first* frame is asked for by whoever starts the motion — inside the
   crate with `request_job`, from outside it with
   `LayoutCtx::request_animation_frame` or `Tree::request_animation_frame`,
