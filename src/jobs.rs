@@ -542,7 +542,7 @@ pub fn process_jobs(jobs: &[Job], tree: &mut Tree, layout_roots: &mut Vec<Widget
             }
             // What it answers is the next frame — see the trait method.
             if widget.advance_animations(tree, wid) {
-                request_job(wid, JobRequest::Animation(RequiredJob::None));
+                tree.request_animation_frame(wid);
             }
         });
     }

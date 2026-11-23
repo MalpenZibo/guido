@@ -10,15 +10,123 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use guido::prelude::*;
 use guido::testing::Headless;
 use guido::widget_prelude::*;
+use guido::widgets::container::AnimationState;
 
 fn fixed_bar() -> SurfaceConfig {
     SurfaceConfig::new()
         .height(50)
         .anchor(Anchor::TOP | Anchor::LEFT | Anchor::RIGHT)
+}
+
+/// A frame's worth of time after `t0`, `i` times over.
+fn frame(t0: Instant, i: u64) -> Instant {
+    t0 + Duration::from_millis(16 * i)
+}
+
+/// A square painted in a colour that eases to whatever its signal says.
+///
+/// Everything here is public: the motion is an `AnimationState`, pointed at
+/// its target in `layout`, moved on in `advance_animations`, and read in
+/// `paint`.
+struct Swatch {
+    color: Signal<Color>,
+    motion: AnimationState<Color>,
+    /// How many times the loop has asked it to advance.
+    advanced: Rc<Cell<u32>>,
+}
+
+impl Widget for Swatch {
+    fn layout(&mut self, ctx: &mut LayoutCtx, constraints: Constraints) -> Size {
+        let target = self.color.get();
+        if self.motion.is_initial() {
+            self.motion.set_immediate(ctx, target);
+        } else {
+            let now = ctx.tree_ref().frame_instant();
+            self.motion.animate_to(target, now);
+            if self.motion.is_animating() {
+                ctx.request_animation_frame();
+            }
+        }
+        constraints.constrain(Size::new(20.0, 20.0))
+    }
+
+    fn advance_animations(&mut self, tree: &mut Tree, id: WidgetId) -> bool {
+        self.advanced.set(self.advanced.get() + 1);
+        // A frame is not a repaint: the value moved, so the widget says so.
+        if self.motion.advance(tree.frame_instant()).is_changed() {
+            tree.mark_needs_paint(id);
+        }
+        self.motion.is_animating()
+    }
+
+    fn paint(&self, ctx: &mut PaintContext) {
+        ctx.draw_rounded_rect(
+            Rect::new(0.0, 0.0, 20.0, 20.0),
+            self.motion.displayed(),
+            0.0,
+        );
+    }
+}
+
+/// The acceptance criterion of #956, in the order it is written.
+#[test]
+fn a_colour_a_custom_widget_retargets_in_layout_eases_there_and_stops() {
+    let Some(mut app) = Headless::new_or_skip() else {
+        return;
+    };
+    let color = create_signal(Color::rgb(1.0, 0.0, 0.0));
+    let advanced = Rc::new(Cell::new(0));
+    let counted = advanced.clone();
+    let surface = app.surface(fixed_bar(), move || {
+        container().child(Swatch {
+            color: color.into(),
+            motion: AnimationState::new(
+                Color::TRANSPARENT,
+                Transition::new(160.0, TimingFunction::Linear),
+            ),
+            advanced: counted.clone(),
+        })
+    });
+    app.configure(surface, 200, 50, 1.0);
+    let t0 = Instant::now();
+    app.step_at(frame(t0, 0));
+    app.step_at(frame(t0, 1));
+    assert_eq!(app.read_pixel(surface, 10, 10), [255, 0, 0, 255], "at rest");
+    assert_eq!(advanced.get(), 0, "nothing moving, nothing advanced");
+
+    color.set(Color::rgb(0.0, 0.0, 1.0));
+    // The retarget, and the frames it asks for.
+    for i in 2..7 {
+        app.step_at(frame(t0, i));
+    }
+    let [r, g, b, a] = app.read_pixel(surface, 10, 10);
+    assert!(
+        r > 0 && r < 255 && b > 0 && b < 255 && g == 0 && a == 255,
+        "mid-way, between the two: {:?}",
+        [r, g, b, a]
+    );
+
+    for i in 7..20 {
+        app.step_at(frame(t0, i));
+    }
+    assert_eq!(
+        app.read_pixel(surface, 10, 10),
+        [0, 0, 255, 255],
+        "and it arrives"
+    );
+
+    let settled = advanced.get();
+    assert!(settled > 1, "eased over several frames, not one");
+    assert_eq!(app.next_wait(), None, "stopped, it asks for nothing more");
+    for i in 20..30 {
+        app.step_at(frame(t0, i));
+    }
+    assert_eq!(advanced.get(), settled, "and is not advanced again");
 }
 
 /// Advanced while it says it needs to be, for as many frames as it says.
