@@ -339,6 +339,25 @@ text("saving…").color(
 installed face, and a stroke and a shadow are records with nothing to
 interpolate, so those four take values only.
 
+A `text_input` draws three colours of its own besides its glyphs, and each
+takes a motion as `color` does — so a palette that changes moves the caret,
+the selection band and the placeholder with the text rather than ahead of it:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let value = create_signal(String::new());
+# let accent = create_signal(Color::rgb(0.4, 0.8, 1.0));
+text_input(value)
+    .color(Color::WHITE.transition(300.0))
+    .cursor_color((move || accent.get()).transition(300.0))
+    .selection_color((move || accent.get().with_alpha(0.4)).transition(300.0))
+    .placeholder_color((move || accent.get().with_alpha(0.5)).transition(300.0))
+# ;
+# }
+```
+
 Both take a `timeline` as readily as a `transition` — a label that flashes on an
 alert, a size that bounces once when a value changes:
 
@@ -440,6 +459,7 @@ container()
 | Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
 | Font size | `font_size(..)` on a `text` or `text_input` | Duration |
+| Caret, selection, placeholder colour | `cursor_color(..)`, `selection_color(..)`, `placeholder_color(..)` on a `text_input` | Duration, EaseOut |
 | Arc progress, colour, track | `progress(..)`, `color(..)`, `track(..)` on an `arc` | Duration, EaseOut |
 
 ## Best Practices

@@ -496,7 +496,9 @@ each alone to say so.
 
 `cursor_color`, `selection_color` and
 `placeholder_color` are `TextInput`'s own methods and nothing else's, because
-it is the only widget that draws a caret, a band or a placeholder.
+it is the only widget that draws a caret, a band or a placeholder. Each takes a
+motion as `color` does, kept in `InputAnims` beside `InputStyle` as `TextAnims`
+is kept beside `TextStyle`, so a palette that eases moves all four together.
 
 ### The same style, many times: write a function
 

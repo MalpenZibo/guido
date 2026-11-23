@@ -59,6 +59,11 @@ text_input(value).selection_color(Color::rgba(0.4, 0.6, 1.0, 0.4))
 # }
 ```
 
+The caret, the selection band and the placeholder each take a motion as the
+text colour does — `cursor_color(accent.transition(200.0))` — so a palette
+that changes eases them with the glyphs. See
+[Animatable Properties](../animations/properties.md#text-colour-and-size).
+
 ### Font Size
 
 ```rust
