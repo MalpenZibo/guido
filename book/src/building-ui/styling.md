@@ -36,6 +36,9 @@ container().gradient(LinearGradient::diagonal(Color::RED, Color::BLUE))
 The stops blend as [colours mix](colors.md#mixing), so a gradient from
 `Color::TRANSPARENT` to red is red fading out, not a red darkening through grey.
 
+A gradient eases into a new one as a background does — see
+[Animatable Properties](../animations/properties.md#gradient).
+
 ## Corners
 
 ### Basic Radius

@@ -218,7 +218,7 @@ container()
 # }
 ```
 
-It cannot be animated. A container transitions `background`, `border_color`,
+It cannot be animated. A container transitions `background`, `gradient`, `border_color`,
 `border_width`, `corners`, `shadow`, `width`, `height`, `padding`,
 `translate`, `rotate` and `scale`; text colour is not among them, so the
 override lands in one frame.

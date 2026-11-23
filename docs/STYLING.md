@@ -57,6 +57,11 @@ The stops are mixed with alpha premultiplied, as `Color::mix` mixes two
 colours and as CSS mixes a gradient's stops: a stop at `Color::TRANSPARENT`
 fades the other one out in its own colour.
 
+A gradient takes a motion as a background does. Two gradients that point the
+same way ease stop by stop, each colour mixed as above; one that turns, appears
+from `None` or goes to it steps halfway through the transition, as an inset
+shadow does, because there is nothing in between to draw.
+
 ## Borders
 
 ### Basic Border

@@ -49,8 +49,8 @@ asking why the cache is not good enough, and saying so where it is read.
 
 An animatable property takes `impl IntoAnimated<T, M>` instead, which is
 everything `IntoSignal` accepts plus a value carrying its own motion:
-`background`, `corners`, `padding`, `border` (each half), `outline` (each of
-its three), `shadow`, `width`,
+`background`, `gradient`, `corners`, `padding`, `border` (each half), `outline`
+(each of its three), `shadow`, `width`,
 `height`, `translate`, `rotate`, `scale`, `opacity`, `blur` — and beyond `Container`,
 `Text`'s `color` and `font_size`, `Image`'s `tint`, and `Arc`'s `color`, `track` and `progress`. The others keep plain `IntoSignal`,
 and so does every setter on `StateStyle` — a state layer supplies a value for a
