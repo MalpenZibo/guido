@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::renderer::{Shadow, Shadows};
 use crate::transform::{Scale, Translate};
-use crate::widgets::{Color, Padding};
+use crate::widgets::{Color, LinearGradient, Padding};
 
 /// The channels of one animatable value. `Shadow` is eight — two offsets, a
 /// blur, a spread and four colour components — and it is what sets the inline
@@ -190,6 +190,33 @@ impl Animatable for Shadows {
     /// `carry_velocity` reads as zero — as `lerp` pads it.
     fn channels(&self) -> Channels {
         self.as_slice().iter().flat_map(Shadow::channels).collect()
+    }
+}
+
+impl Animatable for Option<LinearGradient> {
+    /// Both stops' colours, continuously, while the two ends share a
+    /// direction — Flutter's `LinearGradient.lerp` interpolates its stops the
+    /// same way. A gradient that turns, appears or goes has no shape between
+    /// the two ends, and steps halfway, as an inset shadow does.
+    fn lerp(from: &Self, to: &Self, t: f32) -> Self {
+        match (from, to) {
+            (Some(a), Some(b)) if a.direction == b.direction => Some(LinearGradient {
+                start_color: Color::lerp(&a.start_color, &b.start_color, t),
+                end_color: Color::lerp(&a.end_color, &b.end_color, t),
+                direction: a.direction,
+            }),
+            _ if t < 0.5 => *from,
+            _ => *to,
+        }
+    }
+
+    /// The two stops', one colour's after the other. No gradient has none,
+    /// which `carry_velocity` reads as zero.
+    fn channels(&self) -> Channels {
+        self.iter()
+            .flat_map(|g| [g.start_color, g.end_color])
+            .flat_map(|c| c.channels())
+            .collect()
     }
 }
 
@@ -448,6 +475,55 @@ mod tests {
             &Color::TRANSPARENT,
         );
         assert!((carried + 4.0).abs() < 1e-5, "got {carried}");
+    }
+
+    /// Two gradients that point the same way meet stop by stop, each colour
+    /// mixed as a colour transition mixes it.
+    #[test]
+    fn a_gradient_eases_both_of_its_stops() {
+        let from = Some(LinearGradient::horizontal(Color::BLACK, Color::RED));
+        let to = Some(LinearGradient::horizontal(Color::WHITE, Color::BLUE));
+        let mid = Option::<LinearGradient>::lerp(&from, &to, 0.5).unwrap();
+        assert_eq!(
+            mid.start_color,
+            Color::lerp(&Color::BLACK, &Color::WHITE, 0.5)
+        );
+        assert_eq!(mid.end_color, Color::lerp(&Color::RED, &Color::BLUE, 0.5));
+        assert_eq!(mid.direction, crate::widgets::GradientDirection::Horizontal);
+        assert_eq!(Option::<LinearGradient>::lerp(&from, &to, 0.0), from);
+        assert_eq!(Option::<LinearGradient>::lerp(&from, &to, 1.0), to);
+    }
+
+    /// A gradient that turns, appears or goes is not interpolated: it is one
+    /// end until halfway and the other after it.
+    #[test]
+    fn a_gradient_that_turns_appears_or_goes_steps_halfway() {
+        let across = Some(LinearGradient::horizontal(Color::BLACK, Color::RED));
+        let down = Some(LinearGradient::vertical(Color::WHITE, Color::BLUE));
+        for (from, to) in [(across, down), (None, across), (across, None)] {
+            for t in [0.0, 0.25, 0.49] {
+                assert_eq!(
+                    Option::<LinearGradient>::lerp(&from, &to, t),
+                    from,
+                    "at {t}"
+                );
+            }
+            for t in [0.5, 0.75, 1.0, 1.2] {
+                assert_eq!(Option::<LinearGradient>::lerp(&from, &to, t), to, "at {t}");
+            }
+        }
+    }
+
+    /// A gradient's channels are its two stops, so momentum carries across a
+    /// retarget as it does for a colour — and no gradient is no channels.
+    #[test]
+    fn a_gradient_is_the_channels_of_its_two_stops() {
+        let g = Some(LinearGradient::horizontal(Color::RED, Color::BLUE));
+        let mut expected = Color::RED.channels();
+        expected.extend_from_slice(&Color::BLUE.channels());
+        assert_eq!(g.channels(), expected);
+        assert!(g.channels().len() <= Channels::new().inline_size());
+        assert!(None::<LinearGradient>.channels().is_empty());
     }
 
     #[test]

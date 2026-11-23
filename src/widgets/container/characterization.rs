@@ -2639,7 +2639,7 @@ fn declaring_no_motion_allocates_no_animation_box() {
     );
 }
 
-/// A container pays for the animations it declared, not for the sixteen it
+/// A container pays for the animations it declared, not for the seventeen it
 /// could have.
 ///
 /// The struct of eleven `Option<AnimationState<T>>`s this replaced measured
@@ -2670,7 +2670,7 @@ fn a_container_carries_one_slot_per_declared_animation() {
     assert!(
         std::mem::size_of::<ContainerAnims>()
             <= 2 * std::mem::size_of::<AnimSlot>() + 2 * std::mem::size_of::<usize>(),
-        "the store is sized by what a container declares, not by the sixteen \
+        "the store is sized by what a container declares, not by the seventeen \
          properties it could declare: {} bytes",
         std::mem::size_of::<ContainerAnims>()
     );
@@ -3944,6 +3944,51 @@ fn hovering_a_gradient_lightens_both_of_its_ends() {
 
     h.send(Event::mouse_move(300.0, 10.0));
     assert_eq!(gradient_ends(&h.paint()), Some((Color::RED, Color::BLUE)));
+}
+
+/// And with a motion declared, the hover eases both ends there rather than
+/// jumping: the state layer supplies the value, the gradient the timing.
+#[test]
+fn a_hover_eases_a_gradient_that_declared_a_transition() {
+    let mut h = H::new(
+        container()
+            .width(50.0)
+            .height(20.0)
+            .gradient(
+                LinearGradient::horizontal(Color::WHITE, Color::BLUE)
+                    .transition(Transition::new(100.0, TimingFunction::Linear)),
+            )
+            .when_hovered(|s| s.darker(0.5)),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 500.0, 500.0);
+    assert_eq!(gradient_ends(&h.paint()), Some((Color::WHITE, Color::BLUE)));
+
+    set_hover(&mut h, true);
+    frame_at(&mut h, t0, 500.0, 500.0);
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(50),
+        500.0,
+        500.0,
+    );
+    let (start, end) = gradient_ends(&h.paint()).unwrap();
+    let (white, blue) = (Color::WHITE.darker(0.25), Color::BLUE.darker(0.25));
+    assert!(
+        (start.r - white.r).abs() < 0.01 && (end.b - blue.b).abs() < 0.01,
+        "halfway through, both stops are halfway darker: got {start:?} and {end:?}"
+    );
+
+    frame_at(
+        &mut h,
+        t0 + std::time::Duration::from_millis(100),
+        500.0,
+        500.0,
+    );
+    assert_eq!(
+        gradient_ends(&h.paint()),
+        Some((Color::WHITE.darker(0.5), Color::BLUE.darker(0.5)))
+    );
 }
 
 /// An exact background is a fill of its own, so while it is active it replaces
@@ -7822,6 +7867,10 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
             .pivot(Pivot::percent(nan, 50.0))
             .background(Color::rgba(nan, 0.0, 0.0, 1.0))
             .shadow(Shadow::new((nan, nan), nan, nan, Color::BLACK))
+            .gradient(LinearGradient::horizontal(
+                Color::rgba(nan, 0.0, 0.0, 1.0),
+                Color::BLUE,
+            ))
     };
 
     // One copy in a tree, so the accessors have a laid-out widget to answer
@@ -7854,6 +7903,10 @@ fn every_declared_property_is_resolved_to_a_finite_value() {
             c.effective_corners_target(id).channels().to_vec(),
         );
         finite("shadow", c.effective_shadow_target(id).channels().to_vec());
+        finite(
+            "gradient",
+            c.effective_gradient_target(id).channels().to_vec(),
+        );
         finite(
             "padding",
             c.effective_padding_target(id).channels().to_vec(),
@@ -8179,9 +8232,9 @@ macro_rules! emit_property_tests {
                 /// allocated, so a constant that reaches `alloc_slot` shows up
                 /// whether or not it is later disposed.
                 ///
-                /// Over the table rather than once, because the sixteen
+                /// Over the table rather than once, because the seventeen
                 /// properties do not share a setter — `width` and `height` go
-                /// through `declare_size` and the other fourteen through
+                /// through `declare_size` and the other fifteen through
                 /// `declare_anim`, and a constant that stays free in one is no
                 /// evidence about the other.
                 #[test]
@@ -8273,7 +8326,7 @@ crate::widgets::container::animated_properties::animated_properties!(emit_proper
 
 /// Seven constant properties on a container cost what the bare container costs.
 ///
-/// The per-property test above asks one question of each of the sixteen; this
+/// The per-property test above asks one question of each of the seventeen; this
 /// asks the question #450 was opened about, which is what a *row of a list*
 /// costs. Six is the number the ablation in that issue measured — 194 MB
 /// against 149 MB at twenty thousand rows, and the 45 MB between them was

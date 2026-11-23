@@ -24,6 +24,28 @@ Every animated colour — a background, a border, an outline, a shadow, a text
 colour — moves as [colours mix](../building-ui/colors.md#mixing), so a fade from
 `Color::TRANSPARENT` comes in in the colour it is fading to, not through grey.
 
+## Gradient
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+# let accent = create_signal(Color::rgb(0.4, 0.6, 1.0));
+container().gradient(
+    (move || LinearGradient::diagonal(accent.get(), accent.get().darker(0.3)))
+        .transition(300.0),
+)
+# ;
+# }
+```
+
+Two gradients that point the same way meet stop by stop, each colour mixed as a
+background's is — so a gradient worked out from a palette moves with the rest
+of it. One that turns to another direction, appears from `None` or goes to it
+has nothing in between to draw, and steps halfway through the transition, as an
+inset shadow does. A state layer's `lighter`, `darker` and `background_alpha`
+reach both stops and ease with them.
+
 ## Border
 
 A border is declared as a pair, and each half carries its own timing. Its width

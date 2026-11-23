@@ -1,4 +1,4 @@
-//! The sixteen animated properties of `Container`, declared in one table.
+//! The seventeen animated properties of `Container`, declared in one table.
 //!
 //! An animated property used to be written out by name in nine places that
 //! nothing kept in step — the field, the seed, the target, the drift check,
@@ -30,7 +30,7 @@
 //! forget.
 
 use super::animations::AnimationState;
-use super::{Color, Padding, Scale, Shadows, Translate};
+use super::{Color, LinearGradient, Padding, Scale, Shadows, Translate};
 use crate::clock::FrameInstant;
 use crate::jobs::{JobRequest, JobType, RequiredJob, request_job};
 use crate::reactive::with_signal_tracking;
@@ -118,6 +118,15 @@ macro_rules! animated_properties {
                     value: |k| Color::rgb(k, 0.0, 0.0),
                     declared_as: |v| container().width(200.0).height(100.0).background(v),
                     probe: |h: &mut H| rects(&h.paint())[0].1.r,
+                    from: 0.0, to: 1.0, then: 0.5, base: 0.0,
+                };
+            gradient: Option<LinearGradient> as Option<LinearGradient>,
+                target: effective_gradient_target, layout: no,
+                timeline: yes, state: yes,
+                test {
+                    value: |k| Some(LinearGradient::horizontal(Color::rgb(k, 0.0, 0.0), Color::BLUE)),
+                    declared_as: |v| container().width(200.0).height(100.0).gradient(v),
+                    probe: |h: &mut H| gradient_ends(&h.paint()).unwrap().0.r,
                     from: 0.0, to: 1.0, then: 0.5, base: 0.0,
                 };
             corners: Corners as Corners, target: effective_corners_target, layout: no,
@@ -244,13 +253,18 @@ pub(crate) use animated_properties;
 
 /// Where a slot keeps the animation of a value of this type.
 ///
-/// In the slot itself, for every type but one. An animation holds its value
+/// In the slot itself, for every type but two. An animation holds its value
 /// several times over — where it started, where it is, where it is going —
-/// and a [`Shadows`] is four shadows, so its animation is 768 bytes against
-/// 264 for the next widest. Kept inline it would make every slot that wide,
-/// and so every container that animates anything at all. Behind a box it
-/// costs the containers that animate a shadow one allocation and the others
-/// nothing.
+/// and a [`Shadows`] is four shadows, so its animation is 736 bytes against
+/// 232 for the widest kept inline. Kept inline it would make every slot that
+/// wide, and so every container that animates anything at all. Behind a box
+/// it costs the containers that animate a shadow one allocation and the
+/// others nothing.
+///
+/// A gradient is the other, by a smaller margin and the same argument: two
+/// colours and a direction make its animation 288 bytes, and inline that
+/// would widen every slot by 56 for a property that few containers declare
+/// and fewer animate.
 pub(crate) trait Kept: crate::animation::Animatable {
     type Slot: std::borrow::Borrow<AnimationState<Self>>;
 
@@ -271,13 +285,19 @@ macro_rules! kept_inline {
 
 kept_inline!(f32, Color, Padding, Corners, Translate, Scale);
 
-impl Kept for Shadows {
-    type Slot = Box<AnimationState<Shadows>>;
+macro_rules! kept_boxed {
+    ($($t:ty),* $(,)?) => {$(
+        impl Kept for $t {
+            type Slot = Box<AnimationState<$t>>;
 
-    fn keep(anim: AnimationState<Shadows>) -> Self::Slot {
-        Box::new(anim)
-    }
+            fn keep(anim: AnimationState<$t>) -> Self::Slot {
+                Box::new(anim)
+            }
+        }
+    )*};
 }
+
+kept_boxed!(Shadows, Option<LinearGradient>);
 
 /// The store: one slot per property that was *declared* with a motion, rather
 /// than a field per property whether or not anybody asked for one.
@@ -739,7 +759,9 @@ macro_rules! emit_declarers {
             use super::super::{declare_anim, declare_size};
             use super::{AnimKind, AnimSlot, ContainerAnims};
             use crate::layout::Length;
-            use crate::widgets::container::{Color, Padding, Scale, Shadows, Translate};
+            use crate::widgets::container::{
+                Color, LinearGradient, Padding, Scale, Shadows, Translate,
+            };
             use crate::widgets::Corners;
 
             $(emit_declare!($target, $name, $decl);)*

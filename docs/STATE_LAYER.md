@@ -329,7 +329,7 @@ quietly ignored, because [`Animated`] is deliberately not an [`IntoSignal`]:
 .when_hovered(|s| s.background(HOT.transition(900.0)))
 ```
 
-Every animatable property takes a motion the same way — `background`, `border`
+Every animatable property takes a motion the same way — `background`, `gradient`, `border`
 (each half separately), `outline` (each of its three), `corners`, `padding`,
 `shadow`, `width`, `height`,
 `translate`, `rotate` and `scale` on a container, `color` and `font_size` on

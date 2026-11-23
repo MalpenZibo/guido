@@ -1152,8 +1152,25 @@ impl Container {
     ///     .background(theme.surface)
     ///     .gradient(move || expanded.get().then(|| palette.get()));
     /// ```
-    pub fn gradient<M>(mut self, gradient: impl IntoSignal<Option<LinearGradient>, M>) -> Self {
-        self.decoration_mut().gradient = gradient.into_prop();
+    ///
+    /// `.transition(..)` eases it as it eases a [`background`](Self::background).
+    /// Two gradients that point the same way meet stop by stop, each colour
+    /// mixed as a colour transition mixes it. One that turns, appears or goes
+    /// has nothing in between to show, and steps halfway through the
+    /// transition, as an inset shadow does.
+    ///
+    /// ```no_run
+    /// # use guido::prelude::*;
+    /// # let accent = create_signal(Color::rgb(0.4, 0.6, 1.0));
+    /// container().gradient(
+    ///     (move || LinearGradient::diagonal(accent.get(), accent.get().darker(0.3)))
+    ///         .transition(300.0),
+    /// );
+    /// container().gradient(LinearGradient::vertical(Color::RED, Color::BLUE).transition(200.0));
+    /// ```
+    pub fn gradient<M>(mut self, gradient: impl IntoAnimated<Option<LinearGradient>, M>) -> Self {
+        let gradient = animated_properties::declare::gradient(&mut self.anims, gradient);
+        self.decoration_mut().gradient = gradient;
         self
     }
 
@@ -2589,7 +2606,7 @@ impl Widget for Container {
             placed.pivot,
             self.animated_border_width(id),
             self.animated_border_color(id),
-            self.effective_gradient(id),
+            self.animated_gradient(id),
             self.backdrop_blur.get(),
             self.takes_input.get(),
             self.overflow.get_or(Overflow::Visible),
