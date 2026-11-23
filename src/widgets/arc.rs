@@ -26,8 +26,8 @@ pub struct Arc {
     start: Prop<f32>,
     sweep: Prop<f32>,
     progress: Prop<f32>,
-    /// The motions `color` and `progress` were declared with, if any. Absent
-    /// unless one was, as a text's are.
+    /// The motions `color`, `track` and `progress` were declared with, if
+    /// any. Absent unless one was, as a text's are.
     anims: Option<Box<ArcAnims>>,
 }
 
@@ -35,24 +35,20 @@ pub struct Arc {
 #[derive(Default)]
 struct ArcAnims {
     color: Option<AnimationState<Color>>,
+    track: Option<AnimationState<Color>>,
     progress: Option<AnimationState<f32>>,
 }
 
 impl ArcAnims {
-    fn states(
-        &mut self,
-    ) -> (
-        Option<&mut AnimationState<Color>>,
-        Option<&mut AnimationState<f32>>,
-    ) {
-        (self.color.as_mut(), self.progress.as_mut())
-    }
-
-    /// Whether either motion is still on its way.
+    /// Whether any motion is still on its way.
     fn is_animating(&self) -> bool {
         self.color
             .as_ref()
             .is_some_and(AnimationState::is_animating)
+            || self
+                .track
+                .as_ref()
+                .is_some_and(AnimationState::is_animating)
             || self
                 .progress
                 .as_ref()
@@ -96,10 +92,10 @@ impl Arc {
         self
     }
 
-    /// The colour of the whole line, drawn under the covered part. None when
-    /// nothing says.
-    pub fn track<M>(mut self, color: impl IntoSignal<Color, M>) -> Self {
-        self.track = color.into_prop();
+    /// The colour of the whole line, drawn under the covered part, and how it
+    /// moves. None when nothing says.
+    pub fn track<M>(mut self, color: impl IntoAnimated<Color, M>) -> Self {
+        self.track = declare(&mut self.anims, color, |a: &mut ArcAnims| &mut a.track);
         self
     }
 
@@ -145,9 +141,16 @@ impl Arc {
             return;
         };
         let now = ctx.tree_ref().frame_instant();
-        let (color, progress) = anims.states();
+        let ArcAnims {
+            color,
+            track,
+            progress,
+        } = &mut *anims;
         if let Some(a) = color {
             a.retarget(ctx, self.color.get_or(Color::WHITE), now);
+        }
+        if let Some(a) = track {
+            a.retarget(ctx, self.track.get_or(Color::TRANSPARENT), now);
         }
         if let Some(a) = progress {
             a.retarget(ctx, self.progress.get_or(0.0), now);
@@ -161,9 +164,16 @@ impl Arc {
         let Some(anims) = self.anims.as_deref_mut() else {
             return (false, false);
         };
-        let (color, progress) = anims.states();
-        let moved = color.is_some_and(|a| a.advance(now).is_changed())
-            | progress.is_some_and(|a| a.advance(now).is_changed());
+        let ArcAnims {
+            color,
+            track,
+            progress,
+        } = &mut *anims;
+        let moved = color.as_mut().is_some_and(|a| a.advance(now).is_changed())
+            | track.as_mut().is_some_and(|a| a.advance(now).is_changed())
+            | progress
+                .as_mut()
+                .is_some_and(|a| a.advance(now).is_changed());
         (moved, anims.is_animating())
     }
 }
@@ -195,7 +205,11 @@ impl Widget for Arc {
         let start = self.start.get_or(0.0);
         let sweep = self.sweep.get_or(360.0);
 
-        if let Some(track) = self.track.get().filter(|c| c.a > 0.0) {
+        let anims = self.anims.as_deref();
+        let track = get_animated_value(anims.and_then(|a| a.track.as_ref()), || {
+            self.track.get_or(Color::TRANSPARENT)
+        });
+        if track.a > 0.0 {
             ctx.draw_arc(
                 center,
                 radius,
@@ -204,7 +218,6 @@ impl Widget for Arc {
                 Stroke::new(width, track).caps(cap),
             );
         }
-        let anims = self.anims.as_deref();
         let progress = get_animated_value(anims.and_then(|a| a.progress.as_ref()), || {
             self.progress.get_or(0.0)
         })
@@ -328,5 +341,86 @@ mod tests {
         level.set(0.75);
         jobs::pump_and_layout(&mut tree, root, constraints).expect("registered");
         assert_eq!(sweep(&mut tree), Some(270.0));
+    }
+
+    /// Every arc colour a frame at a named instant drew, in paint order.
+    fn colours_at(tree: &mut Tree, root: WidgetId, at: std::time::Instant) -> Vec<Color> {
+        tree.set_frame_instant(Some(at));
+        jobs::pump_and_layout(tree, root, Constraints::new(0.0, 0.0, 100.0, 100.0))
+            .expect("the root is registered");
+        let mut node = RenderNode::new(root.as_u64());
+        tree.paint_widget(root, &mut node, 1.0);
+        tree.set_frame_instant(None);
+
+        fn walk(node: &RenderNode, out: &mut Vec<Color>) {
+            out.extend(node.commands.iter().filter_map(|cmd| match **cmd {
+                DrawCommand::Arc { color, .. } => Some(color),
+                _ => None,
+            }));
+            for child in &node.children {
+                walk(child, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&node, &mut out);
+        out
+    }
+
+    /// A track declared with a motion eases into a new colour, as the covered
+    /// part does, where one declared without it switches (#951).
+    ///
+    /// The pair differs in nothing but the transition and follows the same
+    /// signal, so the eased track being between the two colours a frame later
+    /// is the claim, and the plain one having arrived is what says the test is
+    /// not watching a slow machine. Neither has any progress, so each draws its
+    /// track and nothing else.
+    #[test]
+    fn a_declared_transition_eases_the_track() {
+        use crate::animation::Animate;
+
+        const FROM: Color = Color::rgb(0.0, 0.0, 0.0);
+        const TO: Color = Color::rgb(1.0, 1.0, 1.0);
+        let palette = create_signal(FROM);
+
+        // One tree, so the two arcs do not share ids and the job queue.
+        let mut tree = Tree::new();
+        let root = tree.register(Box::new(
+            crate::widgets::container()
+                .child(
+                    arc()
+                        .size(20.0)
+                        .track((move || palette.get()).transition(400.0)),
+                )
+                .child(arc().size(20.0).track(palette)),
+        ));
+        tree.with_widget_mut(root, |w, id, t| w.register_children(t, id));
+
+        let t0 = std::time::Instant::now();
+        colours_at(&mut tree, root, t0);
+
+        palette.set(TO);
+
+        // The frame the write lands on is where the ease begins.
+        colours_at(&mut tree, root, t0 + std::time::Duration::from_millis(1));
+        let drawn = colours_at(&mut tree, root, t0 + std::time::Duration::from_millis(100));
+        let [eased, plain] = drawn[..] else {
+            panic!("each arc draws its track and nothing else, got {drawn:?}");
+        };
+        assert!(
+            plain.r > 0.99,
+            "a track declared without a transition switches, got {plain:?}"
+        );
+        assert!(
+            eased.r > 0.01 && eased.r < 0.99,
+            "a quarter of the way through a 400ms ease the track has to be \
+             between the two, got {eased:?}"
+        );
+
+        let settled = colours_at(&mut tree, root, t0 + std::time::Duration::from_millis(600));
+        assert!(
+            settled[0].r > 0.99,
+            "the ease never finished, got {:?}",
+            settled[0]
+        );
     }
 }

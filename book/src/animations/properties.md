@@ -366,10 +366,10 @@ A state override supplies a value and never a timing, here as everywhere:
 `when_hovered(|s| s.color(..))` takes a colour, and a transition on it is a
 compile error rather than something quietly ignored.
 
-## Arc Progress and Colour
+## Arc Progress and Colours
 
-An [`arc()`](../building-ui/arcs-and-paths.md) moves its `progress` and its
-`color` the same way, and nothing else of it moves:
+An [`arc()`](../building-ui/arcs-and-paths.md) moves its `progress`, its
+`color` and its `track` the same way, and nothing else of it moves:
 
 ```rust
 # extern crate guido;
@@ -440,7 +440,7 @@ container()
 | Shadow | `shadow(..)` | Duration, EaseOut |
 | Text colour | `color(..)` on a `text` or `text_input` | Duration, EaseOut |
 | Font size | `font_size(..)` on a `text` or `text_input` | Duration |
-| Arc progress, colour | `progress(..)`, `color(..)` on an `arc` | Duration, EaseOut |
+| Arc progress, colour, track | `progress(..)`, `color(..)`, `track(..)` on an `arc` | Duration, EaseOut |
 
 ## Best Practices
 
