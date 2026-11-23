@@ -2607,6 +2607,37 @@ fn a_container_whose_declared_animation_is_running_asks_for_another_frame() {
     assert!(!settled, "and one that has arrived asks for nothing");
 }
 
+/// A container that moved asks for the paint or layout that shows it, and
+/// nothing more: the frame after comes from its answer (#956).
+#[test]
+fn a_moving_container_asks_for_what_shows_it_and_answers_for_the_next_frame() {
+    let colour = create_signal(Color::RED);
+    let mut h = H::new(
+        container()
+            .width(100.0)
+            .height(50.0)
+            .background(colour.transition(Transition::new(100.0, TimingFunction::Linear))),
+    );
+    let t0 = std::time::Instant::now();
+    frame_at(&mut h, t0, 500.0, 500.0);
+    h.paint();
+    colour.set(Color::BLUE);
+    h.advance_at(t0 + std::time::Duration::from_millis(10));
+
+    h.drain_jobs();
+    let moving = h.advance_at(t0 + std::time::Duration::from_millis(30));
+    let queued = jobs::queued_job_types(h.root);
+    assert!(moving, "halfway through, it answers for the next frame");
+    assert!(
+        queued.contains(&JobType::Paint),
+        "a colour that moved is painted, got {queued:?}"
+    );
+    assert!(
+        !queued.contains(&JobType::Animation),
+        "the next frame is the loop's to ask for, got {queued:?}"
+    );
+}
+
 /// A container that declares no motion carries no animation box.
 ///
 /// `ContainerAnims` holds twelve `AnimationState`s and is boxed precisely so

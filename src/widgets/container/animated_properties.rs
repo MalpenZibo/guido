@@ -528,7 +528,7 @@ macro_rules! retarget {
         let reach = $anim.peak_overshoot();
         $anim.animate_to($container.$target($id), $now);
         if $anim.peak_overshoot() > reach {
-            request_job($id, JobRequest::Animation(RequiredJob::Layout));
+            request_job($id, JobRequest::Layout);
         }
     };
 }
@@ -697,13 +697,14 @@ macro_rules! emit_passes {
                                     }
                                     if anim.is_animating() {
                                         any_animating = true;
-                                        let required =
-                                            match (anim.advance(now).is_changed(), moves_the_box!($layout)) {
-                                                (false, _) => RequiredJob::None,
-                                                (true, true) => RequiredJob::Layout,
-                                                (true, false) => RequiredJob::Paint,
+                                        if anim.advance(now).is_changed() {
+                                            let follow_up = if moves_the_box!($layout) {
+                                                JobRequest::Layout
+                                            } else {
+                                                JobRequest::Paint
                                             };
-                                        request_job(id, JobRequest::Animation(required));
+                                            request_job(id, follow_up);
+                                        }
                                     }
                                 })*
                             }

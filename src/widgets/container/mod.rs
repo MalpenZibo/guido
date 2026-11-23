@@ -2033,12 +2033,9 @@ impl Widget for Container {
             && let Some(moved) = tree.advance_position(id, now)
         {
             any_animating = true;
-            let required = if moved {
-                RequiredJob::Paint
-            } else {
-                RequiredJob::None
-            };
-            request_job(id, JobRequest::Animation(required));
+            if moved {
+                request_job(id, JobRequest::Paint);
+            }
         }
 
         // Advance ripple animation
@@ -2048,8 +2045,7 @@ impl Widget for Container {
         {
             let ripple_animating = ix.ripple.advance(&config, now);
             if ripple_animating {
-                // Ripple is paint-only, request animation continuation with paint
-                request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                request_job(id, JobRequest::Paint);
             }
             any_animating = any_animating || ripple_animating;
         }
@@ -2066,8 +2062,7 @@ impl Widget for Container {
                     tree.mark_hover_stale(id);
                 }
                 if scroll_animating {
-                    // Kinetic scroll is paint-only, request animation continuation with paint
-                    request_job(id, JobRequest::Animation(RequiredJob::Paint));
+                    request_job(id, JobRequest::Paint);
                 }
                 any_animating = any_animating || scroll_animating;
             }
@@ -2078,10 +2073,6 @@ impl Widget for Container {
         if self.advance_scrollbar_scale_animations_internal(id, now) {
             any_animating = true;
         }
-
-        // Note: No final Animation push needed here - each animation source
-        // (the declared animations, the ripple, the kinetic scroll) handles its
-        // own continuation
 
         // An exit has settled: the container holding the row it was asked
         // for by — this one, or the one it is built in — disposes the row once

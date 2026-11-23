@@ -298,18 +298,15 @@ impl Container {
             ScrollbarAxis::Horizontal => &mut sd.h_scrollbar_scale_anim,
         };
 
-        // Advance the animation and request continuation if still animating.
+        // Advance the animation, and ask for a paint when it moved.
         // Scale transforms are applied during paint, not stored on widgets.
         let mut animating = false;
         if let Some(anim) = scale_anim {
             anim.animate_to(target_scale, now);
             if anim.is_animating() {
-                let required = if anim.advance(now).is_changed() {
-                    RequiredJob::Paint
-                } else {
-                    RequiredJob::None
-                };
-                request_job(id, JobRequest::Animation(required));
+                if anim.advance(now).is_changed() {
+                    request_job(id, JobRequest::Paint);
+                }
                 animating = true;
             }
         }
