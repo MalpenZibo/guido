@@ -2483,6 +2483,10 @@ impl Tree {
         mut ids: impl Iterator<Item = WidgetId>,
         read: fn(&Prop<bool>, bool) -> bool,
     ) -> bool {
+        // Nothing hidden, so no ancestor is: skip the walk, as `carry` does.
+        if self.declared_visible.is_empty() {
+            return false;
+        }
         ids.any(|id| {
             self.declared_visible
                 .get(&id)
