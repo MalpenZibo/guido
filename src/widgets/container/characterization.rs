@@ -18,7 +18,7 @@ use crate::animation::{Animate, Keyframes, Repeat, SpringConfig, TimingFunction,
 use crate::backdrop::BackdropSources;
 use crate::jobs::{self, JobType};
 use crate::layout::{Constraints, Flex, at_least, at_most, fill, fraction};
-use crate::reactive::{Signal, create_signal};
+use crate::reactive::{Callback, Signal, create_signal};
 use crate::renderer::{DrawCommand, RenderNode};
 use crate::widgets::widget::{Event, EventResponse, MouseButton};
 use crate::widgets::{CornerRadii, Outsets};
@@ -1337,6 +1337,29 @@ fn click_at(x: f32, y: f32) -> [Event; 2] {
         Event::mouse_down(x, y, MouseButton::Left),
         Event::mouse_up(x, y, MouseButton::Left),
     ]
+}
+
+/// A signal that can never change is resolved where it is handed over: a
+/// component forwarding a callback prop nobody set leaves the container as a
+/// `None` would, with no interaction state to allocate and no control to
+/// register, and one holding a callback is the fixed handler it always is.
+#[test]
+fn a_forwarded_signal_that_cannot_change_is_resolved_when_given() {
+    let unset = container().on_click(crate::reactive::create_stored(None::<Callback>));
+    assert!(
+        unset.interaction.is_none(),
+        "nothing to run, now or later: no interaction state"
+    );
+    assert!(!unset.is_control());
+
+    let given = container().on_click(crate::reactive::create_stored(Some(Callback::new(|| {}))));
+    assert!(matches!(
+        given
+            .interaction
+            .as_ref()
+            .and_then(|ix| ix.on_click.as_ref()),
+        Some(Handler::Fixed(_))
+    ));
 }
 
 #[test]

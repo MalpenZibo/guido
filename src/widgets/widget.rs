@@ -1,6 +1,8 @@
 use crate::layout::{Axis, Constraints, Size};
-use crate::reactive::Callback;
-use crate::reactive::callback::{CallbackHandler, FnHandler, OptionHandler};
+use crate::reactive::callback::{
+    CallbackHandler, FnHandler, OptionHandler, ReactiveHandler, SignalHandler,
+};
+use crate::reactive::{Callback, IntoHandler, Signal};
 use crate::renderer::PaintContext;
 use crate::tree::{LayoutCtx, Tree, WidgetId};
 
@@ -1444,23 +1446,25 @@ impl Widget for Box<dyn Widget> {
 }
 
 /// What a `fn(..) -> impl Widget` render prop's setter takes: a closure
-/// returning any widget, a [`Callback`] returning an [`AnyWidget`], or an
-/// `Option` of one, which is how a component forwards its own render prop.
+/// returning any widget, a [`Callback`] returning an [`AnyWidget`], an
+/// `Option` of one, or a closure or signal giving an `Option` of one, which is
+/// how a component forwards its own render prop.
 ///
 /// The closure's widget is erased by the setter, as Leptos erases to
 /// `AnyView` and Dioxus to `Element`. A closure that erases its branches
 /// itself returns an `AnyWidget`, which is a widget too, and is not boxed
 /// again. It is a trait of its own rather than one more
-/// [`IntoHandler`](crate::reactive::IntoHandler) impl because there such a
+/// [`IntoHandler`] impl because there such a
 /// closure matches both the plain closure and the widget-returning one.
 ///
 /// [`Prop`](IntoRenderProp::Prop) is `IntoHandler`'s: a closure or a
-/// `Callback` makes a `Callback`, an `Option` stays one, and a required render
-/// prop asks for the first.
+/// `Callback` makes a `Callback`, an `Option` stays one, the shapes that follow
+/// state are a signal, and a required render prop asks for the first.
 pub trait IntoRenderProp<Args, Marker> {
-    /// What the prop holds when given this.
-    type Prop: Into<Option<Callback<Args, AnyWidget>>>;
-    /// As the handle the prop holds.
+    /// What this shape is held as.
+    type Prop: Into<Signal<Option<Callback<Args, AnyWidget>>>>;
+    /// As this shape is held: what a required render prop holds, and what an
+    /// optional one converts into its signal.
     fn into_render_prop(self) -> Self::Prop;
 }
 
@@ -1481,21 +1485,30 @@ macro_rules! erases_to_any_widget {
 
 erases_to_any_widget!((), (A), (A, B), (A, B, C));
 
-impl<Args: 'static> IntoRenderProp<Args, CallbackHandler> for Callback<Args, AnyWidget> {
-    type Prop = Self;
+/// The shapes a render prop shares with a handler — everything but the
+/// closure, whose widget has to be erased — are held as `IntoHandler` holds
+/// them.
+macro_rules! held_as_a_handler {
+    ($($marker:ident),*) => {$(
+        impl<Args: 'static, T> IntoRenderProp<Args, $marker> for T
+        where
+            T: IntoHandler<Args, $marker, AnyWidget>,
+        {
+            type Prop = T::Prop;
 
-    fn into_render_prop(self) -> Self {
-        self
-    }
+            fn into_render_prop(self) -> Self::Prop {
+                self.into_callback_prop()
+            }
+        }
+    )*};
 }
 
-impl<Args: 'static> IntoRenderProp<Args, OptionHandler> for Option<Callback<Args, AnyWidget>> {
-    type Prop = Self;
-
-    fn into_render_prop(self) -> Self {
-        self
-    }
-}
+held_as_a_handler!(
+    CallbackHandler,
+    OptionHandler,
+    ReactiveHandler,
+    SignalHandler
+);
 
 #[cfg(test)]
 mod tests {

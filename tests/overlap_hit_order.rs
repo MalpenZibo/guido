@@ -36,6 +36,10 @@ fn hover_flag() -> (Rc<Cell<bool>>, impl Fn(bool) + 'static) {
     (hovered, set)
 }
 
+fn a_disabled_card_takes_no_click() {
+    panic!("a disabled card takes no click");
+}
+
 /// An 80×40 stack of `children`, the last one drawn on top.
 fn stack(children: impl IntoIterator<Item = Container>) -> Container {
     container()
@@ -398,7 +402,7 @@ fn a_disabled_card_that_draws_covers_the_button_beneath() {
                 .height(40.0)
                 .background(Color::BLUE)
                 .enabled(false)
-                .on_click(|| panic!("a disabled card takes no click")),
+                .on_click(a_disabled_card_takes_no_click),
         ]),
         400.0,
         200.0,

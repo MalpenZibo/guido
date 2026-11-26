@@ -19,7 +19,7 @@ fn erased(#[prop(callback)] render: fn(u32) -> impl Widget) -> impl Widget {
     container()
         .width(fill())
         .height(fill())
-        .child(render.map(|render| render.run(7)))
+        .child(move || render.get().map(|render| render.run(7)))
 }
 
 /// The same, with the page's type spelled out.
@@ -28,7 +28,7 @@ fn concrete(#[prop(callback)] render: fn(u32) -> Container) -> impl Widget {
     container()
         .width(fill())
         .height(fill())
-        .child(render.map(|render| render.run(7)))
+        .child(move || render.get().map(|render| render.run(7)))
 }
 
 /// Another component, for a render prop to return.
@@ -97,8 +97,25 @@ fn a_concrete_render_prop_builds_the_container_its_closure_returns() {
     );
 }
 
+/// A render prop that follows state is a closure giving the callback to
+/// render with, or none; the body's child follows it.
+#[test]
+fn a_render_prop_can_follow_state() {
+    let Some(pixel) = painted(|| {
+        let page_for = Callback::new(|v: u32| page(by_argument(v)).into_any());
+        erased().render(move || Some(page_for))
+    }) else {
+        return;
+    };
+    assert!(
+        is_red(pixel),
+        "the page the callback built for 7, got {pixel:?}"
+    );
+}
+
 /// A render prop is forwarded as it is, as a callback prop is: the outer
-/// component's `Option<Callback<..>>` goes straight into the inner builder.
+/// component's `Signal<Option<Callback<..>>>` goes straight into the inner
+/// builder.
 #[component]
 fn forwarding(#[prop(callback)] render: fn(u32) -> impl Widget) -> impl Widget {
     erased().render(render)

@@ -143,10 +143,10 @@ pub use guido_macros::SignalFields;
 /// # fn main() {}
 /// ```
 ///
-/// A required callback is a `Callback` in the body rather than an `Option` of
-/// one, since it is always there, so it is called as it is. Its argument is a
-/// closure or a `Callback`, and a `None` — or an optional callback prop
-/// forwarded into it — is refused at the call:
+/// A required callback is a `Callback` in the body rather than a signal of an
+/// `Option` of one, since it is always there, so it is called as it is. Its
+/// argument is a closure or a `Callback`, and a `None` — or an optional
+/// callback prop forwarded into it — is refused at the call:
 ///
 /// ```compile_fail,E0271
 /// # use guido::prelude::*;

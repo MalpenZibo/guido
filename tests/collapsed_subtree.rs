@@ -37,6 +37,10 @@ const COLLAPSED: Scale = Scale::new(1.0, 0.0);
 // 1. A collapsed container takes nothing, and neither does anything inside it
 // ---------------------------------------------------------------------------
 
+fn the_collapsed_one_must_not_answer() {
+    panic!("the collapsed one must not answer");
+}
+
 #[test]
 fn a_collapsed_container_takes_no_click() {
     let (clicks, bump) = counter();
@@ -131,7 +135,7 @@ fn a_collapsed_container_does_not_swallow_a_siblings_click() {
                     .width(80.0)
                     .height(40.0)
                     .scale(COLLAPSED)
-                    .on_click(|| panic!("the collapsed one must not answer")),
+                    .on_click(the_collapsed_one_must_not_answer),
             ),
         400.0,
         200.0,

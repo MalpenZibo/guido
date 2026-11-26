@@ -21,6 +21,15 @@ Structural: `layout`, `child`, `children`, `control`, `focusable`, the axis a `S
 built with, the event handlers — and the *motion* a value is declared with,
 which is the next section.
 
+A click handler is structural in what it runs and not in whether it is there:
+`on_click` and its three siblings take, through `IntoHandler`, a closure or a
+signal giving an `Option<Callback>`, which is what an optional `#[component]`
+callback prop holds. A stored signal, which cannot change, is resolved where it
+is given, so a prop nobody set costs the container nothing. Any other is read
+when the press arrives, not tracked, and the container stays registered as a
+control while it holds `None` — only the hit test and the press claim follow
+it.
+
 `Scroll` is what a family of setters looks like once it is one value.
 `scrollable`, `scrollbar_visibility` and `scrollbar` were three, and the last
 two were silent no-ops on a container that never became scrollable. Now

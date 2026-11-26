@@ -1324,9 +1324,11 @@ impl Container {
     /// inside them. A release that has wandered off only ends the press, so
     /// letting go away from the container calls a click off.
     ///
-    /// Takes a closure, a [`Callback`](crate::reactive::Callback), or an
-    /// `Option<Callback>` — the last being what a `#[component]` callback prop
-    /// holds, so a component forwards its own prop with no ceremony:
+    /// Takes whatever [`IntoHandler`] does: a closure, a
+    /// [`Callback`](crate::reactive::Callback), an `Option<Callback>`, or a
+    /// closure or signal giving an `Option<Callback>` — the last being what a
+    /// `#[component]` callback prop holds, so a component forwards its own
+    /// prop with no ceremony:
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -1336,8 +1338,10 @@ impl Container {
     /// }
     /// ```
     ///
-    /// A `None` prop leaves the container without a click handler, but still a
-    /// pointer target if anything else made it one.
+    /// A `None`, or a closure or signal holding `None` at the press, leaves the
+    /// press to whatever else is there: the container's own handlers, what
+    /// contains it, or what it is drawn over if it draws nothing and nothing
+    /// else made it a pointer target.
     pub fn on_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
         self.set_click_handler(callback, |ix| &mut ix.on_click)
     }

@@ -223,11 +223,11 @@ button()
 # }
 ```
 
-Inside the body a callback prop is an `Option<Callback<..>>`, and a required
-one is the `Callback` itself. A
-[`Callback`](reactive-model.md) is a `Copy` handle to the closure,
-so it goes into as many closures as needed without being cloned, and is called
-with `run`:
+Inside the body a callback prop is a `Signal<Option<Callback<..>>>` — a
+caller can give one that comes and goes, as the next section shows — and a
+required one is the `Callback` itself. A [`Callback`](reactive-model.md) is a
+`Copy` handle to the closure, so it goes into as many closures as needed
+without being cloned, and is called with `run`:
 
 ```rust
 # extern crate guido;
@@ -238,18 +238,19 @@ pub fn stepper(#[prop(callback)] on_change: fn(i32)) -> impl Widget {
         .layout(Flex::row().spacing(4))
         // The same handle used twice — no clone in sight
         .child(container().on_click(move || {
-            if let Some(cb) = on_change { cb.run(-1) }
+            if let Some(cb) = on_change.get_untracked() { cb.run(-1) }
         }))
         .child(container().on_click(move || {
-            if let Some(cb) = on_change { cb.run(1) }
+            if let Some(cb) = on_change.get_untracked() { cb.run(1) }
         }))
 }
 # fn main() {}
 ```
 
-A callback builder takes the same three shapes `on_click` does: a closure, a
-`Callback`, or an `Option<Callback>`. So a component hands its own prop to the
-component it wraps as it reads, and a prop nobody set arrives unset:
+A callback builder takes the same shapes `on_click` does: a closure, a
+`Callback`, an `Option<Callback>`, a closure returning an `Option<Callback>`,
+or a signal holding one. So a component hands its own prop to the component it
+wraps as it reads, and a prop nobody set arrives unset:
 
 ```rust
 # extern crate guido;
@@ -275,7 +276,48 @@ A closure's parameter types come from the prop, so `.on_change(|step| ...)`
 needs no annotation — unless its body calls a method on `step` before anything
 else has said what it is. That one has to name the type, `|step: i32|`,
 because the prop's type reaches the closure through a trait rather than an
-`Fn` bound.
+`Fn` bound. A closure that does nothing but panic — `|| todo!()`, say — could
+be either kind of closure below, and is refused; write it as a `fn`.
+
+### Callbacks That Come and Go
+
+A closure that returns an `Option<Callback>` rather than running one is a
+callback that follows state. The body sees the prop change and repaints, and a
+container it was forwarded to takes a press only while it holds one — without
+one, the press goes on to whatever is behind:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+#[component]
+pub fn slider_row(
+    label: String,
+    #[prop(callback)] on_more: (),
+) -> impl Widget {
+    container()
+        .layout(Flex::row().spacing(8))
+        .child(text(label))
+        .child(
+            container()
+                .visible(move || on_more.with(Option::is_some))
+                .on_click(on_more)
+                .child(text(">")),
+        )
+}
+# fn main() {
+# let outputs = create_signal(vec![String::new()]);
+# let open_outputs = || {};
+let open = Callback::new(move || open_outputs());
+# let _ =
+slider_row()
+    .label("Volume")
+    .on_more(move || (outputs.with(Vec::len) > 1).then_some(open))
+# ;
+# }
+```
+
+The handler closure and this one cannot be confused: a handler returns
+nothing, and this one returns the callback to run.
 
 ### Documenting Props
 
@@ -324,7 +366,7 @@ pub fn picker(
 ) -> impl Widget {
     container()
         .padding(8.0)
-        .child(render.map(|render| render.run(selected.get_untracked())))
+        .child(move || render.get().map(|render| render.run(selected.get())))
 }
 # fn main() {
 # let _ =
@@ -337,7 +379,7 @@ picker()
 
 Declared `-> impl Widget`, the closure may return any widget — a `Container`,
 `text`, another component — and the setter boxes it, so inside the body the
-prop is an `Option<Callback<(u32,), AnyWidget>>`. Declared with a concrete
+prop is a `Signal<Option<Callback<(u32,), AnyWidget>>>`. Declared with a concrete
 type, `-> Container`, the closure has to return that type and the body gets it
 back as it is, to style further before placing it. Either kind is forwarded to
 another component as a callback prop is, `.render(render)`.
@@ -354,7 +396,7 @@ too, and is not boxed a second time:
 #     selected: u32,
 #     #[prop(callback)] render: fn(u32) -> impl Widget,
 # ) -> impl Widget {
-#     container().child(render.map(|render| render.run(selected.get_untracked())))
+#     container().child(move || render.get().map(|render| render.run(selected.get())))
 # }
 # fn main() {
 # let _ =
