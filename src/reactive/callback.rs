@@ -108,6 +108,38 @@ pub struct CallbackHandler;
 #[doc(hidden)]
 pub struct OptionHandler;
 
+/// A handler as a widget keeps it: a closure fixed when it was given, or a
+/// signal asked, each time the handler would run, which callback that is now,
+/// if any.
+pub enum Handler<Args, Ret = ()> {
+    /// Given as a closure or a [`Callback`]: always there.
+    Fixed(Rc<dyn Fn(Args) -> Ret>),
+    /// Given as something that follows state: there while it holds a
+    /// callback.
+    Live(Signal<Option<Callback<Args, Ret>>>),
+}
+
+impl<Args: 'static, Ret: 'static> Handler<Args, Ret> {
+    /// Whether a callback would run now.
+    pub fn has_callback(&self) -> bool {
+        match self {
+            Self::Fixed(_) => true,
+            Self::Live(signal) => signal.with_untracked(Option::is_some),
+        }
+    }
+
+    /// Run the callback there is now, and say what it returned; `None` when
+    /// there is none.
+    pub fn run(&self, args: Args) -> Option<Ret> {
+        match self {
+            Self::Fixed(f) => Some(f(args)),
+            Self::Live(signal) => signal
+                .get_untracked()
+                .map(|callback| callback.run_packed(args)),
+        }
+    }
+}
+
 /// What an event handler can be written as: a closure, a [`Callback`], or an
 /// `Option<Callback>`.
 ///
@@ -129,8 +161,8 @@ pub struct OptionHandler;
 pub trait IntoHandler<Args, Marker = FnHandler, Ret = ()> {
     /// What a `#[component]` callback prop holds when given this.
     type Prop: Into<Option<Callback<Args, Ret>>>;
-    /// As a closure the widget keeps for itself.
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>>;
+    /// As the handler a widget keeps for itself.
+    fn into_handler(self) -> Option<Handler<Args, Ret>>;
     /// As a handle, which is what a `#[component]` callback prop holds.
     fn into_callback_prop(self) -> Self::Prop;
 }
@@ -140,8 +172,8 @@ impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, 
 {
     type Prop = Callback<Args, Ret>;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
-        Some(self.into_packed())
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        Some(Handler::Fixed(self.into_packed()))
     }
 
     fn into_callback_prop(self) -> Callback<Args, Ret> {
@@ -152,8 +184,8 @@ impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, 
 impl<Args: 'static, Ret: 'static> IntoHandler<Args, CallbackHandler, Ret> for Callback<Args, Ret> {
     type Prop = Self;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
-        Some(Rc::new(move |args| self.run_packed(args)))
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        Some(Handler::Fixed(Rc::new(move |args| self.run_packed(args))))
     }
 
     fn into_callback_prop(self) -> Self {
@@ -166,7 +198,7 @@ impl<Args: 'static, Ret: 'static> IntoHandler<Args, OptionHandler, Ret>
 {
     type Prop = Self;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
         self.and_then(IntoHandler::into_handler)
     }
 

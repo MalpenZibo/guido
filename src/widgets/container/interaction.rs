@@ -232,7 +232,7 @@ impl Container {
     /// declaration on every one above (#636).
     pub(super) fn is_hit(&self, id: WidgetId, hit: &HitContext, event: &Event) -> bool {
         hit.contains(event.coords())
-            && (self.is_control()
+            && (self.is_pointer_target()
                 || self
                     .interaction
                     .as_deref()
@@ -383,8 +383,7 @@ impl Container {
                         MouseButton::Middle => ix.on_middle_click.as_ref(),
                         MouseButton::Left => None,
                     };
-                    if let Some(callback) = callback {
-                        callback(());
+                    if callback.and_then(|callback| callback.run(())).is_some() {
                         return EventResponse::Handled;
                     }
                 }
@@ -427,12 +426,8 @@ impl Container {
                         callback(local.x, local.y);
                         return EventResponse::Handled;
                     }
-                    // A press is claimed even without a down handler, so the
-                    // matching release reaches the click handler.
                     if let Some(ref ix) = self.interaction
-                        && (ix.on_click.is_some()
-                            || ix.on_double_click.is_some()
-                            || ix.on_mouse_up.is_some())
+                        && ix.claims_press()
                     {
                         return EventResponse::Handled;
                     }
@@ -481,14 +476,12 @@ impl Container {
                         && hit.contains(*at)
                     {
                         if let Some(ref callback) = ix.on_click {
-                            callback(());
-                            handled = true;
+                            handled |= callback.run(()).is_some();
                         }
                         if ix.press_count == 2
                             && let Some(ref callback) = ix.on_double_click
                         {
-                            callback(());
-                            handled = true;
+                            handled |= callback.run(()).is_some();
                         }
                     }
                     if handled {
