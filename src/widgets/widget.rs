@@ -708,7 +708,8 @@ pub enum MouseButton {
 /// Scroll source - discrete (mouse wheel) or smooth (touchpad/touchscreen)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollSource {
-    /// Mouse wheel - discrete steps (converted to pixels)
+    /// Mouse wheel - discrete steps, converted to pixels:
+    /// [`SCROLL_PIXELS_PER_LINE`](crate::widgets::SCROLL_PIXELS_PER_LINE) a notch
     Wheel,
     /// Touchpad/touchscreen - smooth pixel-based scrolling
     Finger,

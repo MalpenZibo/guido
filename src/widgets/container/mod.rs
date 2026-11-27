@@ -1496,6 +1496,9 @@ impl Container {
         self
     }
 
+    /// Called with each scroll over the container: `dx` and `dy` in logical
+    /// pixels, and where it came from. To step once per wheel notch, see
+    /// [`SCROLL_PIXELS_PER_LINE`](crate::widgets::SCROLL_PIXELS_PER_LINE).
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_scroll = Some(Rc::new(callback));
         self

@@ -321,7 +321,32 @@ pub(crate) const TOUCH_SLOP: f32 = 18.0;
 /// How far one line scrolls, in logical pixels: a wheel notch, and an arrow
 /// key on a focused scroller (#765), so the two move a list alike. Chromium's
 /// `kPixelsPerLineStep` is the same forty, for both.
-pub(crate) const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
+///
+/// It is also how a scroll handler counts notches.
+/// [`on_scroll`](crate::widgets::Container::on_scroll) is given logical
+/// pixels: a wheel notch is this many, a high-resolution wheel sends fractions
+/// of a notch, and a touchpad sends the pixels it moved. To step once per
+/// notch, add up `dy` and step for each whole line, keeping the rest for the
+/// next event:
+///
+/// ```
+/// use std::cell::Cell;
+///
+/// use guido::prelude::*;
+/// use guido::widgets::SCROLL_PIXELS_PER_LINE;
+///
+/// let level = create_signal(50.0f32);
+/// let gathered = Cell::new(0.0f32);
+/// container().on_scroll(move |_dx, dy, _source| {
+///     let total = gathered.get() + dy;
+///     let lines = (total / SCROLL_PIXELS_PER_LINE).trunc();
+///     gathered.set(total % SCROLL_PIXELS_PER_LINE);
+///     if lines != 0.0 {
+///         level.update(|level| *level -= lines);
+///     }
+/// });
+/// ```
+pub const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
 /// A finger on the content of a scroller, before and after it has taken the
 /// gesture from whatever it landed on.

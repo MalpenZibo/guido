@@ -404,9 +404,16 @@ container()
 ```
 
 Parameters:
-- `dx` - Horizontal scroll amount
-- `dy` - Vertical scroll amount
+- `dx` - Horizontal scroll amount, in logical pixels
+- `dy` - Vertical scroll amount, in logical pixels
 - `source` - Scroll source (wheel, touchpad)
+
+A wheel notch is `guido::widgets::SCROLL_PIXELS_PER_LINE` pixels, a
+high-resolution wheel sends fractions of a notch, and a touchpad sends the
+pixels it moved. To step once per notch — a value cycled, a level raised — add
+up `dy` and step for each whole line, as the constant's documentation shows:
+stepping once per event sweeps the value end to end on a touchpad, which sends
+many small ones.
 
 ### Scroll with Signal
 
