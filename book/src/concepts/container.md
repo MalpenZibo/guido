@@ -312,7 +312,7 @@ widget somewhere inside it:
 
 | Key | Scrolls |
 | --- | --- |
-| Up / Down | one line, 40 pixels — what a wheel notch scrolls |
+| Up / Down | one line, `SCROLL_PIXELS_PER_LINE` (40 pixels) — what a wheel notch scrolls |
 | Left / Right | one line along the horizontal axis |
 | Page Up / Page Down | one viewport height |
 | Home / End | to the start or the end of the vertical axis, or of the horizontal one on a `Scroll::horizontal()` scroller |

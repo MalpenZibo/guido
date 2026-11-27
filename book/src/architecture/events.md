@@ -67,8 +67,8 @@ Event::ScrollEnd { at }
 ```
 
 - `at` - Pointer position, or `None`: see [Where an event is](#where-an-event-is)
-- `delta_x` - Horizontal scroll amount, in pixels
-- `delta_y` - Vertical scroll amount, in pixels
+- `delta_x` - Horizontal scroll amount, in logical pixels, positive to the right
+- `delta_y` - Vertical scroll amount, in logical pixels, positive down
 - `source` - `Wheel`, `Finger` or `Continuous`
 
 `ScrollEnd` is the end of a scroll gesture — the finger lifting off a touchpad,
