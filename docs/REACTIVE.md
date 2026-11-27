@@ -436,9 +436,10 @@ assert_eq!(double.run(21), 42);               // run returns what the closure do
 ```
 
 The second parameter is the return type, `()` unless named, as Leptos, Dioxus
-and Yew carry it. It is what a `#[component]` render prop is:
+and Yew carry it. It is what a `#[component]` render prop holds:
 `Callback<(P,), Container>`, or `Callback<(P,), AnyWidget>` for one declared
-`-> impl Widget`.
+`-> impl Widget` — bare when the prop is required, and otherwise in a
+`Signal<Option<..>>`, which a caller can make follow state.
 
 ## Signal Internals
 

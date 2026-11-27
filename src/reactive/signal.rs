@@ -150,6 +150,14 @@ pub struct Signal<T> {
     _not_send: PhantomData<*const ()>,
 }
 
+impl<T> Signal<T> {
+    /// Whether this signal can never change: a stored value, not a writable
+    /// or a derived one.
+    pub(crate) fn is_constant(&self) -> bool {
+        matches!(self.kind, SignalKind::Stored)
+    }
+}
+
 /// Run a derived signal's closure with nothing listening.
 ///
 /// One place, because there are two callers and they were not the same: the

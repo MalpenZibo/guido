@@ -12,7 +12,9 @@ use syn::{Attribute, DeriveInput, Expr, Fields, ItemFn, Meta, Type, TypeFnPtr, p
 /// - No attribute — standard prop, `Signal<T>`, default = `create_stored(Default::default())`
 /// - `#[prop(default = <expr>)]` — standard prop with custom default
 /// - `#[prop(callback)]` — callback prop. Use `()` for `Fn()`, or `fn(T1, T2)` for typed params.
-///   Its builder takes a closure, a `Callback` or an `Option<Callback>` (`IntoHandler`).
+///   Its builder takes a closure, a `Callback`, an `Option<Callback>`, or a closure or
+///   signal giving an `Option<Callback>` (`IntoHandler`), and the body holds a
+///   `Signal<Option<Callback>>`, which follows the last two.
 ///   A return type makes it a render prop: `fn(T) -> Container` returns what the
 ///   closure does, and `fn(T) -> impl Widget` boxes it into an `AnyWidget`
 ///   (`IntoRenderProp`).
@@ -306,7 +308,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             if field.is_required {
                 quote! { #name: #callback }
             } else {
-                quote! { #name: Option<#callback> }
+                quote! { #name: ::guido::reactive::Signal<Option<#callback>> }
             }
         } else if field.is_children {
             quote! {
@@ -334,7 +336,7 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             }
         } else if field.is_callback {
             quote! {
-                #name: None
+                #name: ::guido::reactive::create_stored(None)
             }
         } else if field.is_children {
             quote! {
@@ -443,13 +445,8 @@ pub fn component(_attr: TokenStream, input: TokenStream) -> TokenStream {
             quote! {
                 let #name = self.#take_name();
             }
-        } else if field.is_callback {
-            // A Callback, or an Option of one, is Copy: bind by value, no clone ceremony
-            quote! {
-                let #name = self.#name;
-            }
         } else {
-            // Signal<T> is Copy — just copy it
+            // A Callback, and every Signal, is Copy: bind by value, no clone ceremony
             quote! {
                 let #name = self.#name;
             }
@@ -648,8 +645,8 @@ struct PropField {
 }
 
 impl PropField {
-    /// The `Callback` a callback prop holds, bare when it is required and in
-    /// an `Option` otherwise.
+    /// The `Callback` a callback prop holds: bare when it is required, and in
+    /// a `Signal<Option<..>>` otherwise.
     fn callback_ty(&self) -> proc_macro2::TokenStream {
         let args = callback_args_tuple(&self.callback_params);
         let ret = self.callback_ret.ty();

@@ -36,6 +36,10 @@ fn hover_flag() -> (Rc<Cell<bool>>, impl Fn(bool) + 'static) {
     (hovered, set)
 }
 
+fn a_disabled_card_takes_no_click() {
+    panic!("a disabled card takes no click");
+}
+
 /// An 80×40 stack of `children`, the last one drawn on top.
 fn stack(children: impl IntoIterator<Item = Container>) -> Container {
     container()
@@ -398,7 +402,7 @@ fn a_disabled_card_that_draws_covers_the_button_beneath() {
                 .height(40.0)
                 .background(Color::BLUE)
                 .enabled(false)
-                .on_click(|| panic!("a disabled card takes no click")),
+                .on_click(a_disabled_card_takes_no_click),
         ]),
         400.0,
         200.0,
@@ -561,4 +565,19 @@ fn a_gradient_covers_the_button_beneath_while_one_end_shows() {
         ))),
         "neither end shows"
     );
+}
+
+/// Listening is being over something as much as drawing is: a card that draws
+/// nothing and only listens for the hover still covers the button beneath.
+#[test]
+fn a_card_that_only_listens_for_the_hover_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(container().on_hover(|_| {})));
+}
+
+/// A hover state is a listener too, with no handler beside it.
+#[test]
+fn a_card_that_only_declares_a_hover_state_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(
+        container().when_hovered(|s| s.background(Color::BLUE))
+    ));
 }

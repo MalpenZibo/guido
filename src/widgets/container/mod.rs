@@ -30,7 +30,7 @@ use crate::layout::{Alignment, Axis, Constraints, Flex, Layout, Length, Size};
 use crate::pivot::Pivot;
 use crate::reactive::invalidation::is_detached;
 use crate::reactive::{
-    CursorIcon, IntoHandler, IntoSignal, Prop, RwSignal, create_derived, create_signal,
+    CursorIcon, Handler, IntoHandler, IntoSignal, Prop, RwSignal, create_derived, create_signal,
     with_signal_tracking,
 };
 use crate::renderer::{GradientDir, MergeChildren, OpacityMode, PaintContext, Shadow, Shadows};
@@ -51,9 +51,9 @@ use super::widget::{
     Placement, Point, Rect, ScrollSource, Widget,
 };
 
-/// Callback for click events, taking its (empty) arguments as one tuple, as
-/// [`IntoHandler`] hands every handler over.
-pub type ClickCallback = Rc<dyn Fn(())>;
+/// Handler for click events, as [`IntoHandler`] hands every handler over: a
+/// closure, or a signal saying which callback runs now.
+pub type ClickCallback = Handler<()>;
 
 /// Callback for a key-down: the key, the modifiers held with it, and whether
 /// a held key produced it rather than a press. Answers whether it took the key.
@@ -359,6 +359,28 @@ impl InteractionState {
     /// every hover just because the flags became reactive.
     pub(super) fn has_any_state(&self) -> bool {
         !self.states.is_empty()
+    }
+
+    /// The four click handlers that are declared.
+    fn click_handlers(&self) -> impl Iterator<Item = &ClickCallback> {
+        [
+            &self.on_click,
+            &self.on_double_click,
+            &self.on_right_click,
+            &self.on_middle_click,
+        ]
+        .into_iter()
+        .flatten()
+    }
+
+    /// Whether a left press is claimed even without a down handler, so the
+    /// matching release reaches what it would run.
+    pub(super) fn claims_press(&self) -> bool {
+        self.on_mouse_up.is_some()
+            || [&self.on_click, &self.on_double_click]
+                .into_iter()
+                .flatten()
+                .any(ClickCallback::has_callback)
     }
 
     /// Whether a layer with this trigger is declared, without reading any
@@ -1302,9 +1324,11 @@ impl Container {
     /// inside them. A release that has wandered off only ends the press, so
     /// letting go away from the container calls a click off.
     ///
-    /// Takes a closure, a [`Callback`](crate::reactive::Callback), or an
-    /// `Option<Callback>` — the last being what a `#[component]` callback prop
-    /// holds, so a component forwards its own prop with no ceremony:
+    /// Takes whatever [`IntoHandler`] does: a closure, a
+    /// [`Callback`](crate::reactive::Callback), an `Option<Callback>`, or a
+    /// closure or signal giving an `Option<Callback>` — the last being what a
+    /// `#[component]` callback prop holds, so a component forwards its own
+    /// prop with no ceremony:
     ///
     /// ```no_run
     /// # use guido::prelude::*;
@@ -1314,8 +1338,10 @@ impl Container {
     /// }
     /// ```
     ///
-    /// A `None` prop leaves the container without a click handler, but still a
-    /// pointer target if anything else made it one.
+    /// A `None`, or a closure or signal holding `None` at the press, leaves the
+    /// press to whatever else is there: the container's own handlers, what
+    /// contains it, or what it is drawn over if it draws nothing and nothing
+    /// else made it a pointer target.
     pub fn on_click<M>(self, callback: impl IntoHandler<(), M>) -> Self {
         self.set_click_handler(callback, |ix| &mut ix.on_click)
     }
@@ -1948,22 +1974,33 @@ impl Container {
     /// at — so every behaviour implies it rather than merely allowing it. So
     /// does declaring a state layer, which is what keeps every container
     /// resolving its own states exactly as it did before controls existed.
+    ///
+    /// A click handler that follows a signal counts whatever the signal holds:
+    /// this is asked once, when the container is registered.
     pub(super) fn is_control(&self) -> bool {
+        self.listens(|_| true)
+    }
+
+    /// Whether this container is a pointer target now: an interaction unit,
+    /// with a click handler that follows a signal counting only while the
+    /// signal holds a callback, so a press goes on to what is beneath.
+    pub(super) fn is_pointer_target(&self) -> bool {
+        self.listens(ClickCallback::has_callback)
+    }
+
+    fn listens(&self, click: fn(&ClickCallback) -> bool) -> bool {
         if self.declared_control || self.scroll_axis != ScrollAxis::None {
             return true;
         }
         self.interaction.as_ref().is_some_and(|ix| {
             ix.declared_enabled.is_set()
                 || ix.has_any_state()
-                || ix.on_click.is_some()
-                || ix.on_double_click.is_some()
-                || ix.on_right_click.is_some()
-                || ix.on_middle_click.is_some()
                 || ix.on_hover.is_some()
                 || ix.on_scroll.is_some()
                 || ix.on_pointer_move.is_some()
                 || ix.on_mouse_down.is_some()
                 || ix.on_mouse_up.is_some()
+                || ix.click_handlers().any(click)
         })
     }
 }

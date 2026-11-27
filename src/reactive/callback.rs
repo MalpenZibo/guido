@@ -20,7 +20,7 @@
 
 use std::rc::Rc;
 
-use super::signal::{Signal, create_stored};
+use super::signal::{Signal, create_derived, create_stored};
 
 /// A `Copy` handle to a closure, parameterised by its argument tuple and what
 /// it returns.
@@ -107,32 +107,104 @@ pub struct FnHandler;
 pub struct CallbackHandler;
 #[doc(hidden)]
 pub struct OptionHandler;
+#[doc(hidden)]
+pub struct ReactiveHandler;
+#[doc(hidden)]
+pub struct SignalHandler;
 
-/// What an event handler can be written as: a closure, a [`Callback`], or an
-/// `Option<Callback>`.
+/// A handler as a widget keeps it: a closure fixed when it was given, or a
+/// signal asked, each time the handler would run, which callback that is now,
+/// if any.
+pub enum Handler<Args, Ret = ()> {
+    /// Given as a closure or a [`Callback`]: always there.
+    Fixed(Rc<dyn Fn(Args) -> Ret>),
+    /// Given as something that follows state: there while it holds a
+    /// callback.
+    Live(Signal<Option<Callback<Args, Ret>>>),
+}
+
+impl<Args: 'static, Ret: 'static> Handler<Args, Ret> {
+    /// Whether a callback would run now.
+    pub fn has_callback(&self) -> bool {
+        match self {
+            Self::Fixed(_) => true,
+            Self::Live(signal) => signal.with_untracked(Option::is_some),
+        }
+    }
+
+    /// Run the callback there is now, and say what it returned; `None` when
+    /// there is none.
+    pub fn run(&self, args: Args) -> Option<Ret> {
+        match self {
+            Self::Fixed(f) => Some(f(args)),
+            Self::Live(signal) => signal
+                .get_untracked()
+                .map(|callback| callback.run_packed(args)),
+        }
+    }
+}
+
+/// What an event handler can be written as: a closure, a [`Callback`], an
+/// `Option<Callback>`, or something that follows state and gives an
+/// `Option<Callback>` — a closure returning one, or a signal holding one.
 ///
-/// A closure is the ordinary case. The other two are the shapes a
-/// `#[component]` callback prop arrives in, so a component forwards its own
-/// prop, to a container's `on_click` or to another component's builder, as it
-/// reads: `.on_change(on_change)`. A `None` leaves the handler unset.
+/// A closure is the ordinary case. A `Callback` or an `Option` of one is fixed
+/// where it is given. A closure returning an `Option<Callback>` follows what it
+/// reads, so a handler can come and go with state:
+///
+/// ```no_run
+/// # use guido::prelude::*;
+/// # let several = create_signal(true);
+/// let open = Callback::new(|| println!("more"));
+/// container().on_click(move || several.get().then_some(open));
+/// ```
+///
+/// A `#[component]` callback prop is the signal, so a component forwards its
+/// own prop, to a container's `on_click` or to another component's builder, as
+/// it reads: `.on_change(on_change)`. A `None`, or a signal holding one, leaves
+/// the handler unset.
 ///
 /// `Ret` is what the closure returns: `()` for a handler, the page for a
 /// render prop.
 ///
-/// [`Prop`](IntoHandler::Prop) is what each shape makes for a callback prop to
-/// hold: a closure or a `Callback` makes a `Callback`, an `Option` stays one.
-/// A required callback prop asks for `Prop = Callback<..>`, which is what
-/// keeps a `None` out of a prop that cannot be unset.
+/// [`Prop`](IntoHandler::Prop) is what each shape is held as: a closure or a
+/// `Callback` makes a `Callback`, an `Option` stays one, and the shapes that
+/// follow state are a signal. Each converts into the signal an optional
+/// `#[component]` callback prop holds; a required one asks for `Prop =
+/// Callback<..>`, which keeps out every shape that could be unset.
 ///
 /// The marker parameter is the same trick [`IntoSignal`](super::IntoSignal)
-/// uses: it keeps the impls from overlapping.
+/// uses: it keeps the impls from overlapping. A handler closure returns `Ret`
+/// and one that follows state returns an `Option<Callback>`, so the two
+/// cannot be confused.
 pub trait IntoHandler<Args, Marker = FnHandler, Ret = ()> {
-    /// What a `#[component]` callback prop holds when given this.
-    type Prop: Into<Option<Callback<Args, Ret>>>;
-    /// As a closure the widget keeps for itself.
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>>;
-    /// As a handle, which is what a `#[component]` callback prop holds.
+    /// What this shape is held as.
+    type Prop: Into<Signal<Option<Callback<Args, Ret>>>>;
+    /// As the handler a widget keeps for itself.
+    fn into_handler(self) -> Option<Handler<Args, Ret>>;
+    /// As this shape is held: what a required `#[component]` callback prop
+    /// holds, and what an optional one converts into its signal.
     fn into_callback_prop(self) -> Self::Prop;
+}
+
+/// What an optional `#[component]` callback prop holds when given a fixed
+/// callback.
+impl<Args: 'static, Ret: 'static> From<Callback<Args, Ret>>
+    for Signal<Option<Callback<Args, Ret>>>
+{
+    fn from(callback: Callback<Args, Ret>) -> Self {
+        create_stored(Some(callback))
+    }
+}
+
+/// What an optional `#[component]` callback prop holds when given a fixed
+/// callback or none.
+impl<Args: 'static, Ret: 'static> From<Option<Callback<Args, Ret>>>
+    for Signal<Option<Callback<Args, Ret>>>
+{
+    fn from(callback: Option<Callback<Args, Ret>>) -> Self {
+        create_stored(callback)
+    }
 }
 
 impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, FnHandler, Ret>
@@ -140,8 +212,8 @@ impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, 
 {
     type Prop = Callback<Args, Ret>;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
-        Some(self.into_packed())
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        Some(Handler::Fixed(self.into_packed()))
     }
 
     fn into_callback_prop(self) -> Callback<Args, Ret> {
@@ -152,8 +224,8 @@ impl<Args: 'static, Ret: 'static, F: IntoCallback<Args, Ret>> IntoHandler<Args, 
 impl<Args: 'static, Ret: 'static> IntoHandler<Args, CallbackHandler, Ret> for Callback<Args, Ret> {
     type Prop = Self;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
-        Some(Rc::new(move |args| self.run_packed(args)))
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        Some(Handler::Fixed(Rc::new(move |args| self.run_packed(args))))
     }
 
     fn into_callback_prop(self) -> Self {
@@ -166,8 +238,43 @@ impl<Args: 'static, Ret: 'static> IntoHandler<Args, OptionHandler, Ret>
 {
     type Prop = Self;
 
-    fn into_handler(self) -> Option<Rc<dyn Fn(Args) -> Ret>> {
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
         self.and_then(IntoHandler::into_handler)
+    }
+
+    fn into_callback_prop(self) -> Self {
+        self
+    }
+}
+
+impl<Args: 'static, Ret: 'static, F> IntoHandler<Args, ReactiveHandler, Ret> for F
+where
+    F: Fn() -> Option<Callback<Args, Ret>> + 'static,
+{
+    type Prop = Signal<Option<Callback<Args, Ret>>>;
+
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        Some(Handler::Live(create_derived(self)))
+    }
+
+    fn into_callback_prop(self) -> Self::Prop {
+        create_derived(self)
+    }
+}
+
+impl<Args: 'static, Ret: 'static> IntoHandler<Args, SignalHandler, Ret>
+    for Signal<Option<Callback<Args, Ret>>>
+{
+    type Prop = Self;
+
+    /// One that can never change — a prop given a fixed callback, or none —
+    /// is resolved here, so the widget holds what that callback would have
+    /// made it, and nothing for an unset one.
+    fn into_handler(self) -> Option<Handler<Args, Ret>> {
+        if self.is_constant() {
+            return self.get_untracked().into_handler();
+        }
+        Some(Handler::Live(self))
     }
 
     fn into_callback_prop(self) -> Self {

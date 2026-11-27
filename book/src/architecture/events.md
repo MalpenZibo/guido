@@ -202,7 +202,7 @@ container()
     .width(80.0)
     .height(40.0)
     .scale(Scale::new(1.0, 0.0))   // collapsed: takes no click, hover or scroll
-    .on_click(|| unreachable!())
+    .on_click(|| println!("never called"))
 ```
 
 The event still *travels*. A press given up and a hover cleared are things only
