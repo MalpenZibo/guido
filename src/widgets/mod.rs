@@ -29,7 +29,7 @@ pub use into_child::{
     DynamicChildren, ForwardedChildren, IntoChild, IntoChildren, IntoDynChild, KeyedChildren,
     StaticChildren, keyed,
 };
-pub use scroll::{Scroll, ScrollbarVisibility};
+pub use scroll::{SCROLL_PIXELS_PER_LINE, Scroll, ScrollbarVisibility};
 pub use state_layer::{
     BackgroundOverride, BorderOverride, OutlineOverride, RippleConfig, StateStyle, StateWhen,
     Stateful,
