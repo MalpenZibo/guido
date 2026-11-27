@@ -1496,6 +1496,43 @@ impl Container {
         self
     }
 
+    /// Calls `callback` with each scroll over this container: the horizontal
+    /// and vertical deltas in logical pixels, positive to the right and down,
+    /// and the [`ScrollSource`] that made them.
+    ///
+    /// A touchpad's pixels arrive as the compositor gave them. A notch the
+    /// compositor counts arrives as
+    /// [`SCROLL_PIXELS_PER_LINE`](crate::widgets::SCROLL_PIXELS_PER_LINE),
+    /// and a high-resolution wheel's fraction of a notch as that fraction of
+    /// it. So a handler that steps once per notch gathers the deltas until
+    /// they make one, whatever the source:
+    ///
+    /// ```
+    /// use std::cell::Cell;
+    ///
+    /// use guido::prelude::*;
+    /// use guido::widgets::SCROLL_PIXELS_PER_LINE;
+    ///
+    /// fn notches(gathered: &Cell<f32>, delta: f32) -> i32 {
+    ///     let total = gathered.get() + delta;
+    ///     gathered.set(total % SCROLL_PIXELS_PER_LINE);
+    ///     (total / SCROLL_PIXELS_PER_LINE) as i32
+    /// }
+    ///
+    /// let gathered = Cell::new(0.0);
+    /// assert_eq!(notches(&gathered, SCROLL_PIXELS_PER_LINE / 2.0), 0);
+    /// assert_eq!(notches(&gathered, SCROLL_PIXELS_PER_LINE / 2.0), 1);
+    /// assert_eq!(notches(&gathered, -SCROLL_PIXELS_PER_LINE), -1);
+    ///
+    /// let level = create_signal(5);
+    /// let gathered = Cell::new(0.0);
+    /// container().on_scroll(move |_dx, dy, _source| {
+    ///     let notches = notches(&gathered, dy);
+    ///     if notches != 0 {
+    ///         level.update(|level| *level -= notches);
+    ///     }
+    /// });
+    /// ```
     pub fn on_scroll<F: Fn(f32, f32, ScrollSource) + 'static>(mut self, callback: F) -> Self {
         self.interact_mut().on_scroll = Some(Rc::new(callback));
         self

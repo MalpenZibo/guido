@@ -404,9 +404,40 @@ container()
 ```
 
 Parameters:
-- `dx` - Horizontal scroll amount
-- `dy` - Vertical scroll amount
-- `source` - Scroll source (wheel, touchpad)
+- `dx` - Horizontal scroll amount, in logical pixels, positive to the right
+- `dy` - Vertical scroll amount, in logical pixels, positive down
+- `source` - Scroll source (wheel, touchpad). A touchpad's pixels arrive as the
+  compositor gave them; a wheel notch as `SCROLL_PIXELS_PER_LINE`, the line a
+  [scroller](../concepts/container.md#scrolling) moves, and a high-resolution
+  wheel's fraction of a notch as that fraction of it
+
+### Counting Notches
+
+A handler that steps once per notch, such as a slider or a value a bar item
+cycles, gathers the deltas until they make one. Stepping once per event
+instead sweeps a touchpad swipe from end to end:
+
+```rust
+# extern crate guido;
+# use guido::prelude::*;
+# fn main() {
+use std::cell::Cell;
+use guido::widgets::SCROLL_PIXELS_PER_LINE;
+
+let level = create_signal(5);
+let gathered = Cell::new(0.0);
+
+container().on_scroll(move |_dx, dy, _source| {
+    let total = gathered.get() + dy;
+    gathered.set(total % SCROLL_PIXELS_PER_LINE);
+    let notches = (total / SCROLL_PIXELS_PER_LINE) as i32;
+    if notches != 0 {
+        level.update(|level| *level -= notches);
+    }
+})
+# ;
+# }
+```
 
 ### Scroll with Signal
 

@@ -321,7 +321,10 @@ pub(crate) const TOUCH_SLOP: f32 = 18.0;
 /// How far one line scrolls, in logical pixels: a wheel notch, and an arrow
 /// key on a focused scroller (#765), so the two move a list alike. Chromium's
 /// `kPixelsPerLineStep` is the same forty, for both.
-pub(crate) const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
+///
+/// A scroll handler that steps once per notch divides by it: see
+/// [`on_scroll`](crate::widgets::Container::on_scroll).
+pub const SCROLL_PIXELS_PER_LINE: f32 = 40.0;
 
 /// A finger on the content of a scroller, before and after it has taken the
 /// gesture from whatever it landed on.
