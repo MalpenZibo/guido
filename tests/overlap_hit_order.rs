@@ -566,3 +566,18 @@ fn a_gradient_covers_the_button_beneath_while_one_end_shows() {
         "neither end shows"
     );
 }
+
+/// Listening is being over something as much as drawing is: a card that draws
+/// nothing and only listens for the hover still covers the button beneath.
+#[test]
+fn a_card_that_only_listens_for_the_hover_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(container().on_hover(|_| {})));
+}
+
+/// A hover state is a listener too, with no handler beside it.
+#[test]
+fn a_card_that_only_declares_a_hover_state_covers_the_button_beneath() {
+    assert!(covers_the_button_beneath(
+        container().when_hovered(|s| s.background(Color::BLUE))
+    ));
+}
